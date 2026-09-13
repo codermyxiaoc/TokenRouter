@@ -1,0 +1,296 @@
+// Package payment provides the core payment provider abstraction,
+// registry, load balancing, and shared utilities for the payment subsystem.
+package payment
+
+import (
+	"context"
+	"time"
+)
+
+// PaymentType represents a supported payment method.
+type PaymentType = string
+
+// Supported payment type constants.
+const (
+	TypeAlipay       PaymentType = "alipay"
+	TypeWxpay        PaymentType = "wxpay"
+	TypeAlipayDirect PaymentType = "alipay_direct"
+	TypeWxpayDirect  PaymentType = "wxpay_direct"
+	TypeStripe       PaymentType = "stripe"
+	TypeCard         PaymentType = "card"
+	TypeLink         PaymentType = "link"
+	TypeEasyPay      PaymentType = "easypay"
+	TypeAirwallex    PaymentType = "airwallex"
+)
+
+// Order status constants shared across payment and service layers.
+const (
+	OrderStatusPending           = "PENDING"
+	OrderStatusProcessing        = "PROCESSING"
+	OrderStatusPaid              = "PAID"
+	OrderStatusRecharging        = "RECHARGING"
+	OrderStatusCompleted         = "COMPLETED"
+	OrderStatusExpired           = "EXPIRED"
+	OrderStatusCancelled         = "CANCELLED"
+	OrderStatusFailed            = "FAILED"
+	OrderStatusRefundRequested   = "REFUND_REQUESTED"
+	OrderStatusRefunding         = "REFUNDING"
+	OrderStatusRefundPending     = "REFUND_PENDING"
+	OrderStatusPartiallyRefunded = "PARTIALLY_REFUNDED"
+	OrderStatusRefunded          = "REFUNDED"
+	OrderStatusRefundFailed      = "REFUND_FAILED"
+)
+
+// Order types distinguish balance recharges from subscription purchases.
+const (
+	OrderTypeBalance      = "balance"
+	OrderTypeSubscription = "subscription"
+)
+
+// Entity statuses shared across users, groups, etc.
+const (
+	EntityStatusActive = "active"
+)
+
+// Deduction types for refund flow.
+const (
+	DeductionTypeBalance      = "balance"
+	DeductionTypeSubscription = "subscription"
+	DeductionTypeNone         = "none"
+)
+
+// Payment notification status values.
+const (
+	NotificationStatusSuccess = "success"
+	NotificationStatusPaid    = "paid"
+)
+
+// Provider-level status constants returned by provider implementations
+// to the service layer (lowercase, distinct from OrderStatus uppercase constants).
+const (
+	ProviderStatusPending    = "pending"
+	ProviderStatusProcessing = "processing"
+	ProviderStatusPaid       = "paid"
+	ProviderStatusSuccess    = "success"
+	ProviderStatusFailed     = "failed"
+	ProviderStatusRefunded   = "refunded"
+)
+
+// DefaultLoadBalanceStrategy is the default load-balancing strategy
+// used when no strategy is configured.
+const DefaultLoadBalanceStrategy = "round-robin"
+
+// ConfigKeyPublishableKey is the config map key for Stripe's publishable key.
+const ConfigKeyPublishableKey = "publishableKey"
+
+// GetBasePaymentType extracts the base payment method from a composite key.
+// For example, "alipay_direct" -> "alipay".
+func GetBasePaymentType(t string) string {
+	switch {
+	case t == TypeEasyPay:
+		return TypeEasyPay
+	case t == TypeAirwallex:
+		return TypeAirwallex
+	case t == TypeStripe || t == TypeCard || t == TypeLink:
+		return TypeStripe
+	case len(t) >= len(TypeAlipay) && t[:len(TypeAlipay)] == TypeAlipay:
+		return TypeAlipay
+	case len(t) >= len(TypeWxpay) && t[:len(TypeWxpay)] == TypeWxpay:
+		return TypeWxpay
+	default:
+		return t
+	}
+}
+
+// CreatePaymentRequest 保存创建支付单时传给支付渠道的参数。
+type CreatePaymentRequest struct {
+	OrderID               string    // 本地订单号
+	Amount                string    // 按服务商实例配置币种解释的实付金额
+	PaymentType           string    // 支付方式，例如 "alipay"、"wxpay"、"stripe"、"airwallex"
+	Subject               string    // 商品或订单描述
+	NotifyURL             string    // 支付渠道回调地址
+	ReturnURL             string    // 浏览器支付完成后的返回地址
+	OpenID                string    // 微信 JSAPI 支付使用的付款人 OpenID
+	ClientIP              string    // 付款人 IP
+	IsMobile              bool      // 请求是否来自移动端
+	AlipayMobilePrecreate bool      // 移动端支付宝是否改用当面付预下单
+	InstanceSubMethods    string    // 支付实例 supported_types 中配置的子支付方式
+	ExpiresAt             time.Time // 本地订单过期时间，用于同步渠道账单到期时间
+	UserEmail             string    // 从本地用户资料复制的付款人邮箱
+	BillingInfo           *BillingInfo
+}
+
+// BillingAddress 保存付款人填写的可选账单地址。
+type BillingAddress struct {
+	Country    string `json:"country,omitempty"`
+	Line1      string `json:"line1,omitempty"`
+	Line2      string `json:"line2,omitempty"`
+	City       string `json:"city,omitempty"`
+	State      string `json:"state,omitempty"`
+	PostalCode string `json:"postal_code,omitempty"`
+}
+
+// BillingInfo 是传给支付渠道的开票抬头和联系方式快照。
+type BillingInfo struct {
+	Name      string          `json:"name,omitempty"`
+	Email     string          `json:"email,omitempty"`
+	Address   *BillingAddress `json:"address,omitempty"`
+	TaxIDType string          `json:"tax_id_type,omitempty"`
+	TaxID     string          `json:"tax_id,omitempty"`
+}
+
+// CreatePaymentResultType describes the shape of the create-payment result.
+type CreatePaymentResultType = string
+
+const (
+	CreatePaymentResultOrderCreated  CreatePaymentResultType = "order_created"
+	CreatePaymentResultOAuthRequired CreatePaymentResultType = "oauth_required"
+	CreatePaymentResultJSAPIReady    CreatePaymentResultType = "jsapi_ready"
+)
+
+// WechatOAuthInfo describes the next step when WeChat OAuth is required before payment.
+type WechatOAuthInfo struct {
+	AuthorizeURL string `json:"authorize_url,omitempty"`
+	AppID        string `json:"appid,omitempty"`
+	OpenID       string `json:"openid,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+	State        string `json:"state,omitempty"`
+	RedirectURL  string `json:"redirect_url,omitempty"`
+}
+
+// WechatJSAPIPayload contains the fields the frontend needs to invoke WeChat JSAPI payment.
+type WechatJSAPIPayload struct {
+	AppID     string `json:"appId,omitempty"`
+	TimeStamp string `json:"timeStamp,omitempty"`
+	NonceStr  string `json:"nonceStr,omitempty"`
+	Package   string `json:"package,omitempty"`
+	SignType  string `json:"signType,omitempty"`
+	PaySign   string `json:"paySign,omitempty"`
+}
+
+// CreatePaymentResponse is returned after successfully initiating a payment.
+type CreatePaymentResponse struct {
+	TradeNo       string                  // Third-party transaction ID
+	PayURL        string                  // H5 payment URL (alipay/wxpay)
+	QRCode        string                  // QR code content for scanning
+	ClientSecret  string                  // Stripe PaymentIntent client secret
+	CustomerID    string                  // 账单型支付渠道的客户 ID
+	InvoiceID     string                  // 支付渠道账单 ID
+	InvoiceURL    string                  // 托管账单页面 URL
+	InvoicePDF    string                  // 账单 PDF URL
+	InvoiceStatus string                  // 支付渠道账单状态
+	IntentID      string                  // 前端 SDK 需要的服务商支付意图 ID
+	Currency      string                  // 服务商支付币种
+	CountryCode   string                  // 服务商收银台国家/地区代码
+	PaymentEnv    string                  // 服务商前端环境标识
+	ExpiresAt     time.Time               // 支付渠道实际返回的订单过期时间
+	ResultType    CreatePaymentResultType // Typed result contract for frontend flows
+	OAuth         *WechatOAuthInfo        // WeChat OAuth bootstrap payload when required
+	JSAPI         *WechatJSAPIPayload     // WeChat JSAPI invocation payload when ready
+}
+
+// QueryOrderResponse describes the payment status from the upstream provider.
+type QueryOrderResponse struct {
+	TradeNo  string
+	Status   string  // "pending", "processing", "paid", "failed", "refunded"
+	Amount   float64 // 按服务商返回币种解释的金额
+	PaidAt   string  // RFC3339 timestamp or empty
+	Metadata map[string]string
+}
+
+// PaymentNotification is the parsed result of a webhook/notify callback.
+type PaymentNotification struct {
+	TradeNo  string
+	OrderID  string
+	Amount   float64
+	Status   string // "success"、"paid"、"processing" 或 "failed"
+	RawData  string // Raw notification body for audit
+	Metadata map[string]string
+}
+
+// PaymentDocumentResponse 描述用户可打开的账单或收据链接。
+type PaymentDocumentResponse struct {
+	Type             string `json:"type"`
+	URL              string `json:"url,omitempty"`
+	HostedInvoiceURL string `json:"hosted_invoice_url,omitempty"`
+	InvoicePDF       string `json:"invoice_pdf,omitempty"`
+	ReceiptURL       string `json:"receipt_url,omitempty"`
+	InvoiceID        string `json:"invoice_id,omitempty"`
+	InvoiceStatus    string `json:"invoice_status,omitempty"`
+}
+
+// RefundRequest contains the parameters for requesting a refund.
+type RefundRequest struct {
+	TradeNo string
+	OrderID string
+	Amount  string // Refund amount formatted to 2 decimal places
+	Reason  string
+}
+
+// RefundQueryRequest 保存查询历史退款状态所需的渠道侧标识。
+type RefundQueryRequest struct {
+	TradeNo  string
+	OrderID  string
+	RefundID string
+	Amount   string
+}
+
+// RefundResponse is returned after a refund request.
+type RefundResponse struct {
+	RefundID string
+	Status   string // "success", "pending", "failed"
+}
+
+// InstanceSelection holds the selected provider instance and its decrypted config.
+type InstanceSelection struct {
+	InstanceID     string
+	ProviderKey    string // Provider key of the selected instance (e.g. "alipay", "easypay")
+	Config         map[string]string
+	SupportedTypes string // Comma-separated list of supported payment types from the instance
+	PaymentMode    string // Payment display mode: "qrcode", "redirect", "popup"
+}
+
+// Provider defines the interface that all payment providers must implement.
+type Provider interface {
+	// Name returns a human-readable name for this provider.
+	Name() string
+	// ProviderKey returns the unique key identifying this provider type (e.g. "easypay").
+	ProviderKey() string
+	// SupportedTypes returns the list of payment types this provider handles.
+	SupportedTypes() []PaymentType
+	// CreatePayment initiates a payment and returns the upstream response.
+	CreatePayment(ctx context.Context, req CreatePaymentRequest) (*CreatePaymentResponse, error)
+	// QueryOrder queries the payment status of the given trade number.
+	QueryOrder(ctx context.Context, tradeNo string) (*QueryOrderResponse, error)
+	// VerifyNotification parses and verifies a webhook callback.
+	// Returns nil for unrecognized or irrelevant events (caller should return 200).
+	VerifyNotification(ctx context.Context, rawBody string, headers map[string]string) (*PaymentNotification, error)
+	// Refund requests a refund from the upstream provider.
+	Refund(ctx context.Context, req RefundRequest) (*RefundResponse, error)
+}
+
+// RefundQueryProvider 表示支持主动查询退款状态的支付渠道。
+type RefundQueryProvider interface {
+	Provider
+	QueryRefund(ctx context.Context, req RefundQueryRequest) (*RefundResponse, error)
+}
+
+// CancelableProvider extends Provider with the ability to cancel pending payments.
+type CancelableProvider interface {
+	Provider
+	// CancelPayment cancels/expires a pending payment on the upstream platform.
+	CancelPayment(ctx context.Context, tradeNo string) error
+}
+
+// DocumentProvider 暴露已完成或历史订单的账单/收据链接。
+type DocumentProvider interface {
+	Provider
+	// GetPaymentDocument 优先返回 invoice，不存在时返回渠道收据。
+	GetPaymentDocument(ctx context.Context, invoiceID string, tradeNo string) (*PaymentDocumentResponse, error)
+}
+
+// MerchantIdentityProvider exposes the current non-sensitive merchant identity
+// derived from provider configuration for snapshot consistency checks.
+type MerchantIdentityProvider interface {
+	MerchantIdentityMetadata() map[string]string
+}

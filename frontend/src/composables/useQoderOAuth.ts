@@ -1,0 +1,196 @@
+import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useAppStore } from '@/stores/app'
+import { adminAPI } from '@/api/admin'
+import type { QoderPollResponse, QoderSite, QoderTokenInfo } from '@/api/admin/qoder'
+
+export function useQoderOAuth() {
+  const appStore = useAppStore()
+  const { t } = useI18n()
+
+  const authUrl = ref('')
+  const sessionId = ref('')
+  const state = ref('')
+  const pollInterval = ref(2)
+  const loading = ref(false)
+  const polling = ref(false)
+  const error = ref('')
+  let requestGeneration = 0
+
+  // 每次只允许最新请求修改共享状态，切换站点时可使所有旧请求立即失效。
+  const beginRequest = () => {
+    requestGeneration += 1
+    return requestGeneration
+  }
+
+  const isCurrentRequest = (generation: number) => generation === requestGeneration
+
+  const invalidatePendingRequests = () => {
+    requestGeneration += 1
+    loading.value = false
+    polling.value = false
+  }
+
+  const resetState = () => {
+    invalidatePendingRequests()
+    authUrl.value = ''
+    sessionId.value = ''
+    state.value = ''
+    pollInterval.value = 2
+    loading.value = false
+    polling.value = false
+    error.value = ''
+  }
+
+  const generateAuthUrl = async (
+    proxyId: number | null | undefined,
+    site: QoderSite = 'global'
+  ): Promise<boolean> => {
+    const generation = beginRequest()
+    loading.value = true
+    authUrl.value = ''
+    sessionId.value = ''
+    state.value = ''
+    error.value = ''
+
+    try {
+      const payload: Record<string, unknown> = { site }
+      if (proxyId) payload.proxy_id = proxyId
+
+      const response = await adminAPI.qoder.generateAuthUrl(payload as any)
+      if (!isCurrentRequest(generation)) return false
+      authUrl.value = response.auth_url
+      sessionId.value = response.session_id
+      state.value = response.state
+      pollInterval.value = response.interval || 2
+      return true
+    } catch (err: any) {
+      if (!isCurrentRequest(generation)) return false
+      error.value =
+        err.response?.data?.detail ||
+        err.message ||
+        t('admin.accounts.oauth.qoder.failedToGenerateUrl')
+      appStore.showError(error.value)
+      return false
+    } finally {
+      if (isCurrentRequest(generation)) {
+        loading.value = false
+      }
+    }
+  }
+
+  const exchangeAuthCode = async (params: {
+    code?: string
+    callbackUrl?: string
+    sessionId: string
+    state: string
+  }): Promise<QoderTokenInfo | null> => {
+    if (!params.sessionId || !params.state) {
+      error.value = t('admin.accounts.oauth.qoder.missingExchangeParams')
+      return null
+    }
+
+    const generation = beginRequest()
+    loading.value = true
+    error.value = ''
+
+    try {
+      const payload: Record<string, unknown> = {
+        session_id: params.sessionId,
+        state: params.state
+      }
+      const code = params.code?.trim()
+      const callbackUrl = params.callbackUrl?.trim()
+      if (code) payload.code = code
+      if (callbackUrl) payload.callback_url = callbackUrl
+
+      const tokenInfo = await adminAPI.qoder.exchangeCode(payload as any)
+      if (!isCurrentRequest(generation)) return null
+      return tokenInfo as QoderTokenInfo
+    } catch (err: any) {
+      if (!isCurrentRequest(generation)) return null
+      error.value =
+        err.response?.data?.detail ||
+        err.message ||
+        t('admin.accounts.oauth.qoder.failedToExchangeCode')
+      appStore.showError(error.value)
+      return null
+    } finally {
+      if (isCurrentRequest(generation)) {
+        loading.value = false
+      }
+    }
+  }
+
+  const pollAuthorization = async (params: {
+    sessionId: string
+    state: string
+  }): Promise<QoderPollResponse | null> => {
+    if (!params.sessionId || !params.state) {
+      error.value = t('admin.accounts.oauth.qoder.missingExchangeParams')
+      return null
+    }
+
+    const generation = beginRequest()
+    polling.value = true
+    loading.value = true
+    error.value = ''
+
+    try {
+      const payload: Record<string, unknown> = {
+        session_id: params.sessionId,
+        state: params.state
+      }
+
+      const result = await adminAPI.qoder.poll(payload as any)
+      return isCurrentRequest(generation) ? result : null
+    } catch (err: any) {
+      if (!isCurrentRequest(generation)) return null
+      error.value =
+        err.response?.data?.detail ||
+        err.message ||
+        t('admin.accounts.oauth.qoder.failedToExchangeCode')
+      appStore.showError(error.value)
+      return null
+    } finally {
+      if (isCurrentRequest(generation)) {
+        loading.value = false
+        polling.value = false
+      }
+    }
+  }
+
+  const buildCredentials = (tokenInfo: QoderTokenInfo): Record<string, unknown> => ({
+    security_oauth_token: tokenInfo.security_oauth_token,
+    refresh_token: tokenInfo.refresh_token,
+    machine_id: tokenInfo.machine_id,
+    machine_token: tokenInfo.machine_token,
+    machine_type: tokenInfo.machine_type,
+    uid: tokenInfo.uid,
+    aid: tokenInfo.aid,
+    organization_id: tokenInfo.organization_id,
+    organization_name: tokenInfo.organization_name,
+    name: tokenInfo.name,
+    user_type: tokenInfo.user_type,
+    site: tokenInfo.site,
+    refresh_mode: tokenInfo.refresh_mode,
+    expires_at: tokenInfo.expires_at,
+    extra: tokenInfo.extra
+  })
+
+  return {
+    authUrl,
+    sessionId,
+    state,
+    pollInterval,
+    loading,
+    polling,
+    error,
+    invalidatePendingRequests,
+    resetState,
+    generateAuthUrl,
+    exchangeAuthCode,
+    pollAuthorization,
+    buildCredentials
+  }
+}

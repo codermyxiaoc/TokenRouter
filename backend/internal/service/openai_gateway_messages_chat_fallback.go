@@ -1,0 +1,347 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/TokenFlux/TokenRouter/internal/pkg/apicompat"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
+	"github.com/TokenFlux/TokenRouter/internal/util/responseheaders"
+	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"go.uber.org/zap"
+)
+
+// forwardAnthropicViaRawChatCompletions 将 `/v1/messages` 客户端请求桥接到
+// 仅支持 `/v1/chat/completions` 的 OpenAI 兼容上游。
+//
+// 转换链直接跳过 Responses 中间表示：
+//
+//	请求：Anthropic Messages → Chat Completions
+//	响应：Chat Completions chunk/response → Anthropic events/response
+//
+// 该函数与服务 `/v1/responses` 的 forwardResponsesViaRawChatCompletions 对应，
+// 但每个流式 token 只经过一个状态机，不再往返 Responses 表示。
+func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	defaultMappedModel string,
+	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
+) (*OpenAIForwardResult, error) {
+	startTime := time.Now()
+
+	// 1. 解析 Anthropic 请求。
+	var anthropicReq apicompat.AnthropicRequest
+	if err := json.Unmarshal(body, &anthropicReq); err != nil {
+		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		return nil, fmt.Errorf("parse anthropic request: %w", err)
+	}
+	originalModel := anthropicReq.Model
+	if strings.TrimSpace(originalModel) == "" {
+		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		return nil, fmt.Errorf("missing model in request")
+	}
+	if err := validateOpenAIReasoningEffort(body, originalModel); err != nil {
+		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
+	applyOpenAICompatModelNormalization(&anthropicReq)
+	clientStream := anthropicReq.Stream
+
+	// 2. 将 Anthropic 请求直接转换为 Chat Completions。
+	chatReq, err := apicompat.AnthropicToChatCompletionsRequest(&anthropicReq)
+	if err != nil {
+		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, fmt.Errorf("convert anthropic to chat completions: %w", err)
+	}
+
+	billingModel := resolveOpenAIForwardModel(account, anthropicReq.Model, defaultMappedModel)
+	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	chatReq.Model = upstreamModel
+	chatReq.ReasoningEffort = openAICompatAnthropicReasoningEffort(&anthropicReq, upstreamModel, chatReq.ReasoningEffort)
+	chatReq.Stream = clientStream
+	if clientStream {
+		chatReq.StreamOptions = &apicompat.ChatStreamOptions{IncludeUsage: true}
+	}
+
+	convertedEffort := chatReq.ReasoningEffort
+	reasoningEffort := &convertedEffort
+	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
+	serviceTier := extractOpenAIServiceTierFromBody(body)
+
+	chatBody, err := json.Marshal(chatReq)
+	if err != nil {
+		return nil, fmt.Errorf("marshal chat completions request: %w", err)
+	}
+	if normalizedBody, normalized := NormalizeGLMOpenAIReasoningEffort(chatBody, upstreamModel); normalized {
+		chatBody = normalizedBody
+	}
+	// Messages 桥只对客户端显式指定的推理强度执行分组超限策略。
+	if account.Platform == PlatformOpenAI {
+		policyBody, changed, policyErr := ApplyOpenAIReasoningEffortPolicyFromContext(ctx, chatBody)
+		if policyErr != nil {
+			var overLimit *ReasoningEffortOverLimitError
+			if errors.As(policyErr, &overLimit) {
+				MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+				writeAnthropicError(c, http.StatusForbidden, "forbidden_error", overLimit.Error())
+			}
+			return nil, policyErr
+		}
+		if changed {
+			chatBody = policyBody
+			if effectiveEffort := strings.TrimSpace(gjson.GetBytes(chatBody, "reasoning_effort").String()); effectiveEffort != "" {
+				reasoningEffort = &effectiveEffort
+			}
+		}
+	}
+	chatBody, err = s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, chatBody)
+	if err != nil {
+		var blocked *OpenAIFastBlockedError
+		if errors.As(err, &blocked) {
+			writeOpenAIFastPolicyBlockedResponse(c, blocked)
+		}
+		return nil, err
+	}
+	if serviceTier == nil {
+		serviceTier = extractOpenAIServiceTierFromBody(chatBody)
+	}
+
+	logger.L().Debug("openai messages: forwarding via raw chat completions",
+		zap.Int64("account_id", account.ID),
+		zap.String("original_model", originalModel),
+		zap.String("billing_model", billingModel),
+		zap.String("upstream_model", upstreamModel),
+		zap.Bool("stream", clientStream),
+	)
+
+	// 3. 通过共享 CC 管线构造并发送上游请求。
+	apiKey, targetURL, err := s.resolveCCFallbackTarget(account)
+	if err != nil {
+		return nil, err
+	}
+	SetActualOpenAIUpstreamEndpoint(c, "/v1/chat/completions")
+	resp, err := s.sendCCUpstreamRequest(ctx, c, account, targetURL, chatBody, clientStream, apiKey, account.GetOpenAIUserAgent(), "", tlsRouterMatch...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// 4. 处理上游错误响应。
+	if resp.StatusCode >= 400 {
+		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		if foErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); foErr != nil {
+			return nil, foErr
+		}
+		// 非 failover 错误交给共享兼容处理器返回 Anthropic 格式，确保错误
+		// 透传规则、ops 记录和 cyber_policy 检测保持一致。
+		return s.handleAnthropicErrorResponse(resp, c, account, billingModel)
+	}
+
+	// 5. 转换上游响应。
+	if clientStream {
+		return s.streamChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime, account)
+	}
+	return s.bufferChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+}
+
+func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
+	c *gin.Context,
+	resp *http.Response,
+	originalModel string,
+	billingModel string,
+	upstreamModel string,
+	reasoningEffort *string,
+	serviceTier *string,
+	startTime time.Time,
+) (*OpenAIForwardResult, error) {
+	requestID := resp.Header.Get("x-request-id")
+	ccResp, usage, err := s.readCCUpstreamJSONResponse(c, resp, writeAnthropicError)
+	if err != nil {
+		return nil, err
+	}
+	anthropicResp := apicompat.ChatCompletionsResponseToAnthropic(ccResp, originalModel)
+
+	if s.responseHeaderFilter != nil {
+		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	}
+	c.JSON(http.StatusOK, anthropicResp)
+
+	return &OpenAIForwardResult{
+		RequestID:                   requestID,
+		UpstreamHeaders:             resp.Header,
+		Usage:                       usage,
+		Model:                       originalModel,
+		BillingModel:                billingModel,
+		UpstreamModel:               upstreamModel,
+		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
+		ReasoningEffort:             reasoningEffort,
+		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+		Stream:                      false,
+		Duration:                    time.Since(startTime),
+	}, nil
+}
+
+func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
+	c *gin.Context,
+	resp *http.Response,
+	originalModel string,
+	billingModel string,
+	upstreamModel string,
+	reasoningEffort *string,
+	serviceTier *string,
+	startTime time.Time,
+	account *Account,
+) (*OpenAIForwardResult, error) {
+	requestID := resp.Header.Get("x-request-id")
+	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
+
+	anthropicState := apicompat.NewChatCompletionsToAnthropicStreamState(originalModel)
+	clientDisconnected := false
+	outputStarted := false
+	var pendingEvents []apicompat.AnthropicStreamEvent
+	var scan ccStreamScanState
+	defer func() { logSmartRoutingChatStreamOutcome(c, account, scan, clientDisconnected) }()
+
+	// 与 responses 兄弟不同：客户端断开后仍继续做事件转换（喂 anthropicState），
+	// 仅跳过写出，保证 finalize 阶段的 usage 汇总不受断开影响。
+	emitChunk := func(chunk *apicompat.ChatCompletionsChunk) {
+		outputStarted = outputStarted || chatChunkStartsResponsesOutput(chunk)
+		hasToolCallDelta := chatCompletionsChunkHasToolCallDelta(chunk)
+		// 通过单个状态机将 CC chunk 直接转换为 Anthropic events。
+		anthropicEvents := apicompat.ChatCompletionsChunkToAnthropicEvents(chunk, anthropicState)
+		if hasToolCallDelta && len(anthropicEvents) == 0 {
+			// 工具参数聚合期间用标准事件维持下游活动，避免长参数流被误判为空闲。
+			anthropicEvents = append(anthropicEvents, apicompat.AnthropicStreamEvent{Type: "ping"})
+		}
+		// message_start 等结构前导不能抢先关闭无输出故障的账号/分组重试窗口。
+		if !outputStarted {
+			pendingEvents = append(pendingEvents, anthropicEvents...)
+			return
+		}
+		if len(pendingEvents) > 0 {
+			anthropicEvents = append(pendingEvents, anthropicEvents...)
+			pendingEvents = nil
+		}
+		if clientDisconnected {
+			return
+		}
+		for _, aEvt := range anthropicEvents {
+			sse, err := apicompat.ResponsesAnthropicEventToSSE(aEvt)
+			if err != nil {
+				continue
+			}
+			writeStreamHeaders()
+			if _, err := fmt.Fprint(c.Writer, sse); err != nil {
+				clientDisconnected = true
+				break
+			}
+		}
+		if !clientDisconnected && len(anthropicEvents) > 0 {
+			c.Writer.Flush()
+		}
+	}
+
+	scan = s.scanCCStream(c, resp, "openai messages chat fallback", requestID, startTime, emitChunk)
+	usage := scan.Usage
+
+	if scan.Err != nil {
+		status, errType, message, streamErr := s.resolveCCStreamFailure(c, resp, account, scan, upstreamModel)
+		var failover *UpstreamFailoverError
+		if errors.As(streamErr, &failover) {
+			return nil, failover
+		}
+		// 上游失败与客户端断连分别记录，不能依赖错误帧写出后才供 Ops 识别。
+		if status > 0 {
+			if errType == "upstream_error" {
+				errType = "api_error"
+			}
+			MarkOpsStreamError(c, errType, message, status)
+		}
+		if status > 0 && !clientDisconnected && c.Request.Context().Err() == nil {
+			if scan.SawOutput || scan.SawUsage || c.Writer.Written() {
+				writeStreamHeaders()
+				MarkResponseCommitted(c)
+				_, _ = fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE(errType, message))
+				c.Writer.Flush()
+			} else {
+				writeAnthropicError(c, status, errType, message)
+			}
+		}
+		if !scan.SawOutput && !scan.SawUsage {
+			return nil, streamErr
+		}
+		// 已观测的用量仍供错误路径补记，不能合成 message_stop 掩盖截断。
+		return &OpenAIForwardResult{
+			RequestID:                   requestID,
+			UpstreamHeaders:             resp.Header,
+			Usage:                       usage,
+			Model:                       originalModel,
+			BillingModel:                billingModel,
+			UpstreamModel:               upstreamModel,
+			UpstreamResponseServiceTier: normalizeObservedOpenAIServiceTier(scan.ServiceTier),
+			ReasoningEffort:             reasoningEffort,
+			ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+			Stream:                      true,
+			Duration:                    time.Since(startTime),
+			FirstTokenMs:                scan.FirstTokenMs,
+			ClientDisconnect:            clientDisconnected || c.Request.Context().Err() != nil,
+		}, streamErr
+	}
+
+	// 收尾时关闭未结束的内容块，并发出 message_delta/message_stop。
+	finalEvents := apicompat.FinalizeChatCompletionsAnthropicStream(anthropicState)
+	finalEvents = append(pendingEvents, finalEvents...)
+	if !clientDisconnected {
+		for _, aEvt := range finalEvents {
+			sse, err := apicompat.ResponsesAnthropicEventToSSE(aEvt)
+			if err != nil {
+				continue
+			}
+			writeStreamHeaders()
+			if _, err := fmt.Fprint(c.Writer, sse); err != nil {
+				clientDisconnected = true
+				break
+			}
+		}
+		c.Writer.Flush()
+	}
+	if !scan.SawDone {
+		logCCStreamMissingDoneSentinel("openai messages chat fallback", requestID)
+	}
+
+	return &OpenAIForwardResult{
+		RequestID:                   requestID,
+		UpstreamHeaders:             resp.Header,
+		Usage:                       usage,
+		Model:                       originalModel,
+		BillingModel:                billingModel,
+		UpstreamModel:               upstreamModel,
+		UpstreamResponseServiceTier: normalizeObservedOpenAIServiceTier(scan.ServiceTier),
+		ReasoningEffort:             reasoningEffort,
+		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+		Stream:                      true,
+		Duration:                    time.Since(startTime),
+		FirstTokenMs:                scan.FirstTokenMs,
+		ClientDisconnect:            clientDisconnected || c.Request.Context().Err() != nil,
+	}, nil
+}
+
+// chatCompletionsChunkHasToolCallDelta 判断当前分片是否携带工具调用增量。
+func chatCompletionsChunkHasToolCallDelta(chunk *apicompat.ChatCompletionsChunk) bool {
+	if chunk == nil {
+		return false
+	}
+	for _, choice := range chunk.Choices {
+		if len(choice.Delta.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
+}

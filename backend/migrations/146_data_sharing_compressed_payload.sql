@@ -1,0 +1,4 @@
+ALTER TABLE data_share_sessions
+    ADD COLUMN IF NOT EXISTS payload_compressed BYTEA NULL,
+    ADD COLUMN IF NOT EXISTS payload_encoding VARCHAR(20) NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS payload_bytes BIGINT NOT NULL DEFAULT 0;

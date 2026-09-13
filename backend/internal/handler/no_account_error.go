@@ -1,0 +1,199 @@
+package handler
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/TokenFlux/TokenRouter/internal/service"
+	"github.com/gin-gonic/gin"
+)
+
+// noAccountErrorClassification 描述账号选择失败时应返回给客户端的错误。
+//
+//   - 404 model_not_found：分组里有账号，但没有任何账号配置支持请求模型。
+//     这通常是模型配置、拼写或上游不支持的问题，返回 404 让客户端看到真实原因。
+//
+//   - 503 api_error：有账号可能支持该模型但暂时不可用，或分组当前没有账号。
+//     这类问题保留 503，因为退避后重试或管理员补账号后仍可能恢复。
+type noAccountErrorClassification struct {
+	Status        int
+	ErrType       string
+	Message       string
+	ModelNotFound bool // true 表示本次应返回 404 model_not_found
+}
+
+var selectionModelRateLimitedPattern = regexp.MustCompile(`(?:model_rate_limited|rate_limited)=(\d+)`)
+
+// classifySelectionFailureError preserves the scheduler's compact reason when
+// every model-capable account is temporarily rate limited.
+func classifySelectionFailureError(err error, fallback noAccountErrorClassification) noAccountErrorClassification {
+	if err == nil {
+		return fallback
+	}
+	// A 404 model_not_found fallback is authoritative and must not be downgraded
+	// to a rate-limit verdict. classifyNoAccountError only reaches it through
+	// DiagnoseModelAvailabilityForPlatform, a dedicated database query over
+	// persistent eligibility (active + schedulable + model_mapping) that already
+	// established no account in the group can serve this model at all. A transient
+	// per-model cooldown on one of the remaining candidates does not make "all
+	// available accounts are rate-limited" true.
+	//
+	// Reporting 429 here is actively harmful: retrying can never succeed, and
+	// clients that treat 429 as a rate limit retry hard and swallow the body
+	// (Codex surfaces only "exceeded retry limit, last status: 429"), losing the
+	// one message that names the real problem. It also flips the ops attribution
+	// from a local model-configuration issue to routing capacity, because call
+	// sites gate markOpsRoutingCapacityLimitedIfNoAvailable on ModelNotFound.
+	if fallback.ModelNotFound {
+		return fallback
+	}
+	match := selectionModelRateLimitedPattern.FindStringSubmatch(strings.ToLower(err.Error()))
+	if len(match) != 2 {
+		return fallback
+	}
+	count, parseErr := strconv.Atoi(match[1])
+	if parseErr != nil || count <= 0 {
+		return fallback
+	}
+	return noAccountErrorClassification{
+		Status:  http.StatusTooManyRequests,
+		ErrType: "rate_limit_error",
+		Message: "All available accounts are currently rate-limited. Please retry later.",
+	}
+}
+
+// classifyNoAccountError decides between 404 model_not_found and 503
+// api_error for "no available accounts" failures.
+//
+// 选择层不会明确告诉调用方账号池为空的具体原因：限流和模型不支持都可能包装成
+// ErrNoAvailableAccounts。因此这里通过专用数据库查询重新检查账号池，只考虑 active、
+// schedulable 和 model_mapping 等持久配置，绕过调度快照和瞬时过滤。只有必须修改
+// 账号、分组或模型配置才能成功的场景才返回 404。
+//
+// routingModel 是账号选择实际比较的模型名（可能已经过分组模型分发映射）；
+// displayModel 是调用方原始请求模型，仅用于客户端错误消息，避免泄露内部映射细节。
+//
+// platform 是请求实际路由到的平台。Anthropic/Gemini 路径还会纳入混排的 Antigravity
+// 账号，因此必须传入正确平台，避免把临时 503 误判为 404。
+func classifyNoAccountError(
+	ctx context.Context,
+	diag service.ModelAvailabilityDiagnoser,
+	apiKey *service.APIKey,
+	routingModel string,
+	displayModel string,
+	platform string,
+) noAccountErrorClassification {
+	fallback := noAccountErrorClassification{
+		Status:  http.StatusServiceUnavailable,
+		ErrType: "api_error",
+		Message: "Service temporarily unavailable",
+	}
+
+	routingModel = strings.TrimSpace(routingModel)
+	displayModel = strings.TrimSpace(displayModel)
+	if displayModel == "" {
+		displayModel = routingModel
+	}
+	if diag == nil || apiKey == nil || apiKey.GroupID == nil || routingModel == "" {
+		return fallback
+	}
+
+	result := diag.DiagnoseModelAvailabilityForPlatform(ctx, apiKey.GroupID, routingModel, platform)
+	if result.HasAccountsInPool && !result.HasModelSupport {
+		return noAccountErrorClassification{
+			Status:        http.StatusNotFound,
+			ErrType:       "model_not_found",
+			Message:       fmt.Sprintf("Model %q is not supported by any configured account in this group", displayModel),
+			ModelNotFound: true,
+		}
+	}
+	return fallback
+}
+
+// classifyNoAccountErrorFromGin 复用 gin.Context 上的 request context，简化 handler 调用点。
+func classifyNoAccountErrorFromGin(
+	c *gin.Context,
+	diag service.ModelAvailabilityDiagnoser,
+	apiKey *service.APIKey,
+	routingModel string,
+	displayModel string,
+	platform string,
+) noAccountErrorClassification {
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	classification := classifyNoAccountError(ctx, diag, apiKey, routingModel, displayModel, platform)
+	if classification.ModelNotFound {
+		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalModelConfiguration)
+	}
+	return classification
+}
+
+// classifyOpenAICompatibleNoAccountErrorFromGin 按 API Key 分组平台诊断 OpenAI 兼容请求。
+func classifyOpenAICompatibleNoAccountErrorFromGin(
+	c *gin.Context,
+	diag service.ModelAvailabilityDiagnoser,
+	apiKey *service.APIKey,
+	routingModel string,
+	displayModel string,
+) noAccountErrorClassification {
+	return classifyNoAccountErrorFromGin(
+		c,
+		diag,
+		apiKey,
+		routingModel,
+		displayModel,
+		openAICompatibleRequestPlatform(apiKey),
+	)
+}
+
+// openAIResolvedRoutingModelDiagnoser 让通用错误分类器直接诊断账号层模型，避免重复渠道映射。
+type openAIResolvedRoutingModelDiagnoser struct {
+	service *service.OpenAIGatewayService
+}
+
+func (d openAIResolvedRoutingModelDiagnoser) DiagnoseModelAvailabilityForPlatform(
+	ctx context.Context,
+	groupID *int64,
+	routingModel string,
+	platform string,
+) service.ModelAvailabilityDiagnosis {
+	if d.service == nil {
+		return service.ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
+	}
+	return d.service.DiagnoseRoutingModelAvailabilityForPlatform(ctx, groupID, routingModel, platform)
+}
+
+// classifyOpenAICompatibleResolvedRoutingNoAccountErrorFromGin 用 D 诊断能力，用 R 输出错误信息。
+func classifyOpenAICompatibleResolvedRoutingNoAccountErrorFromGin(
+	c *gin.Context,
+	gatewayService *service.OpenAIGatewayService,
+	apiKey *service.APIKey,
+	routingModel string,
+	displayModel string,
+) noAccountErrorClassification {
+	return classifyOpenAICompatibleNoAccountErrorFromGin(
+		c,
+		openAIResolvedRoutingModelDiagnoser{service: gatewayService},
+		apiKey,
+		routingModel,
+		displayModel,
+	)
+}
+
+// openAICompatibleSelectionErrorForLog 将 Grok 选择失败日志中的平台名称改为实际平台。
+func openAICompatibleSelectionErrorForLog(err error, platform string) error {
+	if err == nil || platform != service.PlatformGrok {
+		return err
+	}
+	message := strings.ReplaceAll(err.Error(), "OpenAI accounts", "Grok accounts")
+	if message == err.Error() {
+		return err
+	}
+	return fmt.Errorf("%s", message)
+}

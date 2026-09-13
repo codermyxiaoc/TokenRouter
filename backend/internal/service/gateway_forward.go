@@ -1,0 +1,997 @@
+package service
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
+
+	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+)
+
+// 重试相关常量
+const (
+	// 最大尝试次数（包含首次请求）。过多重试会导致请求堆积与资源耗尽。
+	maxRetryAttempts = 5
+
+	// 指数退避：第 N 次失败后的等待 = retryBaseDelay * 2^(N-1)，并且上限为 retryMaxDelay。
+	retryBaseDelay = 300 * time.Millisecond
+	retryMaxDelay  = 3 * time.Second
+
+	// 最大重试耗时（包含请求本身耗时 + 退避等待时间）。
+	// 用于防止极端情况下 goroutine 长时间堆积导致资源耗尽。
+	maxRetryElapsed = 10 * time.Second
+)
+
+func (s *GatewayService) shouldRetryUpstreamError(account *Account, statusCode int) bool {
+	// OAuth/Setup Token 账号：仅 403 重试
+	if account.IsOAuth() {
+		return statusCode == 403
+	}
+
+	// API Key/Bedrock 的 HTTP 错误交给统一策略和 handler 层重试预算处理。
+	// 尤其是自定义错误码未命中时必须立即返回通用 500，不能先做内部重试。
+	return false
+}
+
+// shouldFailoverUpstreamError determines whether an upstream error should trigger account failover.
+func (s *GatewayService) shouldFailoverUpstreamError(statusCode int) bool {
+	switch statusCode {
+	case 401, 403, 429, 529:
+		return true
+	default:
+		return statusCode >= 500
+	}
+}
+
+func retryBackoffDelay(attempt int) time.Duration {
+	// attempt 从 1 开始，表示第 attempt 次请求刚失败，需要等待后进行第 attempt+1 次请求。
+	if attempt <= 0 {
+		return retryBaseDelay
+	}
+	delay := retryBaseDelay * time.Duration(1<<(attempt-1))
+	if delay > retryMaxDelay {
+		return retryMaxDelay
+	}
+	return delay
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// Forward 转发请求到Claude API
+func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (*ForwardResult, error) {
+	startTime := time.Now()
+	if parsed == nil {
+		return nil, fmt.Errorf("parse request: empty request")
+	}
+
+	if account != nil && s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, parsed.Body.Bytes()) {
+		return s.handleWebSearchEmulation(ctx, c, account, parsed)
+	}
+
+	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
+		passthroughBody := parsed.Body.Bytes()
+		passthroughModel := parsed.Model
+		if passthroughModel != "" {
+			if mappedModel := account.GetMappedModel(passthroughModel); mappedModel != passthroughModel {
+				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
+				logger.LegacyPrintf("service.gateway", "Passthrough model mapping: %s -> %s (account: %s)", parsed.Model, mappedModel, account.Name)
+				passthroughModel = mappedModel
+			}
+		}
+		return s.forwardAnthropicAPIKeyPassthroughWithInput(ctx, c, account, anthropicPassthroughForwardInput{
+			Body:          passthroughBody,
+			Parsed:        parsed,
+			RequestModel:  passthroughModel,
+			OriginalModel: parsed.Model,
+			RequestStream: parsed.Stream,
+			StartTime:     startTime,
+		})
+	}
+
+	if account != nil && account.IsBedrock() {
+		return s.forwardBedrock(ctx, c, account, parsed, startTime)
+	}
+
+	if account.Platform == PlatformAnthropic && c != nil {
+		policy := s.evaluateBetaPolicy(ctx, c.GetHeader("anthropic-beta"), account, parsed.Model)
+		if policy.blockErr != nil {
+			return nil, policy.blockErr
+		}
+		filterSet := policy.filterSet
+		if filterSet == nil {
+			filterSet = map[string]struct{}{}
+		}
+		c.Set(betaPolicyFilterSetKey, filterSet)
+	}
+
+	body := parsed.Body.Bytes()
+	replaceBody := func(next []byte) error {
+		if err := parsed.ReplaceBody(next); err != nil {
+			return fmt.Errorf("rewrite request body: %w", err)
+		}
+		body = parsed.Body.Bytes()
+		return nil
+	}
+	reqModel := parsed.Model
+	reqStream := parsed.Stream
+	originalModel := reqModel
+
+	if c != nil {
+		s.debugLogGatewaySnapshot("CLIENT_ORIGINAL", c.Request.Header, body, map[string]string{
+			"account":      fmt.Sprintf("%d(%s)", account.ID, account.Name),
+			"account_type": string(account.Type),
+			"model":        reqModel,
+			"stream":       strconv.FormatBool(reqStream),
+		})
+	}
+
+	// 账号模型映射必须先于平台模型规范化执行，确保调度、限制检查和实际转发使用同一条链路。
+	accountMappedModel := resolveAccountMappedModelForForward(account, reqModel)
+	if accountMappedModel != reqModel {
+		if err := replaceBody(s.replaceModelInBody(body, accountMappedModel)); err != nil {
+			return nil, err
+		}
+		reqModel = accountMappedModel
+		parsed.Model = accountMappedModel
+		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=account)", originalModel, accountMappedModel, account.Name)
+	}
+
+	// Claude Code 客户端判定：UA 匹配 claude-cli/* 且携带 metadata.user_id。
+	// 真正的 Claude Code 客户端自带完整的 system prompt、cache_control 断点和 header，
+	// 不需要代理做任何 body 级别的 mimicry；强行替换反而会破坏客户端的缓存策略
+	// （长 system prompt 被替换为 ~45 tokens 的短 prompt，低于 Anthropic 1024 token
+	// 最低缓存门槛，导致系统级缓存失效）。
+	//
+	// 对于非 Claude Code 的第三方客户端（opencode 等），仍然走完整 mimicry。
+	var clientUserAgent string
+	if c != nil {
+		clientUserAgent = c.GetHeader("User-Agent")
+	}
+	isClaudeCode := IsClaudeCodeClient(ctx) || isClaudeCodeClient(clientUserAgent, parsed.MetadataUserID)
+	// 中间网关可能覆盖 User-Agent；合法 metadata 与原始 billing block 同时存在时，
+	// 只跳过 body mimicry 以保留客户端的 system/cache_control 前缀。
+	if !isClaudeCode {
+		isClaudeCode = isProxiedClaudeCodeRequest(body, parsed.MetadataUserID)
+	}
+	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
+
+	if shouldMimicClaudeCode {
+
+		systemRewritten := false
+		systemRaw, _ := parsed.SystemValue()
+		systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
+		if systemPromptInjectionEnabled {
+			if err := replaceBody(rewriteSystemForNonClaudeCodeWithPromptBlocks(body, systemRaw, systemPrompt, systemPromptBlocks)); err != nil {
+				return nil, err
+			}
+			systemRewritten = true
+		}
+
+		// system 被重写时保留 CC prompt 的 cache_control: ephemeral（匹配真实 Claude Code 行为）；
+		// 未重写时（注入开关关闭）剥离客户端 cache_control，与原有行为一致。
+		// 两种情况下 enforceCacheControlLimit 都会兜底处理上限。
+		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: !systemRewritten}
+		if s.identityService != nil && c != nil {
+			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
+			if err == nil && fp != nil {
+
+				_, mimicMPT, _ := s.settingService.GetGatewayForwardingSettings(ctx)
+				if !mimicMPT {
+					if metadataUserID := s.buildOAuthMetadataUserID(parsed, account, fp); metadataUserID != "" {
+						normalizeOpts.injectMetadata = true
+						normalizeOpts.metadataUserID = metadataUserID
+					}
+				}
+			}
+		}
+
+		var normalizedBody []byte
+		normalizedBody, reqModel = normalizeClaudeOAuthRequestBody(body, reqModel, normalizeOpts)
+		if err := replaceBody(normalizedBody); err != nil {
+			return nil, err
+		}
+
+		if err := replaceBody(s.rewriteMessageCacheControlIfEnabled(ctx, body)); err != nil {
+			return nil, err
+		}
+		if rw := buildToolNameRewriteFromBody(body); rw != nil {
+			if err := replaceBody(applyToolNameRewriteToBody(body, rw)); err != nil {
+				return nil, err
+			}
+			if c != nil {
+				c.Set(toolNameRewriteKey, rw)
+			}
+		} else {
+			if err := replaceBody(applyToolsLastCacheBreakpoint(body)); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if next, ok := s.normalizeClientDatelineIfEnabled(ctx, account, body); ok {
+		if err := replaceBody(next); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := replaceBody(enforceCacheControlLimit(body)); err != nil {
+		return nil, err
+	}
+
+	mappedModel := resolveAnthropicAccountUpstreamModel(account, reqModel)
+	if mappedModel != reqModel {
+		if err := replaceBody(s.replaceModelInBody(body, mappedModel)); err != nil {
+			return nil, err
+		}
+		reqModel = mappedModel
+		parsed.Model = mappedModel
+		logger.LegacyPrintf("service.gateway", "Platform model normalization applied: %s -> %s (account: %s)", accountMappedModel, mappedModel, account.Name)
+	}
+
+	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
+		if err := replaceBody(injectAnthropicCacheControlTTL1h(body)); err != nil {
+			return nil, err
+		}
+	}
+
+	token, tokenType, err := s.GetAccessToken(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		if !account.IsCustomBaseURLEnabled() || account.GetCustomBaseURL() == "" {
+			proxyURL = account.Proxy.URL()
+		}
+	}
+
+	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
+
+	logger.LegacyPrintf("service.gateway", "[Forward] Using account: ID=%d Name=%s Platform=%s Type=%s TLSFingerprint=%v Proxy=%s",
+		account.ID, account.Name, account.Platform, account.Type, tlsProfile, proxyURL)
+
+	if err := replaceBody(StripEmptyTextBlocks(body)); err != nil {
+		return nil, err
+	}
+
+	if err := replaceBody(FilterWebSearchHistoryBlocks(body, reqModel)); err != nil {
+		return nil, err
+	}
+
+	if err := replaceBody(FilterThinkingBlocks(body, reqModel)); err != nil {
+		return nil, err
+	}
+	if ResolveThinkingProtocol(reqModel) == ThinkingProtocolPassbackRequired {
+		if rewritten, applied := NormalizeChineseLLMThinking(body, reqModel); applied {
+			if err := replaceBody(rewritten); err != nil {
+				return nil, err
+			}
+			logger.LegacyPrintf("service.gateway", "Account %d: rewrote thinking.type for %s", account.ID, reqModel)
+		}
+	}
+
+	var resp *http.Response
+	lastWireBody := body
+	retryStart := time.Now()
+	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
+
+		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
+		upstreamReq, wireBody, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
+		releaseUpstreamCtx()
+		if err != nil {
+			return nil, err
+		}
+
+		lastWireBody = wireBody
+
+		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+		if err != nil {
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
+				UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
+			})
+		}
+
+		if resp.StatusCode == 400 {
+			respBody, readErr := s.readUpstreamErrorBody(resp)
+			if readErr == nil {
+				_ = resp.Body.Close()
+
+				if s.shouldRectifySignatureError(ctx, account, respBody, reqModel) {
+					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+						Platform:           account.Platform,
+						AccountID:          account.ID,
+						AccountName:        account.Name,
+						UpstreamStatusCode: resp.StatusCode,
+						UpstreamRequestID:  resp.Header.Get("x-request-id"),
+						UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
+						Kind:               "signature_error",
+						Message:            extractUpstreamErrorMessage(respBody),
+						Detail: func() string {
+							if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+								return truncateString(string(respBody), s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
+							}
+							return ""
+						}(),
+					})
+
+					looksLikeToolSignatureError := func(msg string) bool {
+						m := strings.ToLower(msg)
+						return strings.Contains(m, "tool_use") ||
+							strings.Contains(m, "tool_result") ||
+							strings.Contains(m, "functioncall") ||
+							strings.Contains(m, "function_call") ||
+							strings.Contains(m, "functionresponse") ||
+							strings.Contains(m, "function_response")
+					}
+
+					if time.Since(retryStart) >= maxRetryElapsed {
+						resp.Body = io.NopCloser(bytes.NewReader(respBody))
+						break
+					}
+					logger.LegacyPrintf("service.gateway", "[warn] Account %d: thinking blocks have invalid signature, retrying with filtered blocks", account.ID)
+
+					filteredBody := FilterThinkingBlocksForRetry(body, reqModel)
+					retryCtx, releaseRetryCtx := detachStreamUpstreamContext(ctx, reqStream)
+					retryReq, retryWireBody, buildErr := s.buildUpstreamRequest(retryCtx, c, account, filteredBody, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
+					releaseRetryCtx()
+					if buildErr == nil {
+						retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+						if retryErr == nil {
+							if retryResp.StatusCode < 400 {
+
+								lastWireBody = retryWireBody
+								if err := replaceBody(retryWireBody); err != nil {
+									_ = retryResp.Body.Close()
+									return nil, err
+								}
+								logger.LegacyPrintf("service.gateway", "Account %d: thinking block retry succeeded (blocks downgraded)", account.ID)
+								resp = retryResp
+								break
+							}
+
+							retryRespBody, retryReadErr := s.readUpstreamErrorBody(retryResp)
+							_ = retryResp.Body.Close()
+							if retryReadErr == nil && retryResp.StatusCode == 400 && s.isSignatureErrorPattern(ctx, account, retryRespBody) {
+								appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+									Platform:           account.Platform,
+									AccountID:          account.ID,
+									AccountName:        account.Name,
+									UpstreamStatusCode: retryResp.StatusCode,
+									UpstreamRequestID:  retryResp.Header.Get("x-request-id"),
+									UpstreamURL:        safeUpstreamURL(retryReq.URL.String()),
+									Kind:               "signature_retry_thinking",
+									Message:            extractUpstreamErrorMessage(retryRespBody),
+									Detail: func() string {
+										if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+											return truncateString(string(retryRespBody), s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
+										}
+										return ""
+									}(),
+								})
+								msg2 := extractUpstreamErrorMessage(retryRespBody)
+								if looksLikeToolSignatureError(msg2) && time.Since(retryStart) < maxRetryElapsed {
+									logger.LegacyPrintf("service.gateway", "Account %d: signature retry still failing and looks tool-related, retrying with tool blocks downgraded", account.ID)
+									filteredBody2 := FilterSignatureSensitiveBlocksForRetry(body, reqModel)
+									retryCtx2, releaseRetryCtx2 := detachStreamUpstreamContext(ctx, reqStream)
+									retryReq2, retryWireBody2, buildErr2 := s.buildUpstreamRequest(retryCtx2, c, account, filteredBody2, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
+									releaseRetryCtx2()
+									if buildErr2 == nil {
+										retryResp2, retryErr2 := s.httpUpstream.DoWithTLS(retryReq2, proxyURL, account.ID, account.Concurrency, tlsProfile)
+										if retryErr2 == nil {
+											if retryResp2.StatusCode < 400 {
+
+												lastWireBody = retryWireBody2
+												if err := replaceBody(retryWireBody2); err != nil {
+													_ = retryResp2.Body.Close()
+													return nil, err
+												}
+											}
+											resp = retryResp2
+											break
+										}
+										if retryResp2 != nil && retryResp2.Body != nil {
+											_ = retryResp2.Body.Close()
+										}
+										appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+											Platform:           account.Platform,
+											AccountID:          account.ID,
+											AccountName:        account.Name,
+											UpstreamStatusCode: 0,
+											UpstreamURL:        safeUpstreamURL(retryReq2.URL.String()),
+											Kind:               "signature_retry_tools_request_error",
+											Message:            sanitizeUpstreamErrorMessage(retryErr2.Error()),
+										})
+										logger.LegacyPrintf("service.gateway", "Account %d: tool-downgrade signature retry failed: %v", account.ID, retryErr2)
+									} else {
+										logger.LegacyPrintf("service.gateway", "Account %d: tool-downgrade signature retry build failed: %v", account.ID, buildErr2)
+									}
+								}
+							}
+
+							resp = &http.Response{
+								StatusCode: retryResp.StatusCode,
+								Header:     retryResp.Header.Clone(),
+								Body:       io.NopCloser(bytes.NewReader(retryRespBody)),
+							}
+							break
+						}
+						if retryResp != nil && retryResp.Body != nil {
+							_ = retryResp.Body.Close()
+						}
+						logger.LegacyPrintf("service.gateway", "Account %d: signature error retry failed: %v", account.ID, retryErr)
+					} else {
+						logger.LegacyPrintf("service.gateway", "Account %d: signature error retry build request failed: %v", account.ID, buildErr)
+					}
+
+					resp.Body = io.NopCloser(bytes.NewReader(respBody))
+					break
+				}
+
+				errMsg := extractUpstreamErrorMessage(respBody)
+				if isThinkingBudgetConstraintError(errMsg) && s.settingService.IsBudgetRectifierEnabled(ctx) {
+					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+						Platform:           account.Platform,
+						AccountID:          account.ID,
+						AccountName:        account.Name,
+						UpstreamStatusCode: resp.StatusCode,
+						UpstreamRequestID:  resp.Header.Get("x-request-id"),
+						UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
+						Kind:               "budget_constraint_error",
+						Message:            errMsg,
+						Detail: func() string {
+							if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+								return truncateString(string(respBody), s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
+							}
+							return ""
+						}(),
+					})
+
+					rectifiedBody, applied := RectifyThinkingBudget(body)
+					if applied && time.Since(retryStart) < maxRetryElapsed {
+						logger.LegacyPrintf("service.gateway", "Account %d: detected budget_tokens constraint error, retrying with rectified budget (budget_tokens=%d, max_tokens=%d)", account.ID, BudgetRectifyBudgetTokens, BudgetRectifyMaxTokens)
+						budgetRetryCtx, releaseBudgetRetryCtx := detachStreamUpstreamContext(ctx, reqStream)
+						budgetRetryReq, budgetWireBody, buildErr := s.buildUpstreamRequest(budgetRetryCtx, c, account, rectifiedBody, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
+						releaseBudgetRetryCtx()
+						if buildErr == nil {
+							budgetRetryResp, retryErr := s.httpUpstream.DoWithTLS(budgetRetryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+							if retryErr == nil {
+								if budgetRetryResp.StatusCode < 400 {
+
+									lastWireBody = budgetWireBody
+									if err := replaceBody(budgetWireBody); err != nil {
+										_ = budgetRetryResp.Body.Close()
+										return nil, err
+									}
+								}
+								resp = budgetRetryResp
+								break
+							}
+							if budgetRetryResp != nil && budgetRetryResp.Body != nil {
+								_ = budgetRetryResp.Body.Close()
+							}
+							logger.LegacyPrintf("service.gateway", "Account %d: budget rectifier retry failed: %v", account.ID, retryErr)
+						} else {
+							logger.LegacyPrintf("service.gateway", "Account %d: budget rectifier retry build failed: %v", account.ID, buildErr)
+						}
+					}
+				}
+
+				resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			}
+		}
+
+		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
+			if attempt < maxRetryAttempts {
+				elapsed := time.Since(retryStart)
+				if elapsed >= maxRetryElapsed {
+					break
+				}
+
+				delay := retryBackoffDelay(attempt)
+				remaining := maxRetryElapsed - elapsed
+				if delay > remaining {
+					delay = remaining
+				}
+				if delay <= 0 {
+					break
+				}
+
+				respBody, _ := s.readUpstreamErrorBody(resp)
+				_ = resp.Body.Close()
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: resp.StatusCode,
+					UpstreamRequestID:  resp.Header.Get("x-request-id"),
+					UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
+					Kind:               "retry",
+					Message:            extractUpstreamErrorMessage(respBody),
+					Detail: func() string {
+						if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+							return truncateString(string(respBody), s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
+						}
+						return ""
+					}(),
+				})
+				logger.LegacyPrintf("service.gateway", "Account %d: upstream error %d, retry %d/%d after %v (elapsed=%v/%v)",
+					account.ID, resp.StatusCode, attempt, maxRetryAttempts, delay, elapsed, maxRetryElapsed)
+				if err := sleepWithContext(ctx, delay); err != nil {
+					return nil, err
+				}
+				continue
+			}
+
+			break
+		}
+
+		if account.Platform == PlatformGemini && resp.StatusCode < 400 && s.cfg != nil && s.cfg.Gateway.GeminiDebugResponseHeaders {
+			logger.LegacyPrintf("service.gateway", "[DEBUG] Gemini API Response Headers for account %d:", account.ID)
+			for k, v := range resp.Header {
+				logger.LegacyPrintf("service.gateway", "[DEBUG]   %s: %v", k, v)
+			}
+		}
+		break
+	}
+	if resp == nil || resp.Body == nil {
+		return nil, errors.New("upstream request failed: empty response")
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
+		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+			respBody, _ := s.readUpstreamErrorBody(resp)
+			_ = resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+
+			logger.LegacyPrintf("service.gateway", "[Forward] Upstream error (retry exhausted, failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
+				account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
+
+			decision := s.handleRetryExhaustedSideEffects(ctx, resp, account, reqModel)
+			if decision.ShouldReturnGenericError() {
+				return s.handleErrorResponse(ctx, resp, c, account, reqModel)
+			}
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				Platform:           account.Platform,
+				AccountID:          account.ID,
+				AccountName:        account.Name,
+				UpstreamStatusCode: resp.StatusCode,
+				UpstreamRequestID:  resp.Header.Get("x-request-id"),
+				Kind:               "retry_exhausted_failover",
+				Message:            extractUpstreamErrorMessage(respBody),
+				Detail: func() string {
+					if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+						return truncateString(string(respBody), s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
+					}
+					return ""
+				}(),
+			})
+			return nil, &UpstreamFailoverError{
+				StatusCode:             resp.StatusCode,
+				ResponseBody:           respBody,
+				RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
+			}
+		}
+		return s.handleRetryExhaustedError(ctx, resp, c, account, reqModel)
+	}
+
+	if resp.StatusCode >= 400 && s.shouldFailoverUpstreamError(resp.StatusCode) {
+		respBody, _ := s.readUpstreamErrorBody(resp)
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+
+		logger.LegacyPrintf("service.gateway", "[Forward] Upstream error (failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
+			account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
+
+		decision := s.handleFailoverSideEffects(ctx, resp, account, reqModel)
+		if decision.ShouldReturnGenericError() {
+			return s.handleErrorResponse(ctx, resp, c, account, reqModel)
+		}
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  resp.Header.Get("x-request-id"),
+			Kind:               "failover",
+			Message:            extractUpstreamErrorMessage(respBody),
+			Detail: func() string {
+				if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+					return truncateString(string(respBody), s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
+				}
+				return ""
+			}(),
+		})
+		return nil, &UpstreamFailoverError{
+			StatusCode:             resp.StatusCode,
+			ResponseBody:           respBody,
+			RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
+		}
+	}
+	if resp.StatusCode >= 400 {
+
+		if resp.StatusCode == 400 && s.cfg != nil && s.cfg.Gateway.FailoverOn400 {
+			respBody, readErr := s.readUpstreamErrorBody(resp)
+			if readErr != nil {
+
+				return s.handleErrorResponse(ctx, resp, c, account, reqModel)
+			}
+			_ = resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+
+			if s.shouldFailoverOn400(respBody) {
+				upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
+				upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+				upstreamDetail := ""
+				if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+					maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+					if maxBytes <= 0 {
+						maxBytes = 2048
+					}
+					upstreamDetail = truncateString(string(respBody), maxBytes)
+				}
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: resp.StatusCode,
+					UpstreamRequestID:  resp.Header.Get("x-request-id"),
+					Kind:               "failover_on_400",
+					Message:            upstreamMsg,
+					Detail:             upstreamDetail,
+				})
+
+				if s.cfg.Gateway.LogUpstreamErrorBody {
+					logger.LegacyPrintf("service.gateway",
+						"Account %d: 400 error, attempting failover: %s",
+						account.ID,
+						truncateForLog(respBody, s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes),
+					)
+				} else {
+					logger.LegacyPrintf("service.gateway", "Account %d: 400 error, attempting failover", account.ID)
+				}
+				decision := s.handleFailoverSideEffects(ctx, resp, account, reqModel)
+				if decision.ShouldReturnGenericError() {
+					return s.handleErrorResponse(ctx, resp, c, account, reqModel)
+				}
+				return nil, &UpstreamFailoverError{
+					StatusCode:             resp.StatusCode,
+					ResponseBody:           respBody,
+					RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
+				}
+			}
+		}
+		return s.handleErrorResponse(ctx, resp, c, account, reqModel)
+	}
+
+	if !bytes.Equal(lastWireBody, body) {
+
+		if err := replaceBody(lastWireBody); err != nil {
+			return nil, err
+		}
+	}
+
+	if parsed.OnUpstreamAccepted != nil {
+		parsed.OnUpstreamAccepted()
+	}
+
+	var usage *ClaudeUsage
+	var firstTokenMs *int
+	var clientDisconnect bool
+	if reqStream {
+		writerSizeBeforeStream := c.Writer.Size()
+		streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, reqModel, shouldMimicClaudeCode)
+		if err != nil {
+			var sseErr *sseStreamErrorEventError
+			if errors.As(err, &sseErr) {
+
+				body := []byte(sseErr.RawData)
+				semanticStatus := http.StatusForbidden
+				var semanticDecision UpstreamErrorDecision
+				if c.Writer.Size() == writerSizeBeforeStream && gjson.GetBytes(body, "error.type").String() == "overloaded_error" {
+					semanticStatus = 529
+					syntheticResp := &http.Response{
+						StatusCode: semanticStatus,
+						Header:     resp.Header.Clone(),
+						Body:       io.NopCloser(bytes.NewReader(body)),
+					}
+					semanticDecision = s.handleFailoverSideEffects(ctx, syntheticResp, account, reqModel)
+					_ = syntheticResp.Body.Close()
+				}
+				upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))
+
+				upstreamDetail := ""
+				if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+					maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+					if maxBytes <= 0 {
+						maxBytes = 2048
+					}
+					upstreamDetail = truncateString(sseErr.RawData, maxBytes)
+				}
+
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: semanticStatus,
+					UpstreamRequestID:  resp.Header.Get("x-request-id"),
+					Kind:               "stream_error",
+					Message:            upstreamMsg,
+					Detail:             upstreamDetail,
+				})
+
+				logger.LegacyPrintf("service.gateway",
+					"[Forward] SSE error event in stream: Account=%d(%s) RequestID=%s Body=%s",
+					account.ID, account.Name, resp.Header.Get("x-request-id"),
+					truncateString(sseErr.RawData, 1000),
+				)
+
+				decision := semanticDecision
+				if semanticStatus != 529 {
+					decision = upstreamErrorDecisionWithoutPersistence(account, http.StatusForbidden)
+					// 已经写出部分响应后不能再改变账号调度状态；避免把一个
+					// 无法重试的流内错误写入持久化错误策略。
+					if c.Writer.Size() == writerSizeBeforeStream && s.rateLimitService != nil {
+						decision = s.rateLimitService.ApplyUpstreamError(ctx, account, http.StatusForbidden, resp.Header, body, reqModel)
+					}
+				}
+				if decision.ShouldReturnGenericError() && !c.Writer.Written() {
+					MarkResponseCommitted(c)
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"type": "error",
+						"error": gin.H{
+							"type":    "upstream_error",
+							"message": "Upstream gateway error",
+						},
+					})
+					return nil, fmt.Errorf("upstream SSE error not in custom error codes")
+				}
+				if !c.Writer.Written() && decision.ShouldFailover(account, semanticStatus, true) {
+					return nil, &UpstreamFailoverError{
+						StatusCode:             semanticStatus,
+						ResponseBody:           body,
+						RetryableOnSameAccount: decision.RetryableOnSameAccount(account, semanticStatus),
+					}
+				}
+				return nil, err
+			}
+			requestSpeed := gjson.GetBytes(lastWireBody, "speed").String()
+			if partial := partialStreamUsageResult(resp, streamResult, originalModel, mappedModel, startTime, requestSpeed, err); partial != nil {
+				return partial, err
+			}
+			return nil, err
+		}
+		usage = streamResult.usage
+		firstTokenMs = streamResult.firstTokenMs
+		clientDisconnect = streamResult.clientDisconnect
+	} else {
+		usage, err = s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, reqModel)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if usage == nil {
+		usage = &ClaudeUsage{}
+	}
+	if strings.TrimSpace(usage.Speed) == "" && strings.EqualFold(strings.TrimSpace(gjson.GetBytes(lastWireBody, "speed").String()), "fast") {
+		usage.Speed = "fast"
+	}
+
+	return &ForwardResult{
+		RequestID:                   resp.Header.Get("x-request-id"),
+		UpstreamHeaders:             resp.Header,
+		Usage:                       *usage,
+		Model:                       originalModel,
+		UpstreamModel:               mappedModel,
+		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
+		Stream:                      reqStream,
+		Duration:                    time.Since(startTime),
+		FirstTokenMs:                firstTokenMs,
+		ClientDisconnect:            clientDisconnect,
+	}, nil
+}
+
+// ResolveChannelMapping 委托渠道服务解析模型映射
+func (s *GatewayService) ResolveChannelMapping(ctx context.Context, groupID int64, model string) ChannelMappingResult {
+	if s.channelService == nil {
+		return ChannelMappingResult{MappedModel: model}
+	}
+	return s.channelService.ResolveChannelMapping(ctx, groupID, model)
+}
+
+// ReplaceModelInBody 替换请求体中的模型名（导出供 handler 使用）
+func (s *GatewayService) ReplaceModelInBody(body []byte, newModel string) []byte {
+	return ReplaceModelInBody(body, newModel)
+}
+
+// IsModelRestricted 检查模型是否被渠道限制
+func (s *GatewayService) IsModelRestricted(ctx context.Context, groupID int64, model string) bool {
+	if s.channelService == nil {
+		return false
+	}
+	return s.channelService.IsModelRestricted(ctx, groupID, model)
+}
+
+// ResolveChannelMappingAndRestrict 解析渠道映射。
+// 模型限制检查已移至调度阶段（checkChannelPricingRestriction），restricted 始终返回 false。
+func (s *GatewayService) ResolveChannelMappingAndRestrict(ctx context.Context, groupID *int64, model string) (ChannelMappingResult, bool) {
+	if s.channelService == nil {
+		return (ChannelMappingResult{MappedModel: model}).WithAPIKeyModelRedirect(ctx, model), false
+	}
+	result, restricted := s.channelService.ResolveChannelMappingAndRestrict(ctx, groupID, model)
+	return result.WithAPIKeyModelRedirect(ctx, model), restricted
+}
+
+// checkChannelPricingRestriction 根据渠道计费基准检查模型是否受定价列表限制。
+// 供调度阶段预检查（requested / channel_mapped）。
+// upstream 需逐账号检查，此处返回 false。
+func (s *GatewayService) checkChannelPricingRestriction(ctx context.Context, groupID *int64, requestedModel string) bool {
+	if groupID == nil || s.channelService == nil || requestedModel == "" {
+		return false
+	}
+	mapping := s.channelService.ResolveChannelMapping(ctx, *groupID, requestedModel)
+	billingModel := billingModelForRestriction(mapping.BillingModelSource, requestedModel, mapping.MappedModel)
+	if billingModel == "" {
+		return false
+	}
+	return s.channelService.IsModelRestricted(ctx, *groupID, billingModel)
+}
+
+// billingModelForRestriction 根据计费基准确定限制检查使用的模型。
+// upstream 返回空（需逐账号检查）。
+func billingModelForRestriction(source, requestedModel, channelMappedModel string) string {
+	switch source {
+	case BillingModelSourceRequested:
+		return requestedModel
+	case BillingModelSourceUpstream:
+		return ""
+	case BillingModelSourceChannelMapped:
+		return channelMappedModel
+	default:
+		return channelMappedModel
+	}
+}
+
+// isUpstreamModelRestrictedByChannel 检查账号映射后的上游模型是否受渠道定价限制。
+// 仅在 BillingModelSource="upstream" 且 RestrictModels=true 时由调度循环调用。
+func (s *GatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context, groupID int64, account *Account, requestedModel string) bool {
+	if s.channelService == nil {
+		return false
+	}
+	routingModel := requestedModel
+	if mapping := s.channelService.ResolveChannelMapping(ctx, groupID, requestedModel); mapping.Mapped {
+		routingModel = mapping.MappedModel
+	}
+	upstreamModel := resolveAccountUpstreamModel(ctx, account, routingModel)
+	if upstreamModel == "" {
+		return false
+	}
+	return s.channelService.IsModelRestricted(ctx, groupID, upstreamModel)
+}
+
+// channelMappedModelForGroup 返回账号调度层使用的渠道映射后模型。
+func (s *GatewayService) channelMappedModelForGroup(ctx context.Context, groupID *int64, requestedModel string) string {
+	if s == nil || s.channelService == nil || groupID == nil || strings.TrimSpace(requestedModel) == "" {
+		return requestedModel
+	}
+	mapping := s.channelService.ResolveChannelMapping(ctx, *groupID, requestedModel)
+	if mappedModel := strings.TrimSpace(mapping.MappedModel); mappedModel != "" {
+		return mappedModel
+	}
+	return requestedModel
+}
+
+// resolveAccountMappedModelForForward 执行账号模型映射，并对空映射结果保持原模型透传。
+// 所有实际转发和调度检查都应从渠道映射后的模型调用本函数。
+func resolveAccountMappedModelForForward(account *Account, requestedModel string) string {
+	if account == nil {
+		return ""
+	}
+	mappedModel, matched := account.ResolveMappedModel(requestedModel)
+	if !matched || strings.TrimSpace(mappedModel) == "" {
+		return requestedModel
+	}
+	return strings.TrimSpace(mappedModel)
+}
+
+// resolveAnthropicAccountUpstreamModel 执行账号映射后的 Anthropic 平台最终模型规范化。
+func resolveAnthropicAccountUpstreamModel(account *Account, accountMappedModel string) string {
+	if account == nil {
+		return ""
+	}
+	accountMappedModel = strings.TrimSpace(accountMappedModel)
+	if accountMappedModel == "" || account.Platform != PlatformAnthropic || account.Type == AccountTypeAPIKey || account.IsBedrock() {
+		return accountMappedModel
+	}
+	normalized := claude.NormalizeModelID(accountMappedModel)
+	if account.Type == AccountTypeServiceAccount {
+		return normalizeVertexAnthropicModelID(normalized)
+	}
+	return normalized
+}
+
+// resolveAccountUpstreamModel 解析真正发送给平台上游的最终模型。
+func resolveAccountUpstreamModel(ctx context.Context, account *Account, requestedModel string) string {
+	if account == nil {
+		return ""
+	}
+	var upstreamModel string
+	if account.IsBedrock() {
+		mappedModel, ok := ResolveBedrockModelID(account, requestedModel)
+		if !ok {
+			return ""
+		}
+		upstreamModel = mappedModel
+	} else if account.Platform == PlatformAntigravity {
+		upstreamModel = resolveFinalAntigravityModelKey(ctx, account, requestedModel)
+	} else if account.Platform == PlatformOpenAI || account.Platform == PlatformGrok {
+		// 模型列表按账号的 HTTP 自动透传规则展示真实可请求模型。
+		upstreamModel = resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, false, true)
+	} else {
+		mappedModel := resolveAccountMappedModelForForward(account, requestedModel)
+		if account.Platform == PlatformQoder {
+			site, err := qoderSiteForAccount(account)
+			if err != nil {
+				return ""
+			}
+			upstreamModel = resolveQoderModelForSite(site, mappedModel).Key
+		} else {
+			upstreamModel = resolveAnthropicAccountUpstreamModel(account, mappedModel)
+		}
+	}
+
+	// 最终账号模型必须在写响应前登记，确保流式与非流式元数据都能恢复为客户端别名。
+	upstreamModel = strings.TrimSpace(upstreamModel)
+	RegisterAPIKeyModelRedirectStage(ctx, upstreamModel)
+	return upstreamModel
+}
+
+// needsUpstreamChannelRestrictionCheck 判断是否需要在调度循环中逐账号检查上游模型的渠道限制。
+func (s *GatewayService) needsUpstreamChannelRestrictionCheck(ctx context.Context, groupID *int64) bool {
+	if groupID == nil || s.channelService == nil {
+		return false
+	}
+	ch, err := s.channelService.GetChannelForGroup(ctx, *groupID)
+	if err != nil {
+		slog.Warn("failed to check channel upstream restriction", "group_id", *groupID, "error", err)
+		return false
+	}
+	if ch == nil || !ch.RestrictModels {
+		return false
+	}
+	return ch.BillingModelSource == BillingModelSourceUpstream
+}

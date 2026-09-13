@@ -1,0 +1,439 @@
+//go:build unit
+
+package service
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+// --- billingModelForRestriction ---
+
+func TestBillingModelForRestriction_Requested(t *testing.T) {
+	t.Parallel()
+	got := billingModelForRestriction(BillingModelSourceRequested, "claude-sonnet-4-5", "claude-sonnet-4-6")
+	require.Equal(t, "claude-sonnet-4-5", got)
+}
+
+func TestBillingModelForRestriction_ChannelMapped(t *testing.T) {
+	t.Parallel()
+	got := billingModelForRestriction(BillingModelSourceChannelMapped, "claude-sonnet-4-5", "claude-sonnet-4-6")
+	require.Equal(t, "claude-sonnet-4-6", got)
+}
+
+func TestBillingModelForRestriction_Upstream(t *testing.T) {
+	t.Parallel()
+	got := billingModelForRestriction(BillingModelSourceUpstream, "claude-sonnet-4-5", "claude-sonnet-4-6")
+	require.Equal(t, "", got, "upstream should return empty (per-account check needed)")
+}
+
+func TestBillingModelForRestriction_Empty(t *testing.T) {
+	t.Parallel()
+	got := billingModelForRestriction("", "claude-sonnet-4-5", "claude-sonnet-4-6")
+	require.Equal(t, "claude-sonnet-4-6", got, "empty source defaults to channel_mapped")
+}
+
+// --- resolveAccountUpstreamModel ---
+
+func TestResolveAccountUpstreamModel_Antigravity(t *testing.T) {
+	t.Parallel()
+	account := &Account{
+		Platform: PlatformAntigravity,
+	}
+	// Antigravity 平台使用 DefaultAntigravityModelMapping
+	got := resolveAccountUpstreamModel(context.Background(), account, "claude-sonnet-4-6")
+	require.Equal(t, "claude-sonnet-4-6", got)
+}
+
+func TestResolveAccountUpstreamModel_Antigravity_Unsupported(t *testing.T) {
+	t.Parallel()
+	account := &Account{
+		Platform: PlatformAntigravity,
+	}
+	got := resolveAccountUpstreamModel(context.Background(), account, "totally-unknown-model")
+	require.Equal(t, "", got, "unsupported model should return empty")
+}
+
+func TestResolveAccountUpstreamModel_NonAntigravity(t *testing.T) {
+	t.Parallel()
+	account := &Account{
+		Platform: PlatformAnthropic,
+	}
+	got := resolveAccountUpstreamModel(context.Background(), account, "claude-sonnet-4-6")
+	require.Equal(t, "claude-sonnet-4-6", got, "no mapping = passthrough")
+}
+
+func TestResolveAccountUpstreamModel_AnthropicOAuthAppliesMappingBeforeNormalization(t *testing.T) {
+	t.Parallel()
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"client-alias": "claude-sonnet-4-5"},
+		},
+	}
+
+	got := resolveAccountUpstreamModel(context.Background(), account, "client-alias")
+	require.Equal(t, "claude-sonnet-4-5-20250929", got)
+}
+
+func TestResolveAccountUpstreamModel_BedrockUsesRegionalFinalModel(t *testing.T) {
+	t.Parallel()
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeBedrock,
+		Credentials: map[string]any{
+			"aws_region": "us-east-1",
+		},
+	}
+
+	got := resolveAccountUpstreamModel(context.Background(), account, "claude-sonnet-4-5")
+	require.Equal(t, "us.anthropic.claude-sonnet-4-5-20250929-v1:0", got)
+}
+
+func TestResolveAccountUpstreamModel_AntigravityUsesThinkingContext(t *testing.T) {
+	t.Parallel()
+	account := &Account{Platform: PlatformAntigravity}
+	ctx := WithThinkingEnabled(context.Background(), true, false)
+
+	got := resolveAccountUpstreamModel(ctx, account, "claude-sonnet-4-5")
+	require.Equal(t, "claude-sonnet-4-5-thinking", got)
+}
+
+func TestIsModelSupportedByAccountWithContext_QoderUsesChannelMappedAccountLayerModel(t *testing.T) {
+	t.Parallel()
+	ch := Channel{
+		ID:       1,
+		Status:   StatusActive,
+		GroupIDs: []int64{10},
+		ModelMapping: map[string]map[string]string{
+			PlatformQoder: {"my-qoder": "qmodel"},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: PlatformQoder}))
+	svc := &GatewayService{channelService: channelSvc}
+	ctx := svc.withGroupContext(context.Background(), &Group{
+		ID:       10,
+		Platform: PlatformQoder,
+		Status:   StatusActive,
+		Hydrated: true,
+	})
+	account := &Account{
+		Platform: PlatformQoder,
+		Credentials: map[string]any{
+			"model_mapping":   map[string]any{"qmodel": "ultimate"},
+			"model_whitelist": []any{"ultimate"},
+		},
+	}
+
+	require.True(t, svc.isModelSupportedByAccountWithContext(ctx, account, "my-qoder"),
+		"account whitelist should be checked after channel mapping and account mapping")
+}
+
+// --- checkChannelPricingRestriction ---
+
+func TestCheckChannelPricingRestriction_NilGroupID(t *testing.T) {
+	t.Parallel()
+	svc := &GatewayService{channelService: &ChannelService{}}
+	require.False(t, svc.checkChannelPricingRestriction(context.Background(), nil, "claude-sonnet-4"))
+}
+
+func TestCheckChannelPricingRestriction_NilChannelService(t *testing.T) {
+	t.Parallel()
+	svc := &GatewayService{}
+	gid := int64(10)
+	require.False(t, svc.checkChannelPricingRestriction(context.Background(), &gid, "claude-sonnet-4"))
+}
+
+func TestCheckChannelPricingRestriction_EmptyModel(t *testing.T) {
+	t.Parallel()
+	svc := &GatewayService{channelService: &ChannelService{}}
+	gid := int64(10)
+	require.False(t, svc.checkChannelPricingRestriction(context.Background(), &gid, ""))
+}
+
+func TestCheckChannelPricingRestriction_ChannelMapped_Restricted(t *testing.T) {
+	t.Parallel()
+	// 渠道映射 claude-sonnet-4-5 → claude-sonnet-4-6，但定价列表只有 claude-opus-4-6
+	ch := Channel{
+		ID:                 1,
+		Status:             StatusActive,
+		GroupIDs:           []int64{10},
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceChannelMapped,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: "anthropic", Models: []string{"claude-opus-4-6"}},
+		},
+		ModelMapping: map[string]map[string]string{
+			"anthropic": {"claude-sonnet-4-5": "claude-sonnet-4-6"},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: "anthropic"}))
+	svc := &GatewayService{channelService: channelSvc}
+
+	gid := int64(10)
+	require.True(t, svc.checkChannelPricingRestriction(context.Background(), &gid, "claude-sonnet-4-5"),
+		"mapped model claude-sonnet-4-6 is NOT in pricing → restricted")
+}
+
+func TestCheckChannelPricingRestriction_ChannelMapped_Allowed(t *testing.T) {
+	t.Parallel()
+	// 渠道映射 claude-sonnet-4-5 → claude-sonnet-4-6，定价列表包含 claude-sonnet-4-6
+	ch := Channel{
+		ID:                 1,
+		Status:             StatusActive,
+		GroupIDs:           []int64{10},
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceChannelMapped,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: "anthropic", Models: []string{"claude-sonnet-4-6"}},
+		},
+		ModelMapping: map[string]map[string]string{
+			"anthropic": {"claude-sonnet-4-5": "claude-sonnet-4-6"},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: "anthropic"}))
+	svc := &GatewayService{channelService: channelSvc}
+
+	gid := int64(10)
+	require.False(t, svc.checkChannelPricingRestriction(context.Background(), &gid, "claude-sonnet-4-5"),
+		"mapped model claude-sonnet-4-6 IS in pricing → allowed")
+}
+
+func TestCheckChannelPricingRestriction_QoderChannelMappedBasisRejectsBlankRouteKey(t *testing.T) {
+	t.Parallel()
+	price := 1e-6
+	ch := Channel{
+		ID:                 1,
+		Status:             StatusActive,
+		GroupIDs:           []int64{10},
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceChannelMapped,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: PlatformQoder, Models: []string{"qmodel"}, BillingMode: BillingModeToken},
+			{Platform: PlatformQoder, Models: []string{"qwen3.7-plus"}, BillingMode: BillingModeToken, InputPrice: &price},
+		},
+		ModelMapping: map[string]map[string]string{
+			PlatformQoder: {"qwen3.7-plus": "qmodel"},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: PlatformQoder}))
+	svc := &GatewayService{channelService: channelSvc}
+
+	gid := int64(10)
+	require.True(t, svc.checkChannelPricingRestriction(context.Background(), &gid, "qwen3.7-plus"),
+		"Qoder 渠道映射依据只能检查 C，不能用 R 的有效价格放行空价格 route key")
+}
+
+func TestCheckChannelPricingRestriction_Requested_Restricted(t *testing.T) {
+	t.Parallel()
+	// billing_model_source=requested，定价列表有 claude-sonnet-4-6 但请求的是 claude-sonnet-4-5
+	ch := Channel{
+		ID:                 1,
+		Status:             StatusActive,
+		GroupIDs:           []int64{10},
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceRequested,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: "anthropic", Models: []string{"claude-sonnet-4-6"}},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: "anthropic"}))
+	svc := &GatewayService{channelService: channelSvc}
+
+	gid := int64(10)
+	require.True(t, svc.checkChannelPricingRestriction(context.Background(), &gid, "claude-sonnet-4-5"),
+		"requested model claude-sonnet-4-5 is NOT in pricing → restricted")
+}
+
+func TestCheckChannelPricingRestriction_Requested_Allowed(t *testing.T) {
+	t.Parallel()
+	ch := Channel{
+		ID:                 1,
+		Status:             StatusActive,
+		GroupIDs:           []int64{10},
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceRequested,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: "anthropic", Models: []string{"claude-sonnet-4-5"}},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: "anthropic"}))
+	svc := &GatewayService{channelService: channelSvc}
+
+	gid := int64(10)
+	require.False(t, svc.checkChannelPricingRestriction(context.Background(), &gid, "claude-sonnet-4-5"),
+		"requested model IS in pricing → allowed")
+}
+
+func TestCheckChannelPricingRestriction_Upstream_SkipsPreCheck(t *testing.T) {
+	t.Parallel()
+	// upstream 模式：预检查始终跳过（返回 false），需逐账号检查
+	ch := Channel{
+		ID:                 1,
+		Status:             StatusActive,
+		GroupIDs:           []int64{10},
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceUpstream,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: "anthropic", Models: []string{"claude-opus-4-6"}},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: "anthropic"}))
+	svc := &GatewayService{channelService: channelSvc}
+
+	gid := int64(10)
+	require.False(t, svc.checkChannelPricingRestriction(context.Background(), &gid, "unknown-model"),
+		"upstream mode should skip pre-check (per-account check needed)")
+}
+
+func TestCheckChannelPricingRestriction_RestrictModelsDisabled(t *testing.T) {
+	t.Parallel()
+	ch := Channel{
+		ID:             1,
+		Status:         StatusActive,
+		GroupIDs:       []int64{10},
+		RestrictModels: false, // 未开启模型限制
+		ModelPricing: []ChannelModelPricing{
+			{Platform: "anthropic", Models: []string{"claude-opus-4-6"}},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: "anthropic"}))
+	svc := &GatewayService{channelService: channelSvc}
+
+	gid := int64(10)
+	require.False(t, svc.checkChannelPricingRestriction(context.Background(), &gid, "any-model"),
+		"RestrictModels=false → always allowed")
+}
+
+func TestCheckChannelPricingRestriction_NoChannel(t *testing.T) {
+	t.Parallel()
+	// 分组没有关联渠道
+	repo := &mockChannelRepository{
+		listAllFn: func(_ context.Context) ([]Channel, error) { return nil, nil },
+	}
+	channelSvc := newTestChannelService(repo)
+	svc := &GatewayService{channelService: channelSvc}
+
+	gid := int64(999)
+	require.False(t, svc.checkChannelPricingRestriction(context.Background(), &gid, "any-model"),
+		"no channel for group → allowed")
+}
+
+// --- isUpstreamModelRestrictedByChannel ---
+
+func TestIsUpstreamModelRestrictedByChannel_Restricted(t *testing.T) {
+	t.Parallel()
+	ch := Channel{
+		ID:             1,
+		Status:         StatusActive,
+		GroupIDs:       []int64{10},
+		RestrictModels: true,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: "anthropic", Models: []string{"claude-opus-4-6"}},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: "anthropic"}))
+	svc := &GatewayService{channelService: channelSvc}
+
+	account := &Account{Platform: PlatformAntigravity}
+	// claude-sonnet-4-6 在 DefaultAntigravityModelMapping 中，映射后仍为 claude-sonnet-4-6
+	// 但定价列表只有 claude-opus-4-6
+	require.True(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "claude-sonnet-4-6"),
+		"upstream model claude-sonnet-4-6 NOT in pricing → restricted")
+}
+
+func TestIsUpstreamModelRestrictedByChannel_Allowed(t *testing.T) {
+	t.Parallel()
+	ch := Channel{
+		ID:             1,
+		Status:         StatusActive,
+		GroupIDs:       []int64{10},
+		RestrictModels: true,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: "anthropic", Models: []string{"claude-sonnet-4-6"}},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: "anthropic"}))
+	svc := &GatewayService{channelService: channelSvc}
+
+	account := &Account{Platform: PlatformAntigravity}
+	require.False(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "claude-sonnet-4-6"),
+		"upstream model claude-sonnet-4-6 IS in pricing → allowed")
+}
+
+func TestIsUpstreamModelRestrictedByChannel_AppliesChannelMappingBeforeAccountMapping(t *testing.T) {
+	t.Parallel()
+	price := 1e-6
+	ch := Channel{
+		ID:                 1,
+		Status:             StatusActive,
+		GroupIDs:           []int64{10},
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceUpstream,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: PlatformQoder, Models: []string{"ultimate"}, BillingMode: BillingModeToken, InputPrice: &price},
+		},
+		ModelMapping: map[string]map[string]string{
+			PlatformQoder: {"my-qoder": "qmodel"},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: PlatformQoder}))
+	svc := &GatewayService{channelService: channelSvc}
+	account := &Account{
+		Platform: PlatformQoder,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"qmodel": "ultimate"},
+		},
+	}
+
+	require.False(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "my-qoder"),
+		"upstream restriction should check the final model after channel mapping and account mapping")
+}
+
+func TestIsUpstreamModelRestrictedByChannel_QoderUpstreamBasisRejectsBlankUpstream(t *testing.T) {
+	t.Parallel()
+	price := 1e-6
+	ch := Channel{
+		ID:                 1,
+		Status:             StatusActive,
+		GroupIDs:           []int64{10},
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceUpstream,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: PlatformQoder, Models: []string{"qmodel"}, BillingMode: BillingModeToken},
+			{Platform: PlatformQoder, Models: []string{"qwen3.7-plus"}, BillingMode: BillingModeToken, InputPrice: &price},
+		},
+		ModelMapping: map[string]map[string]string{
+			PlatformQoder: {"qwen3.7-plus": "qmodel"},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: PlatformQoder}))
+	svc := &GatewayService{channelService: channelSvc}
+	account := &Account{Platform: PlatformQoder}
+
+	require.True(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "qwen3.7-plus"),
+		"Qoder upstream 依据只能检查 U，不能用 R 的有效价格放行空价格上游模型")
+}
+
+func TestIsUpstreamModelRestrictedByChannel_UnsupportedModel(t *testing.T) {
+	t.Parallel()
+	ch := Channel{
+		ID:             1,
+		Status:         StatusActive,
+		GroupIDs:       []int64{10},
+		RestrictModels: true,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: "anthropic", Models: []string{"claude-opus-4-6"}},
+		},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: "anthropic"}))
+	svc := &GatewayService{channelService: channelSvc}
+
+	account := &Account{Platform: PlatformAntigravity}
+	// totally-unknown-model 不在 DefaultAntigravityModelMapping 中 → 映射结果为空
+	require.False(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "totally-unknown-model"),
+		"unmappable model → upstream model empty → not restricted (account filter handles this)")
+}

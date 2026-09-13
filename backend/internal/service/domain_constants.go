@@ -1,0 +1,679 @@
+package service
+
+import (
+	"fmt"
+
+	"github.com/TokenFlux/TokenRouter/internal/domain"
+)
+
+// Status constants
+const (
+	StatusActive   = domain.StatusActive
+	StatusDisabled = domain.StatusDisabled
+	StatusError    = domain.StatusError
+	StatusUnused   = domain.StatusUnused
+	StatusUsed     = domain.StatusUsed
+	StatusExpired  = domain.StatusExpired
+)
+
+// Role constants
+const (
+	RoleAdmin = domain.RoleAdmin
+	RoleUser  = domain.RoleUser
+)
+
+const (
+	// DefaultUserAPIKeyLimit 是新用户 API Key 数量上限的内置默认值。
+	DefaultUserAPIKeyLimit = domain.DefaultUserAPIKeyLimit
+	// MaxUserAPIKeyLimit 是数据库能够保存的用户 API Key 数量上限最大值。
+	MaxUserAPIKeyLimit = domain.MaxUserAPIKeyLimit
+)
+
+// Affiliate rebate settings
+const (
+	AffiliateRebateRateDefault          = 20.0
+	AffiliateRebateRateMin              = 0.0
+	AffiliateRebateRateMax              = 100.0
+	AffiliateEnabledDefault             = false // 邀请返利总开关默认关闭
+	AffiliateRebateFreezeHoursDefault   = 0     // 0 表示不冻结
+	AffiliateRebateFreezeHoursMax       = 720   // 最大 30 天
+	AffiliateRebateDurationDaysDefault  = 0     // 0 表示永久有效
+	AffiliateRebateDurationDaysMax      = 3650  // 约 10 年
+	AffiliateRebatePerInviteeCapDefault = 0.0   // 推理积分上限，0 表示无上限
+	AdminRechargeRebateEnabledDefault   = false // 管理员充值默认不产生返利
+)
+
+// Platform constants
+const (
+	PlatformAnthropic   = domain.PlatformAnthropic
+	PlatformOpenAI      = domain.PlatformOpenAI
+	PlatformGemini      = domain.PlatformGemini
+	PlatformAntigravity = domain.PlatformAntigravity
+	PlatformQoder       = domain.PlatformQoder
+	PlatformGrok        = domain.PlatformGrok
+	PlatformKimi        = domain.PlatformKimi
+	PlatformZhipu       = domain.PlatformZhipu
+	PlatformDeepseek    = domain.PlatformDeepseek
+	PlatformMiniMax     = domain.PlatformMiniMax
+	PlatformComposite   = domain.PlatformComposite
+)
+
+// 账号接入模式（国产供应商）：按量付费 vs Coding Plan。
+const (
+	AccountModePayG   = domain.AccountModePayG
+	AccountModeCoding = domain.AccountModeCoding
+)
+
+// 上游 API 协议（国产供应商）：决定转发端点与格式，与接入模式正交。
+const (
+	APIProtocolChatCompletions = domain.APIProtocolChatCompletions
+	APIProtocolAnthropic       = domain.APIProtocolAnthropic
+	APIProtocolResponses       = domain.APIProtocolResponses
+	APIProtocolAdaptive        = domain.APIProtocolAdaptive
+)
+
+// 国产 OpenAI 兼容供应商各模式的默认 base_url。
+// 与前端 credentialsBuilder.ts 中的预设保持一致。
+const (
+	DefaultKimiPayGBaseURL    = "https://api.moonshot.cn/v1"
+	DefaultKimiCodingBaseURL  = "https://api.kimi.com/coding/v1"
+	DefaultZhipuPayGBaseURL   = "https://open.bigmodel.cn/api/paas/v4"
+	DefaultZhipuCodingBaseURL = "https://open.bigmodel.cn/api/coding/paas/v4"
+	DefaultDeepseekBaseURL    = "https://api.deepseek.com"
+	// MiniMax 按量与 Coding Plan 使用相同文本协议端点，凭据决定计费模式。
+	DefaultMiniMaxBaseURL = "https://api.minimax.io/v1"
+)
+
+// 国产供应商 Anthropic 协议端点的默认 base_url（上游路径为 {base}/v1/messages）。
+// 与前端 credentialsBuilder.ts 中的预设保持一致。
+const (
+	DefaultKimiPayGAnthropicBaseURL   = "https://api.moonshot.cn/anthropic"
+	DefaultKimiCodingAnthropicBaseURL = "https://api.kimi.com/coding"
+	DefaultZhipuAnthropicBaseURL      = "https://open.bigmodel.cn/api/anthropic"
+	DefaultDeepseekAnthropicBaseURL   = "https://api.deepseek.com/anthropic"
+	DefaultMiniMaxAnthropicBaseURL    = "https://api.minimax.io/anthropic"
+)
+
+// IsCNProvider 报告 platform 是否为国产 OpenAI 兼容供应商（Kimi/Zhipu/DeepSeek/MiniMax）。
+func IsCNProvider(platform string) bool {
+	switch platform {
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
+		return true
+	default:
+		return false
+	}
+}
+
+// AllowedQuotaPlatforms 是允许设置 user × platform quota 的平台列表（单一权威来源）。
+// ent/schema/user_platform_quota.go 的 Validate 函数独立维护（构建期约束），
+// 若新增平台需同步修改该 schema。
+var AllowedQuotaPlatforms = []string{
+	PlatformAnthropic,
+	PlatformOpenAI,
+	PlatformGemini,
+	PlatformAntigravity,
+	PlatformQoder,
+	PlatformGrok,
+	PlatformKimi,
+	PlatformZhipu,
+	PlatformDeepseek,
+	PlatformMiniMax,
+}
+
+// AllowedSchedulingThresholdPlatforms 是允许设置账号自动停调阈值的平台列表。
+// openai/anthropic/grok 有原生用量窗口；kimi/zhipu 的 Coding Plan 同样暴露 5h/weekly
+// 滚动窗口，MiniMax Coding Plan 也纳入阈值评估；deepseek 为余额型，走余额检测。
+var AllowedSchedulingThresholdPlatforms = []string{
+	PlatformOpenAI,
+	PlatformAnthropic,
+	PlatformGrok,
+	PlatformKimi,
+	PlatformZhipu,
+	PlatformMiniMax,
+}
+
+// IsAllowedQuotaPlatform 报告 s 是否为合法的 quota platform 标识。
+func IsAllowedQuotaPlatform(s string) bool {
+	for _, p := range AllowedQuotaPlatforms {
+		if p == s {
+			return true
+		}
+	}
+	return false
+}
+
+// Account type constants
+const (
+	AccountTypeOAuth          = domain.AccountTypeOAuth          // OAuth类型账号（full scope: profile + inference）
+	AccountTypeSetupToken     = domain.AccountTypeSetupToken     // Setup Token类型账号（inference only scope）
+	AccountTypeAPIKey         = domain.AccountTypeAPIKey         // API Key类型账号
+	AccountTypeUpstream       = domain.AccountTypeUpstream       // 上游透传类型账号（通过 Base URL + API Key 连接上游）
+	AccountTypeBedrock        = domain.AccountTypeBedrock        // AWS Bedrock 类型账号（通过 SigV4 签名或 API Key 连接 Bedrock，由 credentials.auth_mode 区分）
+	AccountTypeServiceAccount = domain.AccountTypeServiceAccount // Google Service Account 类型账号（用于 Vertex AI）
+	AccountTypeCosy           = domain.AccountTypeCosy           // Qoder COSY 协议账号
+)
+
+// Redeem type constants
+const (
+	RedeemTypeBalance          = domain.RedeemTypeBalance
+	RedeemTypeConcurrency      = domain.RedeemTypeConcurrency
+	RedeemTypeSubscription     = domain.RedeemTypeSubscription
+	RedeemTypeInvitation       = domain.RedeemTypeInvitation
+	RedeemTypeAffiliateBalance = "affiliate_balance"
+)
+
+// PromoCode status constants
+const (
+	PromoCodeStatusActive   = domain.PromoCodeStatusActive
+	PromoCodeStatusDisabled = domain.PromoCodeStatusDisabled
+)
+
+// Admin adjustment type constants
+const (
+	AdjustmentTypeAdminBalance     = domain.AdjustmentTypeAdminBalance     // 管理员调整余额
+	AdjustmentTypeAdminConcurrency = domain.AdjustmentTypeAdminConcurrency // 管理员调整并发数
+)
+
+// Group subscription type constants
+const (
+	SubscriptionTypeStandard     = domain.SubscriptionTypeStandard     // 标准计费模式（按余额扣费）
+	SubscriptionTypeSubscription = domain.SubscriptionTypeSubscription // 订阅模式（按限额控制）
+)
+
+// Subscription status constants
+const (
+	SubscriptionStatusActive    = domain.SubscriptionStatusActive
+	SubscriptionStatusPending   = domain.SubscriptionStatusPending
+	SubscriptionStatusExpired   = domain.SubscriptionStatusExpired
+	SubscriptionStatusSuspended = domain.SubscriptionStatusSuspended
+	// SubscriptionStatusRevoked 是软删除订阅的 API 展示态，不写入 status 字段。
+	SubscriptionStatusRevoked = "revoked"
+)
+
+// LinuxDoConnectSyntheticEmailDomain 是 LinuxDo Connect 用户的合成邮箱后缀（RFC 保留域名）。
+const LinuxDoConnectSyntheticEmailDomain = "@linuxdo-connect.invalid"
+
+// OIDCConnectSyntheticEmailDomain 是 OIDC 用户的合成邮箱后缀（RFC 保留域名）。
+const OIDCConnectSyntheticEmailDomain = "@oidc-connect.invalid"
+
+// WeChatConnectSyntheticEmailDomain 是 WeChat Connect 用户的合成邮箱后缀（RFC 保留域名）。
+const WeChatConnectSyntheticEmailDomain = "@wechat-connect.invalid"
+
+// DingTalkConnectSyntheticEmailDomain 是 DingTalk Connect 用户的合成邮箱后缀（RFC 保留域名）。
+const DingTalkConnectSyntheticEmailDomain = "@dingtalk-connect.invalid"
+
+// Setting keys
+const (
+	// 注册设置
+	SettingKeyRegistrationEnabled              = "registration_enabled"                // 是否开放注册
+	SettingKeyEmailVerifyEnabled               = "email_verify_enabled"                // 是否开启邮件验证
+	SettingKeyRegistrationEmailSuffixWhitelist = "registration_email_suffix_whitelist" // 注册邮箱后缀白名单（JSON 数组）
+	SettingKeyRegistrationEmailNormalization   = "registration_email_normalization"    // 注册邮箱地址归一化唯一性开关
+	// 白名单非空时，是否放行非白名单域名按主域名限量注册；默认关闭并严格执行白名单。
+	SettingKeyRegistrationEmailDomainQuotaEnabled = "registration_email_domain_quota_enabled"
+	SettingKeyUserEmailChangeEnabled              = "user_email_change_enabled"        // 是否允许已有邮箱身份的用户换绑主邮箱
+	SettingKeyPromoCodeEnabled                    = "promo_code_enabled"               // 是否启用优惠码功能
+	SettingKeyPasswordResetEnabled                = "password_reset_enabled"           // 是否启用忘记密码功能（需要先开启邮件验证）
+	SettingKeyFrontendURL                         = "frontend_url"                     // 前端基础URL，用于生成密码重置、团队邀请等邮件外部链接
+	SettingKeyInvitationCodeEnabled               = "invitation_code_enabled"          // 是否启用邀请码注册
+	SettingKeyAffiliateEnabled                    = "affiliate_enabled"                // 邀请返利功能总开关
+	SettingKeyAffiliateRebateRate                 = "affiliate_rebate_rate"            // 邀请返利比例（百分比）
+	SettingKeyAffiliateRebateFreezeHours          = "affiliate_rebate_freeze_hours"    // 返利冻结期（小时，0=不冻结）
+	SettingKeyAffiliateRebateDurationDays         = "affiliate_rebate_duration_days"   // 返利有效期（天，0=永久）
+	SettingKeyAffiliateRebatePerInviteeCap        = "affiliate_rebate_per_invitee_cap" // 单个被邀请人的累计返利积分上限（0=无上限）
+	SettingKeyAffiliateAdminRechargeEnabled       = "affiliate_admin_recharge_enabled" // 管理员充值是否产生返利
+	SettingKeyTeamEnabled                         = "team_enabled"                     // 是否显示团队功能相关页面
+	SettingKeyCreativeEnabled                     = "creative_enabled"                 // 创作台功能开关
+	SettingKeyCreativeModelSettings               = "creative_model_settings"          // 创作台生图模型与能力白名单（JSON）
+	SettingKeyCreativeWorkerCount                 = "creative_worker_count"            // 创作台 worker 数量（正整数）
+	SettingKeyRiskControlEnabled                  = "risk_control_enabled"             // 是否启用风控中心入口与内容审计链路
+	SettingKeyCyberSessionBlockEnabled            = "cyber_session_block_enabled"      // cyber_policy 命中后的会话本地屏蔽开关
+	SettingKeyCyberSessionBlockTTLSeconds         = "cyber_session_block_ttl_seconds"  // cyber_policy 会话本地屏蔽时长（秒）
+	SettingKeyContentModerationConfig             = "content_moderation_config"        // 内容审计配置（JSON）
+	SettingKeyLoginAgreementEnabled               = "login_agreement_enabled"          // 登录前是否要求同意条款
+	SettingKeyLoginAgreementMode                  = "login_agreement_mode"             // 条款确认展示模式：modal / checkbox
+	SettingKeyLoginAgreementUpdatedAt             = "login_agreement_updated_at"       // 条款更新日期（展示用）
+	SettingKeyLoginAgreementDocuments             = "login_agreement_documents"        // 条款文档列表（JSON，Markdown 内容）
+
+	// 邮件服务设置
+	SettingKeySMTPHost     = "smtp_host"      // SMTP服务器地址
+	SettingKeySMTPPort     = "smtp_port"      // SMTP端口
+	SettingKeySMTPUsername = "smtp_username"  // SMTP用户名
+	SettingKeySMTPPassword = "smtp_password"  // SMTP密码（加密存储）
+	SettingKeySMTPFrom     = "smtp_from"      // 发件人地址
+	SettingKeySMTPFromName = "smtp_from_name" // 发件人名称
+	SettingKeySMTPUseTLS   = "smtp_use_tls"   // 是否使用TLS
+
+	// Cloudflare Turnstile 设置
+	SettingKeyTurnstileEnabled   = "turnstile_enabled"    // 是否启用 Turnstile 验证
+	SettingKeyTurnstileSiteKey   = "turnstile_site_key"   // Turnstile Site Key
+	SettingKeyTurnstileSecretKey = "turnstile_secret_key" // Turnstile Secret Key
+
+	// 腾讯天御验证码设置
+	SettingKeyTencentCaptchaEnabled        = "tencent_captcha_enabled"
+	SettingKeyTencentCaptchaAppID          = "tencent_captcha_app_id"
+	SettingKeyTencentCaptchaAppSecretKey   = "tencent_captcha_app_secret_key"
+	SettingKeyTencentCaptchaCloudSecretID  = "tencent_captcha_cloud_secret_id"
+	SettingKeyTencentCaptchaCloudSecretKey = "tencent_captcha_cloud_secret_key"
+	SettingKeyTencentCaptchaRegion         = "tencent_captcha_region" // 站点："cn"|"intl"，决定前端 SDK 脚本与服务端接入点
+
+	// 阿里云验证码 2.0 设置（与 Turnstile、腾讯天御互斥，同一时间仅可启用一家）
+	SettingKeyAliyunCaptchaEnabled         = "aliyun_captcha_enabled"           // 是否启用阿里云验证码
+	SettingKeyAliyunCaptchaAccessKeyID     = "aliyun_captcha_access_key_id"     // 阿里云 AccessKey ID
+	SettingKeyAliyunCaptchaAccessKeySecret = "aliyun_captcha_access_key_secret" // 阿里云 AccessKey Secret
+	SettingKeyAliyunCaptchaSceneID         = "aliyun_captcha_scene_id"          // 验证场景 ID（所有认证流程共用）
+	SettingKeyAliyunCaptchaPrefix          = "aliyun_captcha_prefix"            // 身份标，前端 SDK 初始化用
+	SettingKeyAliyunCaptchaRegion          = "aliyun_captcha_region"            // 地域："cn"|"sgp"，决定前端脚本区域与服务端接入点
+
+	// API Key IP 访问控制设置
+	SettingKeyAPIKeyACLTrustForwardedIP = "api_key_acl_trust_forwarded_ip" // API Key IP 白/黑名单是否信任转发 IP
+	SettingKeyForwardedClientIPHeaders  = "forwarded_client_ip_headers"    // 自定义 CDN 客户端 IP 请求头（JSON 数组）
+	settingKeyForwardedClientIPModeV2   = "forwarded_client_ip_mode_v2_migrated"
+
+	// TOTP 双因素认证设置
+	SettingKeyTotpEnabled = "totp_enabled" // 是否启用 TOTP 2FA 功能
+
+	// 会话安全设置
+	SettingKeySessionBindingEnabled = "session_binding_enabled" // 会话 IP/UA 绑定（变更即失效），默认关闭
+
+	// 敏感操作 step-up 2FA 设置
+	SettingKeyStepUpEnabled = "step_up_enabled" // 敏感操作（导出/备份/S3配置/提升管理员等）要求 step-up 2FA，默认关闭
+
+	// 面板 API 限流设置（JSON：PanelRateLimitSettings）
+	SettingKeyPanelRateLimitSettings = "panel_rate_limit_settings"
+
+	// 操作审计日志设置
+	SettingKeyAuditLogRetentionDays = "audit_log_retention_days" // 审计日志保留天数（<=0 永久保留），默认 180
+
+	// LinuxDo Connect OAuth 登录设置
+	SettingKeyLinuxDoConnectEnabled      = "linuxdo_connect_enabled"
+	SettingKeyLinuxDoConnectClientID     = "linuxdo_connect_client_id"
+	SettingKeyLinuxDoConnectClientSecret = "linuxdo_connect_client_secret"
+	SettingKeyLinuxDoConnectRedirectURL  = "linuxdo_connect_redirect_url"
+
+	// DingTalk Connect OAuth 登录设置
+	SettingKeyDingTalkConnectEnabled                 = "dingtalk_connect_enabled"
+	SettingKeyDingTalkConnectClientID                = "dingtalk_connect_client_id"
+	SettingKeyDingTalkConnectClientSecret            = "dingtalk_connect_client_secret"
+	SettingKeyDingTalkConnectRedirectURL             = "dingtalk_connect_redirect_url"
+	SettingKeyDingTalkConnectCorpRestrictionPolicy   = "dingtalk_connect_corp_restriction_policy"
+	SettingKeyDingTalkConnectInternalCorpID          = "dingtalk_connect_internal_corp_id"
+	SettingKeyDingTalkConnectBypassRegistration      = "dingtalk_connect_bypass_registration"
+	SettingKeyDingTalkConnectSyncCorpEmail           = "dingtalk_connect_sync_corp_email"
+	SettingKeyDingTalkConnectSyncDisplayName         = "dingtalk_connect_sync_display_name"
+	SettingKeyDingTalkConnectSyncDept                = "dingtalk_connect_sync_dept"
+	SettingKeyDingTalkConnectSyncCorpEmailAttrKey    = "dingtalk_connect_sync_corp_email_attr_key"
+	SettingKeyDingTalkConnectSyncDisplayNameAttrKey  = "dingtalk_connect_sync_display_name_attr_key"
+	SettingKeyDingTalkConnectSyncDeptAttrKey         = "dingtalk_connect_sync_dept_attr_key"
+	SettingKeyDingTalkConnectSyncCorpEmailAttrName   = "dingtalk_connect_sync_corp_email_attr_name"
+	SettingKeyDingTalkConnectSyncDisplayNameAttrName = "dingtalk_connect_sync_display_name_attr_name"
+	SettingKeyDingTalkConnectSyncDeptAttrName        = "dingtalk_connect_sync_dept_attr_name"
+
+	// WeChat Connect OAuth 登录设置
+	SettingKeyWeChatConnectEnabled             = "wechat_connect_enabled"
+	SettingKeyWeChatConnectAppID               = "wechat_connect_app_id"
+	SettingKeyWeChatConnectAppSecret           = "wechat_connect_app_secret"
+	SettingKeyWeChatConnectOpenAppID           = "wechat_connect_open_app_id"
+	SettingKeyWeChatConnectOpenAppSecret       = "wechat_connect_open_app_secret"
+	SettingKeyWeChatConnectMPAppID             = "wechat_connect_mp_app_id"
+	SettingKeyWeChatConnectMPAppSecret         = "wechat_connect_mp_app_secret"
+	SettingKeyWeChatConnectMobileAppID         = "wechat_connect_mobile_app_id"
+	SettingKeyWeChatConnectMobileAppSecret     = "wechat_connect_mobile_app_secret"
+	SettingKeyWeChatConnectOpenEnabled         = "wechat_connect_open_enabled"
+	SettingKeyWeChatConnectMPEnabled           = "wechat_connect_mp_enabled"
+	SettingKeyWeChatConnectMobileEnabled       = "wechat_connect_mobile_enabled"
+	SettingKeyWeChatConnectMode                = "wechat_connect_mode"
+	SettingKeyWeChatConnectScopes              = "wechat_connect_scopes"
+	SettingKeyWeChatConnectRedirectURL         = "wechat_connect_redirect_url"
+	SettingKeyWeChatConnectFrontendRedirectURL = "wechat_connect_frontend_redirect_url"
+
+	// Generic OIDC OAuth 登录设置
+	SettingKeyOIDCConnectEnabled              = "oidc_connect_enabled"
+	SettingKeyOIDCConnectProviderName         = "oidc_connect_provider_name"
+	SettingKeyOIDCConnectClientID             = "oidc_connect_client_id"
+	SettingKeyOIDCConnectClientSecret         = "oidc_connect_client_secret"
+	SettingKeyOIDCConnectIssuerURL            = "oidc_connect_issuer_url"
+	SettingKeyOIDCConnectDiscoveryURL         = "oidc_connect_discovery_url"
+	SettingKeyOIDCConnectAuthorizeURL         = "oidc_connect_authorize_url"
+	SettingKeyOIDCConnectTokenURL             = "oidc_connect_token_url"
+	SettingKeyOIDCConnectUserInfoURL          = "oidc_connect_userinfo_url"
+	SettingKeyOIDCConnectJWKSURL              = "oidc_connect_jwks_url"
+	SettingKeyOIDCConnectScopes               = "oidc_connect_scopes"
+	SettingKeyOIDCConnectRedirectURL          = "oidc_connect_redirect_url"
+	SettingKeyOIDCConnectFrontendRedirectURL  = "oidc_connect_frontend_redirect_url"
+	SettingKeyOIDCConnectTokenAuthMethod      = "oidc_connect_token_auth_method"
+	SettingKeyOIDCConnectUsePKCE              = "oidc_connect_use_pkce"
+	SettingKeyOIDCConnectValidateIDToken      = "oidc_connect_validate_id_token"
+	SettingKeyOIDCConnectAllowedSigningAlgs   = "oidc_connect_allowed_signing_algs"
+	SettingKeyOIDCConnectClockSkewSeconds     = "oidc_connect_clock_skew_seconds"
+	SettingKeyOIDCConnectRequireEmailVerified = "oidc_connect_require_email_verified"
+	SettingKeyOIDCConnectUserInfoEmailPath    = "oidc_connect_userinfo_email_path"
+	SettingKeyOIDCConnectUserInfoIDPath       = "oidc_connect_userinfo_id_path"
+	SettingKeyOIDCConnectUserInfoUsernamePath = "oidc_connect_userinfo_username_path"
+
+	// GitHub/Google 邮箱快捷登录设置
+	SettingKeyGitHubOAuthEnabled             = "github_oauth_enabled"
+	SettingKeyGitHubOAuthClientID            = "github_oauth_client_id"
+	SettingKeyGitHubOAuthClientSecret        = "github_oauth_client_secret"
+	SettingKeyGitHubOAuthRedirectURL         = "github_oauth_redirect_url"
+	SettingKeyGitHubOAuthFrontendRedirectURL = "github_oauth_frontend_redirect_url"
+	SettingKeyGoogleOAuthEnabled             = "google_oauth_enabled"
+	SettingKeyGoogleOneTapEnabled            = "google_one_tap_enabled"
+	SettingKeyGoogleOAuthClientID            = "google_oauth_client_id"
+	SettingKeyGoogleOAuthClientSecret        = "google_oauth_client_secret"
+	SettingKeyGoogleOAuthRedirectURL         = "google_oauth_redirect_url"
+	SettingKeyGoogleOAuthFrontendRedirectURL = "google_oauth_frontend_redirect_url"
+
+	// OEM设置
+	SettingKeySiteName                    = "site_name"                     // 网站名称
+	SettingKeySiteLogo                    = "site_logo"                     // 网站Logo (base64)
+	SettingKeySiteSubtitle                = "site_subtitle"                 // 网站副标题
+	SettingKeySiteNameZh                  = "site_name_zh"                  // 站点名称（中文）
+	SettingKeySiteNameEn                  = "site_name_en"                  // 站点名称（英文）
+	SettingKeySiteTitleZh                 = "site_title_zh"                 // 站点标题（中文）
+	SettingKeySiteTitleEn                 = "site_title_en"                 // 站点标题（英文）
+	SettingKeySiteSubtitleZh              = "site_subtitle_zh"              // 站点副标题（中文）
+	SettingKeySiteSubtitleEn              = "site_subtitle_en"              // 站点副标题（英文）
+	SettingKeyAPIBaseURL                  = "api_base_url"                  // API端点地址（用于客户端配置和导入）
+	SettingKeyContactInfo                 = "contact_info"                  // 客服联系方式
+	SettingKeyDocURL                      = "doc_url"                       // 文档链接
+	SettingKeyHomeContent                 = "home_content"                  // 首页内容（支持 Markdown/HTML，或 URL 作为 iframe src）
+	SettingKeyHideCcsImportButton         = "hide_ccs_import_button"        // 是否隐藏 API Keys 页面的导入 CCS 按钮
+	SettingKeyPurchaseSubscriptionEnabled = "purchase_subscription_enabled" // 是否展示"购买订阅"页面入口
+	SettingKeyPurchaseSubscriptionURL     = "purchase_subscription_url"     // "购买订阅"页面 URL（作为 iframe src）
+	SettingKeyTableDefaultPageSize        = "table_default_page_size"       // 表格默认每页条数
+	SettingKeyTablePageSizeOptions        = "table_page_size_options"       // 表格可选每页条数（JSON 数组）
+	SettingKeyCustomMenuItems             = "custom_menu_items"             // 自定义菜单项（JSON 数组）
+	SettingKeyCustomEndpoints             = "custom_endpoints"              // 自定义端点列表（JSON 数组）
+	SettingKeyFooterLinks                 = "footer_links"                  // 首页底栏链接分组（JSON 数组）
+	SettingKeyFooterText                  = "footer_text"                   // 首页底栏附加文本（备案号等，支持多行）
+	SettingKeyHomeFeaturedModels          = "home_featured_models"          // 首页展示的模型 ID 列表（JSON 数组，按顺序展示）
+)
+
+const (
+	// 用户侧用量排行设置
+	SettingKeyUsageRankingLimit           = "usage_ranking_limit"             // 用户侧用量排行显示名次上限
+	SettingKeyUsageRankingEnabled         = "usage_ranking_enabled"           // 用户侧用量排行是否启用
+	SettingKeyUsageRankingSortBy          = "usage_ranking_sort_by"           // 用户侧用量排行排序依据
+	SettingKeyUsageRankingShowTotalTokens = "usage_ranking_show_total_tokens" // 用户侧用量排行是否显示总 Token
+	SettingKeyUsageRankingShowRequests    = "usage_ranking_show_requests"     // 用户侧用量排行是否显示请求数
+	SettingKeyUsageRankingShowActualCost  = "usage_ranking_show_actual_cost"  // 用户侧用量排行是否显示实际消费
+)
+
+const (
+	// 默认配置
+	SettingKeyDefaultConcurrency                   = "default_concurrency"                     // 新用户默认并发量
+	SettingKeyDefaultBalance                       = "default_balance"                         // 新用户默认余额
+	SettingKeyDefaultSubscriptions                 = "default_subscriptions"                   // 新用户默认订阅列表（JSON）
+	SettingKeyDefaultUserRPMLimit                  = "default_user_rpm_limit"                  // 新用户默认 RPM 限制（0 = 不限制）
+	SettingKeyDefaultUserAPIKeyLimit               = "default_user_api_key_limit"              // 新用户默认 API Key 数量上限（0 = 不限制）
+	SettingKeyBalanceUnitName                      = "balance_unit_name"                       // 内部余额展示名称
+	SettingKeyBalanceUnitSymbol                    = "balance_unit_symbol"                     // 内部余额展示符号
+	SettingKeyBalanceIconSVG                       = "balance_icon_svg"                        // 内部余额展示 SVG 图标
+	SettingKeyReasoningPointRMBUnitPrice           = "reasoning_point_rmb_unit_price"          // 推理积分人民币单价
+	SettingKeyUSDExchangeRate                      = "usd_exchange_rate"                       // 美元兑人民币汇率（1 USD = N CNY）
+	SettingKeyMarketplaceAvailabilityWindowDays    = "marketplace_availability_window_days"    // 模型广场可用率展示天数
+	SettingKeyMarketplaceAvailabilityBucketMinutes = "marketplace_availability_bucket_minutes" // 模型广场可用率每根柱子的分钟数
+
+	// 第三方认证来源默认授予配置
+	SettingKeyAuthSourceDefaultEmailBalance             = "auth_source_default_email_balance"
+	SettingKeyAuthSourceDefaultEmailConcurrency         = "auth_source_default_email_concurrency"
+	SettingKeyAuthSourceDefaultEmailSubscriptions       = "auth_source_default_email_subscriptions"
+	SettingKeyAuthSourceDefaultEmailGrantOnSignup       = "auth_source_default_email_grant_on_signup"
+	SettingKeyAuthSourceDefaultEmailGrantOnFirstBind    = "auth_source_default_email_grant_on_first_bind"
+	SettingKeyAuthSourceDefaultLinuxDoBalance           = "auth_source_default_linuxdo_balance"
+	SettingKeyAuthSourceDefaultLinuxDoConcurrency       = "auth_source_default_linuxdo_concurrency"
+	SettingKeyAuthSourceDefaultLinuxDoSubscriptions     = "auth_source_default_linuxdo_subscriptions"
+	SettingKeyAuthSourceDefaultLinuxDoGrantOnSignup     = "auth_source_default_linuxdo_grant_on_signup"
+	SettingKeyAuthSourceDefaultLinuxDoGrantOnFirstBind  = "auth_source_default_linuxdo_grant_on_first_bind"
+	SettingKeyAuthSourceDefaultOIDCBalance              = "auth_source_default_oidc_balance"
+	SettingKeyAuthSourceDefaultOIDCConcurrency          = "auth_source_default_oidc_concurrency"
+	SettingKeyAuthSourceDefaultOIDCSubscriptions        = "auth_source_default_oidc_subscriptions"
+	SettingKeyAuthSourceDefaultOIDCGrantOnSignup        = "auth_source_default_oidc_grant_on_signup"
+	SettingKeyAuthSourceDefaultOIDCGrantOnFirstBind     = "auth_source_default_oidc_grant_on_first_bind"
+	SettingKeyAuthSourceDefaultWeChatBalance            = "auth_source_default_wechat_balance"
+	SettingKeyAuthSourceDefaultWeChatConcurrency        = "auth_source_default_wechat_concurrency"
+	SettingKeyAuthSourceDefaultWeChatSubscriptions      = "auth_source_default_wechat_subscriptions"
+	SettingKeyAuthSourceDefaultWeChatGrantOnSignup      = "auth_source_default_wechat_grant_on_signup"
+	SettingKeyAuthSourceDefaultWeChatGrantOnFirstBind   = "auth_source_default_wechat_grant_on_first_bind"
+	SettingKeyAuthSourceDefaultGitHubBalance            = "auth_source_default_github_balance"
+	SettingKeyAuthSourceDefaultGitHubConcurrency        = "auth_source_default_github_concurrency"
+	SettingKeyAuthSourceDefaultGitHubSubscriptions      = "auth_source_default_github_subscriptions"
+	SettingKeyAuthSourceDefaultGitHubGrantOnSignup      = "auth_source_default_github_grant_on_signup"
+	SettingKeyAuthSourceDefaultGitHubGrantOnFirstBind   = "auth_source_default_github_grant_on_first_bind"
+	SettingKeyAuthSourceDefaultGoogleBalance            = "auth_source_default_google_balance"
+	SettingKeyAuthSourceDefaultGoogleConcurrency        = "auth_source_default_google_concurrency"
+	SettingKeyAuthSourceDefaultGoogleSubscriptions      = "auth_source_default_google_subscriptions"
+	SettingKeyAuthSourceDefaultGoogleGrantOnSignup      = "auth_source_default_google_grant_on_signup"
+	SettingKeyAuthSourceDefaultGoogleGrantOnFirstBind   = "auth_source_default_google_grant_on_first_bind"
+	SettingKeyAuthSourceDefaultDingTalkBalance          = "auth_source_default_dingtalk_balance"
+	SettingKeyAuthSourceDefaultDingTalkConcurrency      = "auth_source_default_dingtalk_concurrency"
+	SettingKeyAuthSourceDefaultDingTalkSubscriptions    = "auth_source_default_dingtalk_subscriptions"
+	SettingKeyAuthSourceDefaultDingTalkGrantOnSignup    = "auth_source_default_dingtalk_grant_on_signup"
+	SettingKeyAuthSourceDefaultDingTalkGrantOnFirstBind = "auth_source_default_dingtalk_grant_on_first_bind"
+	SettingKeyForceEmailOnThirdPartySignup              = "force_email_on_third_party_signup"
+
+	// 管理员 API Key
+	SettingKeyAdminAPIKey = "admin_api_key" // 全局管理员 API Key（用于外部系统集成）
+
+	// Gemini 配额策略（JSON）
+	SettingKeyGeminiQuotaPolicy = "gemini_quota_policy"
+
+	// Model fallback settings
+	SettingKeyEnableModelFallback      = "enable_model_fallback"
+	SettingKeyFallbackModelAnthropic   = "fallback_model_anthropic"
+	SettingKeyFallbackModelOpenAI      = "fallback_model_openai"
+	SettingKeyFallbackModelGemini      = "fallback_model_gemini"
+	SettingKeyFallbackModelAntigravity = "fallback_model_antigravity"
+
+	// Request identity patch (Claude -> Gemini systemInstruction injection)
+	SettingKeyEnableIdentityPatch = "enable_identity_patch"
+	SettingKeyIdentityPatchPrompt = "identity_patch_prompt"
+
+	// Grok 默认模型、跨客户端映射与文本上游区域策略。
+	SettingKeyGrokDefaultTextModel           = "grok_default_text_model"
+	SettingKeyGrokCrossClientModelMapEnabled = "grok_cross_client_model_map_enabled"
+	SettingKeyGrokDefaultBaseURLMode         = "grok_default_base_url_mode"
+
+	// =========================
+	// Ops Monitoring (vNext)
+	// =========================
+
+	// SettingKeyOpsMonitoringEnabled is a DB-backed soft switch to enable/disable ops module at runtime.
+	SettingKeyOpsMonitoringEnabled = "ops_monitoring_enabled"
+
+	// SettingKeyOpsRealtimeMonitoringEnabled controls realtime features (e.g. WS/QPS push).
+	SettingKeyOpsRealtimeMonitoringEnabled = "ops_realtime_monitoring_enabled"
+
+	// SettingKeyPreAggregationSettings 保存用量与运维预聚合的统一运行时配置。
+	SettingKeyPreAggregationSettings = "pre_aggregation_settings"
+
+	// SettingKeyOpsEmailNotificationConfig stores JSON config for ops email notifications.
+	SettingKeyOpsEmailNotificationConfig = "ops_email_notification_config"
+
+	// SettingKeyOpsAlertRuntimeSettings stores JSON config for ops alert evaluator runtime settings.
+	SettingKeyOpsAlertRuntimeSettings = "ops_alert_runtime_settings"
+
+	// SettingKeyOpsMetricsIntervalSeconds controls the ops metrics collector interval (>=60).
+	SettingKeyOpsMetricsIntervalSeconds = "ops_metrics_interval_seconds"
+
+	// SettingKeyOpsAdvancedSettings stores JSON config for ops advanced settings (data retention, aggregation).
+	SettingKeyOpsAdvancedSettings = "ops_advanced_settings"
+
+	// SettingKeyOpsRuntimeLogConfig stores JSON config for runtime log settings.
+	SettingKeyOpsRuntimeLogConfig = "ops_runtime_log_config"
+
+	// SettingKeyOllamaCloudUsageSettings 保存可选的全局刷新开关和刷新周期。
+	SettingKeyOllamaCloudUsageSettings = "ollama_cloud_usage_settings"
+
+	// =========================
+	// Overload Cooldown (529)
+	// =========================
+
+	// SettingKeyOverloadCooldownSettings stores JSON config for 529 overload cooldown handling.
+	SettingKeyOverloadCooldownSettings = "overload_cooldown_settings"
+
+	// SettingKeyOpenAI403CooldownSettings stores JSON config for OpenAI OAuth 403 cooldown handling.
+	SettingKeyOpenAI403CooldownSettings = "openai_oauth_403_cooldown_settings"
+
+	// SettingKeyRateLimit429CooldownSettings stores JSON config for 429 fallback cooldown handling.
+	SettingKeyRateLimit429CooldownSettings = "rate_limit_429_cooldown_settings"
+	// SettingKeyOpenAIImagesOAuthUnavailableCooldownSettings stores the cooldown applied when the OAuth image tool is unavailable.
+	SettingKeyOpenAIImagesOAuthUnavailableCooldownSettings = "openai_images_oauth_unavailable_cooldown_settings"
+	// SettingKeyOpenAIAPIKeyHealthBreakerSettings stores the opt-in OpenAI pool API-key breaker config.
+	SettingKeyOpenAIAPIKeyHealthBreakerSettings = "openai_apikey_health_breaker_settings"
+
+	// =========================
+	// Stream Timeout Handling
+	// =========================
+
+	// SettingKeyStreamTimeoutSettings stores JSON config for stream timeout handling.
+	SettingKeyStreamTimeoutSettings = "stream_timeout_settings"
+
+	// =========================
+	// Request Rectifier (请求整流器)
+	// =========================
+
+	// SettingKeyRectifierSettings stores JSON config for rectifier settings (thinking signature + budget).
+	SettingKeyRectifierSettings = "rectifier_settings"
+
+	// =========================
+	// Beta Policy Settings
+	// =========================
+
+	// SettingKeyBetaPolicySettings stores JSON config for beta policy rules.
+	SettingKeyBetaPolicySettings = "beta_policy_settings"
+
+	// SettingKeyOpenAIFastPolicySettings stores JSON config for OpenAI
+	// service_tier (fast/flex) policy rules. Mirrors BetaPolicySettings but
+	// targets OpenAI's body-level service_tier field instead of Claude's
+	// anthropic-beta header.
+	SettingKeyOpenAIFastPolicySettings = "openai_fast_policy_settings"
+
+	// SettingKeyOpenAIOAuthImportDefaults 保存 OpenAI OAuth 账号导入时的缺省模板。
+	SettingKeyOpenAIOAuthImportDefaults = "openai_oauth_import_defaults"
+
+	// =========================
+	// Claude Code Version Check
+	// =========================
+
+	// SettingKeyMinClaudeCodeVersion 最低 Claude Code 版本号要求 (semver, 如 "2.1.0"，空值=不检查)
+	SettingKeyMinClaudeCodeVersion = "min_claude_code_version"
+
+	// SettingKeyMaxClaudeCodeVersion 最高 Claude Code 版本号限制 (semver, 如 "3.0.0"，空值=不检查)
+	SettingKeyMaxClaudeCodeVersion = "max_claude_code_version"
+
+	// SettingKeyAllowUngroupedKeyScheduling 允许未分组 API Key 调度（默认 false：未分组 Key 返回 403）
+	SettingKeyAllowUngroupedKeyScheduling = "allow_ungrouped_key_scheduling"
+	// SettingKeyAdvancedSchedulerStickyWeightedEnabled 控制高级调度器的粘性加权。
+	SettingKeyAdvancedSchedulerStickyWeightedEnabled = "advanced_scheduler_sticky_weighted_enabled"
+	// SettingKeyAdvancedSchedulerSubscriptionPriorityEnabled 控制可用时的订阅账号优先级。
+	SettingKeyAdvancedSchedulerSubscriptionPriorityEnabled = "advanced_scheduler_subscription_priority_enabled"
+	// SettingKeyAdvancedSchedulerEWMAErrorRateAlpha 控制错误率 EWMA 的平滑系数。
+	SettingKeyAdvancedSchedulerEWMAErrorRateAlpha = "advanced_scheduler_ewma_error_rate_alpha"
+	// SettingKeyAdvancedSchedulerEWMATTFTAlpha 控制首 token 延迟 EWMA 的平滑系数。
+	SettingKeyAdvancedSchedulerEWMATTFTAlpha = "advanced_scheduler_ewma_ttft_alpha"
+	// SettingKeyAdvancedSchedulerStickyEscapeEnabled 控制健康度恶化时是否允许逃逸粘性账号。
+	SettingKeyAdvancedSchedulerStickyEscapeEnabled = "advanced_scheduler_sticky_escape_enabled"
+	// SettingKeyAdvancedSchedulerStickyEscapeTTFTMs 控制触发粘性逃逸的 TTFT 阈值。
+	SettingKeyAdvancedSchedulerStickyEscapeTTFTMs = "advanced_scheduler_sticky_escape_ttft_ms"
+	// SettingKeyAdvancedSchedulerStickyEscapeErrorRate 控制触发粘性逃逸的错误率阈值。
+	SettingKeyAdvancedSchedulerStickyEscapeErrorRate  = "advanced_scheduler_sticky_escape_error_rate"
+	SettingKeyAdvancedSchedulerLBTopK                 = "advanced_scheduler_lb_top_k"
+	SettingKeyAdvancedSchedulerWeightPriority         = "advanced_scheduler_weight_priority"
+	SettingKeyAdvancedSchedulerWeightLoad             = "advanced_scheduler_weight_load"
+	SettingKeyAdvancedSchedulerWeightQueue            = "advanced_scheduler_weight_queue"
+	SettingKeyAdvancedSchedulerWeightErrorRate        = "advanced_scheduler_weight_error_rate"
+	SettingKeyAdvancedSchedulerWeightTTFT             = "advanced_scheduler_weight_ttft"
+	SettingKeyAdvancedSchedulerWeightReset            = "advanced_scheduler_weight_reset"
+	SettingKeyAdvancedSchedulerWeightQuotaHeadroom    = "advanced_scheduler_weight_quota_headroom"
+	SettingKeyAdvancedSchedulerWeightPreviousResponse = "advanced_scheduler_weight_previous_response"
+	SettingKeyAdvancedSchedulerWeightSessionSticky    = "advanced_scheduler_weight_session_sticky"
+
+	// SettingKeyBackendModeEnabled Backend 模式：禁用用户注册和自助服务，仅管理员可登录
+	SettingKeyBackendModeEnabled = "backend_mode_enabled"
+
+	// Gateway Forwarding Behavior
+	// SettingKeyOpenAITTFTMode 控制 Responses first_token_ms 的统计口径。
+	SettingKeyOpenAITTFTMode = "openai_ttft_mode"
+	OpenAITTFTModeSemantic   = "semantic"
+	OpenAITTFTModeVisible    = "visible"
+	// SettingKeyEnableFingerprintUnification 是否统一 OAuth 账号的 X-Stainless-* 指纹头（默认 true）
+	SettingKeyEnableFingerprintUnification = "enable_fingerprint_unification"
+	// SettingKeyEnableMetadataPassthrough 是否透传客户端原始 metadata.user_id（默认 false）
+	SettingKeyEnableMetadataPassthrough = "enable_metadata_passthrough"
+	// SettingKeyEnableCCHSigning 已废弃（no-op）：新版 Claude Code CLI 已取消 cch 签名字段，
+	// 网关随之不再注入/签名 cch（见 buildBillingAttributionText）。保留该 key 仅为向后兼容，
+	// 开关不再产生任何效果。
+	SettingKeyEnableCCHSigning = "enable_cch_signing"
+	// SettingKeyEnableClaudeOAuthSystemPromptInjection 是否对 Claude OAuth mimic 路径注入 Claude Code system blocks（默认 true）
+	SettingKeyEnableClaudeOAuthSystemPromptInjection = "enable_claude_oauth_system_prompt_injection"
+	// SettingKeyClaudeOAuthSystemPrompt Claude OAuth mimic 路径注入的通用扩展 system prompt（空值使用内置默认）
+	SettingKeyClaudeOAuthSystemPrompt = "claude_oauth_system_prompt"
+	// SettingKeyClaudeOAuthSystemPromptBlocks Claude OAuth mimic 路径注入的 system blocks JSON 配置（空值使用内置默认）
+	SettingKeyClaudeOAuthSystemPromptBlocks = "claude_oauth_system_prompt_blocks"
+	// SettingKeyEnableAnthropicCacheTTL1hInjection 是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl（默认 false）
+	SettingKeyEnableAnthropicCacheTTL1hInjection = "enable_anthropic_cache_ttl_1h_injection"
+	// SettingKeyEnableClientDatelineNormalization 是否对 Anthropic OAuth/SetupToken 账号
+	// 的 /v1/messages 请求体做客户端 dateline 归一化（默认 true）。
+	// 归一化把 system prompt / <system-reminder> 块中 "Today's date is …" 语句里的
+	// 非 ASCII 撇号与 "/" 日期分隔符还原为 ASCII 撇号 + "-" 分隔符，抹除某些客户端
+	// 在检测到非官方 base URL 时注入的 3 bit 隐写指纹。仅适用于 Anthropic OAuth/SetupToken
+	// 账号；API Key 账号不受影响。
+	SettingKeyEnableClientDatelineNormalization = "enable_client_dateline_normalization"
+	// SettingKeyRewriteMessageCacheControl 是否改写 messages[*].content[*].cache_control（默认 false）
+	SettingKeyRewriteMessageCacheControl = "rewrite_message_cache_control"
+	// SettingKeyAntigravityUserAgentVersion Antigravity 上游 User-Agent 版本号（空值使用环境变量/默认值）
+	SettingKeyAntigravityUserAgentVersion = "antigravity_user_agent_version"
+	// SettingKeyOpenAICodexUserAgent OpenAI Codex 完整 User-Agent（空值使用内置默认）
+	// 当客户端 UA 被识别为浏览器（Chrome/Firefox/Safari/Edge 等）时，转发给 OpenAI 上游前会替换为此值，
+	// 用于避免 Cloudflare 对浏览器型 UA 的质询拦截。
+	SettingKeyOpenAICodexUserAgent = "openai_codex_user_agent"
+	// SettingKeyOpenAIAllowClaudeCodeCodexPlugin 全局开关：是否额外放行 Claude Code 的 Codex 插件（默认 false）。
+	// 仅在账号 codex_cli_only 开启时生效；开启后无需逐账号配置 codex_cli_only_allowed_clients。
+	SettingKeyOpenAIAllowClaudeCodeCodexPlugin = "openai_allow_claude_code_codex_plugin"
+	// SettingKeyUserPromptReplacementConfig 用户提示词替换规则配置（JSON）。
+	SettingKeyUserPromptReplacementConfig = "user_prompt_replacement_config"
+
+	// 余额不足提醒
+	SettingKeyBalanceLowNotifyEnabled     = "balance_low_notify_enabled"      // 全局开关
+	SettingKeyBalanceLowNotifyThreshold   = "balance_low_notify_threshold"    // 默认阈值（USD）
+	SettingKeyBalanceLowNotifyRechargeURL = "balance_low_notify_recharge_url" // 充值页面 URL
+
+	// 订阅到期提醒
+	SettingKeySubscriptionExpiryNotifyEnabled = "subscription_expiry_notify_enabled" // 订阅到期提醒全局开关，默认开启
+
+	// 账号限额通知
+	SettingKeyAccountQuotaNotifyEnabled = "account_quota_notify_enabled" // 全局开关
+	SettingKeyAccountQuotaNotifyEmails  = "account_quota_notify_emails"  // 管理员通知邮箱列表（JSON 数组）
+
+	// Web Search Emulation
+	SettingKeyWebSearchEmulationConfig = "web_search_emulation_config" // JSON 配置
+)
+
+// SettingKeyDefaultPlatformQuotas —— 系统全局：每用户 × 平台日/周/月 USD 上限（JSON）。
+// 值为 map[platform]{daily,weekly,monthly}，null/缺省 = 不限制；0 = 禁用；>0 = USD 上限。
+const SettingKeyDefaultPlatformQuotas = "default_platform_quotas"
+
+// SettingKeyAccountSchedulingThresholds —— 系统全局：按平台自动停调阈值（JSON map）。
+// 值为 map[platform]percent，1..100；100 = 禁用该平台自动停调。
+const SettingKeyAccountSchedulingThresholds = "account_scheduling_thresholds"
+
+// SettingKeyAuthSourcePlatformQuotas 返回某 auth source 的 platform quota JSON key。
+// 形如 auth_source_default_{source}_platform_quotas
+func SettingKeyAuthSourcePlatformQuotas(source string) string {
+	return fmt.Sprintf("auth_source_default_%s_platform_quotas", source)
+}
+
+// QuotaDimension constants for spark shadow accounts.
+const (
+	QuotaDimensionGlobal = "global"
+	QuotaDimensionSpark  = "spark"
+)
+
+// AdminAPIKeyPrefix is the prefix for admin API keys (distinct from user "sk-" keys).
+const AdminAPIKeyPrefix = "admin-"
+
+// SettingKeyAllowUserViewErrorRequests 控制终端用户是否能在用量页查看自己的失败请求。
+// 默认关闭，需要管理员显式开启。
+const SettingKeyAllowUserViewErrorRequests = "allow_user_view_error_requests"

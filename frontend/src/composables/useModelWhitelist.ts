@@ -1,0 +1,758 @@
+import { MINIMAX_MODELS } from '@/constants/minimax'
+
+// =====================
+// 模型列表（硬编码，与 new-api 一致）
+// =====================
+
+// OpenAI
+const openaiModels = [
+	'gpt-5.2',
+	'gpt-5.3',
+	'gpt-5.3-spark',
+	'codex-auto-review',
+	'gpt-5.6-sol',
+	'gpt-5.6-terra',
+	'gpt-5.6-luna',
+	'gpt-6-astra',
+	'gpt-5.4',
+	'gpt-5.4-mini',
+	'gpt-5.5'
+]
+
+// Anthropic Claude
+export const claudeModels = [
+  'claude-3-5-sonnet-20241022', 'claude-3-5-sonnet-20240620',
+  'claude-3-5-haiku-20241022',
+  'claude-3-7-sonnet-20250219',
+  'claude-sonnet-4-20250514', 'claude-opus-4-20250514',
+  'claude-opus-4-1-20250805',
+  'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001',
+  'claude-opus-4-5-20251101',
+  'claude-opus-4-6',
+  'claude-opus-4-7',
+  'claude-opus-4-8',
+  'claude-opus-5',
+  'claude-sonnet-4-6',
+  'claude-sonnet-5',
+  'claude-fable-5-1',
+  'claude-fable-5'
+]
+
+// Google Gemini
+const geminiModels = [
+  // Keep in sync with backend curated Gemini lists.
+  // This list is intentionally conservative (models commonly available across OAuth/API key).
+  'gemini-3.1-flash-image',
+  'gemini-2.5-flash-image',
+  'gemini-2.0-flash',
+  'gemini-2.5-flash',
+  'gemini-2.5-pro',
+  'gemini-3.5-flash',
+  'gemini-3-flash-preview',
+  'gemini-3-pro-preview'
+]
+
+// Antigravity 官方支持的模型（精确匹配）
+// 基于官方 API 返回的模型列表，只支持 Claude 4.5+ 和 Gemini 2.5+
+const antigravityModels = [
+  // Claude 4.5+ 系列
+  'claude-fable-5-1',
+  'claude-fable-5',
+  'claude-opus-4-6',
+  'claude-opus-4-6-thinking',
+  'claude-opus-4-7',
+  'claude-opus-4-8',
+  'claude-opus-4-5-thinking',
+  'claude-sonnet-4-6',
+  'claude-sonnet-4-5',
+  'claude-sonnet-4-5-thinking',
+  // Gemini 2.5 系列
+  'gemini-3.1-flash-image',
+  'gemini-2.5-flash-image',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash-thinking',
+  'gemini-2.5-pro',
+  // Gemini 3 系列
+  'gemini-3-flash',
+  'gemini-3-pro-high',
+  'gemini-3-pro-low',
+  // Gemini 3.6 Flash 系列
+  'gemini-3.6-flash',
+  'gemini-3.6-flash-high',
+  'gemini-3.6-flash-low',
+  'gemini-3.6-flash-medium',
+  'gemini-3.6-flash-tiered',
+  // Gemini 3.1 系列
+  'gemini-3.1-pro',
+  'gemini-3.1-pro-high',
+  'gemini-3.1-pro-low',
+  'gemini-3-pro-image',
+  // 其他
+  'gpt-oss-120b-medium',
+  'tab_flash_lite_preview'
+]
+
+// Qoder 上游模型变化较快。账号级 model_mapping 的 key 才是 Qoder
+// 前端/客户端应展示的请求模型；这里仅保留创建账号时的快捷候选。
+export type QoderSite = 'global' | 'cn'
+
+const qoderGlobalModels = [
+  'claude-opus-4-6',
+  'auto',
+  'performance',
+  'efficient',
+  'lite',
+  'qwen3.8-max',
+  'qwen3.7-max',
+  'qwen3.7-plus',
+  // Kimi-K3 与 Kimi-K2.7-Code 当前使用不同的 Qoder 路由。
+  'kimi-k3',
+  'kimi-k2.7-code',
+  'glm-5.3',
+  'glm-5.2',
+  'deepseek-v4-pro',
+  'deepseek-v4-flash',
+  'minimax-m3'
+]
+
+const qoderCNModels = [
+  'auto',
+  'qwen3.8-max',
+  'qwen3.7-max',
+  'qwen3.7-plus',
+  'qwen3.6-flash',
+  'deepseek-v4-pro',
+  'deepseek-v4-flash',
+  'glm-5.3',
+  'glm-5.2',
+  'kimi-k2.7-code',
+  'minimax-m2.7'
+]
+
+// 无账号上下文按国际站优先合并两站模型。
+const qoderModels = [...new Set([...qoderGlobalModels, ...qoderCNModels])]
+
+// 智谱 GLM
+const zhipuModels = [
+  'glm-4', 'glm-4v', 'glm-4-plus', 'glm-4-0520',
+  'glm-4-air', 'glm-4-airx', 'glm-4-long', 'glm-4-flash',
+  'glm-4v-plus', 'glm-4.5', 'glm-4.6',
+  'glm-3-turbo', 'glm-4-alltools',
+  'chatglm_turbo', 'chatglm_pro', 'chatglm_std', 'chatglm_lite',
+  'cogview-3', 'cogvideo'
+]
+
+// 阿里 通义千问
+const qwenModels = [
+  'qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-max-longcontext', 'qwen-long',
+  'qwen2-72b-instruct', 'qwen2-57b-a14b-instruct', 'qwen2-7b-instruct',
+  'qwen2.5-72b-instruct', 'qwen2.5-32b-instruct', 'qwen2.5-14b-instruct',
+  'qwen2.5-7b-instruct', 'qwen2.5-3b-instruct', 'qwen2.5-1.5b-instruct',
+  'qwen2.5-coder-32b-instruct', 'qwen2.5-coder-14b-instruct', 'qwen2.5-coder-7b-instruct',
+  'qwen3-235b-a22b',
+  'qwq-32b', 'qwq-32b-preview'
+]
+
+// DeepSeek
+const deepseekModels = [
+  'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp',
+  'deepseek-coder',
+  'deepseek-v3', 'deepseek-v3-0324',
+  'deepseek-r1', 'deepseek-r1-0528',
+  'deepseek-r1-distill-qwen-32b', 'deepseek-r1-distill-qwen-14b', 'deepseek-r1-distill-qwen-7b',
+  'deepseek-r1-distill-llama-70b', 'deepseek-r1-distill-llama-8b'
+]
+
+// Mistral
+const mistralModels = [
+  'mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest',
+  'open-mistral-7b', 'open-mixtral-8x7b', 'open-mixtral-8x22b',
+  'codestral-latest', 'codestral-mamba',
+  'pixtral-12b-2409', 'pixtral-large-latest'
+]
+
+// Meta Llama
+const metaModels = [
+  'llama-3.3-70b-instruct',
+  'llama-3.2-90b-vision-instruct', 'llama-3.2-11b-vision-instruct',
+  'llama-3.2-3b-instruct', 'llama-3.2-1b-instruct',
+  'llama-3.1-405b-instruct', 'llama-3.1-70b-instruct', 'llama-3.1-8b-instruct',
+  'llama-3-70b-instruct', 'llama-3-8b-instruct',
+  'codellama-70b-instruct', 'codellama-34b-instruct', 'codellama-13b-instruct'
+]
+
+// xAI Grok
+const xaiModels = [
+  'grok-4.6',
+  'grok-4.5',
+  'grok-4.3',
+  'grok-build-0.1',
+  'grok-composer-2.5-fast',
+  'grok-4.20-0309-reasoning',
+  'grok-4.20-0309-non-reasoning',
+  'grok-4.20-multi-agent-0309',
+  'grok-4.20-multi-agent',
+  'grok-4.20-multi-agent-latest',
+  'grok-4.3-latest',
+  'grok-latest',
+  'grok-4.6-latest',
+  'grok-4.5-latest',
+  'grok-build-latest',
+  'composer-2.5',
+  'grok-4.20-reasoning',
+  'grok-4.20-non-reasoning',
+  'grok-imagine',
+  'grok-imagine-edit',
+  'grok-imagine-image-quality',
+  'grok-imagine-image',
+  'grok-imagine-image-2.0',
+  'grok-imagine-video',
+  'grok-imagine-video-1.5'
+]
+
+// Cohere
+const cohereModels = [
+  'command-a-03-2025',
+  'command-r', 'command-r-plus',
+  'command-r-08-2024', 'command-r-plus-08-2024',
+  'c4ai-aya-23-35b', 'c4ai-aya-23-8b',
+  'command', 'command-light'
+]
+
+// Yi (01.AI)
+const yiModels = [
+  'yi-large', 'yi-large-turbo', 'yi-large-rag',
+  'yi-medium', 'yi-medium-200k',
+  'yi-spark', 'yi-vision',
+  'yi-1.5-34b-chat', 'yi-1.5-9b-chat', 'yi-1.5-6b-chat'
+]
+
+// Moonshot/Kimi
+const moonshotModels = [
+  'moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k',
+  'kimi-latest',
+  'kimi-for-coding',
+  'kimi-k2'
+]
+
+// 字节跳动 豆包
+const doubaoModels = [
+  'doubao-pro-256k', 'doubao-pro-128k', 'doubao-pro-32k', 'doubao-pro-4k',
+  'doubao-lite-128k', 'doubao-lite-32k', 'doubao-lite-4k',
+  'doubao-vision-pro-32k', 'doubao-vision-lite-32k',
+  'doubao-1.5-pro-256k', 'doubao-1.5-pro-32k', 'doubao-1.5-lite-32k',
+  'doubao-1.5-pro-vision-32k', 'doubao-1.5-thinking-pro'
+]
+
+// 通用模型列表保留历史 abab 选项，避免影响已有中转供应商。
+const minimaxModels = [
+  'abab6.5-chat', 'abab6.5s-chat', 'abab6.5s-chat-pro',
+  'abab6-chat',
+  'abab5.5-chat', 'abab5.5s-chat'
+]
+
+// 百度 文心
+const baiduModels = [
+  'ernie-4.0-8k-latest', 'ernie-4.0-8k', 'ernie-4.0-turbo-8k',
+  'ernie-3.5-8k', 'ernie-3.5-128k',
+  'ernie-speed-8k', 'ernie-speed-128k', 'ernie-speed-pro-128k',
+  'ernie-lite-8k', 'ernie-lite-pro-128k',
+  'ernie-tiny-8k'
+]
+
+// 讯飞 星火
+const sparkModels = [
+  'spark-desk', 'spark-desk-v1.1', 'spark-desk-v2.1',
+  'spark-desk-v3.1', 'spark-desk-v3.5', 'spark-desk-v4.0',
+  'spark-lite', 'spark-pro', 'spark-max', 'spark-ultra'
+]
+
+// 腾讯 混元
+const hunyuanModels = [
+  'hunyuan-lite', 'hunyuan-standard', 'hunyuan-standard-256k',
+  'hunyuan-pro', 'hunyuan-turbo', 'hunyuan-large',
+  'hunyuan-vision', 'hunyuan-code'
+]
+
+// Perplexity
+const perplexityModels = [
+  'sonar', 'sonar-pro', 'sonar-reasoning',
+  'llama-3-sonar-small-32k-online', 'llama-3-sonar-large-32k-online',
+  'llama-3-sonar-small-32k-chat', 'llama-3-sonar-large-32k-chat'
+]
+
+// 所有模型（去重）
+const allModelsList: string[] = Array.from(new Set([
+  ...openaiModels,
+  ...claudeModels,
+  ...geminiModels,
+  ...qoderModels,
+  ...zhipuModels,
+  ...qwenModels,
+  ...deepseekModels,
+  ...mistralModels,
+  ...metaModels,
+  ...xaiModels,
+  ...cohereModels,
+  ...yiModels,
+  ...moonshotModels,
+  ...doubaoModels,
+  ...minimaxModels,
+  ...baiduModels,
+  ...sparkModels,
+  ...hunyuanModels,
+  ...perplexityModels
+]))
+
+// 转换为下拉选项格式
+export const allModels = allModelsList.map(m => ({ value: m, label: m }))
+
+// =====================
+// 预设映射
+// =====================
+
+const anthropicPresetMappings = [
+  { label: 'Fable 5.1', from: 'claude-fable-5-1', to: 'claude-fable-5-1', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
+  { label: 'Fable 5', from: 'claude-fable-5', to: 'claude-fable-5', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
+  { label: 'Sonnet 5', from: 'claude-sonnet-5', to: 'claude-sonnet-5', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'Sonnet 4', from: 'claude-sonnet-4-20250514', to: 'claude-sonnet-4-20250514', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
+  { label: 'Sonnet 4.5', from: 'claude-sonnet-4-5-20250929', to: 'claude-sonnet-4-5-20250929', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'Sonnet 4.6', from: 'claude-sonnet-4-6', to: 'claude-sonnet-4-6', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'Opus 4.5', from: 'claude-opus-4-5-20251101', to: 'claude-opus-4-5-20251101', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'Opus 4.6', from: 'claude-opus-4-6', to: 'claude-opus-4-6', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'Opus 4.7', from: 'claude-opus-4-7', to: 'claude-opus-4-7', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4-8', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'Opus 5', from: 'claude-opus-5', to: 'claude-opus-5', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'Haiku 3.5', from: 'claude-3-5-haiku-20241022', to: 'claude-3-5-haiku-20241022', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400' },
+  { label: 'Haiku 4.5', from: 'claude-haiku-4-5-20251001', to: 'claude-haiku-4-5-20251001', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
+  { label: 'Opus->Sonnet', from: 'claude-opus-4-6', to: 'claude-sonnet-4-5-20250929', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' }
+]
+
+const openaiPresetMappings = [
+  { label: 'GPT-4o', from: 'gpt-4o', to: 'gpt-4o', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400' },
+  { label: 'GPT-4o Mini', from: 'gpt-4o-mini', to: 'gpt-4o-mini', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
+  { label: 'GPT-4.1', from: 'gpt-4.1', to: 'gpt-4.1', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'o1', from: 'o1', to: 'o1', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'o3', from: 'o3', to: 'o3', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
+  { label: 'GPT-5.3 Codex Spark', from: 'gpt-5.3-codex-spark', to: 'gpt-5.3-codex-spark', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
+  { label: 'GPT-5.2', from: 'gpt-5.2', to: 'gpt-5.2', color: 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-400' },
+  { label: 'GPT-5.6 Sol', from: 'gpt-5.6-sol', to: 'gpt-5.6-sol', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
+  { label: 'GPT-5.6 Terra', from: 'gpt-5.6-terra', to: 'gpt-5.6-terra', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-400' },
+  { label: 'GPT-5.6 Luna', from: 'gpt-5.6-luna', to: 'gpt-5.6-luna', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
+  { label: 'GPT-6 Astra', from: 'gpt-6-astra', to: 'gpt-6-astra', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'GPT-5.5', from: 'gpt-5.5', to: 'gpt-5.5', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
+  { label: 'GPT-5.4', from: 'gpt-5.4', to: 'gpt-5.4', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
+  { label: 'Haiku→5.4', from: 'claude-haiku-4-5-20251001', to: 'gpt-5.4', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
+  { label: 'Opus→5.4', from: 'claude-opus-4-6', to: 'gpt-5.4', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'Sonnet→5.4', from: 'claude-sonnet-4-6', to: 'gpt-5.4', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' }
+]
+
+const geminiPresetMappings = [
+  { label: 'Flash 2.0', from: 'gemini-2.0-flash', to: 'gemini-2.0-flash', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
+  { label: '2.5 Flash', from: 'gemini-2.5-flash', to: 'gemini-2.5-flash', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: '2.5 Image', from: 'gemini-2.5-flash-image', to: 'gemini-2.5-flash-image', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
+  { label: '2.5 Pro', from: 'gemini-2.5-pro', to: 'gemini-2.5-pro', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: '3.5 Flash', from: 'gemini-3.5-flash', to: 'gemini-3.5-flash', color: 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400' },
+  { label: '3.1 Image', from: 'gemini-3.1-flash-image', to: 'gemini-3.1-flash-image', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' }
+]
+
+const qoderGlobalPresetMappings = [
+  { label: 'Opus 4.6', from: 'claude-opus-4-6', to: 'ultimate', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'Auto', from: 'auto', to: 'auto', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'Performance', from: 'performance', to: 'performance', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
+  { label: 'Efficient', from: 'efficient', to: 'efficient', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
+  { label: 'Lite', from: 'lite', to: 'lite', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
+  { label: 'Qwen 3.8 Max', from: 'qwen3.8-max', to: 'qmodel_38max', color: 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400' },
+  { label: 'Qwen 3.7 Max', from: 'qwen3.7-max', to: 'qmodel_latest', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
+  { label: 'Qwen 3.7 Plus', from: 'qwen3.7-plus', to: 'qmodel', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  // Kimi-K3 必须映射到 latest 路由，不能复用 Kimi-K2.7-Code 的 kmodel。
+  { label: 'Kimi K3', from: 'kimi-k3', to: 'kmodel_latest', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400' },
+  { label: 'Kimi K2.7 Code', from: 'kimi-k2.7-code', to: 'kmodel', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
+  { label: 'GLM 5.3', from: 'glm-5.3', to: 'gmodel', color: 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400' },
+  { label: 'GLM 5.2', from: 'glm-5.2', to: 'gm51model', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'DeepSeek V4 Pro', from: 'deepseek-v4-pro', to: 'dmodel', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
+  { label: 'DeepSeek V4 Flash', from: 'deepseek-v4-flash', to: 'dfmodel', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
+  { label: 'MiniMax M3', from: 'minimax-m3', to: 'mmodel', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-400' }
+]
+
+const qoderCNPresetMappings = [
+  { label: 'Auto', from: 'auto', to: 'auto', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'Qwen 3.8 Max', from: 'qwen3.8-max', to: 'qmodel_38max', color: 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400' },
+  { label: 'Qwen 3.7 Max', from: 'qwen3.7-max', to: 'qmodel_latest', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
+  { label: 'Qwen 3.7 Plus', from: 'qwen3.7-plus', to: 'qmodel', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'Qwen 3.6 Flash', from: 'qwen3.6-flash', to: 'q36fmodel', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
+  { label: 'DeepSeek V4 Pro', from: 'deepseek-v4-pro', to: 'dmodel', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
+  { label: 'DeepSeek V4 Flash', from: 'deepseek-v4-flash', to: 'dfmodel', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
+  { label: 'GLM 5.3', from: 'glm-5.3', to: 'gmodel', color: 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400' },
+  { label: 'GLM 5.2', from: 'glm-5.2', to: 'gm51model', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'Kimi K2.7 Code', from: 'kimi-k2.7-code', to: 'kmodel', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
+  { label: 'MiniMax M2.7', from: 'minimax-m2.7', to: 'mmodel', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-400' }
+]
+
+const qoderPresetMappings = Array.from(
+  new Map(
+    [...qoderGlobalPresetMappings, ...qoderCNPresetMappings].map(mapping => [mapping.from, mapping])
+  ).values()
+)
+
+const qoderModelKeyByAlias: Record<string, string> = Object.fromEntries(
+  qoderPresetMappings.map(({ from, to }) => [from, to])
+)
+
+const grokPresetMappings = [
+  { label: 'Grok 4.6', from: 'grok-4.6', to: 'grok-4.6', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/50 dark:text-slate-300' },
+  { label: 'Grok 4.5', from: 'grok-4.5', to: 'grok-4.5', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/50 dark:text-slate-300' },
+  { label: 'Grok 4.3', from: 'grok-4.3', to: 'grok-4.3', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/50 dark:text-slate-300' },
+  { label: 'Grok Latest', from: 'grok-latest', to: 'grok-4.5', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
+  { label: '4.5 Latest', from: 'grok-4.5-latest', to: 'grok-4.5', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-400' },
+  { label: 'Build 0.1', from: 'grok-build', to: 'grok-build-0.1', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'Build Latest', from: 'grok-build-latest', to: 'grok-4.5', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
+  { label: 'Composer 2.5', from: 'grok-composer', to: 'grok-composer-2.5-fast', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
+  { label: 'Composer legacy', from: 'composer-2.5', to: 'grok-composer-2.5-fast', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
+  { label: '4.20 Reasoning', from: 'grok-4.20-reasoning', to: 'grok-4.20-0309-reasoning', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: '4.20 Non Reasoning', from: 'grok-4.20-non-reasoning', to: 'grok-4.20-0309-non-reasoning', color: 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400' },
+  { label: 'Imagine Image', from: 'grok-imagine', to: 'grok-imagine-image-quality', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
+  { label: 'Imagine Edit', from: 'grok-imagine-edit', to: 'grok-imagine-image-quality', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
+  { label: 'Imagine Video', from: 'grok-imagine-video-1.5', to: 'grok-imagine-video-1.5', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' }
+]
+// Antigravity 预设映射（支持通配符）
+const antigravityPresetMappings = [
+  // Claude 通配符映射
+  { label: 'Claude→Sonnet', from: 'claude-*', to: 'claude-sonnet-4-5', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
+  { label: 'Fable 5', from: 'claude-fable-5', to: 'claude-fable-5', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
+  { label: 'Fable 5.1', from: 'claude-fable-5-1', to: 'claude-fable-5-1', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
+  { label: 'Sonnet→Sonnet', from: 'claude-sonnet-*', to: 'claude-sonnet-4-5', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'Opus→Opus', from: 'claude-opus-*', to: 'claude-opus-4-6-thinking', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'Haiku→Sonnet', from: 'claude-haiku-*', to: 'claude-sonnet-4-5', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
+  { label: 'Sonnet4→4.6', from: 'claude-sonnet-4-20250514', to: 'claude-sonnet-4-6', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
+  { label: 'Sonnet4.5→4.6', from: 'claude-sonnet-4-5-20250929', to: 'claude-sonnet-4-6', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'Sonnet3.5→4.6', from: 'claude-3-5-sonnet-20241022', to: 'claude-sonnet-4-6', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
+  { label: 'Opus4.5→4.6', from: 'claude-opus-4-5-20251101', to: 'claude-opus-4-6-thinking', color: 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400' },
+  // Gemini 3→3.1 映射
+  { label: '3-Pro-Preview→Pro-Agent', from: 'gemini-3-pro-preview', to: 'gemini-pro-agent', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
+  { label: '3-Pro-High→Pro-Agent', from: 'gemini-3-pro-high', to: 'gemini-pro-agent', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
+  { label: '3-Pro-Low→3.1-Pro-Low', from: 'gemini-3-pro-low', to: 'gemini-3.1-pro-low', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400' },
+  { label: '3.1-Pro→Pro-Agent', from: 'gemini-3.1-pro', to: 'gemini-pro-agent', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
+  { label: '3.1-Pro-High→Pro-Agent', from: 'gemini-3.1-pro-high', to: 'gemini-pro-agent', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
+  { label: '3.1-Pro-High透传', from: 'gemini-3.1-pro-high', to: 'gemini-3.1-pro-high', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
+  { label: '3.1-Pro-Low透传', from: 'gemini-3.1-pro-low', to: 'gemini-3.1-pro-low', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400' },
+  { label: '3.1-Pro-Preview→Pro-Agent', from: 'gemini-3.1-pro-preview', to: 'gemini-pro-agent', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
+  // Gemini 通配符映射
+  { label: 'Gemini 3→Flash', from: 'gemini-3*', to: 'gemini-3-flash', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400' },
+  { label: 'Gemini 2.5→Flash', from: 'gemini-2.5*', to: 'gemini-2.5-flash', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
+  { label: '2.5-Flash-Image透传', from: 'gemini-2.5-flash-image', to: 'gemini-2.5-flash-image', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
+  { label: '3.1-Flash-Image透传', from: 'gemini-3.1-flash-image', to: 'gemini-3.1-flash-image', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
+  { label: '3-Pro-Image→3.1', from: 'gemini-3-pro-image', to: 'gemini-3.1-flash-image', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
+  { label: '3-Flash透传', from: 'gemini-3-flash', to: 'gemini-3-flash', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-400' },
+  { label: '2.5-Flash-Lite透传', from: 'gemini-2.5-flash-lite', to: 'gemini-2.5-flash-lite', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400' },
+  // 精确映射
+  { label: 'Sonnet 4.6', from: 'claude-sonnet-4-6', to: 'claude-sonnet-4-6', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'Sonnet 4.5', from: 'claude-sonnet-4-5', to: 'claude-sonnet-4-5', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'Opus 4.6', from: 'claude-opus-4-6', to: 'claude-opus-4-6-thinking', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Opus 4.6-thinking', from: 'claude-opus-4-6-thinking', to: 'claude-opus-4-6-thinking', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Opus 4.7', from: 'claude-opus-4-7', to: 'claude-opus-4-7', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4-8', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' }
+]
+
+// Bedrock 预设映射（与后端 DefaultBedrockModelMapping 保持一致）
+const bedrockPresetMappings = [
+  { label: 'Fable 5.1', from: 'claude-fable-5-1', to: 'anthropic.claude-fable-5-1', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
+  { label: 'Fable 5', from: 'claude-fable-5', to: 'anthropic.claude-fable-5', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
+  { label: 'Opus 4.6', from: 'claude-opus-4-6', to: 'us.anthropic.claude-opus-4-6-v1', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Opus 4.7', from: 'claude-opus-4-7', to: 'us.anthropic.claude-opus-4-7', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'us.anthropic.claude-opus-4-8', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Opus 5', from: 'claude-opus-5', to: 'us.anthropic.claude-opus-5', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Sonnet 5', from: 'claude-sonnet-5', to: 'us.anthropic.claude-sonnet-5', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'Sonnet 4.6', from: 'claude-sonnet-4-6', to: 'us.anthropic.claude-sonnet-4-6', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'Opus 4.5', from: 'claude-opus-4-5-thinking', to: 'us.anthropic.claude-opus-4-5-20251101-v1:0', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Sonnet 4.5', from: 'claude-sonnet-4-5', to: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'Haiku 4.5', from: 'claude-haiku-4-5', to: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400' },
+]
+
+// Antigravity 默认映射（从后端 API 获取，与 constants.go 保持一致）
+// 使用 fetchAntigravityDefaultMappings() 异步获取
+import { getAntigravityDefaultModelMapping } from '@/api/admin/accounts'
+
+let _antigravityDefaultMappingsCache: { from: string; to: string }[] | null = null
+
+export async function fetchAntigravityDefaultMappings(): Promise<{ from: string; to: string }[]> {
+  if (_antigravityDefaultMappingsCache !== null) {
+    return _antigravityDefaultMappingsCache
+  }
+  try {
+    const mapping = await getAntigravityDefaultModelMapping()
+    _antigravityDefaultMappingsCache = Object.entries(mapping).map(([from, to]) => ({ from, to }))
+  } catch (e) {
+    console.warn('[fetchAntigravityDefaultMappings] API failed, using empty fallback', e)
+    _antigravityDefaultMappingsCache = []
+  }
+  return _antigravityDefaultMappingsCache
+}
+
+// =====================
+// 常用错误码
+// =====================
+
+export const commonErrorCodes = [
+  { value: 401, label: 'Unauthorized' },
+  { value: 403, label: 'Forbidden' },
+  { value: 429, label: 'Rate Limit' },
+  { value: 500, label: 'Server Error' },
+  { value: 502, label: 'Bad Gateway' },
+  { value: 503, label: 'Unavailable' },
+  { value: 529, label: 'Overloaded' }
+]
+
+// =====================
+// 辅助函数
+// =====================
+
+// 按平台获取模型
+export function getModelsByPlatform(platform: string, qoderSite?: QoderSite): string[] {
+  switch (platform) {
+    case 'openai': return openaiModels
+    case 'anthropic':
+    case 'claude': return claudeModels
+    case 'gemini': return geminiModels
+    case 'antigravity': return antigravityModels
+    case 'qoder':
+      if (qoderSite === 'global') return qoderGlobalModels
+      if (qoderSite === 'cn') return qoderCNModels
+      return qoderModels
+    case 'zhipu': return zhipuModels
+    case 'qwen': return qwenModels
+    case 'deepseek': return deepseekModels
+    case 'mistral': return mistralModels
+    case 'meta': return metaModels
+    case 'xai':
+    case 'grok': return xaiModels
+    case 'cohere': return cohereModels
+    case 'yi': return yiModels
+    case 'moonshot':
+    case 'kimi': return moonshotModels
+    case 'doubao': return doubaoModels
+    case 'minimax': return MINIMAX_MODELS
+    case 'baidu': return baiduModels
+    case 'spark': return sparkModels
+    case 'hunyuan': return hunyuanModels
+    case 'perplexity': return perplexityModels
+    default: return claudeModels
+  }
+}
+
+// 按平台获取预设映射
+export function getPresetMappingsByPlatform(platform: string, qoderSite?: QoderSite) {
+  if (platform === 'openai') return openaiPresetMappings
+  if (platform === 'gemini') return geminiPresetMappings
+  if (platform === 'grok' || platform === 'xai') return grokPresetMappings
+  if (platform === 'antigravity') return antigravityPresetMappings
+  if (platform === 'qoder') {
+    if (qoderSite === 'global') return qoderGlobalPresetMappings
+    if (qoderSite === 'cn') return qoderCNPresetMappings
+    return qoderPresetMappings
+  }
+  if (platform === 'bedrock') return bedrockPresetMappings
+  return anthropicPresetMappings
+}
+
+// =====================
+// 构建模型映射对象（用于 API）
+// =====================
+
+// isValidWildcardPattern 校验通配符格式：* 只能放在末尾
+// 导出供表单组件使用实时校验
+export function isValidWildcardPattern(pattern: string): boolean {
+  const starIndex = pattern.indexOf('*')
+  if (starIndex === -1) return true // 无通配符，有效
+  // * 必须在末尾，且只能有一个
+  return starIndex === pattern.length - 1 && pattern.lastIndexOf('*') === starIndex
+}
+
+export function buildModelMappingObject(
+  mode: 'whitelist' | 'mapping',
+  allowedModels: string[],
+  modelMappings: { from: string; to: string }[]
+): Record<string, string> | null {
+  const mapping: Record<string, string> = {}
+
+  if (mode === 'whitelist') {
+    for (const model of allowedModels) {
+      // whitelist 模式的本意是"精确模型列表"，如果用户输入了通配符（如 claude-*），
+      // 写入 model_mapping 会导致 GetMappedModel() 把真实模型映射成 "claude-*"，从而转发失败。
+      // 因此这里跳过包含通配符的条目。
+      if (!model.includes('*')) {
+        mapping[model] = model
+      }
+    }
+  } else {
+    for (const m of modelMappings) {
+      const from = m.from.trim()
+      const to = m.to.trim()
+      if (!from || !to) continue
+      // 校验通配符格式：* 只能放在末尾
+      if (!isValidWildcardPattern(from)) {
+        console.warn(`[buildModelMappingObject] 无效的通配符格式，跳过: ${from}`)
+        continue
+      }
+      // to 不允许包含通配符
+      if (to.includes('*')) {
+        console.warn(`[buildModelMappingObject] 目标模型不能包含通配符，跳过: ${from} -> ${to}`)
+        continue
+      }
+      mapping[from] = to
+    }
+  }
+
+  return Object.keys(mapping).length > 0 ? mapping : null
+}
+
+// splitModelMappingObject 将持久化的 model_mapping 拆成：
+// 1. 最终模型白名单：仅精确自映射（from == to）；
+// 2. 显式映射规则：通配符映射或 from != to 的精确映射。
+export function splitModelMappingObject(
+  existingMappings?: Record<string, string>
+): { allowedModels: string[]; modelMappings: { from: string; to: string }[] } {
+  const nextAllowedModels: string[] = []
+  const nextModelMappings: { from: string; to: string }[] = []
+
+  if (existingMappings && typeof existingMappings === 'object') {
+    for (const [rawFrom, rawTo] of Object.entries(existingMappings)) {
+      const from = rawFrom.trim()
+      const to = String(rawTo).trim()
+      if (!from || !to) {
+        continue
+      }
+
+      if (!from.includes('*') && from === to) {
+        nextAllowedModels.push(from)
+        continue
+      }
+
+      nextModelMappings.push({ from, to })
+    }
+  }
+
+  return {
+    allowedModels: Array.from(new Set(nextAllowedModels)),
+    modelMappings: nextModelMappings
+  }
+}
+
+export interface PersistedModelRestriction {
+  modelMapping: Record<string, string> | null
+  modelWhitelist: string[]
+}
+
+// normalizeModelWhitelist 将白名单规范成“精确模型列表”。
+// 这里继续忽略通配符，避免把 whitelist 的输入误当成 request-side mapping 规则。
+export function normalizeModelWhitelist(rawWhitelist?: unknown): string[] {
+  if (!Array.isArray(rawWhitelist)) {
+    return []
+  }
+
+  const normalized: string[] = []
+  for (const rawModel of rawWhitelist) {
+    const model = String(rawModel).trim()
+    if (!model || model.includes('*')) {
+      continue
+    }
+    normalized.push(model)
+  }
+
+  return Array.from(new Set(normalized))
+}
+
+// splitPersistedModelRestriction 优先读取新的独立 model_whitelist 字段；
+// 如果旧数据还把白名单编码在 model_mapping 的自映射里，则继续兼容解析。
+export function splitPersistedModelRestriction(
+  existingMappings?: Record<string, string>,
+  rawWhitelist?: unknown
+): { allowedModels: string[]; modelMappings: { from: string; to: string }[] } {
+  const parsedMapping = splitModelMappingObject(existingMappings)
+
+  if (Array.isArray(rawWhitelist)) {
+    // 独立 model_whitelist 出现后，model_mapping 的每一项都是请求侧映射。
+    // 不能再把精确自映射当作旧格式白名单，否则保存后重新打开会丢失这类映射。
+    const modelMappings = Object.entries(existingMappings || {}).flatMap(([rawFrom, rawTo]) => {
+      const from = rawFrom.trim()
+      const to = String(rawTo).trim()
+      return from && to ? [{ from, to }] : []
+    })
+
+    return {
+      allowedModels: normalizeModelWhitelist(rawWhitelist),
+      modelMappings
+    }
+  }
+
+  return parsedMapping
+}
+
+// buildPersistedModelRestriction 将白名单与映射分别持久化。
+// 普通账号使用 model_mapping 表示请求侧映射，model_whitelist 表示映射后的最终白名单。
+// 注意：即使白名单为空，也要显式返回空数组，作为“无白名单限制”的新格式信号，
+// 避免后端回退到 legacy 的“自映射即白名单”兼容分支。
+export function buildPersistedModelRestriction(
+  allowedModels: string[],
+  modelMappings: { from: string; to: string }[]
+): PersistedModelRestriction {
+  const modelMapping = buildModelMappingObject('mapping', [], modelMappings)
+  const modelWhitelist = normalizeModelWhitelist(allowedModels)
+
+  return {
+    modelMapping,
+    modelWhitelist
+  }
+}
+
+export function qoderModelKeyByPublicAlias(alias: string, site?: QoderSite): string | undefined {
+  const normalized = alias.trim()
+  if (site) {
+    const presets = site === 'cn' ? qoderCNPresetMappings : qoderGlobalPresetMappings
+    return presets.find(mapping => mapping.from === normalized)?.to
+  }
+  return qoderModelKeyByAlias[normalized]
+}
+
+export function splitQoderPersistedModelRestriction(
+  existingMappings?: Record<string, string>,
+  rawWhitelist?: unknown
+): { allowedModels: string[]; modelMappings: { from: string; to: string }[] } {
+  const modelMappings: { from: string; to: string }[] = []
+
+  if (existingMappings && typeof existingMappings === 'object') {
+    for (const [rawFrom, rawTo] of Object.entries(existingMappings)) {
+      const from = rawFrom.trim()
+      const to = String(rawTo).trim()
+      if (!from || !to) {
+        continue
+      }
+      modelMappings.push({ from, to })
+    }
+  }
+
+  return {
+    allowedModels: normalizeModelWhitelist(rawWhitelist),
+    modelMappings
+  }
+}
+
+// buildCombinedModelMappingObject 同时持久化“最终模型白名单”和“显式映射规则”。
+// 其中白名单以精确自映射表示，映射规则则直接覆盖同来源模型。
+export function buildCombinedModelMappingObject(
+  allowedModels: string[],
+  modelMappings: { from: string; to: string }[]
+): Record<string, string> | null {
+  const whitelistMapping = buildModelMappingObject('whitelist', allowedModels, [])
+  const explicitMapping = buildModelMappingObject('mapping', [], modelMappings)
+
+  if (!whitelistMapping && !explicitMapping) {
+    return null
+  }
+
+  return {
+    ...(whitelistMapping || {}),
+    ...(explicitMapping || {})
+  }
+}

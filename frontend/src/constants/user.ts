@@ -1,0 +1,2 @@
+// MAX_USER_API_KEY_LIMIT 与后端 PostgreSQL INTEGER 字段的最大值保持一致。
+export const MAX_USER_API_KEY_LIMIT = 2_147_483_647

@@ -266,7 +266,8 @@ SELECT
   COALESCE(e.user_agent, ''),
   e.request_type,
   COALESCE(ak.name, ''),
-  ak.deleted_at
+  ak.deleted_at,
+  COALESCE(e.status_code, 0)
 FROM ops_error_logs e
 LEFT JOIN accounts a ON e.account_id = a.id
 LEFT JOIN groups g ON e.group_id = g.id
@@ -337,6 +338,7 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 			&requestType,
 			&apiKeyName,
 			&apiKeyDeletedAt,
+			&item.ClientStatusCode,
 		); err != nil {
 			return nil, err
 		}
@@ -350,6 +352,7 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 		}
 		item.ResolvedByUserName = resolvedByName
 		item.StatusCode = int(statusCode.Int64)
+		item.SetClientStatus(item.ClientStatusCode)
 		if clientIP.Valid {
 			s := clientIP.String
 			item.ClientIP = &s
@@ -448,7 +451,8 @@ SELECT
   e.time_to_first_token_ms,
   COALESCE(e.api_key_prefix, ''),
   COALESCE(ak.name, ''),
-  ak.deleted_at
+  ak.deleted_at,
+  COALESCE(e.status_code, 0)
 FROM ops_error_logs e
 LEFT JOIN users u ON e.user_id = u.id
 LEFT JOIN accounts a ON e.account_id = a.id
@@ -523,12 +527,14 @@ LIMIT 1`
 		&out.APIKeyPrefix,
 		&detailAPIKeyName,
 		&detailAPIKeyDeletedAt,
+		&out.ClientStatusCode,
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	out.StatusCode = int(statusCode.Int64)
+	out.SetClientStatus(out.ClientStatusCode)
 	if resolvedAt.Valid {
 		t := resolvedAt.Time
 		out.ResolvedAt = &t
@@ -909,7 +915,12 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 	// 默认只展示客户端可见错误；Ops 上游健康列表可显式包含 upstream/account_auth 恢复记录。
 	// cyber_policy 流式命中可能是 200，但仍是对用户可见的拒绝，因此始终豁免。
 	if !opsFilterIncludesRecoveredProviderRows(filter, phaseFilter) {
-		clauses = append(clauses, "(COALESCE(e.status_code, 0) >= 400 OR e.error_type = 'cyber_policy')")
+		guard := "COALESCE(e.status_code, 0) >= 400 OR e.error_type = 'cyber_policy'"
+		if filter != nil && filter.IncludeRecoveredUpstream && phaseFilter == "" && len(filter.ErrorPhasesAny) == 0 {
+			// 混合列表只额外纳入提供方的恢复记录，不把普通成功或其它阶段放进错误列表。
+			guard += " OR (e.status_code >= 200 AND e.status_code < 300 AND e.error_phase IN ('upstream', 'account_auth'))"
+		}
+		clauses = append(clauses, "("+guard+")")
 	}
 
 	if filter.StartTime != nil && !filter.StartTime.IsZero() {

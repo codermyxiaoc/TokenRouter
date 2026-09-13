@@ -632,6 +632,7 @@ const baseSettingsResponse = {
   payment_max_pending_orders: 3,
   payment_enabled_types: [],
   payment_balance_disabled: false,
+  payment_wallet_payment_enabled: false,
   payment_balance_recharge_multiplier: 1,
   payment_subscription_usd_to_cny_rate: 0,
   payment_recharge_fee_rate: 0,
@@ -1002,6 +1003,19 @@ describe("admin SettingsView payment visible method controls", () => {
 
     expect(wrapper.text()).not.toContain("可见方式");
     expect(wrapper.text()).not.toContain("支付来源");
+  });
+
+  it("loads and saves the independent wallet payment switch", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+
+    const toggle = wrapper.get('[data-testid="wallet-payment-enabled-toggle"]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(false);
+    await toggle.setValue(true);
+    await wrapper.get("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ payment_wallet_payment_enabled: true }));
   });
 
   it("人机验证切换到腾讯天御并保存四项配置", async () => {

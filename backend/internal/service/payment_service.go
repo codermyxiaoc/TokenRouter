@@ -73,6 +73,8 @@ func generateRandomString(n int) string {
 
 type CreateOrderRequest struct {
 	UserID          int64
+	// IdempotencyKey 用于站内余额支付的持久去重，防止超时重试重复扣款。
+	IdempotencyKey  string
 	Amount          float64
 	PaymentType     string
 	OpenID          string

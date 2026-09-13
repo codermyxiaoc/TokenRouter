@@ -764,6 +764,8 @@ export default {
         maxAmount: '最高金额',
         dailyLimit: '每日限额',
         balanceRechargeMultiplier: '余额充值倍率',
+        walletPaymentEnabled: '启用站内余额支付',
+        walletPaymentEnabledHint: '允许用户使用站内余额购买或续费订阅，按套餐价格扣款，不收取支付手续费。',
         balanceRechargeMultiplierHint: '用户每支付 1 CNY 可获得多少 {unitName} 余额',
         balanceRechargePreview: '预览：1 CNY = {amount} {unitName}',
         subscriptionUsdToCnyRate: '订阅 CNY 换算汇率',

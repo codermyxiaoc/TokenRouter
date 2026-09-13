@@ -59,6 +59,8 @@ RequestLogger
 - 成功响应的 `data` 为 `{ revoked_subscription_id, replacement_subscription_id, rebound_api_key_count }`；没有接续记录时 `replacement_subscription_id` 为 `null`，Key 改绑数量为 `0`。
 - 越权或不存在的订阅返回 `SUBSCRIPTION_NOT_FOUND`；记录不是当前 active 返回 `SUBSCRIPTION_NOT_ACTIVE`（409）；最高层额度仍可用或套餐无限返回 `SUBSCRIPTION_QUOTA_NOT_EXHAUSTED`（409）。撤销不触发退款，也不提供用户侧恢复接口。
 
+用户余额购买及续费订阅复用 `POST /api/v1/payment/orders`，以 `payment_type=balance`、`order_type=subscription` 和 `plan_id` 区分，必须携带 `Idempotency-Key`。成功响应直接为 `COMPLETED` 并返回订单标识，不提供二维码或外部支付链接；余额不足及开关关闭分别返回 `INSUFFICIENT_BALANCE` 与 `WALLET_PAYMENT_DISABLED`。重试与资金原子性见[站内余额购买订阅](../domains/payments_and_entitlements.md#wallet_subscription_payment)。
+
 <a id="payment_admin_recovery"></a>
 ## 支付管理恢复
 

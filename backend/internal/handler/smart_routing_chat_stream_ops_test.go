@@ -78,7 +78,7 @@ func TestSmartRoutingChatStreamFailureAndOps(t *testing.T) {
 				t.Cleanup(server.Close)
 				upstream.allowed[server.URL] = true
 				id := int64(index + 1)
-				group := &service.Group{ID: id, Platform: service.PlatformOpenAI, Status: service.StatusActive, Hydrated: true}
+				group := &service.Group{ID: id, Name: fmt.Sprintf("group-%d", id), Platform: service.PlatformOpenAI, Status: service.StatusActive, Hydrated: true}
 				key.CompositeGroups = append(key.CompositeGroups, service.APIKeyCompositeGroup{GroupID: id, Group: group})
 				accounts.accounts[id] = &service.Account{
 					ID: id + 100, Name: fmt.Sprintf("local-%d", id), Platform: service.PlatformOpenAI,
@@ -164,12 +164,26 @@ func TestSmartRoutingChatStreamFailureAndOps(t *testing.T) {
 			var recordedEvents []service.OpsUpstreamErrorEvent
 			require.NoError(t, json.Unmarshal([]byte(*job.entry.UpstreamErrorsJSON), &recordedEvents))
 			require.NotEmpty(t, recordedEvents)
+			// 错误行和每个尝试都按失败时的分组、账号、端点记录，不借用恢复成功的组。
+			for index, event := range recordedEvents {
+				require.Equal(t, int64(index+1), event.GroupID)
+				require.Equal(t, fmt.Sprintf("group-%d", index+1), event.GroupName)
+				require.Equal(t, int64(index+101), event.AccountID)
+				require.Equal(t, "/v1/chat/completions", event.UpstreamEndpoint)
+			}
+			require.NotNil(t, job.entry.GroupID)
+			require.Equal(t, recordedEvents[len(recordedEvents)-1].GroupID, *job.entry.GroupID)
+			require.Equal(t, "/v1/chat/completions", job.entry.UpstreamEndpoint)
 			if scenario == "all_stream_errors" {
 				require.Equal(t, 524, *job.entry.UpstreamStatusCode)
 				require.Len(t, recordedEvents, 3)
 			} else if partial {
 				require.GreaterOrEqual(t, job.entry.StatusCode, 400)
 				require.Equal(t, 503, *job.entry.UpstreamStatusCode)
+				require.NotContains(t, job.entry.ErrorMessage, "Recovered upstream error")
+			} else {
+				require.Equal(t, http.StatusOK, job.entry.StatusCode)
+				require.Contains(t, job.entry.ErrorMessage, "Recovered upstream error")
 			}
 			ttl, err := resolver.GetSmartRoutingCooldown(context.Background(), key.ID, 1)
 			require.NoError(t, err)

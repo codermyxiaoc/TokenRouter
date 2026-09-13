@@ -39,7 +39,7 @@ const EndpointAntigravityGenerateContent = "/v1internal:streamGenerateContent"
 // gin.Context keys used by the middleware and helpers below.
 const (
 	ctxKeyInboundEndpoint        = "_gateway_inbound_endpoint"
-	ctxKeyActualUpstreamEndpoint = "_gateway_actual_upstream_endpoint"
+	ctxKeyActualUpstreamEndpoint = service.OpsActualUpstreamEndpointKey
 )
 
 // ──────────────────────────────────────────────────────────

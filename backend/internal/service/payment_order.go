@@ -34,6 +34,10 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if err != nil {
 		return nil, fmt.Errorf("get payment config: %w", err)
 	}
+	// 余额支付直接在本地事务完成，不选择外部支付实例或应用充值手续费。
+	if req.PaymentType == PaymentTypeWallet {
+		return s.createWalletSubscriptionOrder(ctx, req, cfg)
+	}
 	if !cfg.Enabled {
 		return nil, infraerrors.Forbidden("PAYMENT_DISABLED", "payment system is disabled")
 	}

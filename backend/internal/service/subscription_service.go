@@ -250,6 +250,10 @@ func (s *SubscriptionService) assignOrExtendSubscriptionUnlocked(ctx context.Con
 	now := time.Now()
 	latest, err := s.userSubRepo.GetLatestByUserIDAndPlanID(ctx, input.UserID, input.PlanID)
 	if err != nil {
+		// 数据库读取失败不能当成首次购买，否则会打乱续费时间链并错误发放权益。
+		if !errors.Is(err, ErrSubscriptionNotFound) {
+			return nil, false, fmt.Errorf("load latest subscription: %w", err)
+		}
 		latest = nil
 	}
 

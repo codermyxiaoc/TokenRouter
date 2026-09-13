@@ -207,6 +207,10 @@ func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float
 	if err != nil {
 		return nil, nil, infraerrors.NotFound("NOT_FOUND", "order not found")
 	}
+	// 余额订阅没有外部收款实例，不能进入渠道退款或撤回权益流程。
+	if o.PaymentType == PaymentTypeWallet {
+		return nil, nil, infraerrors.Forbidden("WALLET_REFUND_UNSUPPORTED", "站内余额支付订单暂不支持退款")
+	}
 	ok := []string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundPending, OrderStatusRefundFailed}
 	if !psSliceContains(ok, o.Status) {
 		return nil, nil, infraerrors.BadRequest("INVALID_STATUS", "order status does not allow refund")

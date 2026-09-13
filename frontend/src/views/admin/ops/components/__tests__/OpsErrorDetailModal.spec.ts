@@ -76,4 +76,36 @@ describe('OpsErrorDetailModal', () => {
     expect(wrapper.findAll('pre')).toHaveLength(2)
     expect(wrapper.text()).not.toContain('admin.ops.errorDetail.payloads.upstream_detail')
   })
+
+  // 详情保留原始上游状态，同时说明后台恢复后的最终 HTTP 状态。
+  it('shows a recovered upstream error separately from the final request result', async () => {
+    mocks.getRequestErrorDetail.mockResolvedValue({
+      id: 2,
+      created_at: '2026-09-13T02:24:11Z',
+      phase: 'upstream',
+      type: 'upstream_error',
+      error_owner: 'provider',
+      severity: 'P1',
+      status_code: 503,
+      upstream_status_code: 503,
+      client_status_code: 200,
+      recovered_upstream: true,
+      platform: 'openai',
+      model: 'gpt-6-astra',
+      request_id: 'recovered-request',
+      message: 'Recovered upstream error 503: Service temporarily unavailable',
+      error_body: '',
+      upstream_errors: '[]',
+    })
+
+    const wrapper = shallowMount(OpsErrorDetailModal, {
+      props: { show: true, errorId: 2, errorType: 'request' },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('503')
+    expect(wrapper.text()).toContain('usage.errors.recovered')
+    expect(wrapper.text()).toContain('usage.errors.finalStatus 200')
+  })
 })

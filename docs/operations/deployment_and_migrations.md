@@ -13,7 +13,7 @@
 
 ## 构建与运行形态
 
-标准发布先生成一次前端静态资源，再由独立 runner 把同一份前端嵌入各平台 Go 二进制并行交叉编译；最终发布阶段统一归档二进制，并用 Linux `amd64`、`arm64` 产物组装多架构镜像和必要运行时工具。GitHub Release 同时发布 Linux `amd64`、Linux `arm64` 等产物，具体矩阵以 [release workflow](../../.github/workflows/release.yml) 为准。
+源码镜像由根 `Dockerfile` 多阶段构建：先生成前端静态资源，再嵌入 Go 二进制，最后加入运行时资源和 PostgreSQL 客户端。`buildx --platform` 决定目标架构，`VERSION`、`COMMIT` 和 `DATE` 构建参数写入版本信息。二进制归档与多架构发布的另一条入口由 [GoReleaser 配置](../../.goreleaser.yaml) 定义；当前检出内容没有 `.github/workflows/release.yml`，不能依赖该工作流自动发布。
 
 仓库支持以下运行形态：
 
@@ -26,6 +26,15 @@
 | Apple Container | `deploy/apple-container.sh` | 独立脚本管理容器、卷和健康状态 |
 
 应用至少依赖 PostgreSQL 和 Redis。`/app/data` 或等价 `DATA_DIR` 保存配置、安装锁及本地运维产物；数据库、Redis 和对象存储各有独立生命周期，不能只备份应用数据目录就宣称完成系统备份。
+
+<a id="dockerhub_deployment"></a>
+### DockerHub 镜像与宿主机数据库端口
+
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v1.1`，保留 `pull_policy: always`。发布端在当前源码根目录构建 `linux/amd64` 镜像并推送 DockerHub；部署端只拉取指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+
+标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
+
+更新时必须沿用既有 Compose 项目名、配置文件和存储方式：标准版的命名卷与本地目录版的挂载不可互换，`postgres_data` 的目标目录和 `PGDATA` 均保持 `/var/lib/postgresql/data`。安装脚本下载的是本地目录版并保存为部署端 `docker-compose.yml`，不能用仓库标准版覆盖后直接启动。原二进制/systemd 部署改用容器时，应先明确如何继续连接原 PostgreSQL、Redis 并保留配置、安装锁及稳定安全密钥；新建三服务 Compose 的空数据库不会自动包含原数据。
 
 逐步操作见 [中文部署指南](../guides/deployment/index.md)、[Docker 镜像说明](../../deploy/DOCKER.md) 和 [Apple Container 指南](../guides/deployment/apple_container.md)。这些是部署者手册，不替代本文的工程约束。
 

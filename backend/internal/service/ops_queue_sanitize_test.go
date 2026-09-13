@@ -11,6 +11,10 @@ func TestSanitizeOpsUpstreamErrorsForQueueBoundsAndRedacts(t *testing.T) {
 		entry.UpstreamErrors = append(entry.UpstreamErrors, &OpsUpstreamErrorEvent{
 			Platform:             strings.Repeat("p", 100),
 			AccountName:          strings.Repeat("a", 300),
+			GroupID:              int64(i + 1),
+			GroupName:            strings.Repeat("g", 300),
+			UpstreamEndpoint:     "/" + strings.Repeat("e", 500) + "?api_key=secret",
+			UpstreamModel:        strings.Repeat("m", 300),
 			UpstreamStatusCode:   500,
 			UpstreamURL:          strings.Repeat("u", 3000),
 			UpstreamResponseBody: `{"authorization":"Bearer secret","message":"` + strings.Repeat("x", 10_000) + `"}`,
@@ -41,6 +45,12 @@ func TestSanitizeOpsUpstreamErrorsForQueueBoundsAndRedacts(t *testing.T) {
 		}
 		if len(event.UpstreamResponseBody) > OpsErrorLogQueueBodyMaxBytes || len(event.Detail) > OpsErrorLogQueueBodyMaxBytes {
 			t.Fatal("event body/detail exceeded queue limit")
+		}
+		if event.GroupID <= 0 || len(event.GroupName) > 128 || len(event.UpstreamEndpoint) > 256 || len(event.UpstreamModel) > 128 {
+			t.Fatal("attempt attribution fields were not preserved and bounded")
+		}
+		if strings.Contains(event.UpstreamEndpoint, "secret") || strings.Contains(event.UpstreamEndpoint, "?") {
+			t.Fatal("endpoint snapshot leaked query parameters")
 		}
 		if strings.Contains(event.UpstreamResponseBody, "Bearer secret") || strings.Contains(event.Detail, `"secret"`) {
 			t.Fatal("credential material was not redacted")

@@ -130,6 +130,10 @@ type OpsErrorLog struct {
 	Platform   string `json:"platform"`
 	Model      string `json:"model"`
 
+	// StatusCode 保持既有的上游优先展示值；最终请求结果单独暴露，避免把恢复误当失败。
+	ClientStatusCode  int  `json:"client_status_code"`
+	RecoveredUpstream bool `json:"recovered_upstream"`
+
 	Resolved           bool       `json:"resolved"`
 	ResolvedAt         *time.Time `json:"resolved_at"`
 	ResolvedByUserID   *int64     `json:"resolved_by_user_id"`
@@ -189,6 +193,14 @@ type OpsErrorLogDetail struct {
 	APIKeyPrefix string `json:"api_key_prefix,omitempty"`
 }
 
+// SetClientStatus 从持久化结果和采集器的恢复标记确认恢复，不能仅凭 SSE 的 HTTP 200 推断。
+func (e *OpsErrorLog) SetClientStatus(status int) {
+	e.ClientStatusCode = status
+	e.RecoveredUpstream = status >= 200 && status < 300 &&
+		((e.Phase == "upstream" && strings.HasPrefix(e.Message, "Recovered upstream error")) ||
+			(e.Phase == "account_auth" && strings.HasPrefix(e.Message, "Recovered account authentication failure")))
+}
+
 type OpsErrorLogFilter struct {
 	StartTime *time.Time
 	EndTime   *time.Time
@@ -223,9 +235,9 @@ type OpsErrorLogFilter struct {
 	// ExcludeCountTokens drops count_tokens probe errors (is_count_tokens=true).
 	ExcludeCountTokens bool
 
-	// IncludeRecoveredUpstream 允许提供方健康视图绕过 status>=400 守卫，
-	// 从而展示 upstream/account_auth 阶段中 status<400 的恢复记录。
-	// 普通请求错误接口不设置该开关，继续保持客户端错误语义。
+	// IncludeRecoveredUpstream 允许管理端显式查询提供方恢复记录。
+	// 未筛阶段时也纳入 upstream/account_auth 的 2xx 记录，其它阶段仍保持失败守卫。
+	// 普通请求错误和用户接口不设置该开关，继续保持客户端错误语义。
 	IncludeRecoveredUpstream bool
 
 	// ErrorPhasesAny 和 ErrorTypesAny 增加普通 ANY() 条件，不改变单值 Phase 的匹配语义。

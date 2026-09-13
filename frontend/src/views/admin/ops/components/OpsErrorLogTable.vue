@@ -115,6 +115,16 @@
             <span class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium" :class="getStatusClass(row.status_code)">
               {{ row.status_code }}
             </span>
+            <!-- 上游失败与最终请求结果分开展示，不能凭流式 HTTP 200 推断已恢复。 -->
+            <span
+              v-if="row.recovered_upstream"
+              class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"
+              :title="t('usage.errors.recoveredHint')"
+            >{{ t('usage.errors.recovered') }}</span>
+            <span
+              v-if="row.recovered_upstream && row.client_status_code != null"
+              class="whitespace-nowrap text-xs text-gray-500 dark:text-gray-400"
+            >{{ t('usage.errors.finalStatus') }} {{ row.client_status_code }}</span>
             <span
               v-if="row.severity"
               :class="['rounded px-1.5 py-0.5 text-[10px] font-medium', getSeverityClass(row.severity)]"

@@ -540,6 +540,8 @@ export default {
       keyName: 'Key 名称', keyDeleted: '已删除', allKeys: '全部 Key',
       modelPlaceholder: '搜索模型', allCategories: '全部分类', allStatuses: '全部状态码',
       empty: '暂无错误请求', failedToLoad: '加载错误请求失败',
+      recovered: '已恢复', finalStatus: '最终 HTTP',
+      recoveredHint: '已通过后台重试或换组恢复，上游异常仍保留用于排查。',
       categories: {
         auth: '认证失败', rate_limit: '限流', quota: '余额/订阅',
         invalid_request: '参数错误', service_unavailable: '服务暂时不可用',

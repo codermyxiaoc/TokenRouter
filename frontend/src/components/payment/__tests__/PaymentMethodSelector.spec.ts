@@ -2,13 +2,25 @@ import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 
-vi.mock('vue-i18n', () => ({
+vi.mock('vue-i18n', async (importOriginal) => ({
+  ...await importOriginal<typeof import('vue-i18n')>(),
   useI18n: () => ({
     t: (key: string, fallback?: string) => fallback ?? key,
   }),
 }))
 
 describe('PaymentMethodSelector', () => {
+  it('prevents selecting wallet payment when the balance is insufficient', async () => {
+    const wrapper = mount(PaymentMethodSelector, {
+      props: { selected: '', methods: [{ type: 'balance', display_name: '站内余额', fee_fixed: 0, fee_rate: 0, available: false }] },
+    })
+
+    expect(wrapper.text()).toContain('站内余额')
+    expect(wrapper.get('button').attributes('disabled')).toBeDefined()
+    await wrapper.get('button').trigger('click')
+    expect(wrapper.emitted('select')).toBeUndefined()
+  })
+
   it('wraps large custom method collections without letting labels widen the selector', () => {
     const methods = Array.from({ length: 12 }, (_, index) => ({
       type: `custom_${index}`,

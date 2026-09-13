@@ -564,6 +564,9 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 
 		out.Platform = truncateString(strings.TrimSpace(out.Platform), 32)
 		out.AccountName = truncateString(strings.TrimSpace(out.AccountName), 128)
+		out.GroupName = truncateString(strings.TrimSpace(out.GroupName), 128)
+		out.UpstreamEndpoint = truncateString(opsUpstreamEndpointPath(out.UpstreamEndpoint), 256)
+		out.UpstreamModel = truncateString(strings.TrimSpace(out.UpstreamModel), 128)
 		out.UpstreamRequestID = truncateString(strings.TrimSpace(out.UpstreamRequestID), 128)
 		out.UpstreamURL = truncateString(strings.TrimSpace(out.UpstreamURL), 2048)
 		if body := strings.TrimSpace(out.UpstreamResponseBody); body != "" {
@@ -578,6 +581,9 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 
 		if out.AccountID < 0 {
 			out.AccountID = 0
+		}
+		if out.GroupID < 0 {
+			out.GroupID = 0
 		}
 		if out.UpstreamStatusCode < 0 {
 			out.UpstreamStatusCode = 0

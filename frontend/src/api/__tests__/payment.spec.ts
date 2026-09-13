@@ -37,4 +37,19 @@ describe('payment api', () => {
       resume_token: 'resume-token-123',
     })
   })
+
+  it('sends wallet retry keys in the header without leaking them into the order body', async () => {
+    const payload = { amount: 10, payment_type: 'balance', order_type: 'subscription', plan_id: 7 }
+    await paymentAPI.createOrder({ ...payload, idempotency_key: 'wallet-retry-key' })
+
+    expect(post).toHaveBeenCalledWith('/payment/orders', payload, {
+      headers: { 'Idempotency-Key': 'wallet-retry-key' },
+    })
+  })
+
+  it('preserves external payment requests without an idempotency key', async () => {
+    const payload = { amount: 10, payment_type: 'wxpay', order_type: 'balance' }
+    await paymentAPI.createOrder(payload)
+    expect(post).toHaveBeenCalledWith('/payment/orders', payload)
+  })
 })

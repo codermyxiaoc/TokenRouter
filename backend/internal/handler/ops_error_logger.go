@@ -1254,8 +1254,6 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				entry.UpstreamStatusCode = &finalStatus
 			}
 		}
-		suppressOpsUpstreamAttributionForLocalModelConfiguration(c, entry)
-
 		if apiKey != nil {
 			entry.APIKeyID = &apiKey.ID
 			// 有效 key 报错时快照前缀，key 之后被删也保留。
@@ -1271,6 +1269,8 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				entry.Platform = apiKey.Group.Platform
 			}
 		}
+		applyOpsFailedAttemptAttribution(entry)
+		suppressOpsUpstreamAttributionForLocalModelConfiguration(c, entry)
 
 		var clientIP string
 		if ip := strings.TrimSpace(ip.GetClientIP(c)); ip != "" {
@@ -1389,6 +1389,7 @@ func logOpsRecoveredUpstream(c *gin.Context, ops *service.OpsService, finalStatu
 	if clientIP := strings.TrimSpace(ip.GetClientIP(c)); clientIP != "" {
 		entry.ClientIP = &clientIP
 	}
+	applyOpsFailedAttemptAttribution(entry)
 	applyOpsLatencyFieldsFromContext(c, entry)
 	enqueueOpsErrorLog(ops, entry)
 }
@@ -1558,6 +1559,7 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 		entry.ClientIP = &clientIP
 	}
 
+	applyOpsFailedAttemptAttribution(entry)
 	enqueueOpsErrorLog(ops, entry)
 }
 
@@ -1714,6 +1716,50 @@ func applyOpsUpstreamErrorEvents(entry *service.OpsInsertErrorLogInput, events [
 	}
 	if detail := strings.TrimSpace(last.Detail); detail != "" {
 		entry.UpstreamErrorDetail = &detail
+	}
+}
+
+// applyOpsFailedAttemptAttribution 用最后一次真实失败的快照统一错误行归属。
+// 最终 HTTP 状态、入站信息及全部尝试历史保持不变，避免恢复成功的组替失败组背负错误。
+func applyOpsFailedAttemptAttribution(entry *service.OpsInsertErrorLogInput) {
+	if entry == nil || (entry.ErrorPhase != "upstream" && entry.ErrorPhase != string(service.GatewayFailureStageAccountAuth)) {
+		return
+	}
+	var last *service.OpsUpstreamErrorEvent
+	for i := len(entry.UpstreamErrors) - 1; i >= 0; i-- {
+		if entry.UpstreamErrors[i] != nil {
+			last = entry.UpstreamErrors[i]
+			break
+		}
+	}
+	if last == nil {
+		return
+	}
+	// 当前已明确失败的账号优先；历史重试事件不能冒充另一个账号未附带事件的最终失败。
+	if entry.StatusCode >= http.StatusBadRequest && entry.AccountID != nil && last.AccountID > 0 && *entry.AccountID != last.AccountID {
+		return
+	}
+	if last.AccountID > 0 {
+		accountID := last.AccountID
+		entry.AccountID = &accountID
+	}
+	if platform := strings.TrimSpace(last.Platform); platform != "" {
+		entry.Platform = platform
+	}
+	if last.GroupID > 0 {
+		if entry.GroupID == nil || *entry.GroupID != last.GroupID {
+			// 已跨组时未知端点或模型应留空，不能沿用另一组的成功上下文。
+			entry.UpstreamEndpoint = ""
+			entry.UpstreamModel = ""
+		}
+		groupID := last.GroupID
+		entry.GroupID = &groupID
+	}
+	if endpoint := strings.TrimSpace(last.UpstreamEndpoint); endpoint != "" {
+		entry.UpstreamEndpoint = endpoint
+	}
+	if model := strings.TrimSpace(last.UpstreamModel); model != "" {
+		entry.UpstreamModel = model
 	}
 }
 

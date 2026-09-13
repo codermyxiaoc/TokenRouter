@@ -24,6 +24,8 @@
 
 同名概念可能跨层，但要有明确接管语义。例如进程 `security.trust_forwarded_ip_for_api_key_acl` 提供启动默认值，数据库设置可以在运行时覆盖安全客户端 IP 策略；读取方必须使用运行时 snapshot，而不是持续读取旧的 struct 字段。相反，数据库地址和 Redis 连接池不能通过管理后台热切换。
 
+Compose 的 `.env` 还包含只供部署工具插值的变量：`SUB2API_IMAGE` 选择标准、本地目录和 standalone 版的应用镜像；`POSTGRES_BIND_HOST`、`POSTGRES_PORT` 只设置标准、本地目录版 PostgreSQL 的宿主机映射入口，默认 `127.0.0.1:5433`。它们不会自动成为应用进程配置，修改后需由 Compose 重建相应容器。内置数据库拓扑中的应用始终连接 `postgres:5432`；standalone 的 `DATABASE_PORT` 则是外置数据库实际端口。镜像发布、端口与持久化边界见[部署与数据库迁移](../operations/deployment_and_migrations.md#dockerhub_deployment)。
+
 <a id="configuration_sources"></a>
 ## 进程配置来源
 
@@ -66,6 +68,8 @@ setup 使用 `DATA_DIR > 可写 /app/data > 当前目录` 选择 `config.yaml` �
 ## 数据库运行时设置
 
 `settings` 是 `key/value/updated_at` 表，删除键表示恢复该 getter 的默认语义。`SettingService` 负责类型解析、范围/组合校验、敏感值保留、批量原子写入和更新后的缓存通知；handler 只负责 HTTP binding、权限、审计和响应。
+
+`wallet_payment_enabled` 控制站内余额购买和续费订阅，默认关闭；它通过系统设置接口的 `payment_wallet_payment_enabled` 字段维护，通过专用支付配置及 `checkout-info` 的 `wallet_payment_enabled` 字段读取。更新省略时保留旧值，显式 `false` 关闭；保存后无需重启或数据库迁移。支付总开关仍须开启，现有余额充值入口开关保持独立。扣款、幂等及统计边界见[站内余额购买订阅](../domains/payments_and_entitlements.md#wallet_subscription_payment)。
 
 运行时设置包括注册与邮件验证、第三方登录、SMTP、TOTP/session binding/step-up、登录协议、面板限流、部分冷却与流超时、支付展示以及各类功能开关。不同 getter 的回退可能来自代码常量或 `config.Config`，不能假设所有缺失键都等价于 `false`。
 

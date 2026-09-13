@@ -38,9 +38,11 @@
 
 API Key 账号可以在管理员列表配置并手动查询上游用量。普通兼容上游缺省使用 Sub2API 适配器，New API 和 Zivv 必须显式选择；Kimi、Zhipu、DeepSeek、MiniMax 则由平台与 `account_mode` 自动选择固定只读适配器，Zhipu payg 和 MiniMax payg 因没有接入公开余额协议而明确不支持。手动查询协议错误只影响展示，不改变转发资格。API Key 行同时保留 TokenRouter 本地今日统计/本地配额和上游余额/周期限额两个来源；只有显式开启的 CN 周期监控可以把同一查询结果写入统一快照并形成身份绑定的临时停调，详见[API Key 上游用量查询](upstream_usage.md)。
 
-Kimi、Zhipu 和 DeepSeek 只接受 `type=apikey`。`credentials.account_mode` 为 `payg` 或 `coding`，其中 DeepSeek 不支持 `coding`；`credentials.api_protocol` 为 `chat_completions`、`anthropic` 或 `responses`，其中 Kimi/Zhipu 不支持上游原生 `responses`。历史账号缺少这两个字段时分别按 `payg` 和 `chat_completions` 读取。自定义 `base_url`、代理、TLS 指纹与受保护的 Header Override 沿用共同传输边界，平台身份不能从中继 URL 反推。
+Kimi、Zhipu 和 DeepSeek 只接受 `type=apikey`。`credentials.account_mode` 为 `payg` 或 `coding`，其中 DeepSeek 不支持 `coding`；`credentials.api_protocol` 支持 `chat_completions`、`anthropic` 和 `adaptive`，Kimi、DeepSeek 还支持 `responses`。历史账号缺少这两个字段时分别按 `payg` 和 `chat_completions` 读取。自定义 `base_url`、代理、TLS 指纹与受保护的 Header Override 沿用共同传输边界，平台身份不能从中继 URL 反推。
 
 MiniMax 同样仅支持 API Key，可选择 `payg` 或 `coding`，协议支持 `chat_completions`、`anthropic`、`responses` 和 `adaptive`。默认按量付费与 Chat Completions；自适应模式使用三个独立端点。两种账号模式使用相同官方端点，详情见 [MiniMax 上游](minimax_upstream.md)。
+
+四个 CN 平台的 `adaptive` 均按客户端入口选择已有的协议转发路径。`credentials.api_base_urls` 分别保存 Chat Completions、Anthropic 与平台支持的 Responses 地址，未设置时按平台和账号模式读取默认端点；旧 `base_url` 在自适应模式中仅作为 Chat Completions 地址回退。Zhipu 不提供原生 Responses，Responses 入站继续经 Chat Completions 转换，不因开启自适应新增上游能力。账号创建、编辑和批量更新采用与运行时一致的协议校验，导入复用账号创建流程；未知协议、Zhipu 固定 `responses` 和 DeepSeek `coding` 仍会被拒绝。
 
 平台专题：
 

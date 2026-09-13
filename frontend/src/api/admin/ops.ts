@@ -16,6 +16,11 @@ export type OpsUpstreamErrorEvent = {
   platform?: string
   account_id?: number
   account_name?: string
+  // 失败发生时的分组和上游协议快照。
+  group_id?: number
+  group_name?: string
+  upstream_endpoint?: string
+  upstream_model?: string
   upstream_status_code?: number
   upstream_request_id?: string
   kind?: string
@@ -911,6 +916,9 @@ export interface OpsErrorLog {
 
   severity: OpsSeverity
   status_code: number
+  // status_code 保持上游错误展示口径，最终 HTTP 状态单独返回。
+  client_status_code?: number
+  recovered_upstream?: boolean
   platform: string
   model: string
 
@@ -1104,6 +1112,8 @@ export type OpsErrorListQueryParams = {
   error_source?: string
   resolved?: string
   view?: OpsErrorListView
+  // 使用记录需要展示换组恢复的上游错误；省略时保持最终请求错误口径。
+  include_recovered_upstream?: boolean
 
   q?: string
   status_codes?: string

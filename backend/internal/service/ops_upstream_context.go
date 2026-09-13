@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"time"
 
@@ -18,6 +19,8 @@ const (
 	OpsUpstreamErrorDetailKey  = "ops_upstream_error_detail"
 	OpsUpstreamErrorsKey       = "ops_upstream_errors"
 	OpsUpstreamModelKey        = "ops_upstream_model"
+	// OpsActualUpstreamEndpointKey 与网关共享实际端点，供失败尝试及时保存归属快照。
+	OpsActualUpstreamEndpointKey = "_gateway_actual_upstream_endpoint"
 
 	// Optional stage latencies (milliseconds) for troubleshooting and alerting.
 	OpsAuthLatencyMsKey      = "ops_auth_latency_ms"
@@ -381,6 +384,11 @@ type OpsUpstreamErrorEvent struct {
 	Platform    string `json:"platform,omitempty"`
 	AccountID   int64  `json:"account_id,omitempty"`
 	AccountName string `json:"account_name,omitempty"`
+	// 分组和上游协议按失败时快照，不能在换组成功后读取最终请求上下文补写。
+	GroupID          int64  `json:"group_id,omitempty"`
+	GroupName        string `json:"group_name,omitempty"`
+	UpstreamEndpoint string `json:"upstream_endpoint,omitempty"`
+	UpstreamModel    string `json:"upstream_model,omitempty"`
 
 	// Outcome
 	UpstreamStatusCode int    `json:"upstream_status_code,omitempty"`
@@ -418,6 +426,7 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 		ev.AtUnixMs = time.Now().UnixMilli()
 	}
 	ev.Platform = strings.TrimSpace(ev.Platform)
+	snapshotOpsUpstreamAttemptContext(c, &ev)
 	ev.UpstreamRequestID = strings.TrimSpace(ev.UpstreamRequestID)
 	ev.UpstreamResponseBody = strings.TrimSpace(ev.UpstreamResponseBody)
 	ev.Kind = strings.TrimSpace(ev.Kind)
@@ -443,6 +452,45 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	c.Set(OpsUpstreamErrorsKey, existing)
 
 	checkSkipMonitoringForUpstreamEvent(c, &evCopy)
+}
+
+// snapshotOpsUpstreamAttemptContext 在事件产生时固定路由归属，不持有后续可能被修改的分组指针。
+func snapshotOpsUpstreamAttemptContext(c *gin.Context, ev *OpsUpstreamErrorEvent) {
+	if c == nil || ev == nil {
+		return
+	}
+	if c.Request != nil {
+		if group, ok := c.Request.Context().Value(ctxkey.Group).(*Group); ok && group != nil {
+			if ev.GroupID == 0 {
+				ev.GroupID = group.ID
+			}
+			if ev.GroupID == group.ID && ev.GroupName == "" {
+				ev.GroupName = group.Name
+			}
+		}
+	}
+	if ev.UpstreamModel == "" {
+		ev.UpstreamModel = strings.TrimSpace(c.GetString(OpsUpstreamModelKey))
+	}
+	if ev.UpstreamEndpoint == "" && (ev.Platform == PlatformOpenAI || ev.Platform == PlatformGrok || IsCNProvider(ev.Platform)) {
+		ev.UpstreamEndpoint = GetActualOpenAIUpstreamEndpoint(c)
+	}
+	if ev.UpstreamEndpoint == "" {
+		ev.UpstreamEndpoint = c.GetString(OpsActualUpstreamEndpointKey)
+	}
+	if ev.UpstreamEndpoint == "" {
+		ev.UpstreamEndpoint = opsUpstreamEndpointPath(ev.UpstreamURL)
+	}
+	ev.UpstreamEndpoint = opsUpstreamEndpointPath(ev.UpstreamEndpoint)
+}
+
+// opsUpstreamEndpointPath 仅保存实际路径，避免查询参数或认证信息混入新增的端点快照。
+func opsUpstreamEndpointPath(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || !strings.HasPrefix(parsed.Path, "/") {
+		return ""
+	}
+	return parsed.Path
 }
 
 // checkSkipMonitoringForUpstreamEvent snapshots whether this attempt matches a

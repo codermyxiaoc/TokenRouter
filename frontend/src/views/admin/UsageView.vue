@@ -860,6 +860,7 @@ const loadAdminErrors = async () => {
       page: errPage.value,
       page_size: errPageSize.value,
       view: 'all',
+      include_recovered_upstream: true,
       start_time: toRFC3339(filters.value.start_date),
       end_time: toRFC3339(filters.value.end_date, true),
       user_id: filters.value.user_id ?? undefined,

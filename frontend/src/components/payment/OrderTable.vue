@@ -4,7 +4,7 @@
       <span class="font-mono text-sm">#{{ value }}</span>
     </template>
     <template #cell-out_trade_no="{ value }">
-      <span class="text-sm text-gray-900 dark:text-white">{{ value }}</span>
+      <span class="block max-w-64 truncate text-sm text-gray-900 dark:text-white" :title="value">{{ value }}</span>
     </template>
     <template v-if="showUser" #cell-user_email="{ value, row }">
       <div class="text-sm">

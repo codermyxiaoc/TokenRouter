@@ -73,6 +73,32 @@ describe('OpsErrorLogTable user/api-key/account columns', () => {
     expect(wrapper.text()).toContain('old-key')
     expect(wrapper.text()).toContain('admin.ops.errorLog.keyDeletedBadge')
   })
+
+  // 恢复请求仍展示上游 503，同时明确标注最终 HTTP 200，便于排查失败分组。
+  it('keeps the upstream failure visible with the recovered final result', () => {
+    const wrapper = mountTable({
+      status_code: 503,
+      client_status_code: 200,
+      recovered_upstream: true,
+    })
+
+    expect(wrapper.text()).toContain('503')
+    expect(wrapper.text()).toContain('usage.errors.recovered')
+    expect(wrapper.text()).toContain('usage.errors.finalStatus 200')
+  })
+
+  // 流式响应可能在 HTTP 200 后失败，只接受后端明确提供的恢复标记。
+  it('does not label an HTTP 200 stream failure as recovered', () => {
+    const wrapper = mountTable({
+      status_code: 503,
+      client_status_code: 200,
+      recovered_upstream: false,
+    })
+
+    expect(wrapper.text()).toContain('503')
+    expect(wrapper.text()).not.toContain('usage.errors.recovered')
+    expect(wrapper.text()).not.toContain('usage.errors.finalStatus')
+  })
 })
 
 // 防回归:组件用 admin.ops.errorLog.* 命名空间。若 i18n 键写错命名空间(如误放到
@@ -88,6 +114,9 @@ describe('OpsErrorLogTable i18n keys exist in the errorLog namespace', () => {
       const errorLog = msgs?.admin?.ops?.errorLog
       expect(errorLog?.apiKey).toBeTruthy()
       expect(errorLog?.keyDeletedBadge).toBeTruthy()
+      expect(msgs?.usage?.errors?.recovered).toBeTruthy()
+      expect(msgs?.usage?.errors?.recoveredHint).toBeTruthy()
+      expect(msgs?.usage?.errors?.finalStatus).toBeTruthy()
     })
   }
 })

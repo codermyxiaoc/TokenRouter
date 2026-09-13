@@ -24,8 +24,8 @@ services:
   # Sub2API Application
   # ===========================================================================
   sub2api:
-    image: ghcr.io/tokenflux/tokenrouter:latest
-    # 重建前始终刷新 latest，避免容器内在线更新后从旧本地镜像回退。
+    image: ${SUB2API_IMAGE:-coderxiaoc/tokenrouter:v0.1.278-ct-v1.1}
+    # 从 DockerHub 拉取本地源码发布的版本；可在 .env 中指定其他标签或镜像摘要。
     pull_policy: always
     container_name: sub2api
     restart: unless-stopped
@@ -275,8 +275,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    # 注意：不暴露端口到宿主机，应用通过内部网络连接
-    # 如需调试，可临时添加：ports: ["127.0.0.1:5433:5432"]
+    ports:
+      # 仅控制宿主机访问入口；应用仍通过内部网络连接 postgres:5432。
+      - "${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}:5432"
 
   # ===========================================================================
   # Redis Cache

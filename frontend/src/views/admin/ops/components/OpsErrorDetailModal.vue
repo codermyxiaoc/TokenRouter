@@ -90,6 +90,16 @@
             <span :class="['inline-flex items-center rounded-lg px-2 py-1 text-xs font-black ring-1 ring-inset shadow-sm', statusClass]">
               {{ detail.status_code }}
             </span>
+            <!-- 恢复状态由后端判定，避免把 HTTP 200 的流内失败标成成功恢复。 -->
+            <span
+              v-if="detail.recovered_upstream"
+              class="ml-2 inline-flex items-center rounded-lg bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"
+              :title="t('usage.errors.recoveredHint')"
+            >{{ t('usage.errors.recovered') }}</span>
+            <span
+              v-if="detail.recovered_upstream && detail.client_status_code != null"
+              class="ml-2 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400"
+            >{{ t('usage.errors.finalStatus') }} {{ detail.client_status_code }}</span>
           </div>
         </div>
 

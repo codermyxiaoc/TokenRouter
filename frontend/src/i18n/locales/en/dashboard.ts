@@ -535,6 +535,8 @@ export default {
       keyName: 'Key Name', keyDeleted: 'Deleted', allKeys: 'All keys',
       modelPlaceholder: 'Search model', allCategories: 'All categories', allStatuses: 'All status codes',
       empty: 'No error requests', failedToLoad: 'Failed to load error requests',
+      recovered: 'Recovered', finalStatus: 'Final HTTP',
+      recoveredHint: 'Recovered through a retry or group switch. The upstream error is retained for troubleshooting.',
       categories: {
         auth: 'Auth failed', rate_limit: 'Rate limited', quota: 'Balance/Subscription',
         invalid_request: 'Invalid request', service_unavailable: 'Service unavailable',

@@ -771,6 +771,8 @@ export default {
         maxAmount: 'Maximum Amount',
         dailyLimit: 'Daily Limit',
         balanceRechargeMultiplier: 'Balance Recharge Multiplier',
+        walletPaymentEnabled: 'Enable Account Balance Payments',
+        walletPaymentEnabledHint: 'Allow users to purchase or renew subscriptions with account balance at the plan price, without payment fees.',
         balanceRechargeMultiplierHint: 'How much {unitName} balance the user receives for each 1 CNY paid',
         balanceRechargePreview: 'Preview: 1 CNY = {amount} {unitName}',
         subscriptionUsdToCnyRate: 'Subscription USD to CNY Rate',

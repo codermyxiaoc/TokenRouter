@@ -5,6 +5,7 @@ import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
+import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import type { CheckoutInfoResponse, MethodLimit, SubscriptionPlan } from '@/types/payment'
@@ -560,6 +561,111 @@ describe('PaymentView subscription confirmation amounts', () => {
     expect(text).toContain(fee)
     expect(text).toContain(total)
     expect(wrapper.findAll('button').some(button => button.text().includes(total))).toBe(true)
+  })
+})
+
+describe('PaymentView wallet subscription payments', () => {
+  beforeEach(() => {
+    authUserState.value = { username: 'demo-user', email: 'buyer@example.com', balance: 200 }
+    activeSubscriptionsState.value = []
+    window.sessionStorage?.clear()
+  })
+
+  it('only offers wallet payment for subscriptions when the setting is enabled', async () => {
+    const disabled = await mountSubscriptionConfirm()
+    expect(disabled.findComponent(PaymentMethodSelector).props('methods').some((method: { type: string }) => method.type === 'balance')).toBe(false)
+    disabled.unmount()
+
+    const wrapper = await mountSubscriptionConfirm({ checkout: { wallet_payment_enabled: true } })
+    const selector = wrapper.findComponent(PaymentMethodSelector)
+    expect(selector.props('methods')).toContainEqual(expect.objectContaining({ type: 'balance', available: true, fee_fixed: 0, fee_rate: 0 }))
+    selector.vm.$emit('select', 'balance')
+    await flushPromises()
+    // 返回余额充值时必须清除站内余额支付方式，防止形成自己给自己充值的请求。
+    const vm = wrapper.vm as unknown as { activeTab: string; selectedPlan: SubscriptionPlan | null; selectedMethod: string }
+    vm.selectedPlan = null
+    vm.activeTab = 'recharge'
+    await flushPromises()
+    expect(wrapper.findComponent(PaymentMethodSelector).props('methods').some((method: { type: string }) => method.type === 'balance')).toBe(false)
+    expect(vm.selectedMethod).toBe('wxpay')
+  })
+
+  it('uses the plan price without exchange rates or fees and completes without a cashier', async () => {
+    const wrapper = await mountSubscriptionConfirm({
+      checkout: { wallet_payment_enabled: true, subscription_usd_to_cny_rate: 7.15, balance_recharge_multiplier: 3 },
+      method: { currency: 'CNY', fee_fixed: 2, fee_rate: 10 },
+      plan: { price: 10 },
+    }, { tab: 'subscription', plan: '7' })
+    wrapper.findComponent(PaymentMethodSelector).vm.$emit('select', 'balance')
+    await flushPromises()
+    expect(wrapper.text()).toContain('payment.currentBalance')
+    expect(wrapper.text()).toContain('payment.walletPaymentHint')
+    const vm = wrapper.vm as unknown as { subTotalAmount: number; subscriptionFeeBreakdown: { totalFee: number }; confirmSubscribe: () => Promise<void> }
+    expect(vm.subTotalAmount).toBe(10)
+    expect(vm.subscriptionFeeBreakdown.totalFee).toBe(0)
+    expect(wrapper.findAll('button').some(button => button.text().includes('payment.confirmWalletPayment') && button.text().includes('$10.00'))).toBe(true)
+    createOrder.mockResolvedValue({ order_id: 99, amount: 10, pay_amount: 10, currency: 'USD', status: 'COMPLETED', payment_type: 'balance', out_trade_no: 'wallet-99' })
+
+    await vm.confirmSubscribe()
+    await flushPromises()
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({ amount: 10, payment_type: 'balance', order_type: 'subscription', plan_id: 7, idempotency_key: expect.any(String) }))
+    expect(refreshUser).toHaveBeenCalled()
+    expect(fetchActiveSubscriptions).toHaveBeenCalledWith(true)
+    expect(routerPush).toHaveBeenCalledWith(expect.objectContaining({ path: '/payment/result', query: expect.objectContaining({ order_id: '99' }) }))
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('disables insufficient balance and also blocks a direct submit attempt', async () => {
+    authUserState.value.balance = 9
+    const wrapper = await mountSubscriptionConfirm({ checkout: { wallet_payment_enabled: true }, plan: { price: 10 } })
+    const selector = wrapper.findComponent(PaymentMethodSelector)
+    expect(selector.props('methods')).toContainEqual(expect.objectContaining({ type: 'balance', available: false }))
+    expect(wrapper.text()).toContain('payment.walletInsufficientBalance')
+    selector.vm.$emit('select', 'balance')
+    await flushPromises()
+    const vm = wrapper.vm as unknown as { canSubmitSubscription: boolean; confirmSubscribe: () => Promise<void> }
+    expect(vm.canSubmitSubscription).toBe(false)
+    await vm.confirmSubscribe()
+    expect(createOrder).not.toHaveBeenCalled()
+  })
+
+  it('selects wallet when no external provider exists and never offers it for top-up', async () => {
+    const wrapper = await mountSubscriptionConfirm({ checkout: { wallet_payment_enabled: true } })
+    const vm = wrapper.vm as unknown as { checkout: CheckoutInfoResponse; selectedMethod: string; activeTab: string; selectedPlan: SubscriptionPlan | null }
+    vm.selectedMethod = ''
+    vm.checkout.methods = {}
+    await flushPromises()
+    expect(vm.selectedMethod).toBe('balance')
+    expect(wrapper.findComponent(PaymentMethodSelector).props('methods')).toHaveLength(1)
+    vm.selectedPlan = null
+    vm.activeTab = 'recharge'
+    await flushPromises()
+    expect(wrapper.text()).toContain('payment.notAvailable')
+    expect(wrapper.findComponent(PaymentMethodSelector).exists()).toBe(false)
+  })
+
+  it('reuses the key after a lost response and after remounting the same subscription', async () => {
+    const wrapper = await mountSubscriptionConfirm({ checkout: { wallet_payment_enabled: true }, plan: { price: 10 } })
+    wrapper.findComponent(PaymentMethodSelector).vm.$emit('select', 'balance')
+    await flushPromises()
+    createOrder.mockRejectedValue(new Error('Network error'))
+    const vm = wrapper.vm as unknown as { confirmSubscribe: () => Promise<void> }
+    await vm.confirmSubscribe()
+    await vm.confirmSubscribe()
+    const key = createOrder.mock.calls[0][0].idempotency_key
+    expect(key).toBeTruthy()
+    expect(createOrder.mock.calls[1][0].idempotency_key).toBe(key)
+    wrapper.unmount()
+
+    const restored = await mountSubscriptionConfirm({ checkout: { wallet_payment_enabled: true }, plan: { price: 10 } })
+    restored.findComponent(PaymentMethodSelector).vm.$emit('select', 'balance')
+    await flushPromises()
+    createOrder.mockResolvedValue({ order_id: 100, amount: 10, pay_amount: 10, currency: 'USD', status: 'COMPLETED', payment_type: 'balance' })
+    const restoredVm = restored.vm as unknown as { confirmSubscribe: () => Promise<void> }
+    await restoredVm.confirmSubscribe()
+    expect(createOrder.mock.calls[0][0].idempotency_key).toBe(key)
+    await restoredVm.confirmSubscribe()
+    expect(createOrder.mock.calls[1][0].idempotency_key).not.toBe(key)
   })
 })
 

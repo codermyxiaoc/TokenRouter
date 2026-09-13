@@ -440,15 +440,12 @@ func normalizeCNProviderCredentials(account *Account, isCreate bool) error {
 		}
 	}
 	switch protocol {
-	case APIProtocolChatCompletions, APIProtocolAnthropic:
-	case APIProtocolAdaptive:
-		// MiniMax 按入站协议选择原生端点；其它供应商保持原有校验边界。
-		if account.Platform != PlatformMiniMax {
-			return infraerrors.BadRequest("CN_PROVIDER_PROTOCOL_INVALID", "api_protocol is unsupported")
-		}
+	case APIProtocolChatCompletions, APIProtocolAnthropic, APIProtocolAdaptive:
+		// 四个国产供应商均已有自适应转发，保存时必须接受前端提供的同一协议值。
 	case APIProtocolResponses:
-		if account.Platform != PlatformDeepseek && account.Platform != PlatformMiniMax {
-			return infraerrors.BadRequest("CN_PROVIDER_PROTOCOL_INVALID", "only DeepSeek and MiniMax support Responses protocol")
+		// 复用运行时能力判定，避免创建、编辑与实际转发的平台列表再次漂移。
+		if !account.SupportsNativeCNResponses() {
+			return infraerrors.BadRequest("CN_PROVIDER_PROTOCOL_INVALID", "only DeepSeek, Kimi and MiniMax support Responses protocol")
 		}
 	default:
 		return infraerrors.BadRequest("CN_PROVIDER_PROTOCOL_INVALID", "api_protocol is unsupported")

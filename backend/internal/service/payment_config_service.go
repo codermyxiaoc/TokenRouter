@@ -43,6 +43,8 @@ const (
 	SettingCancelWindowMode              = "CANCEL_RATE_LIMIT_WINDOW_MODE"
 	SettingAlipayForceQRCode             = "ALIPAY_FORCE_QRCODE"
 	SettingAlipayMobilePrecreateDeepLink = "ALIPAY_MOBILE_PRECREATE_DEEP_LINK"
+	// SettingWalletPaymentEnabled 控制是否允许使用站内余额购买或续费订阅，默认关闭。
+	SettingWalletPaymentEnabled = "wallet_payment_enabled"
 )
 
 // Default values for payment configuration settings.
@@ -61,6 +63,7 @@ type PaymentConfig struct {
 	MaxPendingOrders          int      `json:"max_pending_orders"`
 	EnabledTypes              []string `json:"enabled_payment_types"`
 	BalanceDisabled           bool     `json:"balance_disabled"`
+	WalletPaymentEnabled      bool     `json:"wallet_payment_enabled"`
 	BalanceRechargeMultiplier float64  `json:"balance_recharge_multiplier"`
 	// SubscriptionUSDToCNYRate 为 0 时订阅换算关闭（兼容存量行为）。
 	SubscriptionUSDToCNYRate float64           `json:"subscription_usd_to_cny_rate"`
@@ -96,6 +99,7 @@ type UpdatePaymentConfigRequest struct {
 	MaxPendingOrders          *int              `json:"max_pending_orders"`
 	EnabledTypes              []string          `json:"enabled_payment_types"`
 	BalanceDisabled           *bool             `json:"balance_disabled"`
+	WalletPaymentEnabled      *bool             `json:"wallet_payment_enabled"`
 	BalanceRechargeMultiplier *float64          `json:"balance_recharge_multiplier"`
 	SubscriptionUSDToCNYRate  *float64          `json:"subscription_usd_to_cny_rate"`
 	RechargeFeeRate           *float64          `json:"recharge_fee_rate"`
@@ -308,6 +312,7 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 		SettingPaymentEnabled, SettingMinRechargeAmount, SettingMaxRechargeAmount,
 		SettingDailyRechargeLimit, SettingOrderTimeoutMinutes, SettingMaxPendingOrders,
 		SettingEnabledPaymentTypes, SettingBalancePayDisabled, SettingBalanceRechargeMult, SettingSubscriptionUSDToCNYRate, SettingRechargeFeeRate, SettingPaymentMethodFees, SettingLoadBalanceStrategy,
+		SettingWalletPaymentEnabled,
 		SettingProductNamePrefix, SettingProductNameSuffix,
 		SettingHelpImageURL, SettingHelpText,
 		SettingCancelRateLimitOn, SettingCancelRateLimitMax,
@@ -335,6 +340,7 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 		OrderTimeoutMin:           pcParseInt(vals[SettingOrderTimeoutMinutes], defaultOrderTimeoutMin),
 		MaxPendingOrders:          pcParseInt(vals[SettingMaxPendingOrders], defaultMaxPendingOrders),
 		BalanceDisabled:           vals[SettingBalancePayDisabled] == "true",
+		WalletPaymentEnabled:      vals[SettingWalletPaymentEnabled] == "true",
 		BalanceRechargeMultiplier: normalizeBalanceRechargeMultiplier(pcParseFloat(vals[SettingBalanceRechargeMult], defaultBalanceRechargeMultiplier)),
 		SubscriptionUSDToCNYRate:  normalizeSubscriptionUSDToCNYRate(pcParseFloat(vals[SettingSubscriptionUSDToCNYRate], 0)),
 		RechargeFeeRate:           pcParseFloat(vals[SettingRechargeFeeRate], 0),
@@ -565,6 +571,9 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 	}
 	if req.BalanceDisabled != nil {
 		m[SettingBalancePayDisabled] = formatBoolOrEmpty(req.BalanceDisabled)
+	}
+	if req.WalletPaymentEnabled != nil {
+		m[SettingWalletPaymentEnabled] = formatBoolOrEmpty(req.WalletPaymentEnabled)
 	}
 	if req.BalanceRechargeMultiplier != nil {
 		m[SettingBalanceRechargeMult] = formatPositiveFloat(req.BalanceRechargeMultiplier)

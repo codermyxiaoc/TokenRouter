@@ -49,6 +49,13 @@ export const paymentAPI = {
 
   /** Create a new payment order */
   createOrder(data: CreateOrderRequest) {
+    // 余额支付的网络重试复用请求头，避免同一次确认重复扣款。
+    if (data.idempotency_key) {
+      const { idempotency_key, ...payload } = data
+      return apiClient.post<CreateOrderResult>('/payment/orders', payload, {
+        headers: { 'Idempotency-Key': idempotency_key },
+      })
+    }
     return apiClient.post<CreateOrderResult>('/payment/orders', data)
   },
 

@@ -20,7 +20,7 @@ export type OrderStatus =
   | 'REFUNDED'
   | 'REFUND_FAILED'
 
-export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'card' | 'link' | 'airwallex'
+export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'card' | 'link' | 'airwallex' | 'balance'
 
 export type OrderType = 'balance' | 'subscription'
 
@@ -28,6 +28,8 @@ export type OrderType = 'balance' | 'subscription'
 
 export interface PaymentConfig {
   payment_enabled: boolean
+  /** 站内余额仅用于购买或续费订阅，默认关闭。 */
+  wallet_payment_enabled?: boolean
   min_amount: number
   max_amount: number
   daily_limit: number
@@ -72,6 +74,8 @@ export interface MethodLimitsResponse {
 
 /** Response from /payment/checkout-info API — single call for the payment page */
 export interface CheckoutInfoResponse {
+  /** 站内余额支付不依赖第三方支付实例。 */
+  wallet_payment_enabled?: boolean
   methods: Record<string, MethodLimit>
   global_min: number
   global_max: number
@@ -193,6 +197,8 @@ export interface ProviderInstance {
 // ==================== Request / Response ====================
 
 export interface CreateOrderRequest {
+  /** 仅客户端使用；API 层会移入 Idempotency-Key 请求头。 */
+  idempotency_key?: string
   amount: number
   payment_type: string
   order_type: string
@@ -244,6 +250,8 @@ export interface WechatJSAPIPayload {
 
 export interface CreateOrderResult {
   order_id: number
+  /** 余额扣款直接返回订单状态，无需唤起外部收银台。 */
+  status?: OrderStatus
   amount: number
   pay_url?: string
   qr_code?: string

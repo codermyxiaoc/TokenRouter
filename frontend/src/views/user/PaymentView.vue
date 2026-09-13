@@ -174,12 +174,18 @@
                   </div>
                 </div>
               </div>
-              <div v-if="enabledMethods.length >= 1" class="card p-6">
+              <div v-if="subMethodOptions.length >= 1" class="card p-6">
                 <PaymentMethodSelector
                   :methods="subMethodOptions"
                   :selected="selectedMethod"
                   @select="selectedMethod = $event"
                 />
+                <!-- 余额支付展示可用余额和实扣金额，避免与外部充值倍率混淆。 -->
+                <div v-if="checkout.wallet_payment_enabled" class="mt-3 space-y-1 text-sm">
+                  <p class="text-gray-600 dark:text-gray-300">{{ t('payment.currentBalance') }}: {{ formatBalanceAmount(user?.balance, { fractionDigits: 2 }) }}</p>
+                  <p v-if="isBalanceSelected" class="text-gray-500 dark:text-gray-400">{{ t('payment.walletPaymentHint', { amount: formatBalanceAmount(selectedPlan.price, { fractionDigits: 2 }) }) }}</p>
+                  <p v-if="!hasSufficientWalletBalance" class="text-amber-600 dark:text-amber-400">{{ t('payment.walletInsufficientBalance') }}</p>
+                </div>
               </div>
               <div v-if="isStripeSelected" class="card p-6">
                 <div class="grid gap-4 sm:grid-cols-2">
@@ -242,7 +248,7 @@
                   <span class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
                   {{ t('common.processing') }}
                 </span>
-                <span v-else>{{ t('payment.createOrder') }} {{ formatSelectedPaymentAmount(subTotalAmount) }}</span>
+                <span v-else>{{ t(isBalanceSelected ? 'payment.confirmWalletPayment' : 'payment.createOrder') }} {{ formatSelectedPaymentAmount(subTotalAmount) }}</span>
               </button>
               <button class="btn btn-secondary w-full" @click="selectedPlan = null">{{ t('common.cancel') }}</button>
             </template>
@@ -602,8 +608,54 @@ const tabs = computed(() => {
   return result
 })
 
-const visibleMethods = computed(() => getVisibleMethods(checkout.value.methods))
+// 站内余额单独按订阅开关控制，不能进入余额充值的支付方式或金额限额。
+const visibleMethods = computed(() => {
+  const methods = getVisibleMethods(checkout.value.methods)
+  delete methods.balance
+  return methods
+})
 const enabledMethods = computed(() => Object.keys(visibleMethods.value))
+const isBalanceSelected = computed(() => activeTab.value === 'subscription' && selectedMethod.value === 'balance')
+const hasSufficientWalletBalance = computed(() => {
+  const price = selectedPlan.value?.price ?? 0
+  return price > 0 && Number(user.value?.balance ?? 0) >= price
+})
+const walletRequestStorageKey = 'payment.wallet.request'
+let walletRequest: { userId: number; planId: number; key: string } | null = null
+
+// 未确认结果的请求跨页面刷新保留；同一套餐重试始终复用原幂等键。
+function walletPaymentRequestKey(planId: number): string {
+  const userId = user.value?.id ?? 0
+  if (!walletRequest) {
+    try {
+      const stored = JSON.parse(window.sessionStorage.getItem(walletRequestStorageKey) || 'null')
+      if (stored && typeof stored.key === 'string' && typeof stored.userId === 'number' && typeof stored.planId === 'number') {
+        walletRequest = stored
+      }
+    } catch {
+      // 浏览器禁用存储时仍在当前页面内保留重试幂等性。
+    }
+  }
+  if (walletRequest?.userId !== userId || walletRequest.planId !== planId) {
+    const key = globalThis.crypto?.randomUUID?.() ?? Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+    walletRequest = { userId, planId, key }
+    try {
+      window.sessionStorage.setItem(walletRequestStorageKey, JSON.stringify(walletRequest))
+    } catch {
+      // 内存中的幂等键仍覆盖同页重试。
+    }
+  }
+  return walletRequest.key
+}
+
+function clearWalletPaymentRequest() {
+  walletRequest = null
+  try {
+    window.sessionStorage.removeItem(walletRequestStorageKey)
+  } catch {
+    // 存储不可用时无需额外清理。
+  }
+}
 const validAmount = computed(() => amount.value ?? 0)
 const balanceRechargeMultiplier = computed(() => {
   const multiplier = checkout.value.balance_recharge_multiplier
@@ -721,7 +773,7 @@ function validateStripeBillingInfo(): boolean {
   return true
 }
 
-const selectedCurrency = computed(() => normalizePaymentCurrency(selectedLimit.value?.currency))
+const selectedCurrency = computed(() => isBalanceSelected.value ? 'USD' : normalizePaymentCurrency(selectedLimit.value?.currency))
 const localeCode = computed(() => {
   const raw = i18n.locale as unknown
   if (typeof raw === 'string') return raw
@@ -737,6 +789,7 @@ function subscriptionPaymentAmountForCurrency(value: number, currency: string): 
   return roundMoneyForCurrency(value * rate, currency)
 }
 function formatSelectedPaymentAmount(value: number): string {
+  if (isBalanceSelected.value) return formatBalanceAmount(value, { fractionDigits: 2 })
   return formatPaymentAmount(value, selectedCurrency.value, localeCode.value)
 }
 
@@ -826,7 +879,7 @@ const canSubmit = computed(() =>
 // 订阅方式限额按换算后的网关实扣金额（含手续费）判断。
 const subMethodOptions = computed<PaymentMethodOption[]>(() => {
   const planPrice = selectedPlan.value?.price ?? 0
-  return enabledMethods.value.map((type) => {
+  const methods = enabledMethods.value.map((type) => {
     const ml = visibleMethods.value[type]
     const currency = normalizePaymentCurrency(ml?.currency)
     const baseAmount = subscriptionPaymentAmountForCurrency(planPrice, currency)
@@ -838,24 +891,42 @@ const subMethodOptions = computed<PaymentMethodOption[]>(() => {
       available: ml?.available !== false && amountFitsMethod(calculateFeeBreakdown(baseAmount, type).payAmount, type),
     }
   })
+  if (checkout.value.wallet_payment_enabled) {
+    methods.push({ type: 'balance', display_name: t('payment.methods.balance'), fee_fixed: 0, fee_rate: 0, available: hasSufficientWalletBalance.value })
+  }
+  return methods
 })
 
 const subscriptionFeeBreakdown = computed(() => {
+  // 余额以套餐原价直接扣款，不换汇、不乘充值倍率、不收外部渠道手续费。
+  if (isBalanceSelected.value) {
+    return { fixedFee: 0, feeRate: 0, rateFee: 0, totalFee: 0, payAmount: selectedPlan.value?.price ?? 0 }
+  }
   const baseAmount = subscriptionPaymentAmountForCurrency(selectedPlan.value?.price ?? 0, selectedCurrency.value)
   return calculateFeeBreakdown(baseAmount, selectedMethod.value)
 })
 const subTotalAmount = computed(() => subscriptionFeeBreakdown.value.payAmount)
 
-const canSubmitSubscription = computed(() =>
-  selectedPlan.value !== null
+const canSubmitSubscription = computed(() => isBalanceSelected.value
+  ? checkout.value.wallet_payment_enabled === true && hasSufficientWalletBalance.value
+  : selectedPlan.value !== null
     && amountFitsMethod(selectedPlan.value.price, selectedMethod.value)
     && selectedLimit.value?.available !== false
     && (!isStripeSelected.value || (billingInfo.name.trim() !== '' && billingInfo.email.trim() !== ''))
 )
 
+// 切换充值页时清除余额选中；只启用站内支付时，订阅页仍可自动选中余额。
+watch(() => [activeTab.value, checkout.value.wallet_payment_enabled, enabledMethods.value] as const, () => {
+  if (activeTab.value === 'subscription' && checkout.value.wallet_payment_enabled && !selectedMethod.value) {
+    selectedMethod.value = 'balance'
+  } else if (selectedMethod.value === 'balance' && (activeTab.value !== 'subscription' || !checkout.value.wallet_payment_enabled)) {
+    selectedMethod.value = enabledMethods.value[0] || ''
+  }
+})
+
 // Auto-switch to first available method when current selection can't handle the amount
 watch(() => [validAmount.value, selectedMethod.value] as const, ([amt, method]) => {
-  if (amt <= 0 || amountFitsMethod(amt, method)) return
+  if (isBalanceSelected.value || amt <= 0 || amountFitsMethod(amt, method)) return
   const available = enabledMethods.value.find((m) => amountFitsMethod(amt, m))
   if (available) selectedMethod.value = available
 })
@@ -923,6 +994,7 @@ async function hasActivePlan(planId: number): Promise<boolean> {
 }
 
 function applySelectedPlan(plan: SubscriptionPlan, acknowledgedDuplicate = false) {
+  if (selectedPlan.value && selectedPlan.value.id !== plan.id) clearWalletPaymentRequest()
   selectedPlan.value = plan
   duplicatePlanAcknowledgedId.value = acknowledgedDuplicate ? plan.id : null
   errorMessage.value = ''
@@ -1003,6 +1075,7 @@ async function handleSubmitRecharge() {
 
 async function confirmSubscribe() {
   if (!selectedPlan.value || submitting.value) return
+  if (isBalanceSelected.value && !canSubmitSubscription.value) return
   if (!validateStripeBillingInfo()) return
   const plan = selectedPlan.value
   // 若订阅状态在选中套餐后才刷新出来，提交订单前再兜底提醒一次。
@@ -1039,6 +1112,9 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     }
     if (options.wechatResumeToken) {
       payload.wechat_resume_token = options.wechatResumeToken
+    }
+    if (requestType === 'balance' && orderType === 'subscription' && planId) {
+      payload.idempotency_key = walletPaymentRequestKey(planId)
     }
 
     const result = await paymentStore.createOrder(payload) as CreateOrderResult & { resume_token?: string }
@@ -1086,6 +1162,14 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       stripeRouteUrl,
       airwallexRouteUrl,
     })
+
+    // 余额下单已原子完成扣款与订阅发放，直接进入既有支付结果页。
+    if (visibleMethod === 'balance' && result.status === 'COMPLETED') {
+      paymentState.value = decision.paymentState
+      clearWalletPaymentRequest()
+      await onPaymentSuccess()
+      return
+    }
 
     if (decision.kind === 'wechat_oauth' && decision.oauth?.authorize_url) {
       window.location.href = buildWechatOAuthAuthorizeUrl(decision.oauth.authorize_url, {

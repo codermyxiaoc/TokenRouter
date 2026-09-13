@@ -37,6 +37,8 @@ func (s *PaymentService) GetDashboardStatsWithRange(ctx context.Context, start, 
 
 	orders, err := s.entClient.PaymentOrder.Query().
 		Where(
+			// 余额购买是站内资金流转，充值收款已经统计过，不能再次计入收入。
+			paymentorder.PaymentTypeNEQ(PaymentTypeWallet),
 			paymentorder.StatusIn(paidStatuses...),
 			paymentorder.PaidAtGTE(start),
 			paymentorder.PaidAtLT(end),
@@ -76,6 +78,7 @@ func (s *PaymentService) fillPaymentDashboardTodayStats(ctx context.Context, st 
 	// 今日卡片保持自然日口径，不跟随自定义历史范围变化。
 	todayOrders, err := s.entClient.PaymentOrder.Query().
 		Where(
+			paymentorder.PaymentTypeNEQ(PaymentTypeWallet),
 			paymentorder.StatusIn(paidStatuses...),
 			paymentorder.PaidAtGTE(todayStart),
 			paymentorder.PaidAtLT(todayStart.AddDate(0, 0, 1)),

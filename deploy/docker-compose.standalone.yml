@@ -12,8 +12,8 @@
 
 services:
   sub2api:
-    image: ghcr.io/tokenflux/tokenrouter:latest
-    # 重建前始终刷新 latest，避免容器内在线更新后从旧本地镜像回退。
+    image: ${SUB2API_IMAGE:-coderxiaoc/tokenrouter:v0.1.278-ct-v1.1}
+    # 从 DockerHub 拉取本地源码发布的版本；可在 .env 中指定其他标签或镜像摘要。
     pull_policy: always
     container_name: sub2api
     restart: unless-stopped

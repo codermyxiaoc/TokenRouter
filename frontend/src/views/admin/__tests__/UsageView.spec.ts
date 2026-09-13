@@ -655,6 +655,7 @@ describe('admin UsageView errors tab filter forwarding', () => {
 
     expect(listErrorLogs).toHaveBeenCalledWith(expect.objectContaining({
       view: 'all',
+      include_recovered_upstream: true,
       model: 'gpt-5.3-codex',
       account_id: 7,
       group_id: 3,

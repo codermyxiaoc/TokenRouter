@@ -24,6 +24,9 @@ const (
 	NotificationEmailEventAuthPasswordReset           = "auth.password_reset"
 	NotificationEmailEventNotificationEmailVerifyCode = "notification_email.verify_code"
 	NotificationEmailEventTeamInvitation              = "team.invitation"
+	NotificationEmailEventTicketStaffReply            = "ticket.staff_reply"
+	NotificationEmailEventTicketCompleted             = "ticket.completed"
+	NotificationEmailEventTicketCancelled             = "ticket.cancelled"
 	NotificationEmailEventSubscriptionPurchaseSuccess = "subscription.purchase_success"
 	NotificationEmailEventSubscriptionExpiryReminder  = "subscription.expiry_reminder"
 	NotificationEmailEventBalanceLow                  = "balance.low"
@@ -387,7 +390,7 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 			return err
 		}
 		if unsubscribed {
-			slog.Info("notification email suppressed by unsubscribe preference", "event", normalizedEvent, "recipient_hash", notificationEmailHash(recipient))
+			slog.Info("notification email suppressed by unsubscribe preference", "event", normalizedEvent, "source_type", input.SourceType, "source_id", input.SourceID, "recipient_hash", notificationEmailHash(recipient))
 			return nil
 		}
 	}
@@ -413,6 +416,7 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 			return err
 		}
 		if sent {
+			slog.Info("notification email suppressed by delivery deduplication", "event", normalizedEvent, "source_type", input.SourceType, "source_id", input.SourceID, "recipient_hash", notificationEmailHash(recipient))
 			return nil
 		}
 	}
@@ -423,6 +427,8 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 	if err := s.emailService.SendEmail(ctx, recipient, rendered.Subject, rendered.HTML); err != nil {
 		return notificationEmailDeliveryErr(err)
 	}
+	// SMTP 接受不等于收件箱投递成功；记录来源标识便于排查重复消息及退订抑制。
+	slog.Info("notification email accepted by SMTP", "event", normalizedEvent, "source_type", input.SourceType, "source_id", input.SourceID, "recipient_hash", notificationEmailHash(recipient))
 	if deliveryKey != "" {
 		if err := s.settingRepo.Set(ctx, deliveryKey, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
@@ -469,7 +475,8 @@ func (s *NotificationEmailService) IsUnsubscribed(ctx context.Context, email, ev
 	if !info.Optional {
 		return false, nil
 	}
-	for _, key := range []string{notificationEmailPreferenceKey(normalizedEvent, email), legacyNotificationEmailPreferenceKey(normalizedEvent, email)} {
+	preferenceEvent := notificationEmailPreferenceEvent(normalizedEvent)
+	for _, key := range []string{notificationEmailPreferenceKey(preferenceEvent, email), legacyNotificationEmailPreferenceKey(preferenceEvent, email)} {
 		if strings.TrimSpace(key) == "" {
 			continue
 		}
@@ -484,7 +491,8 @@ func (s *NotificationEmailService) IsUnsubscribed(ctx context.Context, email, ev
 	return false, nil
 }
 
-func (s *NotificationEmailService) Unsubscribe(ctx context.Context, token string) (NotificationEmailUnsubscribeResult, error) {
+// PreviewUnsubscribe 仅验证令牌并展示待确认信息，邮件客户端预取链接不能改变偏好。
+func (s *NotificationEmailService) PreviewUnsubscribe(ctx context.Context, token string) (NotificationEmailUnsubscribeResult, error) {
 	claims, err := s.parseUnsubscribeToken(ctx, token)
 	if err != nil {
 		return NotificationEmailUnsubscribeResult{}, err
@@ -496,10 +504,46 @@ func (s *NotificationEmailService) Unsubscribe(ctx context.Context, token string
 	if !info.Optional {
 		return NotificationEmailUnsubscribeResult{}, fmt.Errorf("%s is transactional and cannot be unsubscribed", normalizedEvent)
 	}
-	if err := s.settingRepo.Set(ctx, notificationEmailPreferenceKey(normalizedEvent, claims.Email), "unsubscribed"); err != nil {
+	return NotificationEmailUnsubscribeResult{Event: normalizedEvent, Email: claims.Email, Done: false}, nil
+}
+
+func (s *NotificationEmailService) Unsubscribe(ctx context.Context, token string) (NotificationEmailUnsubscribeResult, error) {
+	result, err := s.PreviewUnsubscribe(ctx, token)
+	if err != nil {
 		return NotificationEmailUnsubscribeResult{}, err
 	}
-	return NotificationEmailUnsubscribeResult{Event: normalizedEvent, Email: claims.Email, Done: true}, nil
+	if err := s.settingRepo.Set(ctx, notificationEmailPreferenceKey(notificationEmailPreferenceEvent(result.Event), result.Email), "unsubscribed"); err != nil {
+		return NotificationEmailUnsubscribeResult{}, err
+	}
+	result.Done = true
+	return result, nil
+}
+
+// ResubscribeTicketNotifications 仅供持工单令牌的用户显式恢复通知，不自动撤销既有退订。
+func (s *NotificationEmailService) ResubscribeTicketNotifications(ctx context.Context, token string) (NotificationEmailUnsubscribeResult, error) {
+	result, err := s.PreviewUnsubscribe(ctx, token)
+	if err != nil {
+		return NotificationEmailUnsubscribeResult{}, err
+	}
+	if notificationEmailPreferenceEvent(result.Event) != NotificationEmailEventTicketStaffReply {
+		return NotificationEmailUnsubscribeResult{}, errors.New("only ticket notifications can be restored with this action")
+	}
+	// 新版键优先于旧版键，显式订阅值覆盖旧退订；不写可能超过旧列长度的历史键。
+	if err := s.settingRepo.Set(ctx, notificationEmailPreferenceKey(NotificationEmailEventTicketStaffReply, result.Email), "subscribed"); err != nil {
+		return NotificationEmailUnsubscribeResult{}, err
+	}
+	result.Done = true
+	return result, nil
+}
+
+// 三类工单通知共用既有退订偏好，新增完成和撤销事件不能绕过用户此前的选择。
+func notificationEmailPreferenceEvent(event string) string {
+	switch event {
+	case NotificationEmailEventTicketCompleted, NotificationEmailEventTicketCancelled:
+		return NotificationEmailEventTicketStaffReply
+	default:
+		return event
+	}
 }
 
 func (s *NotificationEmailService) eventInfo(event string) (NotificationEmailEventInfo, string, error) {
@@ -526,6 +570,12 @@ func (s *NotificationEmailService) sampleVariables(ctx context.Context, event, l
 
 func (s *NotificationEmailService) runtimeVariables(ctx context.Context, event, locale string, input NotificationEmailSendInput) map[string]string {
 	variables := s.sampleVariables(ctx, event, locale)
+	if notificationEmailEventDefinitions[event].Category == "ticket" {
+		// 工单编号、标题和链接的预览样例不能进入缺少对应字段的真实通知。
+		for _, key := range []string{"ticket_id", "ticket_title", "ticket_url"} {
+			variables[key] = ""
+		}
+	}
 	for key, value := range input.Variables {
 		variables[key] = value
 	}
@@ -626,9 +676,14 @@ func (s *NotificationEmailService) parseUnsubscribeToken(ctx context.Context, to
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return notificationEmailUnsubscribeClaims{}, errors.New("invalid unsubscribe token")
 	}
-	secret, err := s.unsubscribeSecret(ctx)
+	// 验证路径只读既有密钥；生成密钥仅限发送通知创建令牌时执行。
+	secret, err := s.settingRepo.GetValue(ctx, notificationEmailUnsubscribeSecretKey)
 	if err != nil {
 		return notificationEmailUnsubscribeClaims{}, err
+	}
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return notificationEmailUnsubscribeClaims{}, errors.New("unsubscribe secret is unavailable")
 	}
 	expected := signNotificationEmailToken(secret, parts[0])
 	if !hmac.Equal([]byte(expected), []byte(parts[1])) {
@@ -906,6 +961,9 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 			"team_name":           "平台研发团队",
 			"invitation_url":      "https://example.com/team?invitation=preview",
 			"expires_at":          "2026-08-03T12:00:00+09:00",
+			"ticket_id":           "1024",
+			"ticket_title":        "接口使用咨询",
+			"ticket_url":          "https://example.com/tickets/1024",
 			"subscription_group":  "Claude Pro",
 			"subscription_days":   "30",
 			"expiry_time":         "2026-06-18 12:00",
@@ -957,6 +1015,9 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 		"team_name":           "Platform Engineering",
 		"invitation_url":      "https://example.com/team?invitation=preview",
 		"expires_at":          "2026-08-03T12:00:00+09:00",
+		"ticket_id":           "1024",
+		"ticket_title":        "API usage question",
+		"ticket_url":          "https://example.com/tickets/1024",
 		"subscription_group":  "Claude Pro",
 		"subscription_days":   "30",
 		"expiry_time":         "2026-06-18 12:00",
@@ -1027,6 +1088,9 @@ func addNotificationEmailOpsSummarySampleVariables(variables map[string]string) 
 }
 
 var notificationEmailEventOrder = []string{
+	NotificationEmailEventTicketStaffReply,
+	NotificationEmailEventTicketCompleted,
+	NotificationEmailEventTicketCancelled,
 	NotificationEmailEventAuthVerifyCode,
 	NotificationEmailEventAuthPasswordReset,
 	NotificationEmailEventNotificationEmailVerifyCode,
@@ -1043,6 +1107,30 @@ var notificationEmailEventOrder = []string{
 }
 
 var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
+	NotificationEmailEventTicketCompleted: {
+		Event:        NotificationEmailEventTicketCompleted,
+		Label:        "Ticket completed by support",
+		Description:  "Sent when support staff complete a ticket and ticket email notifications are enabled.",
+		Category:     "ticket",
+		Optional:     true,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...), "ticket_id", "ticket_title", "ticket_url", "unsubscribe_url"),
+	},
+	NotificationEmailEventTicketCancelled: {
+		Event:        NotificationEmailEventTicketCancelled,
+		Label:        "Ticket cancelled by support",
+		Description:  "Sent when support staff cancel a ticket and ticket email notifications are enabled.",
+		Category:     "ticket",
+		Optional:     true,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...), "ticket_id", "ticket_title", "ticket_url", "unsubscribe_url"),
+	},
+	NotificationEmailEventTicketStaffReply: {
+		Event:        NotificationEmailEventTicketStaffReply,
+		Label:        "Ticket staff reply",
+		Description:  "Sent after a support staff reply when ticket email notifications are enabled.",
+		Category:     "ticket",
+		Optional:     true,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...), "ticket_id", "ticket_title", "ticket_url", "unsubscribe_url"),
+	},
 	NotificationEmailEventAuthVerifyCode: {
 		Event:        NotificationEmailEventAuthVerifyCode,
 		Label:        "Email verification code",
@@ -1160,6 +1248,36 @@ var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
 }
 
 var notificationEmailOfficialTemplates = map[string]map[string]notificationEmailOfficialTemplate{
+	NotificationEmailEventTicketCompleted: {
+		notificationEmailDefaultLocale: {
+			Subject: "[{{site_name}}] Ticket #{{ticket_id}} completed",
+			HTML:    notificationEmailCard("#16a34a", "Support ticket completed", `<p>Hello {{recipient_name}},</p><p>Support staff have completed your ticket <strong>#{{ticket_id}}: {{ticket_title}}</strong>.</p><p>You can sign in to view the ticket and conversation history.</p><p>{{ticket_url}}</p><p class="muted"><a href="{{unsubscribe_url}}">Unsubscribe from ticket emails</a></p>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 工单 #{{ticket_id}} 已完成",
+			HTML:    notificationEmailCard("#16a34a", "工单已完成", `<p>{{recipient_name}}，您好：</p><p>客服已完成您的工单 <strong>#{{ticket_id}}：{{ticket_title}}</strong>。</p><p>您可以登录站点，查看工单和历史对话。</p><p>{{ticket_url}}</p><p class="muted"><a href="{{unsubscribe_url}}">退订工单邮件通知</a></p>`),
+		},
+	},
+	NotificationEmailEventTicketCancelled: {
+		notificationEmailDefaultLocale: {
+			Subject: "[{{site_name}}] Ticket #{{ticket_id}} cancelled",
+			HTML:    notificationEmailCard("#64748b", "Support ticket cancelled", `<p>Hello {{recipient_name}},</p><p>Support staff have cancelled your ticket <strong>#{{ticket_id}}: {{ticket_title}}</strong>.</p><p>You can sign in to view the ticket and conversation history.</p><p>{{ticket_url}}</p><p class="muted"><a href="{{unsubscribe_url}}">Unsubscribe from ticket emails</a></p>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 工单 #{{ticket_id}} 已撤销",
+			HTML:    notificationEmailCard("#64748b", "工单已撤销", `<p>{{recipient_name}}，您好：</p><p>客服已撤销您的工单 <strong>#{{ticket_id}}：{{ticket_title}}</strong>。</p><p>您可以登录站点，查看工单和历史对话。</p><p>{{ticket_url}}</p><p class="muted"><a href="{{unsubscribe_url}}">退订工单邮件通知</a></p>`),
+		},
+	},
+	NotificationEmailEventTicketStaffReply: {
+		notificationEmailDefaultLocale: {
+			Subject: "[{{site_name}}] Reply to ticket #{{ticket_id}}",
+			HTML:    notificationEmailCard("#2563eb", "Support ticket update", `<p>Hello {{recipient_name}},</p><p>Staff have replied to your ticket <strong>#{{ticket_id}}: {{ticket_title}}</strong>.</p><p>Please sign in and open Support tickets to read and reply.</p><p>{{ticket_url}}</p><p class="muted"><a href="{{unsubscribe_url}}">Unsubscribe from ticket emails</a></p>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 工单 #{{ticket_id}} 有新回复",
+			HTML:    notificationEmailCard("#2563eb", "工单有新回复", `<p>{{recipient_name}}，您好：</p><p>处理人员回复了您的工单 <strong>#{{ticket_id}}：{{ticket_title}}</strong>。</p><p>请登录站点，在工单页面查看并回复。</p><p>{{ticket_url}}</p><p class="muted"><a href="{{unsubscribe_url}}">退订工单邮件通知</a></p>`),
+		},
+	},
 	NotificationEmailEventAuthVerifyCode: {
 		notificationEmailDefaultLocale: {
 			Subject: "[{{site_name}}] Email verification code",

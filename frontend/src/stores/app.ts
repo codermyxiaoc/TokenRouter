@@ -34,6 +34,8 @@ export const useAppStore = defineStore('app', () => {
   const docUrl = ref<string>('')
   const cachedPublicSettings = ref<PublicSettings | null>(null)
   let publicSettingsRequest: Promise<PublicSettings | null> | null = null
+  let ticketSettingsRevision = 0
+  let lastSavedTicketEnabled: boolean | undefined
 
   // 版本信息缓存状态
   const versionLoaded = ref<boolean>(false)
@@ -383,6 +385,7 @@ export const useAppStore = defineStore('app', () => {
         payment_enabled: false,
         // 页面功能默认开启，兼容尚未返回新字段的旧后端。
         team_enabled: true,
+        ticket_enabled: true,
         creative_enabled: true,
         table_default_page_size: 20,
         table_page_size_options: [10, 20, 50, 100],
@@ -431,8 +434,13 @@ export const useAppStore = defineStore('app', () => {
       return Promise.resolve(null)
     }
 
+    const ticketRevisionAtRequest = ticketSettingsRevision
     const request = apiRequest
       .then((data) => {
+        // 管理员保存工单开关后，在途旧 GET 不能重新覆盖已确认的新值。
+        if (ticketRevisionAtRequest !== ticketSettingsRevision && lastSavedTicketEnabled !== undefined) {
+          data = { ...data, ticket_enabled: lastSavedTicketEnabled }
+        }
         applySettings(data)
         return data
       })
@@ -449,6 +457,16 @@ export const useAppStore = defineStore('app', () => {
 
     publicSettingsRequest = request
     return request
+  }
+
+  // 专用工单设置接口保存成功后，立即同步导航和注入缓存，不等待页面重新加载。
+  async function syncTicketModuleEnabled(enabled: boolean): Promise<void> {
+    const revision = ++ticketSettingsRevision
+    lastSavedTicketEnabled = enabled
+    const config = cachedPublicSettings.value ?? await fetchPublicSettings()
+    if (config && revision === ticketSettingsRevision) {
+      applySettings({ ...config, ticket_enabled: enabled })
+    }
   }
 
   /**
@@ -528,6 +546,7 @@ export const useAppStore = defineStore('app', () => {
 
     // Public settings actions
     fetchPublicSettings,
+    syncTicketModuleEnabled,
     clearPublicSettingsCache,
     initFromInjectedConfig
   }

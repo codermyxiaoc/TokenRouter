@@ -18,6 +18,9 @@
         <LoadingSpinner />
       </div>
       <template v-else-if="stats">
+        <p class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+          {{ t('payment.admin.paymentStatisticsHint') }}
+        </p>
         <OrderStatsCards :stats="stats" />
         <DailyRevenueChart :data="stats.daily_series || []" :loading="loading" />
         <PurchaseDistributionChart :items="stats.purchase_distribution || []" />
@@ -105,7 +108,7 @@ function methodColor(type: string): string {
   const c: Record<string, string> = {
     alipay: 'bg-blue-500', wxpay: 'bg-green-500',
     alipay_direct: 'bg-blue-400', wxpay_direct: 'bg-green-400',
-    stripe: 'bg-purple-500',
+    stripe: 'bg-purple-500', balance: 'bg-amber-500',
   }
   return c[type] || 'bg-gray-400'
 }

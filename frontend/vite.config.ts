@@ -108,6 +108,13 @@ export default defineConfig(({ mode }) => {
     emptyOutDir: true,
     rollupOptions: {
       output: {
+        // PDF.js 在 worker 内按固定名称加载无 WASM 解码器，保留同源目录及文件名。
+        assetFileNames(assetInfo) {
+          if (['openjpeg_nowasm_fallback.js', 'jbig2_nowasm_fallback.js'].includes(assetInfo.name || '')) {
+            return 'assets/pdfjs/[name][extname]'
+          }
+          return 'assets/[name]-[hash][extname]'
+        },
         /**
          * 手动分包配置
          * 分离第三方库并按功能合并应用代码，避免循环依赖
@@ -142,6 +149,11 @@ export default defineConfig(({ mode }) => {
             // Stripe 仅在支付流程中按需加载，避免进入首页公共依赖。
             if (id.includes('/@stripe/stripe-js/')) {
               return 'vendor-stripe'
+            }
+
+            // PDF 引擎只在附件预览页按需加载，避免合入首页公共依赖。
+            if (id.includes('/pdfjs-dist/')) {
+              return 'vendor-pdf'
             }
 
             // 其他小型第三方库合并

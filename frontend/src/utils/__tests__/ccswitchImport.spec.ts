@@ -128,4 +128,131 @@ describe('ccswitchImport utils', () => {
     expect(params.get('endpoint')).toBe('https://api.example.com')
     expect(decodeBase64Utf8(params.get('usageScript') || '')).toBe(usageScript)
   })
+
+  it.each([
+    { platform: 'openai' as const, app: 'claude' as const, endpoint: 'https://api.example.com' },
+    { platform: 'gemini' as const, app: 'codex' as const, endpoint: 'https://api.example.com/v1' },
+    { platform: 'anthropic' as const, app: 'gemini' as const, endpoint: 'https://api.example.com' },
+    { platform: 'grok' as const, app: 'claude' as const, endpoint: 'https://api.example.com' }
+  ])('显式选择 $app 优先于 $platform 平台推导', ({ platform, app, endpoint }) => {
+    const params = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput,
+      platform,
+      clientType: 'gemini',
+      app,
+      model: '自定义模型-1'
+    }))
+
+    expect(params.get('app')).toBe(app)
+    expect(params.get('endpoint')).toBe(endpoint)
+    expect(params.get('model')).toBe('自定义模型-1')
+  })
+
+  it.each([
+    'https://api.example.com',
+    'https://api.example.com/',
+    'https://api.example.com/v1',
+    'https://api.example.com/v1/'
+  ])('显式应用为地址 %s 选择正确的版本后缀', (baseUrl) => {
+    for (const app of ['claude', 'codex', 'gemini'] as const) {
+      const params = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+        ...baseInput,
+        baseUrl,
+        app,
+        model: 'selected-model'
+      }))
+
+      expect(params.get('endpoint')).toBe(`https://api.example.com${app === 'codex' ? '/v1' : ''}`)
+    }
+  })
+
+  it.each(['claude', 'gemini'] as const)('显式 %s 保留调用方提供的专用路由', (app) => {
+    const params = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput,
+      baseUrl: 'https://api.example.com/proxy/antigravity/v1/',
+      platform: 'antigravity',
+      app,
+      model: 'selected-model'
+    }))
+
+    expect(params.get('endpoint')).toBe('https://api.example.com/proxy/antigravity')
+  })
+
+  it.each(['claude', 'codex', 'gemini'] as const)('智能路由显式 %s 保留公共入口且不推导专用路由', (app) => {
+    const params = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput,
+      baseUrl: 'https://api.example.com/proxy/v1/',
+      platform: 'antigravity',
+      app,
+      model: 'selected-model'
+    }))
+
+    expect(params.get('endpoint')).toBe(`https://api.example.com/proxy${app === 'codex' ? '/v1' : ''}`)
+    expect(params.get('endpoint')).not.toContain('/antigravity')
+  })
+
+  it('使用官方 Claude 模型参数并完整编码自定义值', () => {
+    const params = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput,
+      app: 'claude',
+      providerName: '我的供应商 & 测试',
+      apiKey: 'sk-test+/?=&',
+      model: '  主模型/别名+1  ',
+      haikuModel: '  quick-model  ',
+      sonnetModel: 'balanced-model',
+      opusModel: 'heavy-model'
+    }))
+
+    expect(params.get('name')).toBe('我的供应商 & 测试')
+    expect(params.get('apiKey')).toBe('sk-test+/?=&')
+    expect(params.get('model')).toBe('主模型/别名+1')
+    expect(params.get('haikuModel')).toBe('quick-model')
+    expect(params.get('sonnetModel')).toBe('balanced-model')
+    expect(params.get('opusModel')).toBe('heavy-model')
+    expect(params.has('haiku_model')).toBe(false)
+  })
+
+  it.each(['codex', 'gemini'] as const)('显式 %s 只写入主模型，不携带 Claude 专用模型', (app) => {
+    const params = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput,
+      app,
+      model: 'selected-model',
+      haikuModel: 'quick-model',
+      sonnetModel: 'balanced-model',
+      opusModel: 'heavy-model'
+    }))
+
+    expect(params.get('model')).toBe('selected-model')
+    expect(params.has('haikuModel')).toBe(false)
+    expect(params.has('sonnetModel')).toBe(false)
+    expect(params.has('opusModel')).toBe(false)
+  })
+
+  it('省略空白可选模型，不把空值写入 Claude 配置', () => {
+    const params = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput,
+      app: 'claude',
+      model: 'selected-model',
+      haikuModel: '   ',
+      sonnetModel: '',
+      opusModel: undefined
+    }))
+
+    expect(params.get('model')).toBe('selected-model')
+    expect(params.has('haikuModel')).toBe(false)
+    expect(params.has('sonnetModel')).toBe(false)
+    expect(params.has('opusModel')).toBe(false)
+  })
+
+  it('旧平台调用允许显式主模型覆盖原默认值', () => {
+    const params = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput,
+      platform: 'openai',
+      clientType: 'claude',
+      model: 'custom-codex-model'
+    }))
+
+    expect(params.get('app')).toBe('codex')
+    expect(params.get('model')).toBe('custom-codex-model')
+  })
 })

@@ -720,6 +720,7 @@ function mountView() {
         ModelWhitelistSelector: true,
         ImageUpload: ImageUploadStub,
         BackupSettings: true,
+        TicketSettingsTab: true,
       },
     },
   });
@@ -782,6 +783,18 @@ async function openUsersTab(wrapper: ReturnType<typeof mountView>) {
 }
 
 describe("admin SettingsView payment visible method controls", () => {
+  it("工单页中的表单提交不写入其它系统设置", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    const tab = wrapper.findAll("button").find(node => node.text().includes("admin.settings.tabs.tickets"));
+    expect(tab).toBeDefined();
+    await tab!.trigger("click");
+    await flushPromises();
+    await wrapper.get("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     getSettings.mockReset();
     getCreativeModelCandidates.mockReset();

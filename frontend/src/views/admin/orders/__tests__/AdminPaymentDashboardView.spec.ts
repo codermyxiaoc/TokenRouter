@@ -117,4 +117,41 @@ describe('AdminPaymentDashboardView', () => {
       end_date: '2026-05-09'
     })
   })
+
+  it('shows wallet purchases in the payment distribution alongside external payments', async () => {
+    mockGetDashboard.mockResolvedValueOnce({
+      data: {
+        today_amount: { CNY: 70, USD: 10 },
+        total_amount: { CNY: 70, USD: 10 },
+        today_count: 2,
+        total_count: 2,
+        avg_amount: { CNY: 70, USD: 10 },
+        avg_reasoning_point_purchase_unit_price: 0,
+        reasoning_point_purchase_order_count: 0,
+        daily_series: [],
+        payment_methods: [
+          { type: 'alipay', amount: { CNY: 70 }, count: 1 },
+          { type: 'balance', amount: { USD: 10 }, count: 1 }
+        ],
+        purchase_distribution: [
+          { type: 'subscription', label: '专业版', plan_id: 7, currency: 'CNY', amount: 70, count: 1 },
+          { type: 'subscription', label: '专业版', plan_id: 7, currency: 'USD', amount: 10, count: 1 }
+        ],
+        top_users: { USD: [{ user_id: 1, email: 'wallet@example.com', amount: 10 }] }
+      }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('payment.methods.balance')
+    expect(wrapper.text()).toContain('payment.methods.alipay')
+    expect(wrapper.text()).toContain('payment.admin.paymentStatisticsHint')
+    expect(wrapper.text()).toContain('$10.00')
+    expect(wrapper.text()).toContain('70.00')
+    expect(wrapper.text()).toContain('wallet@example.com')
+    expect(wrapper.find('.bg-amber-500').exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'OrderStatsCards' }).props('stats').total_count).toBe(2)
+    expect(wrapper.findComponent({ name: 'PurchaseDistributionChart' }).props('items')).toHaveLength(2)
+    wrapper.unmount()
+  })
 })

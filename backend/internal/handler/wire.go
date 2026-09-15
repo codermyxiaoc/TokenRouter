@@ -161,6 +161,7 @@ func ProvideHandlers(
 	batchImageHandler *BatchImageHandler,
 	creativeHandler *CreativeHandler,
 	teamHandler *TeamHandler,
+	ticketHandler *TicketHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
@@ -185,6 +186,7 @@ func ProvideHandlers(
 		BatchImage:       batchImageHandler,
 		Creative:         creativeHandler,
 		Team:             teamHandler,
+		Ticket:           ticketHandler,
 	}
 }
 
@@ -210,6 +212,7 @@ var ProviderSet = wire.NewSet(
 	NewBatchImageHandler,
 	NewCreativeHandler,
 	NewTeamHandler,
+	NewTicketHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,

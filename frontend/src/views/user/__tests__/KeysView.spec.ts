@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 import type { ApiKey } from '@/types'
+import type { CcSwitchApp, CcSwitchImportSelection } from '@/utils/ccswitchImport'
 import KeysView from '../KeysView.vue'
 
 const {
@@ -54,6 +55,7 @@ const messages: Record<string, string> = {
   'keys.disable': 'Disable',
   'keys.enable': 'Enable',
   'keys.importToTf': 'Import to TF CLI',
+  'keys.importToCcSwitch': 'Import to CC Switch',
   'keys.apiKeyLimitReached': 'API key limit reached',
   'keys.created': 'Created',
   'keys.expiresAt': 'Expires',
@@ -333,6 +335,14 @@ const TfCliImportDialogStub = {
   `,
 }
 
+// 页面测试只模拟配置框确认与取消；具体字段校验由配置框自身测试覆盖。
+const CcSwitchImportDialogStub = {
+  name: 'CcSwitchImportDialog',
+  props: ['show', 'apiKey'],
+  emits: ['confirm', 'close'],
+  template: '<div v-if="show" data-test="ccs-import-dialog-stub"><button data-test="ccs-import-cancel" @click="$emit(\'close\')">Cancel</button></div>',
+}
+
 const mountView = async (settle = true) => {
   const wrapper = mount(KeysView, {
     global: {
@@ -350,6 +360,7 @@ const mountView = async (settle = true) => {
         Icon: IconStub,
         UseKeyModal: true,
         TfCliImportDialog: TfCliImportDialogStub,
+        CcSwitchImportDialog: CcSwitchImportDialogStub,
         EndpointPopover: true,
         GroupBadge: true,
         GroupOptionItem: GroupOptionItemStub,
@@ -510,6 +521,129 @@ describe('user KeysView column settings', () => {
     await nextTick()
 
     expect(wrapper.get('[data-test="tf-cli-dialog-stub"]').attributes('data-key-name')).toBe('test-key')
+  })
+
+  describe('CC Switch import confirmation', () => {
+    const openWindow = vi.fn<typeof window.open>()
+    let mountedView: VueWrapper | undefined
+
+    beforeEach(() => {
+      openWindow.mockReset().mockReturnValue(null)
+      vi.spyOn(window, 'open').mockImplementation(openWindow)
+      getPublicSettings.mockResolvedValue({
+        site_name: 'Default site',
+        api_base_url: 'https://gateway.example/v1/'
+      })
+    })
+
+    afterEach(() => {
+      mountedView?.unmount()
+      mountedView = undefined
+      vi.restoreAllMocks()
+    })
+
+    // 从真实菜单进入配置框，避免绕过页面事件链直接调用内部方法。
+    const openImportDialog = async (key: unknown) => {
+      listKeys.mockResolvedValue({ items: [key], total: 1, page: 1, page_size: 20, pages: 1 })
+      mountedView = await mountView()
+      await getButtonByText(mountedView, 'More').trigger('click')
+      await getButtonByText(mountedView, 'Import to CC Switch').trigger('click')
+      return mountedView.getComponent({ name: 'CcSwitchImportDialog' })
+    }
+
+    it.each(['openai', 'grok', 'gemini', 'antigravity'])(
+      'opens configuration for %s without launching CCS and cancels without importing',
+      async (platform) => {
+        const key = {
+          ...createApiKey(),
+          group_id: 42,
+          group: { id: 42, name: 'Selected group', platform }
+        }
+        const dialog = await openImportDialog(key)
+
+        expect(dialog.props('show')).toBe(true)
+        expect(dialog.props('apiKey')).toEqual(key)
+        expect(openWindow).not.toHaveBeenCalled()
+
+        await dialog.get('[data-test="ccs-import-cancel"]').trigger('click')
+
+        expect(dialog.props('show')).toBe(false)
+        expect(dialog.props('apiKey')).toBeNull()
+        expect(openWindow).not.toHaveBeenCalled()
+      }
+    )
+
+    it('imports the confirmed application, custom name and model choices only after confirmation', async () => {
+      const key = {
+        ...createApiKey(),
+        group_id: 42,
+        group: { id: 42, name: 'OpenAI group', platform: 'openai' }
+      }
+      const dialog = await openImportDialog(key)
+      const selection: CcSwitchImportSelection = {
+        app: 'claude',
+        providerName: 'My Claude 中文 & team',
+        model: 'Custom/main-alias',
+        haikuModel: 'Custom/haiku-alias',
+        sonnetModel: 'Custom/sonnet-alias',
+        opusModel: 'Custom/opus-alias'
+      }
+      expect(openWindow).not.toHaveBeenCalled()
+
+      dialog.vm.$emit('confirm', selection)
+      await nextTick()
+
+      expect(openWindow).toHaveBeenCalledTimes(1)
+      expect(openWindow.mock.calls[0]?.[1]).toBe('_self')
+      const url = new URL(String(openWindow.mock.calls[0]?.[0]))
+      expect(url.protocol).toBe('ccswitch:')
+      expect(url.searchParams.get('app')).toBe('claude')
+      expect(url.searchParams.get('name')).toBe(selection.providerName)
+      expect(url.searchParams.get('apiKey')).toBe(key.key)
+      expect(url.searchParams.get('model')).toBe(selection.model)
+      expect(url.searchParams.get('haikuModel')).toBe(selection.haikuModel)
+      expect(url.searchParams.get('sonnetModel')).toBe(selection.sonnetModel)
+      expect(url.searchParams.get('opusModel')).toBe(selection.opusModel)
+      expect(url.searchParams.get('endpoint')).toBe('https://gateway.example')
+      expect(dialog.props('show')).toBe(false)
+      expect(dialog.props('apiKey')).toBeNull()
+    })
+
+    it.each<{
+      mode: 'ordinary' | 'smart' | 'composite'
+      app: CcSwitchApp
+      endpoint: string
+    }>([
+      { mode: 'ordinary', app: 'claude', endpoint: 'https://gateway.example/antigravity' },
+      { mode: 'ordinary', app: 'gemini', endpoint: 'https://gateway.example/antigravity' },
+      { mode: 'ordinary', app: 'codex', endpoint: 'https://gateway.example/v1' },
+      { mode: 'smart', app: 'claude', endpoint: 'https://gateway.example' },
+      { mode: 'composite', app: 'gemini', endpoint: 'https://gateway.example' }
+    ])('uses the correct Antigravity endpoint for $mode keys importing $app', async ({ mode, app, endpoint }) => {
+      const group = { id: 42, name: 'Antigravity group', platform: 'antigravity' }
+      const key = {
+        ...createApiKey(),
+        group_id: mode === 'ordinary' ? 42 : null,
+        group,
+        smart_routing: mode === 'smart',
+        smart_routing_group_ids: mode === 'smart' ? [42] : undefined,
+        smart_routing_groups: mode === 'smart' ? [group] : undefined,
+        is_composite: mode === 'composite',
+        composite_groups: mode === 'composite' ? [{ group_id: 42, prefix: 'AG', group }] : undefined
+      }
+      const dialog = await openImportDialog(key)
+      const model = mode === 'composite' ? 'AG/custom-model' : 'custom-model'
+      expect(openWindow).not.toHaveBeenCalled()
+
+      dialog.vm.$emit('confirm', { app, providerName: 'Custom provider', model })
+      await nextTick()
+
+      expect(openWindow).toHaveBeenCalledTimes(1)
+      const params = new URL(String(openWindow.mock.calls[0]?.[0])).searchParams
+      expect(params.get('app')).toBe(app)
+      expect(params.get('endpoint')).toBe(endpoint)
+      expect(params.get('model')).toBe(model)
+    })
   })
 
   it('shows a hidden column when toggled and persists the preference', async () => {
@@ -796,6 +930,72 @@ describe('user KeysView column settings', () => {
       expect.objectContaining({ value: 43 }),
     ]))
     expect(getAvailableGroups).toHaveBeenCalledWith('personal', 71)
+  })
+
+  // 同一分组切换订阅时使用对应套餐倍率，指定订阅不能被用户专属倍率覆盖。
+  it('创建密钥的分组倍率随所选订阅更新，切回余额恢复用户专属倍率', async () => {
+    getUserGroupRates.mockResolvedValue({ 42: 0.3, 43: 0.4 })
+    getAvailableGroups.mockImplementation((_scope, subscriptionID?: number) => Promise.resolve([
+      { id: 42, name: 'OpenAI', platform: 'openai', rate_multiplier: subscriptionID === 71 ? 0.8 : subscriptionID === 72 ? 0.6 : 1.2 },
+      { id: 43, name: 'Default free group', platform: 'anthropic', rate_multiplier: 0 },
+    ]))
+    getBillingOptions.mockResolvedValue([71, 72].map(id => ({ id, plan_name: `Plan ${id}`, groups_restricted: false, applicable_groups: [] })))
+    const wrapper = await mountView()
+    await getButtonByText(wrapper, 'Create API Key').trigger('click')
+    await flushPromises()
+    const billingMode = wrapper.getComponent('[data-test="api-key-billing-mode"]')
+    const groupSelect = () => wrapper.getComponent('[data-tour="key-form-group"]')
+    expect(groupSelect().props('options')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: 42, rate: 1.2, userRate: 0.3 }),
+    ]))
+    billingMode.vm.$emit('update:modelValue', 'subscription')
+    billingMode.vm.$emit('change', 'subscription')
+    await flushPromises()
+    const subscription = wrapper.getComponent('[data-test="api-key-preferred-subscription"]')
+    for (const [id, rate] of [[71, 0.8], [72, 0.6]]) {
+      subscription.vm.$emit('update:modelValue', id)
+      subscription.vm.$emit('change', id)
+      await flushPromises()
+      expect(groupSelect().props('options')).toEqual(expect.arrayContaining([
+        expect.objectContaining({ value: 42, rate, userRate: null }),
+        expect.objectContaining({ value: 43, rate: 0, userRate: null }),
+      ]))
+    }
+    billingMode.vm.$emit('update:modelValue', 'balance')
+    billingMode.vm.$emit('change', 'balance')
+    await flushPromises()
+    expect(groupSelect().props('options')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: 42, rate: 1.2, userRate: 0.3 }),
+    ]))
+  })
+
+  it('指定订阅的智能路由和复合分组沿用订阅倍率且不叠加用户倍率', async () => {
+    getUserGroupRates.mockResolvedValue({ 42: 0.3 })
+    getAvailableGroups.mockImplementation((_scope, subscriptionID?: number) => Promise.resolve([
+      { id: 42, name: 'OpenAI', platform: 'openai', rate_multiplier: subscriptionID === 71 ? 0.8 : 1.2 },
+    ]))
+    getBillingOptions.mockResolvedValue([{ id: 71, plan_name: 'Plan', groups_restricted: true, applicable_groups: [42] }])
+    const wrapper = await mountView()
+    await getButtonByText(wrapper, 'Create API Key').trigger('click')
+    await flushPromises()
+    const billingMode = wrapper.getComponent('[data-test="api-key-billing-mode"]')
+    billingMode.vm.$emit('update:modelValue', 'subscription')
+    billingMode.vm.$emit('change', 'subscription')
+    await flushPromises()
+    const subscription = wrapper.getComponent('[data-test="api-key-preferred-subscription"]')
+    subscription.vm.$emit('update:modelValue', 71)
+    subscription.vm.$emit('change', 71)
+    await flushPromises()
+    await wrapper.get('[data-test="smart-routing-toggle"]').setValue(true)
+    const routing = wrapper.findComponent({ name: 'SmartRoutingGroupEditor' })
+    expect(routing.props('groups')[0].rate_multiplier).toBe(0.8)
+    expect(routing.props('userGroupRates')).toEqual({})
+    await wrapper.get('[data-test="composite-key-toggle"]').trigger('click')
+    await flushPromises()
+    const composite = wrapper.get('[data-test="composite-group-editor"]').findComponent({ name: 'Select' })
+    expect(composite.props('options')).toEqual([expect.objectContaining({ value: 42, rate: 0.8, userRate: null })])
+    expect(composite.vm.$slots.selected).toBeTypeOf('function')
+    expect(composite.vm.$slots.option).toBeTypeOf('function')
   })
 
   it('keeps filters and selected page size when sorting by current concurrency', async () => {

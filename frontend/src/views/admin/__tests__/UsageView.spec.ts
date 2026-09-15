@@ -4,7 +4,7 @@ import { defineComponent, ref } from 'vue'
 
 import UsageView from '../UsageView.vue'
 
-const { list, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, routeQuery } = vi.hoisted(() => {
+const { list, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, routeQuery, exportList, exportHeaders, exportRows, saveFile } = vi.hoisted(() => {
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
@@ -19,6 +19,10 @@ const { list, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, ro
     getModelStats: vi.fn(),
     listErrorLogs: vi.fn(),
     routeQuery: {} as Record<string, string>,
+    exportList: vi.fn(),
+    exportHeaders: vi.fn<(rows: string[][]) => Record<string, unknown>>(() => ({})),
+    exportRows: vi.fn(),
+    saveFile: vi.fn(),
   }
 })
 
@@ -28,6 +32,10 @@ const messages: Record<string, string> = {
   'admin.dashboard.hour': 'Hour',
   'admin.usage.failedToLoadUser': 'Failed to load user',
   'admin.usage.requestId': 'Request ID',
+  'admin.usage.billingType': 'Billing type',
+  'admin.usage.billingTypeBalance': '余额扣费',
+  'admin.usage.billingTypeSubscription': '订阅扣费',
+  'admin.usage.billingTypeMixed': '订阅 + 余额',
 	'admin.usage.upstreamRequestId': 'Upstream ID',
 	'usage.requestedModel': 'Requested model',
 	'usage.sentUpstreamModel': 'Sent upstream model',
@@ -62,9 +70,21 @@ vi.mock('@/api/admin', () => ({
 
 vi.mock('@/api/admin/usage', () => ({
   adminUsageAPI: {
-    list: vi.fn(),
+    list: exportList,
   },
 }))
+
+vi.mock('xlsx', () => ({
+  utils: {
+    aoa_to_sheet: exportHeaders,
+    sheet_add_aoa: exportRows,
+    book_new: vi.fn(() => ({})),
+    book_append_sheet: vi.fn(),
+  },
+  write: vi.fn(() => new Uint8Array()),
+}))
+
+vi.mock('file-saver', () => ({ saveAs: saveFile }))
 
 vi.mock('@/api/admin/ops', () => ({
   listErrorLogs,
@@ -407,7 +427,7 @@ describe('admin UsageView distribution metric toggles', () => {
   })
 })
 
-describe('admin UsageView request ID column visibility', () => {
+describe('admin UsageView column visibility and billing export', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.mocked(localStorage.getItem).mockReset().mockReturnValue(null)
@@ -419,6 +439,10 @@ describe('admin UsageView request ID column visibility', () => {
     })
     getSnapshotV2.mockReset().mockResolvedValue({ trend: [], models: [], groups: [] })
     getModelStats.mockReset().mockResolvedValue({ models: [] })
+    exportList.mockReset()
+    exportHeaders.mockClear()
+    exportRows.mockClear()
+    saveFile.mockClear()
   })
 
   afterEach(() => {
@@ -447,6 +471,79 @@ describe('admin UsageView request ID column visibility', () => {
         UserTokenRanking: true,
       },
     },
+  })
+
+  it('默认在费用之前显示计费类型并允许隐藏', async () => {
+    const wrapper = mountColumnView()
+    await wrapper.vm.$nextTick()
+    const usageTable = wrapper.findComponent(UsageTableStub)
+    const columns = usageTable.props('columns') as Array<{ key: string; label: string }>
+    const billingIndex = columns.findIndex((column) => column.key === 'billing_type')
+    expect(billingIndex).toBeGreaterThan(-1)
+    expect(columns[billingIndex].label).toBe('Billing type')
+    expect(columns[billingIndex + 1].key).toBe('cost')
+
+    await wrapper.get('button[title="admin.users.columnSettings"]').trigger('click')
+    const billingToggle = wrapper.findAll('button').find((button) => button.text() === 'Billing type')
+    expect(billingToggle).toBeDefined()
+    await billingToggle!.trigger('click')
+
+    expect(usageTable.props('columns')).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'billing_type' })]),
+    )
+    expect(localStorage.setItem).toHaveBeenCalledWith(
+      'usage-hidden-columns',
+      JSON.stringify(['reasoning_effort', 'request_id', 'upstream_request_id', 'user_agent', 'billing_type']),
+    )
+  })
+
+  it('升级旧偏好时展示计费类型且保留原有隐藏列', async () => {
+    vi.mocked(localStorage.getItem).mockImplementation((key: string) => {
+      if (key === 'usage-hidden-columns') return JSON.stringify(['ip_address', 'cost'])
+      return null
+    })
+    const wrapper = mountColumnView()
+    await wrapper.vm.$nextTick()
+    const columns = wrapper.findComponent(UsageTableStub).props('columns') as Array<{ key: string }>
+    expect(columns).toEqual(expect.arrayContaining([expect.objectContaining({ key: 'billing_type' })]))
+    expect(columns).not.toEqual(expect.arrayContaining([expect.objectContaining({ key: 'ip_address' })]))
+    expect(columns).not.toEqual(expect.arrayContaining([expect.objectContaining({ key: 'cost' })]))
+  })
+
+  it('保留管理员已保存的计费类型隐藏偏好', async () => {
+    vi.mocked(localStorage.getItem).mockImplementation((key: string) => {
+      if (key === 'usage-hidden-columns') return JSON.stringify(['billing_type'])
+      if (key === 'usage-hidden-columns-version') return 'upstream-request-id-hidden-by-default'
+      return null
+    })
+    const wrapper = mountColumnView()
+    await wrapper.vm.$nextTick()
+    const columns = wrapper.findComponent(UsageTableStub).props('columns') as Array<{ key: string }>
+    expect(columns).not.toEqual(expect.arrayContaining([expect.objectContaining({ key: 'billing_type' })]))
+    expect(columns).toEqual(expect.arrayContaining([expect.objectContaining({ key: 'cost' })]))
+  })
+
+  it('Excel 导出保留余额、订阅和混合计费类型', async () => {
+    exportList.mockResolvedValue({
+      items: [
+        { billing_type: 0, actual_cost: 0.3, total_cost: 0.3 },
+        { billing_type: 1, actual_cost: 0.3, total_cost: 0.3 },
+        { billing_type: 1, actual_cost: 0.3, total_cost: 0.3, subscription_amount_usd: 0.2, balance_amount_usd: 0.1 },
+      ],
+      total: 3,
+      pages: 1,
+    })
+    const wrapper = mountColumnView()
+    await wrapper.vm.$nextTick()
+    await (wrapper.vm as any).exportToExcel()
+
+    const headers = exportHeaders.mock.calls[0][0][0] as string[]
+    const billingIndex = headers.indexOf('Billing type')
+    expect(billingIndex).toBeGreaterThan(-1)
+    const rows = exportRows.mock.calls[0][1] as unknown[][]
+    expect(rows.map((row) => row[billingIndex])).toEqual(['余额扣费', '订阅扣费', '订阅 + 余额'])
+    expect(rows.every((row) => row.length === headers.length)).toBe(true)
+    expect(saveFile).toHaveBeenCalledOnce()
   })
 
   it('keeps request ID hidden by default and persists an explicit enable', async () => {

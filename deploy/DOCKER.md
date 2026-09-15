@@ -3,7 +3,7 @@
 当前标准、本地目录和 standalone Compose 默认从 DockerHub 拉取：
 
 ```text
-coderxiaoc/tokenrouter:v0.1.278-ct-v1.1
+coderxiaoc/tokenrouter:v0.1.278-ct-v1.2
 ```
 
 在 `.env` 中设置 `SUB2API_IMAGE` 可选择其他已发布标签或镜像摘要。这些 Compose 保留 `pull_policy: always`，部署服务器无需源码。应用依赖 PostgreSQL 和 Redis；Compose 提供运行配置、持久化存储、健康检查和依赖启动顺序。
@@ -27,10 +27,10 @@ coderxiaoc/tokenrouter:v0.1.278-ct-v1.1
 
 ```bash
 docker login
-docker buildx build --platform linux/amd64 --build-arg VERSION=0.1.278-ct-v1.1 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v1.1 --load --file Dockerfile .
-docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v1.1 --version
-docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v1.1 --version
-docker push coderxiaoc/tokenrouter:v0.1.278-ct-v1.1
+docker buildx build --platform linux/amd64 --build-arg VERSION=0.1.278-ct-v1.2 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v1.2 --load --file Dockerfile .
+docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v1.2 --version
+docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v1.2 --version
+docker push coderxiaoc/tokenrouter:v0.1.278-ct-v1.2
 ```
 
 版本和 PostgreSQL 客户端检查不挂载现有数据，也不启动应用服务。程序内部版本号不带 `v`，镜像标签保留 `v` 前缀。根 `Dockerfile` 还支持 `COMMIT`、`DATE` 构建参数；发布下一版本时同时替换构建参数、镜像标签与部署端 `SUB2API_IMAGE`。以上命令只发布 `amd64`，不会同时生成 `arm64` 镜像。
@@ -50,22 +50,46 @@ nano .env
 在现有部署目录修改 `.env`，保留原有密码、JWT/TOTP 密钥以及其他配置：
 
 ```dotenv
-SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v1.1
+SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v1.2
 POSTGRES_BIND_HOST=127.0.0.1
 POSTGRES_PORT=5433
 ```
 
-以下命令以既有配置名为 `docker-compose.yml` 为例；如果此前使用 `docker-compose.local.yml`，每条命令都继续使用该文件和原 Compose 项目名：
+以下命令以既有配置名为 `docker-compose.yml` 为例；如果此前使用 `docker-compose.local.yml`，每条命令都继续使用该文件和原 Compose 项目名。原配置的 `image` 如果是写死的旧标签，直接修改原文件这一行；只有使用 `${SUB2API_IMAGE:-...}` 的配置才会读取上述变量。
+
+先拉取新应用镜像：
 
 ```bash
 docker compose -f docker-compose.yml config --quiet
 docker compose -f docker-compose.yml pull sub2api
-docker compose -f docker-compose.yml up -d
+```
+
+升级前验证 PostgreSQL 备份并保留应用配置。以下为内置 PostgreSQL 部署示例，在维护窗口停止应用后执行；standalone 使用原外置数据库的备份流程。若备份失败，先启动旧应用并排查，不继续升级：
+
+```bash
+docker compose -f docker-compose.yml stop sub2api
+backup_dir="backups/pre-v1.2-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$backup_dir"
+chmod 700 "$backup_dir"
+cp -p .env docker-compose.yml "$backup_dir/"
+docker compose -f docker-compose.yml cp sub2api:/app/data "$backup_dir/app-data"
+docker compose -f docker-compose.yml exec -T postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$backup_dir/database.dump"
+docker compose -f docker-compose.yml exec -T postgres pg_restore --list < "$backup_dir/database.dump" > /dev/null
+```
+
+同时保留原 Compose 覆盖文件、外置配置和原镜像标签。确认备份有效后，仅重建应用：
+
+```bash
+docker compose -f docker-compose.yml up -d --no-deps sub2api
 docker compose -f docker-compose.yml ps
 docker compose -f docker-compose.yml logs --tail=100 sub2api
+docker compose -f docker-compose.yml exec -T sub2api /app/sub2api --version
+docker compose -f docker-compose.yml exec -T sub2api wget -q -O - http://127.0.0.1:8080/health
 ```
 
 私有 DockerHub 仓库需要先在服务器执行 `docker login`。应用镜像更新或端口映射变更应使用 `up -d` 重建相关容器；仅 `restart` 不会应用这些变更。已有部署无需用 `.env.example` 覆盖 `.env`，也不要执行 `down -v`。
+
+`--no-deps sub2api` 只更新应用，不替换 PostgreSQL 或 Redis。新应用启动时会自动执行待应用的迁移；从 `v0.1.278-ct-v1.1` 更新到本版本包含工单表及后续类型、优先级和结单身份迁移（273–276），工单附件随数据库保存。迁移不会因为换回旧镜像自动撤销，尤其工单类型和优先级合并无法仅靠旧镜像恢复；需要精确回滚时必须恢复升级前数据库与配置备份，备份后的新写入也会随之回退。不要删除迁移记录或改写已应用文件的校验和。
 
 **沿用现有存储方式。** 标准 Compose 使用命名卷，本地目录版使用 `./data`、`./postgres_data`、`./redis_data`；两种文件不能互换后直接启动。安装脚本下载本地目录版并把它保存为 `docker-compose.yml`，这种部署仍应更新本地目录版。PostgreSQL 的镜像版本、数据挂载和 `PGDATA` 不随本次应用镜像更新改变；升级前按现有备份流程验证数据库备份。
 
@@ -115,7 +139,7 @@ docker compose -f docker-compose.yml logs --tail=100 sub2api
 
 ## 镜像标签
 
-当前默认固定版本标签 `v0.1.278-ct-v1.1`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
+当前默认固定版本标签 `v0.1.278-ct-v1.2`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
 
 ## 相关链接
 

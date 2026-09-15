@@ -67,6 +67,10 @@
 4. 创建 Redis 客户端、仓储、服务、handler、中间件和 Gin server。多个 provider 会在构造后立即启动各自 worker，例如 token 刷新、到期处理、调度快照、用量记录、聚合、清理、备份、批量图片作业、创作台队列（`CreativeWorkerRuntime`，`creative.queue_enabled` 时运行数据库设置 `creative_worker_count` 指定数量的任务 worker、一个 delayed mover、一个 stale active recovery、outbox reconciler 和 transient cleanup reconciler）和支付订单过期处理。
 5. 在 goroutine 中调用 `ListenAndServe`，主 goroutine 等待 `SIGINT` 或 `SIGTERM`。
 
+`ProvideTicketRuntime` 启动工单每分钟到期扫描及独立邮件队列，`provideCleanup` 在数据库关闭前调用幂等 `Stop` 并取消执行上下文。多实例过期扫描使用状态和截止时间条件更新，避免覆盖同时到达的用户回复；通知只由新消息写入实例入队，以消息编号复用通知发送去重。工单状态及附件持久化见[工单](../domains/support_tickets.md)。
+
+`ProvideTicketConfigService` 将独立工单设置的成功写入接入既有设置更新回调，使工单总开关同步刷新 HTML 注入缓存。关闭后请求期阻止用户和管理员业务操作，后台扫描及待发送邮件也检查总开关；设置入口和历史数据保留。
+
 收到终止信号后先给 HTTP server 五秒完成优雅关闭，停止接收新请求；函数返回时执行应用 `Cleanup`。关闭过程有独立三十秒上下文：大部分互不依赖的 worker 并行停止，然后按顺序停止配额等需要 drain 或 flush 的服务，最后关闭 Redis 和 Ent/PostgreSQL。单个关闭步骤失败会记录日志并继续，超时会告警而不会无限阻塞进程退出。
 
 依赖 Redis Pub/Sub 的 TLS 指纹 Profile/Router 缓存订阅由对应服务在 Redis 关闭前主动取消并等待退出；Redis 被动关闭导致的 channel 结束只作为异常路径记录告警。

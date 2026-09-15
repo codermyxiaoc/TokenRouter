@@ -218,7 +218,13 @@ func SubscriptionPlanFromServiceShallow(plan *service.SubscriptionPlan) *Subscri
 	}
 	out.ApplicableGroups = make([]SubscriptionPlanGroup, 0, len(plan.ApplicableGroups))
 	for _, group := range plan.ApplicableGroups {
-		out.ApplicableGroups = append(out.ApplicableGroups, SubscriptionPlanGroup{ID: group.ID, Name: group.Name})
+		out.ApplicableGroups = append(out.ApplicableGroups, SubscriptionPlanGroup{
+			ID:             group.ID,
+			Name:           group.Name,
+			Platform:       group.Platform,
+			DisplayBrand:   group.DisplayBrand,
+			RateMultiplier: group.RateMultiplier,
+		})
 	}
 	if out.ApplicableGroups == nil {
 		out.ApplicableGroups = []SubscriptionPlanGroup{}

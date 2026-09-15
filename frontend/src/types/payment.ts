@@ -2,6 +2,8 @@
  * Payment System Type Definitions
  */
 
+import type { GroupPlatform } from './index'
+
 // ==================== Enums / Union Types ====================
 
 export type OrderStatus =
@@ -139,7 +141,14 @@ export interface SubscriptionPlan {
   group_id?: number
   group_ids?: number[]
   groups_restricted?: boolean
-  applicable_groups?: Array<{ id: number; name: string }>
+  // 订阅接口返回分组的平台/品牌与最终展示倍率；兼容旧接口缺少展示字段。
+  applicable_groups?: Array<{
+    id: number
+    name: string
+    platform?: GroupPlatform
+    display_brand?: string | null
+    rate_multiplier?: number
+  }>
   group_rate_multipliers?: Record<string, number> | Record<number, number>
   group_platform?: string
   group_name?: string
@@ -322,6 +331,7 @@ export interface DashboardStats {
   reasoning_point_purchase_order_count: number
   daily_series: DailyPaymentStats[]
   payment_methods: PaymentMethodStats[]
-  purchase_distribution: { type: OrderType; label: string; plan_id?: number; amount: number; count: number }[]
+  // 同一套餐按币种拆分；缺少币种的历史响应沿用默认支付币种。
+  purchase_distribution: { type: OrderType; label: string; plan_id?: number; currency?: string; amount: number; count: number }[]
   top_users: Record<string, TopUserPaymentStats[]>
 }

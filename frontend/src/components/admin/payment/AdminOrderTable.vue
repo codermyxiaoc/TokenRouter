@@ -214,6 +214,8 @@ const statusFilterOptions = computed(() => [
 
 const paymentTypeFilterOptions = computed(() => [
   { value: '', label: t('payment.admin.allPaymentTypes') },
+  // 历史余额订单始终可查询，不随当前余额支付开关隐藏。
+  { value: 'balance', label: t('payment.methods.balance') },
   { value: 'alipay', label: t('payment.methods.alipay') },
   { value: 'wxpay', label: t('payment.methods.wxpay') },
   { value: 'stripe', label: t('payment.methods.stripe') },

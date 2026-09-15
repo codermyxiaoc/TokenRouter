@@ -250,6 +250,8 @@ func RegisterAuthRoutes(
 	{
 		settings.GET("/public", h.Setting.GetPublicSettings)
 		settings.GET("/email-unsubscribe", h.Setting.UnsubscribeNotificationEmail)
+		// 链接访问只读，必须显式提交确认表单才修改通知偏好。
+		settings.POST("/email-unsubscribe", h.Setting.ConfirmNotificationEmailUnsubscribe)
 	}
 
 	marketplace := v1.Group("/marketplace")

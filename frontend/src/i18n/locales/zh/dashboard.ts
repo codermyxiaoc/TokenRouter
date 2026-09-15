@@ -323,13 +323,24 @@ export default {
     ipRestrictionEnabled: '已配置 IP 限制',
     ccSwitchNotInstalled:
       'CC-Switch 未安装或协议处理程序未注册。请先安装 CC-Switch 或手动复制 API 密钥。',
-    ccsClientSelect: {
-      title: '选择客户端',
-      description: '请选择您要导入到 CC-Switch 的客户端类型：',
-      claudeCode: 'Claude Code',
-      claudeCodeDesc: '导入为 Claude Code 配置',
-      geminiCli: 'Gemini CLI',
-      geminiCliDesc: '导入为 Gemini CLI 配置'
+    ccsImport: {
+      title: '填入 CC Switch',
+      app: '应用',
+      name: '名称',
+      namePlaceholder: '请输入配置名称',
+      mainModel: '主模型',
+      modelPlaceholder: '请选择模型',
+      modelSearchPlaceholder: '搜索模型名称或 ID',
+      loadingModels: '正在加载网站模型…',
+      modelsFailed: '网站模型加载失败，请重试。',
+      modelsEmpty: '网站暂无可选模型。',
+      retryModels: '重新加载',
+      haikuModel: 'Haiku 模型',
+      sonnetModel: 'Sonnet 模型',
+      opusModel: 'Opus 模型',
+      open: '打开 CC Switch',
+      nameRequired: '请输入配置名称。',
+      modelRequired: '请选择主模型。'
     },
     // 配额和有效期
     quotaLimit: '额度限制',

@@ -27,14 +27,18 @@
 
 应用至少依赖 PostgreSQL 和 Redis。`/app/data` 或等价 `DATA_DIR` 保存配置、安装锁及本地运维产物；数据库、Redis 和对象存储各有独立生命周期，不能只备份应用数据目录就宣称完成系统备份。
 
+手工二进制更新包包含嵌入前端和迁移的 `sub2api`，并携带 `resources/model-pricing/model_prices_and_context_window.json` 作为离线定价回退资源。默认 `pricing.fallback_file` 相对于进程工作目录解析：标准 systemd 的 `WorkingDirectory=/opt/sub2api` 对应 `/opt/sub2api/resources/model-pricing/`；自定义目录或显式定价覆盖继续沿用原配置。Ubuntu 部署的 `pg_dump`、`psql` 是宿主机独立依赖，不能直接复制 Alpine 镜像中的动态链接客户端。
+
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v1.1`，保留 `pull_policy: always`。发布端在当前源码根目录构建 `linux/amd64` 镜像并推送 DockerHub；部署端只拉取指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v1.2`，保留 `pull_policy: always`。发布端在当前源码根目录构建 `linux/amd64` 镜像并推送 DockerHub；部署端只拉取指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
 更新时必须沿用既有 Compose 项目名、配置文件和存储方式：标准版的命名卷与本地目录版的挂载不可互换，`postgres_data` 的目标目录和 `PGDATA` 均保持 `/var/lib/postgresql/data`。安装脚本下载的是本地目录版并保存为部署端 `docker-compose.yml`，不能用仓库标准版覆盖后直接启动。原二进制/systemd 部署改用容器时，应先明确如何继续连接原 PostgreSQL、Redis 并保留配置、安装锁及稳定安全密钥；新建三服务 Compose 的空数据库不会自动包含原数据。
+
+只更新应用镜像时，先拉取新镜像并完成升级前备份，再使用 `up -d --no-deps sub2api` 重建应用容器，保持 PostgreSQL、Redis 的镜像和挂载不变。迁移在新应用启动时执行；回退应用镜像不会自动回退数据库，必须先核对本次迁移的兼容性。
 
 逐步操作见 [中文部署指南](../guides/deployment/index.md)、[Docker 镜像说明](../../deploy/DOCKER.md) 和 [Apple Container 指南](../guides/deployment/apple_container.md)。这些是部署者手册，不替代本文的工程约束。
 
@@ -65,6 +69,14 @@
 - schema、数据回填、Repository 查询和 Ent schema 变化应在同一兼容序列中设计；若明确无法支持新旧二进制共存，必须在本页记录停机升级、备份与回滚步骤。
 
 ## 新增与同步迁移
+
+工单模块使用 `273_support_tickets.sql` 新建工单、消息和附件三张表，不回填或改写已有订单和用户数据。附件二进制随 PostgreSQL 备份保存，不需要新增宿主机附件目录。新程序启动时由上述迁移流程创建表，工单开关与限制通过后台设置热更新。
+
+工单类型调整使用新增的 `274_support_ticket_consultation_type.sql`，不修改已应用的 273 文件及其校验和。274 将售前、售后及其他合并为咨询，正式类型收敛为咨询、财务和技术；不改变工单 ID、正文、消息、附件、时间或请求幂等哈希。数据库触发器将滚动升级期间旧程序写入的三个旧类型转换为咨询。类型合并不保留旧类型的单独分类，旧版本界面可能无法显示咨询标签，因此应更新完整程序及前端；若必须恢复原分类，需要使用升级前的数据库备份，不能仅替换旧二进制恢复分类。
+
+工单优先级收敛使用新增 `275_support_ticket_three_priorities.sql`，将 `urgent` 合并为 `high` 并更新约束，保留 `normal` 作为中优先级的协议值；触发器兼容升级窗口的旧优先级写入，历史消息、附件及幂等哈希不变。移除处理人员功能只调整应用读写和 API，不删除原数据库列。此次总开关语义升级后，原来已保存为关闭的工单配置将关闭整个模块，管理员可在工单设置中重新开启。
+
+工单结单身份使用新增 `276_support_ticket_closure_actor.sql`，增加可空的 `closed_by` 用户外键（删除账号时置空）及默认空字符串的 `closed_by_role` 角色快照，保留所有既有状态、消息和附件。历史完成或撤销记录不回填猜测身份，界面显示“未记录”；新程序完成、撤销或自动过期时写入真实角色。该迁移只追加字段与约束，可重复执行，不修改 273–275 的校验和；回复状态只更改显示标签，仍使用 `pending` / `waiting_user`。旧实例仍可操作原字段，但不会记录结单身份，因此需要完成全部后端及前端升级后再依赖该记录排查操作来源。回退旧程序不会删除新列，但回退期间的新结束操作会缺少身份记录。
 
 新增文件使用 `<递增数字>_<snake_case 描述>.sql`；并发索引使用 `<递增数字>_<描述>_notx.sql`。仓库历史上存在重复编号和字母后缀，不能据此复用编号。每次创建前都要扫描 `backend/migrations/` 的数字前缀，取当前最大值再加一，并确认按字典序排在预期位置。
 

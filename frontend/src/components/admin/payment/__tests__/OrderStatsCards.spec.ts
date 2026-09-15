@@ -5,8 +5,8 @@ import OrderStatsCards from '../OrderStatsCards.vue'
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
   const labels: Record<string, string> = {
-    'payment.admin.todayRevenue': '今日收入',
-    'payment.admin.totalRevenue': '总收入',
+    'payment.admin.todayRevenue': '今日支付金额',
+    'payment.admin.totalRevenue': '总支付金额',
     'payment.admin.todayOrders': '今日订单',
     'payment.admin.avgAmount': '平均金额',
     'payment.admin.orders': '订单'

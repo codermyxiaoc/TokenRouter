@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"errors"
 	"html"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -114,6 +116,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		TeamEnabled:                         settings.TeamEnabled,
 		TeamSelfServiceEnabled:              settings.TeamSelfServiceEnabled,
 		CreativeEnabled:                     settings.CreativeEnabled,
+		TicketEnabled:                       settings.TicketEnabled,
 		Version:                             h.version,
 		ServerTimezone:                      timezone.Name(),
 		ServerUTCOffset:                     timezone.UTCOffset(),
@@ -130,25 +133,131 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 	})
 }
 
-// UnsubscribeNotificationEmail 处理可选通知邮件的退订请求。
+const notificationEmailUnsubscribeTokenLimit = 4096
+
+// UnsubscribeNotificationEmail 只展示确认页，邮件客户端预取链接不能改变通知偏好。
 // GET /api/v1/settings/email-unsubscribe?token=...
 func (h *SettingHandler) UnsubscribeNotificationEmail(c *gin.Context) {
+	setNotificationEmailUnsubscribeHeaders(c)
 	if h.notificationEmailService == nil {
 		response.InternalError(c, "notification email service is not configured")
 		return
 	}
 	token := strings.TrimSpace(c.Query("token"))
-	if token == "" {
-		response.BadRequest(c, "token is required")
+	if token == "" || len(token) > notificationEmailUnsubscribeTokenLimit || len(c.Request.URL.Query()["token"]) != 1 {
+		response.BadRequest(c, "a valid unsubscribe token is required")
 		return
 	}
-	result, err := h.notificationEmailService.Unsubscribe(c.Request.Context(), token)
+	result, err := h.notificationEmailService.PreviewUnsubscribe(c.Request.Context(), token)
 	if err != nil {
-		response.BadRequest(c, err.Error())
+		response.BadRequest(c, "unsubscribe link is invalid or expired")
 		return
 	}
-	body := "<!doctype html><html><head><meta charset=\"utf-8\"><title>Unsubscribed</title></head><body style=\"font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:32px;\"><h1>Unsubscribed</h1><p>You have unsubscribed <strong>" + html.EscapeString(result.Email) + "</strong> from <strong>" + html.EscapeString(result.Event) + "</strong> emails.</p></body></html>"
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(body))
+	unsubscribed, err := h.notificationEmailService.IsUnsubscribed(c.Request.Context(), result.Email, result.Event)
+	if err != nil {
+		response.InternalError(c, "notification email preference is unavailable")
+		return
+	}
+	if unsubscribed {
+		body := "<h1>已退订 / Unsubscribed</h1><p><strong>" + html.EscapeString(result.Email) + "</strong> 已停止接收此类邮件。These email notifications are currently disabled.</p>"
+		if isTicketNotificationEvent(result.Event) {
+			// 旧链接可用于主动恢复工单通知，读取链接本身始终不改变用户选择。
+			body += "<p>如需继续接收客服回复、完成和撤销工单的邮件，请点击下方按钮。Restore emails about staff replies and ticket closure by confirming below.</p>" + notificationEmailPreferenceForm(token, "subscribe", "恢复工单邮件通知 / Restore ticket emails")
+		}
+		writeNotificationEmailUnsubscribePage(c, "邮件通知设置 / Email preferences", body)
+		return
+	}
+	// 保留旧邮件的签名令牌；只由用户点击按钮提交正文，不在后续表单 URL 中传播令牌。
+	body := "<h1>确认退订 / Confirm unsubscribe</h1><p>当前尚未退订。点击下方按钮后才会停止此类邮件通知。</p><p>Confirm that <strong>" + html.EscapeString(result.Email) + "</strong> should stop receiving <strong>" + html.EscapeString(notificationEmailPreferenceLabel(result.Event)) + "</strong>.</p>" +
+		notificationEmailPreferenceForm(token, "unsubscribe", "确认退订 / Unsubscribe")
+	writeNotificationEmailUnsubscribePage(c, "确认退订 / Confirm unsubscribe", body)
+}
+
+// ConfirmNotificationEmailUnsubscribe 仅接受有大小限制的显式确认表单，不从查询参数读取令牌。
+// POST /api/v1/settings/email-unsubscribe
+func (h *SettingHandler) ConfirmNotificationEmailUnsubscribe(c *gin.Context) {
+	setNotificationEmailUnsubscribeHeaders(c)
+	if h.notificationEmailService == nil {
+		response.InternalError(c, "notification email service is not configured")
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
+	if err != nil || mediaType != "application/x-www-form-urlencoded" {
+		response.Error(c, http.StatusUnsupportedMediaType, "unsubscribe confirmation requires a form submission")
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8*1024)
+	if err := c.Request.ParseForm(); err != nil {
+		var sizeErr *http.MaxBytesError
+		if errors.As(err, &sizeErr) {
+			response.Error(c, http.StatusRequestEntityTooLarge, "unsubscribe confirmation is too large")
+		} else {
+			response.BadRequest(c, "invalid unsubscribe confirmation form")
+		}
+		return
+	}
+	form := c.Request.PostForm
+	token := strings.TrimSpace(form.Get("token"))
+	confirmation := form.Get("confirm")
+	if len(form["token"]) != 1 || token == "" || len(token) > notificationEmailUnsubscribeTokenLimit || len(form["confirm"]) != 1 || (confirmation != "unsubscribe" && confirmation != "subscribe") {
+		response.BadRequest(c, "an explicit unsubscribe confirmation is required")
+		return
+	}
+	var result service.NotificationEmailUnsubscribeResult
+	if confirmation == "subscribe" {
+		result, err = h.notificationEmailService.ResubscribeTicketNotifications(c.Request.Context(), token)
+	} else {
+		result, err = h.notificationEmailService.Unsubscribe(c.Request.Context(), token)
+	}
+	if err != nil {
+		response.BadRequest(c, "unsubscribe link is invalid or expired")
+		return
+	}
+	if confirmation == "subscribe" {
+		body := "<h1>已恢复工单邮件通知 / Ticket emails restored</h1><p><strong>" + html.EscapeString(result.Email) + "</strong> 将按站点工单通知设置接收后续客服回复及结单邮件。Future staff replies and ticket closure emails will follow the site's notification settings.</p>"
+		writeNotificationEmailUnsubscribePage(c, "已恢复工单邮件通知 / Ticket emails restored", body)
+		return
+	}
+	body := "<h1>已退订 / Unsubscribed</h1><p>已停止此类邮件通知。You have unsubscribed <strong>" + html.EscapeString(result.Email) + "</strong> from <strong>" + html.EscapeString(notificationEmailPreferenceLabel(result.Event)) + "</strong>.</p>"
+	writeNotificationEmailUnsubscribePage(c, "已退订 / Unsubscribed", body)
+}
+
+// isTicketNotificationEvent 将公开恢复入口限定为工单通知，不扩展其他通知类别的权限。
+func isTicketNotificationEvent(event string) bool {
+	switch event {
+	case service.NotificationEmailEventTicketStaffReply, service.NotificationEmailEventTicketCompleted, service.NotificationEmailEventTicketCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+// notificationEmailPreferenceLabel 明确工单共享偏好的范围，避免误认为只退订某一种结单邮件。
+func notificationEmailPreferenceLabel(event string) string {
+	if isTicketNotificationEvent(event) {
+		return "工单邮件通知（客服回复、完成与撤销） / Ticket emails (staff replies and closure)"
+	}
+	return event + " emails"
+}
+
+// notificationEmailPreferenceForm 使用相对路径兼容反向代理前缀，并将令牌限制在表单正文。
+func notificationEmailPreferenceForm(token, confirmation, label string) string {
+	return `<form method="post" action="email-unsubscribe"><input type="hidden" name="token" value="` + html.EscapeString(token) + `"><button type="submit" name="confirm" value="` + html.EscapeString(confirmation) + `">` + html.EscapeString(label) + `</button></form>`
+}
+
+// setNotificationEmailUnsubscribeHeaders 防止令牌页面被缓存、嵌入或通过来源头泄漏。
+func setNotificationEmailUnsubscribeHeaders(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("Referrer-Policy", "no-referrer")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("X-Frame-Options", "DENY")
+	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+}
+
+// writeNotificationEmailUnsubscribePage 仅接收固定结构和已转义文本，不加载外部资源或脚本。
+func writeNotificationEmailUnsubscribePage(c *gin.Context, title, body string) {
+	page := `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>` + html.EscapeString(title) + `</title></head><body style="font-family:system-ui,sans-serif;padding:24px;overflow-wrap:anywhere">` + body + "</body></html>"
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(page))
 }
 
 func publicLoginAgreementDocumentsToDTO(items []service.LoginAgreementDocument) []dto.LoginAgreementDocument {

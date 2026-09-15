@@ -1,8 +1,17 @@
 <template>
   <div class="card p-4">
-    <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">
-      {{ t('payment.admin.purchaseDistribution') }}
-    </h3>
+    <div class="mb-4 flex items-center justify-between gap-3">
+      <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
+        {{ t('payment.admin.purchaseDistribution') }}
+      </h3>
+      <Select
+        v-if="currencyOptions.length"
+        v-model="selectedCurrency"
+        :options="currencyOptions"
+        :aria-label="t('payment.admin.statsCurrency')"
+        class="w-28 shrink-0"
+      />
+    </div>
     <div
       v-if="!items?.length"
       class="flex h-48 items-center justify-center text-sm text-gray-500 dark:text-gray-400"
@@ -12,7 +21,7 @@
     <div v-else class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(260px,0.9fr)]">
       <div class="min-w-0">
         <p class="mb-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400">
-          {{ t('payment.admin.amountShare') }}
+          {{ t('payment.admin.amountShare') }} ({{ selectedCurrency }})
         </p>
         <div class="mx-auto h-52 max-w-52">
           <Doughnut :data="amountChartData" :options="amountChartOptions" />
@@ -20,7 +29,7 @@
       </div>
       <div class="min-w-0">
         <p class="mb-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400">
-          {{ t('payment.admin.countShare') }}
+          {{ t('payment.admin.countShare') }} ({{ selectedCurrency }})
         </p>
         <div class="mx-auto h-52 max-w-52">
           <Doughnut :data="countChartData" :options="countChartOptions" />
@@ -53,7 +62,7 @@
                 </div>
               </td>
               <td class="py-2 text-right font-medium text-gray-900 dark:text-white">
-                ${{ formatMoney(item.amount) }}
+                {{ formatPaymentAmount(item.amount, item.currency) }}
               </td>
               <td class="py-2 text-right text-gray-600 dark:text-gray-400">
                 {{ item.count.toLocaleString() }}
@@ -67,10 +76,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, type TooltipItem } from 'chart.js'
 import { Doughnut } from 'vue-chartjs'
+import Select from '@/components/common/Select.vue'
+import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
 import { externalTooltipHandler, hideExternalTooltip } from '@/utils/chartExternalTooltip'
 import type { DashboardStats } from '@/types/payment'
 
@@ -85,6 +96,20 @@ type PurchaseDistributionItem = DashboardStats['purchase_distribution'][number]
 const props = defineProps<{
   items: PurchaseDistributionItem[]
 }>()
+
+const selectedCurrency = ref(DEFAULT_PAYMENT_CURRENCY)
+const currencyOptions = computed(() => {
+  const currencies = [...new Set((props.items || []).map(item => normalizePaymentCurrency(item.currency)))].sort()
+  return currencies.map(currency => ({ value: currency, label: currency }))
+})
+
+watch(currencyOptions, options => {
+  // 切换日期后保留仍存在的币种，否则回到默认币种或首个可用币种。
+  if (!options.some(option => option.value === selectedCurrency.value)) {
+    selectedCurrency.value = options.find(option => option.value === DEFAULT_PAYMENT_CURRENCY)?.value
+      || options[0]?.value || DEFAULT_PAYMENT_CURRENCY
+  }
+}, { immediate: true })
 
 const chartColors = [
   '#3b82f6',
@@ -102,7 +127,8 @@ const chartColors = [
 ]
 
 const sortedItems = computed(() => {
-  return [...(props.items || [])].sort((a, b) => {
+  // 余额支付是 USD，外部订单可能是 CNY；同套餐也不能跨币种合并金额占比。
+  return (props.items || []).filter(item => normalizePaymentCurrency(item.currency) === selectedCurrency.value).sort((a, b) => {
     if (b.amount === a.amount) return b.count - a.count
     return b.amount - a.amount
   })
@@ -130,7 +156,7 @@ const countChartData = computed(() => ({
   ]
 }))
 
-const amountChartOptions = computed(() => makeChartOptions((value) => `$${formatMoney(value)}`))
+const amountChartOptions = computed(() => makeChartOptions((value) => formatPaymentAmount(value, selectedCurrency.value)))
 const countChartOptions = computed(() => makeChartOptions((value) => value.toLocaleString()))
 
 function makeChartOptions(formatValue: (value: number) => string) {
@@ -164,10 +190,6 @@ function displayLabel(item: PurchaseDistributionItem): string {
 }
 
 function distributionKey(item: PurchaseDistributionItem, index: number): string {
-  return `${item.type}-${item.plan_id || item.label || index}`
-}
-
-function formatMoney(value: number): string {
-  return Number(value || 0).toFixed(2)
+  return `${normalizePaymentCurrency(item.currency)}-${item.type}-${item.plan_id || item.label || index}`
 }
 </script>

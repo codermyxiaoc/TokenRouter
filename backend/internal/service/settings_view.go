@@ -401,6 +401,8 @@ type PublicSettings struct {
 	PaymentEnabled           bool
 	TeamEnabled              bool
 	TeamSelfServiceEnabled   bool
+	// TicketEnabled 与工单独立设置共用总开关，供导航和路由判断。
+	TicketEnabled bool
 	// CreativeEnabled 暴露给前端用于控制创作台页面入口与路由守卫。
 	CreativeEnabled       bool
 	OIDCOAuthEnabled      bool

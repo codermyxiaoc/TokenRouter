@@ -334,6 +334,7 @@ type paymentStatsOrderSeed struct {
 	userEmail    string
 	userName     string
 	paymentType  string
+	currency     string
 	orderType    string
 	status       string
 	amount       float64
@@ -370,6 +371,10 @@ func createPaidPaymentStatsOrder(t *testing.T, ctx context.Context, client *dben
 		SetPaidAt(seed.paidAt).
 		SetClientIP("127.0.0.1").
 		SetSrcHost("api.example.com")
+	if seed.currency != "" {
+		// 按真实下单行为保存币种快照，覆盖余额 USD 与外部支付混合的统计场景。
+		create.SetProviderSnapshot(map[string]any{"currency": seed.currency})
+	}
 	if seed.planID != nil {
 		create.SetPlanID(*seed.planID)
 	}

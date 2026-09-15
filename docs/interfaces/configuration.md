@@ -67,6 +67,8 @@ setup 使用 `DATA_DIR > 可写 /app/data > 当前目录` 选择 `config.yaml` �
 
 ## 数据库运行时设置
 
+工单设置通过 `GET/PUT /api/v1/admin/tickets/settings` 单独维护，`ticket_*` 六个键保存到 `settings`，由 `TicketConfigService` 在所有业务操作及后台任务中读取，保存后无需重启。`ticket_enabled` 是整个模块的总开关，公开设置和 HTML 注入均暴露该值；关闭时隐藏用户与后台入口、阻止业务访问，保留设置读写和历史数据。独立设置保存成功后刷新已有页面注入缓存。其他设置包含每用户未关闭数量、每次附件数量及大小、客服操作邮件通知和用户未回复过期时间。客服操作邮件通知继续使用 `notify_on_staff_reply` 接口字段和 `ticket_notify_on_staff_reply` 存储键，开启后覆盖每条客服新回复、客服完成及撤销，不包含用户自助结单或自动过期；已退订用户仍尊重退订偏好。默认值和范围见[工单配置](../domains/support_tickets.md#ticket_configuration)。
+
 `settings` 是 `key/value/updated_at` 表，删除键表示恢复该 getter 的默认语义。`SettingService` 负责类型解析、范围/组合校验、敏感值保留、批量原子写入和更新后的缓存通知；handler 只负责 HTTP binding、权限、审计和响应。
 
 `wallet_payment_enabled` 控制站内余额购买和续费订阅，默认关闭；它通过系统设置接口的 `payment_wallet_payment_enabled` 字段维护，通过专用支付配置及 `checkout-info` 的 `wallet_payment_enabled` 字段读取。更新省略时保留旧值，显式 `false` 关闭；保存后无需重启或数据库迁移。支付总开关仍须开启，现有余额充值入口开关保持独立。扣款、幂等及统计边界见[站内余额购买订阅](../domains/payments_and_entitlements.md#wallet_subscription_payment)。

@@ -98,13 +98,17 @@
                 v-if="chain.plan?.groups_restricted && chain.plan.applicable_groups?.length"
                 class="mt-2 flex flex-wrap gap-1.5"
               >
-                <span
+                <!-- 未设置展示品牌时按平台匹配品牌配色，与品牌选择标签一致；保留名称省略及倍率。 -->
+                <GroupBadge
                   v-for="group in chain.plan.applicable_groups"
                   :key="group.id"
-                  class="rounded-md bg-gray-100 px-2 py-1 text-xs text-gray-700 dark:bg-dark-700 dark:text-dark-200"
-                >
-                  {{ group.name || `#${group.id}` }}
-                </span>
+                  :name="group.name || `#${group.id}`"
+                  :platform="group.platform"
+                  :display-brand="group.display_brand?.trim() || resolveProviderBrandKey(group.platform)"
+                  :rate-multiplier="group.rate_multiplier ?? undefined"
+                  class="min-w-0 max-w-full [&>span:not(.truncate)]:shrink-0"
+                  :title="group.name || `#${group.id}`"
+                />
               </div>
             </div>
 
@@ -213,6 +217,8 @@ import type { SubscriptionPlan, UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import GroupBadge from '@/components/common/GroupBadge.vue'
+import { resolveProviderBrandKey } from '@/utils/providerBrand'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 import { formatDateOnly, formatDateTimeToMinute } from '@/utils/format'
 import {

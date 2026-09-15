@@ -31,6 +31,7 @@
     "file-saver": "^2.0.5",
     "lottie-web": "^5.13.0",
     "marked": "^17.0.1",
+    "pdfjs-dist": "6.3.289",
     "pinia": "^2.1.7",
     "qrcode": "^1.5.4",
     "vue": "^3.4.0",

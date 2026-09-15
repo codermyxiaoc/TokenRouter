@@ -6,6 +6,7 @@ import creative from './creative'
 import admin from './admin'
 import misc from './misc'
 import team from './team'
+import tickets from './tickets'
 
 export default {
   ...landing,
@@ -16,4 +17,5 @@ export default {
   admin,
   ...misc,
   ...team,
+  ...tickets,
 }

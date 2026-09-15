@@ -261,6 +261,8 @@ export interface PublicSettings {
   payment_enabled: boolean
   team_enabled?: boolean
   team_self_service_enabled?: boolean
+  // 旧后端缺少该字段时保持工单入口开启，仅显式 false 关闭整个模块。
+  ticket_enabled?: boolean
   // 旧版公开设置可能缺少该字段，调用方应仅在明确为 false 时关闭创作台入口。
   creative_enabled?: boolean
   table_default_page_size: number
@@ -1966,6 +1968,9 @@ export interface UsageLog {
   cache_read_cost: number
   total_cost: number
   actual_cost: number
+  // 本次实际结算的资金分配；旧服务返回的数据可能没有这些字段。
+  subscription_amount_usd?: number
+  balance_amount_usd?: number
   rate_multiplier: number
   long_context_billing_applied: boolean
   billing_type: number

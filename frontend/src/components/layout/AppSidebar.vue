@@ -570,6 +570,7 @@ const flagBatchImageAccess = () => canUseBatchImage.value
 // 创作台入口由功能开关控制（默认开），可用模型以页面内目录为准。
 const flagCreativeStudioAccess = () => appStore.cachedPublicSettings?.creative_enabled !== false
 const flagTeamAccess = () => appStore.cachedPublicSettings?.team_enabled !== false
+const flagTicketAccess = () => appStore.cachedPublicSettings?.ticket_enabled !== false
 const flagUsageRankingAccess = () => appStore.cachedPublicSettings?.usage_ranking_enabled !== false
 
 // 普通用户导航项。
@@ -605,6 +606,7 @@ const userNavItems = computed((): NavItem[] => {
         ]
       : []),
     { path: '/redeem', label: t('nav.redeem'), icon: GiftIcon, hideInSimpleMode: true },
+    { path: '/tickets', label: t('nav.tickets'), icon: TicketIcon, featureFlag: flagTicketAccess },
     ...(appStore.cachedPublicSettings?.affiliate_enabled === true
       ? [
           {
@@ -660,6 +662,7 @@ const personalNavItems = computed((): NavItem[] => {
         ]
       : []),
     { path: '/redeem', label: t('nav.redeem'), icon: GiftIcon, hideInSimpleMode: true },
+    { path: '/tickets', label: t('nav.tickets'), icon: TicketIcon, featureFlag: flagTicketAccess },
     ...(appStore.cachedPublicSettings?.affiliate_enabled === true
       ? [
           {
@@ -710,6 +713,7 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
+    { path: '/admin/tickets', label: t('nav.ticketManagement'), icon: TicketIcon, featureFlag: flagTicketAccess },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },
     {
       path: '/admin/risk-control',

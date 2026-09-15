@@ -26,6 +26,9 @@ func RegisterAdminRoutes(
 	// 审计中间件挂在认证之后：所有管理面变更类操作 + 敏感读取入审计日志
 	admin.Use(gin.HandlerFunc(auditLog))
 	{
+		// 工单处理和设置沿用管理员认证与操作审计。
+		registerAdminTicketRoutes(admin, h)
+
 		// 仪表盘
 		registerDashboardRoutes(admin, h)
 

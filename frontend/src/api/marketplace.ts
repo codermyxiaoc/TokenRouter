@@ -1,8 +1,9 @@
 import { apiClient } from './client'
 import type { MarketplaceGroup, MarketplaceStats } from '@/types'
 
-export async function getMarketplaceModels(): Promise<MarketplaceGroup[]> {
-  const { data } = await apiClient.get<MarketplaceGroup[]>('/marketplace/models')
+// 弹窗关闭时可取消目录请求，模型广场原有无参数调用保持兼容。
+export async function getMarketplaceModels(signal?: AbortSignal): Promise<MarketplaceGroup[]> {
+  const { data } = await apiClient.get<MarketplaceGroup[]>('/marketplace/models', { signal })
   return data
 }
 

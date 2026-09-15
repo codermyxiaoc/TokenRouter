@@ -322,6 +322,42 @@ describe('useAppStore', () => {
   // --- 公开设置 ---
 
   describe('公开设置加载', () => {
+    it('保存工单关闭立即更新缓存，旧在途请求不能恢复入口', async () => {
+      const store = useAppStore()
+      vi.mocked(getPublicSettings).mockResolvedValueOnce(createPublicSettings({ ticket_enabled: true }))
+      await store.fetchPublicSettings()
+      const oldResponse = createDeferred<PublicSettings>()
+      vi.mocked(getPublicSettings).mockReturnValueOnce(oldResponse.promise)
+      const refresh = store.fetchPublicSettings(true)
+
+      await store.syncTicketModuleEnabled(false)
+      expect(store.cachedPublicSettings?.ticket_enabled).toBe(false)
+      expect(window.__APP_CONFIG__?.ticket_enabled).toBe(false)
+      oldResponse.resolve(createPublicSettings({ ticket_enabled: true, site_name: 'Updated Site' }))
+      await refresh
+      expect(store.cachedPublicSettings?.ticket_enabled).toBe(false)
+      expect(window.__APP_CONFIG__?.ticket_enabled).toBe(false)
+      expect(store.siteName).toBe('Updated Site')
+
+      // 保存后的新刷新仍以服务端为准，其他管理员重新开启后能够恢复导航。
+      vi.mocked(getPublicSettings).mockResolvedValueOnce(createPublicSettings({ ticket_enabled: true }))
+      await store.fetchPublicSettings(true)
+      expect(store.cachedPublicSettings?.ticket_enabled).toBe(true)
+    })
+
+    it('冷启动并发保存工单开关时只保留最后确认的值', async () => {
+      const store = useAppStore()
+      const response = createDeferred<PublicSettings>()
+      vi.mocked(getPublicSettings).mockReturnValueOnce(response.promise)
+      const first = store.syncTicketModuleEnabled(true)
+      const last = store.syncTicketModuleEnabled(false)
+      response.resolve(createPublicSettings({ ticket_enabled: true }))
+      await Promise.all([first, last])
+      expect(getPublicSettings).toHaveBeenCalledTimes(1)
+      expect(store.cachedPublicSettings?.ticket_enabled).toBe(false)
+      expect(window.__APP_CONFIG__?.ticket_enabled).toBe(false)
+    })
+
     it('并发调用复用并等待同一个请求，包括 force 调用', async () => {
       const deferred = createDeferred<PublicSettings>()
       vi.mocked(getPublicSettings).mockReturnValue(deferred.promise)

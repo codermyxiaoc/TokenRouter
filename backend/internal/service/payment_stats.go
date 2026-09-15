@@ -37,8 +37,7 @@ func (s *PaymentService) GetDashboardStatsWithRange(ctx context.Context, start, 
 
 	orders, err := s.entClient.PaymentOrder.Query().
 		Where(
-			// 余额购买是站内资金流转，充值收款已经统计过，不能再次计入收入。
-			paymentorder.PaymentTypeNEQ(PaymentTypeWallet),
+			// 概览按已支付订单统计，包含站内余额购买和续费，不代表新增外部收款。
 			paymentorder.StatusIn(paidStatuses...),
 			paymentorder.PaidAtGTE(start),
 			paymentorder.PaidAtLT(end),
@@ -78,7 +77,6 @@ func (s *PaymentService) fillPaymentDashboardTodayStats(ctx context.Context, st 
 	// 今日卡片保持自然日口径，不跟随自定义历史范围变化。
 	todayOrders, err := s.entClient.PaymentOrder.Query().
 		Where(
-			paymentorder.PaymentTypeNEQ(PaymentTypeWallet),
 			paymentorder.StatusIn(paidStatuses...),
 			paymentorder.PaidAtGTE(todayStart),
 			paymentorder.PaidAtLT(todayStart.AddDate(0, 0, 1)),
@@ -140,6 +138,10 @@ func computeReasoningPointPurchaseUnitPrice(st *DashboardStats, orders []*dbent.
 }
 
 func paymentDashboardReasoningPointPurchase(o *dbent.PaymentOrder) (principal float64, points float64, ok bool) {
+	// 余额消费不是从外部购入余额单位，不能重复计入购入成本和购入数量。
+	if o.PaymentType == PaymentTypeWallet {
+		return 0, 0, false
+	}
 	switch o.OrderType {
 	case payment.OrderTypeSubscription:
 		// 订阅订单只按月额度快照折算推理积分，避免日/周/无限额套餐混入口径。
@@ -248,6 +250,9 @@ func buildPurchaseDistribution(orders []*dbent.PaymentOrder, planNames map[int64
 	distributionMap := make(map[string]*PurchaseDistributionStat)
 	for _, o := range orders {
 		key, item := purchaseDistributionKey(o, planNames)
+		// 余额支付使用 USD，同一套餐的其他支付币种必须独立聚合。
+		item.Currency = PaymentOrderCurrency(o)
+		key = item.Currency + ":" + key
 		stat, ok := distributionMap[key]
 		if !ok {
 			stat = item
@@ -262,6 +267,9 @@ func buildPurchaseDistribution(orders []*dbent.PaymentOrder, planNames map[int64
 		items = append(items, *stat)
 	}
 	sort.Slice(items, func(i, j int) bool {
+		if items[i].Currency != items[j].Currency {
+			return items[i].Currency < items[j].Currency
+		}
 		if items[i].Amount == items[j].Amount {
 			return items[i].Count > items[j].Count
 		}

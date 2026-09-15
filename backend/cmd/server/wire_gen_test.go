@@ -100,6 +100,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // ollamaCloudUsage
 		nil, // auditLog
 		nil, // 国产供应商用量监控
+		nil, // 工单后台任务
 	)
 
 	require.NotPanics(t, func() {

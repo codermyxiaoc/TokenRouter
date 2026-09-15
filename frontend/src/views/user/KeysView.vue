@@ -626,7 +626,7 @@
             v-model="formData.smart_routing_group_ids"
             :groups="formGroups"
             :existing-groups="selectedKey?.smart_routing_groups || []"
-            :user-group-rates="userGroupRates"
+            :user-group-rates="formUserGroupRates"
             :disabled="formGroupsLoading"
           />
           <Select
@@ -685,7 +685,38 @@
               :searchable="true"
               :disabled="formGroupsLoading"
               class="min-w-0"
-            />
+            >
+              <template #selected="{ option }">
+                <GroupBadge
+                  v-if="option"
+                  :name="(option as unknown as GroupOption).label"
+                  :platform="(option as unknown as GroupOption).platform"
+                  :display-brand="(option as unknown as GroupOption).displayBrand"
+                  :rate-multiplier="(option as unknown as GroupOption).rate"
+                  :user-rate-multiplier="(option as unknown as GroupOption).userRate"
+                  :peak-rate-enabled="(option as unknown as GroupOption).peakRateEnabled"
+                  :peak-start="(option as unknown as GroupOption).peakStart"
+                  :peak-end="(option as unknown as GroupOption).peakEnd"
+                  :peak-rate-multiplier="(option as unknown as GroupOption).peakRateMultiplier"
+                />
+                <span v-else class="text-gray-400">{{ t('keys.selectGroup') }}</span>
+              </template>
+              <template #option="{ option, selected }">
+                <GroupOptionItem
+                  :name="(option as unknown as GroupOption).label"
+                  :platform="(option as unknown as GroupOption).platform"
+                  :display-brand="(option as unknown as GroupOption).displayBrand"
+                  :rate-multiplier="(option as unknown as GroupOption).rate"
+                  :user-rate-multiplier="(option as unknown as GroupOption).userRate"
+                  :peak-rate-enabled="(option as unknown as GroupOption).peakRateEnabled"
+                  :peak-start="(option as unknown as GroupOption).peakStart"
+                  :peak-end="(option as unknown as GroupOption).peakEnd"
+                  :peak-rate-multiplier="(option as unknown as GroupOption).peakRateMultiplier"
+                  :description="(option as unknown as GroupOption).description"
+                  :selected="selected"
+                />
+              </template>
+            </Select>
             <div class="min-w-0">
               <input
                 v-model="binding.prefix"
@@ -1341,52 +1372,13 @@
       @delete="confirmDelete"
     />
 
-    <!-- CCS Client Selection Dialog for Antigravity -->
-    <BaseDialog
-      :show="showCcsClientSelect"
-      :title="t('keys.ccsClientSelect.title')"
-      width="narrow"
-      @close="closeCcsClientSelect"
-    >
-      <div class="space-y-4">
-        <p class="text-sm text-gray-600 dark:text-gray-400">
-          {{ t('keys.ccsClientSelect.description') }}
-	        </p>
-	        <div class="grid grid-cols-2 gap-3">
-	          <button
-	            @click="handleCcsClientSelect('claude')"
-	            class="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-gray-200 dark:border-dark-600 hover:border-primary-500 dark:hover:border-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-all"
-	          >
-	            <Icon name="terminal" size="xl" class="text-gray-600 dark:text-gray-400" />
-	            <span class="font-medium text-gray-900 dark:text-white">{{
-	              t('keys.ccsClientSelect.claudeCode')
-	            }}</span>
-	            <span class="text-xs text-gray-500 dark:text-gray-400">{{
-	              t('keys.ccsClientSelect.claudeCodeDesc')
-	            }}</span>
-	          </button>
-	          <button
-	            @click="handleCcsClientSelect('gemini')"
-	            class="flex flex-col items-center gap-2 p-4 rounded-xl border-2 border-gray-200 dark:border-dark-600 hover:border-primary-500 dark:hover:border-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-all"
-	          >
-	            <Icon name="sparkles" size="xl" class="text-gray-600 dark:text-gray-400" />
-	            <span class="font-medium text-gray-900 dark:text-white">{{
-	              t('keys.ccsClientSelect.geminiCli')
-	            }}</span>
-	            <span class="text-xs text-gray-500 dark:text-gray-400">{{
-	              t('keys.ccsClientSelect.geminiCliDesc')
-	            }}</span>
-	          </button>
-	        </div>
-	      </div>
-      <template #footer>
-        <div class="flex justify-end">
-          <button @click="closeCcsClientSelect" class="btn btn-secondary">
-            {{ t('common.cancel') }}
-          </button>
-        </div>
-      </template>
-    </BaseDialog>
+    <!-- 所有平台统一先配置应用及模型，确认后才向 CC Switch 发送密钥。 -->
+    <CcSwitchImportDialog
+      :show="showCcsImportDialog"
+      :api-key="pendingCcsRow"
+      @close="closeCcsImportDialog"
+      @confirm="confirmCcsImport"
+    />
 
     <!-- Group Selector Dropdown (Teleported to body to avoid overflow clipping) -->
     <Teleport to="body">
@@ -1485,6 +1477,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 	import KeyActionMenu from '@/components/keys/KeyActionMenu.vue'
 	import UseKeyModal from '@/components/keys/UseKeyModal.vue'
 	import TfCliImportDialog from '@/components/keys/TfCliImportDialog.vue'
+import CcSwitchImportDialog from '@/components/keys/CcSwitchImportDialog.vue'
 	import EndpointPopover from '@/components/keys/EndpointPopover.vue'
 	import GroupBadge from '@/components/common/GroupBadge.vue'
 	import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
@@ -1507,7 +1500,7 @@ import { formatDateTime } from '@/utils/format'
 import {
   buildCcSwitchImportDeeplink,
   buildCcSwitchUsageScript,
-  type CcSwitchClientType
+  type CcSwitchImportSelection
 } from '@/utils/ccswitchImport'
 
 // Helper to format date for datetime-local input
@@ -1688,7 +1681,7 @@ const showResetQuotaDialog = ref(false)
 const showResetRateLimitDialog = ref(false)
 const showUseKeyModal = ref(false)
 const showTfCliImportDialog = ref(false)
-const showCcsClientSelect = ref(false)
+const showCcsImportDialog = ref(false)
 const showColumnDropdown = ref(false)
 const pendingCcsRow = ref<ApiKey | null>(null)
 const tfImportKey = ref<ApiKey | null>(null)
@@ -1953,14 +1946,14 @@ const onStatusFilterChange = (value: string | number | boolean | null) => {
 }
 
 // 用户侧分组选项只投影选择所需信息，不传递管理员使用的容量数据。
-const buildGroupOptions = (source: Group[]) =>
+const buildGroupOptions = (source: Group[], rates = userGroupRates.value) =>
   source.map((group) => ({
     value: group.id,
     label: group.name,
     description: group.description,
     displayBrand: group.display_brand?.trim() || null,
     rate: group.rate_multiplier,
-    userRate: userGroupRates.value[group.id] ?? null,
+    userRate: rates[group.id] ?? null,
     peakRateEnabled: group.peak_rate_enabled,
     peakStart: group.peak_start,
     peakEnd: group.peak_end,
@@ -1968,8 +1961,11 @@ const buildGroupOptions = (source: Group[]) =>
     platform: group.platform
   }))
 
-// 指定订阅时仅使用服务端返回的权限与套餐分组交集。
-const formGroupOptions = computed(() => buildGroupOptions(formGroups.value))
+// 指定订阅的倍率已由服务端按套餐覆盖或分组默认解析，不能再被用户专属倍率覆盖。
+const formUserGroupRates = computed<Record<number, number>>(() =>
+  formData.value.billing_mode === 'subscription' ? {} : userGroupRates.value)
+// 普通、复合和智能路由共用同一订阅上下文；自动和余额模式保留原用户专属倍率展示。
+const formGroupOptions = computed(() => buildGroupOptions(formGroups.value, formUserGroupRates.value))
 const allGroupOptions = computed(() => buildGroupOptions(groups.value))
 
 const smartRoutingGroupName = (key: ApiKey, groupID: number) =>
@@ -2843,32 +2839,23 @@ const resetRateLimitUsage = async () => {
 }
 
 const importToCcswitch = (row: ApiKey) => {
-  const platform = row.group?.platform || 'anthropic'
-
-  // Antigravity 平台需要先选择客户端。
-  if (platform === 'antigravity') {
-    pendingCcsRow.value = row
-    showCcsClientSelect.value = true
-    return
-  }
-
-  // 其他平台直接执行导入。
-  executeCcsImport(row, platform === 'gemini' ? 'gemini' : 'claude')
+  pendingCcsRow.value = row
+  showCcsImportDialog.value = true
 }
 
-const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
+const executeCcsImport = (row: ApiKey, selection: CcSwitchImportSelection) => {
   const baseUrl = publicSettings.value?.api_base_url || window.location.origin
-  const platform = row.group?.platform || 'anthropic'
-
-  const usageScript = buildCcSwitchUsageScript(baseUrl, balanceUnitName.value)
-  const providerName = (publicSettings.value?.site_name || 'sub2api').trim() || 'sub2api'
+  const platform = row.group?.platform
+  const root = baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '')
+  // 专用入口只用于普通 Antigravity Key；跨分组 Key 必须由公共入口解析候选及前缀。
+  const useAntigravityEndpoint = platform === 'antigravity' && !row.smart_routing && !row.is_composite && selection.app !== 'codex'
+  const endpoint = useAntigravityEndpoint && !root.endsWith('/antigravity') ? `${root}/antigravity` : baseUrl
   const deeplink = buildCcSwitchImportDeeplink({
-    baseUrl,
+    ...selection,
+    baseUrl: endpoint,
     platform,
-    clientType,
-    providerName,
     apiKey: row.key,
-    usageScript
+    usageScript: buildCcSwitchUsageScript(baseUrl, balanceUnitName.value)
   })
 
   try {
@@ -2886,16 +2873,13 @@ const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
   }
 }
 
-const handleCcsClientSelect = (clientType: CcSwitchClientType) => {
-  if (pendingCcsRow.value) {
-    executeCcsImport(pendingCcsRow.value, clientType)
-  }
-  showCcsClientSelect.value = false
-  pendingCcsRow.value = null
+const confirmCcsImport = (selection: CcSwitchImportSelection) => {
+  if (pendingCcsRow.value) executeCcsImport(pendingCcsRow.value, selection)
+  closeCcsImportDialog()
 }
 
-const closeCcsClientSelect = () => {
-  showCcsClientSelect.value = false
+const closeCcsImportDialog = () => {
+  showCcsImportDialog.value = false
   pendingCcsRow.value = null
 }
 

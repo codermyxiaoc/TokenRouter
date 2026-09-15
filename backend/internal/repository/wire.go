@@ -71,6 +71,7 @@ func ProvideCreativeManagedKeyRepository(client *ent.Client, sqlDB *sql.DB) serv
 var ProviderSet = wire.NewSet(
 	NewUserRepository,
 	NewTeamRepository,
+	NewTicketRepository,
 	NewTeamInvitationLimiter,
 	ProvideAPIKeyRepository,
 	NewGroupRepository,

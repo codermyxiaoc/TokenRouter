@@ -48,6 +48,7 @@ const messages: Record<string, string> = {
   'admin.usage.allBillingTypes': 'All billing types',
   'admin.usage.billingTypeBalance': 'Balance',
   'admin.usage.billingTypeSubscription': 'Subscription',
+  'admin.usage.billingTypeMixed': 'Subscription + Balance',
   'admin.usage.allBillingModes': 'All billing modes',
   'admin.usage.billingModeToken': 'Token',
   'admin.usage.billingModePerRequest': 'Per request',
@@ -144,6 +145,7 @@ const usageLog = {
   ip_address: '203.0.113.10',
   api_key: { name: 'demo-key' },
   billing_mode: 'token',
+  billing_type: 0,
   request_type: 'sync',
   stream: false,
 }
@@ -276,6 +278,7 @@ describe('user UsageView', () => {
     const usageTable = wrapper.findComponent(UsageTableStub)
     const columns = usageTable.props('columns') as Array<{ key: string; class?: string }>
     expect(columns.map((column) => column.key)).toContain('user')
+    expect(columns.map((column) => column.key)).toContain('billing_type')
     expect(columns.find((column) => column.key === 'user')?.class).toContain('w-36')
     expect(usageTable.props('userClickable')).toBe(false)
     expect(usageTable.props('compactUserColumn')).toBe(true)
@@ -288,10 +291,16 @@ describe('user UsageView', () => {
     const usageTable = wrapper.findComponent(UsageTableStub)
     const columns = usageTable.props('columns') as Array<{ key: string }>
     expect(columns.map((col) => col.key)).toContain('reasoning_effort')
+    expect(columns.map((col) => col.key)).toContain('billing_type')
     expect(columns.map((col) => col.key)).not.toContain('user_agent')
   })
 
-  it('exports csv with current filters and without admin-only fields', async () => {
+  it.each([
+    { billing: { billing_type: 0 }, label: 'Balance' },
+    { billing: { billing_type: 1 }, label: 'Subscription' },
+    { billing: { billing_type: 1, subscription_amount_usd: 0.08, balance_amount_usd: 0.012883 }, label: 'Subscription + Balance' },
+  ])('exports csv with current filters and billing source $label without admin-only fields', async ({ billing, label }) => {
+    query.mockResolvedValue({ items: [{ ...usageLog, ...billing }], total: 1, pages: 1 })
     const wrapper = mountUsageView()
     await flushPromises()
 
@@ -323,8 +332,8 @@ describe('user UsageView', () => {
     expect(showSuccess).toHaveBeenCalled()
     expect(csvContent.startsWith('\uFEFF')).toBe(true)
     expect(csvContent.slice(1)).toBe([
-      'Time,API Key Name,Model,Reasoning Effort,Inbound Endpoint,IP Address,Type,Billing Mode,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Rate Multiplier,Billed Cost,Original Cost,First Token (ms),Duration (ms)',
-      '2026-03-08T00:00:00Z,demo-key,gpt-5.4,"\'-",,203.0.113.10,Sync,Token,4057,101,278272,4,1,0.09288300,0.09288300,12,345',
+      'Time,API Key Name,Model,Reasoning Effort,Inbound Endpoint,IP Address,Type,Billing Mode,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Rate Multiplier,Billing Type,Billed Cost,Original Cost,First Token (ms),Duration (ms)',
+      `2026-03-08T00:00:00Z,demo-key,gpt-5.4,"'-",,203.0.113.10,Sync,Token,4057,101,278272,4,1,${label},0.09288300,0.09288300,12,345`,
     ].join('\n'))
     expect(csvContent).toContain('IP Address')
     expect(csvContent).toContain('203.0.113.10')

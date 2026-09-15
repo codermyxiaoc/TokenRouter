@@ -64,6 +64,7 @@ type Handlers struct {
 	BatchImage       *BatchImageHandler
 	Creative         *CreativeHandler
 	Team             *TeamHandler
+	Ticket           *TicketHandler
 }
 
 // BuildInfo contains build-time information

@@ -1882,7 +1882,7 @@ func (s *APIKeyService) GetAvailableGroupsForScope(ctx context.Context, userID i
 	return s.GetAvailableGroupsForScopeWithSubscription(ctx, userID, scope, nil)
 }
 
-// GetAvailableGroupsForScopeWithSubscription 返回付款主体原有权限与指定套餐分组的交集。
+// GetAvailableGroupsForScopeWithSubscription 返回付款主体原有权限与指定套餐分组的交集，并展示订阅有效倍率。
 // subscriptionID 为 nil 时严格保留历史行为，不会因为用户持有其它受限套餐而收窄分组。
 func (s *APIKeyService) GetAvailableGroupsForScopeWithSubscription(ctx context.Context, userID int64, scope string, subscriptionID *int64) ([]Group, error) {
 	billingUserID, err := s.billingUserIDForScope(ctx, userID, scope)
@@ -1897,13 +1897,15 @@ func (s *APIKeyService) GetAvailableGroupsForScopeWithSubscription(ctx context.C
 	if err != nil {
 		return nil, err
 	}
-	if subscription.Plan == nil || len(subscription.Plan.GroupIDs) == 0 {
-		return groups, nil
-	}
 	filtered := make([]Group, 0, len(groups))
 	for i := range groups {
 		if subscriptionPlanIncludesGroup(subscription.Plan, groups[i].ID) {
-			filtered = append(filtered, groups[i])
+			// 只修改返回副本，避免将套餐覆盖倍率写回分组或影响其它订阅的展示。
+			group := groups[i]
+			if rateMultiplier, ok := subscriptionPlanGroupRateMultiplier(subscription.Plan, group.ID); ok {
+				group.RateMultiplier = rateMultiplier
+			}
+			filtered = append(filtered, group)
 		}
 	}
 	return filtered, nil

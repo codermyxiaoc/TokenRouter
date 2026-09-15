@@ -104,6 +104,8 @@ export default {
   },
 // Navigation
   nav: {
+    tickets: '我的工单',
+    ticketManagement: '工单管理',
     dashboard: '仪表盘',
     modelMarketplace: '模型广场',
     usageRanking: '用量排行',

@@ -8903,12 +8903,14 @@
         <!-- /Tab: Email -->
 
         <!-- Tab: Backup -->
+        <!-- 工单配置拥有独立保存入口，避免主表单写入其它设置。 -->
+        <TicketSettingsTab v-if="activeTab === 'tickets'" />
         <div v-show="activeTab === 'backup'">
           <BackupSettings />
         </div>
 
         <!-- Save Button -->
-        <div v-show="activeTab !== 'backup'" class="flex justify-end">
+        <div v-show="activeTab !== 'backup' && activeTab !== 'tickets'" class="flex justify-end">
           <button
             type="submit"
             :disabled="saving || loadFailed"
@@ -9030,6 +9032,7 @@ import ImageUpload from "@/components/common/ImageUpload.vue";
 import BalanceIcon from "@/components/common/BalanceIcon.vue";
 import OpenAIOAuthImportDefaultsSettings from "@/components/admin/account/OpenAIOAuthImportDefaultsSettings.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
+import TicketSettingsTab from "@/views/admin/settings/TicketSettingsTab.vue";
 import { useBalanceDisplay } from "@/composables/useBalanceDisplay";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
@@ -9084,6 +9087,7 @@ type SettingsTab =
   | "gateway"
   | "payment"
   | "email"
+  | "tickets"
   | "backup";
 const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
@@ -9094,6 +9098,7 @@ const settingsTabs = [
   { key: "gateway" as SettingsTab, icon: "server" as const },
   { key: "payment" as SettingsTab, icon: "creditCard" as const },
   { key: "email" as SettingsTab, icon: "mail" as const },
+  { key: "tickets" as SettingsTab, icon: "document" as const },
   { key: "backup" as SettingsTab, icon: "database" as const },
 ];
 // 允许通过路由参数直接定位到指定标签。
@@ -11589,6 +11594,8 @@ function findDuplicateDefaultSubscription(
 }
 
 async function saveSettings() {
+  // 工单页中的回车不能触发无关系统配置保存。
+  if (activeTab.value === "tickets") return;
   saving.value = true;
   try {
     const normalizedCreativeWorkerCount = Math.floor(Number(form.creative_worker_count));

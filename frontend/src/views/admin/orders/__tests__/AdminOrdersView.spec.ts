@@ -91,7 +91,7 @@ const OrderTableStub = {
   `,
 }
 
-function mountView() {
+function mountView(stubSelect = true) {
   return mount(AdminOrdersView, {
     global: {
       stubs: {
@@ -101,7 +101,8 @@ function mountView() {
         OrderStatusBadge: true,
         OrderTable: OrderTableStub,
         Pagination: true,
-        Select: true,
+        Select: stubSelect,
+        Teleport: true,
       },
     },
   })
@@ -122,6 +123,33 @@ describe('AdminOrdersView', () => {
     mockGetOrders.mockResolvedValue({
       data: { items: [order], total: 1, page: 1, page_size: 20 },
     })
+  })
+
+  it('站内余额筛选以支付方式请求订单，并可与订阅类型组合及重置', async () => {
+    const wrapper = mountView(false)
+    await flushPromises()
+    await wrapper.get('button[aria-label="common.filter"]').trigger('click')
+
+    const paymentSelect = wrapper.findAll('.select-trigger')[1]
+    await paymentSelect.trigger('click')
+    const balanceOption = wrapper.findAll('[role="option"]').find((option) => option.text() === 'payment.methods.balance')
+    expect(balanceOption).toBeDefined()
+    await balanceOption!.trigger('click')
+    await flushPromises()
+
+    expect(mockGetOrders).toHaveBeenLastCalledWith(expect.objectContaining({ payment_type: 'balance', order_type: undefined }))
+
+    await wrapper.findAll('.select-trigger')[2].trigger('click')
+    const subscriptionOption = wrapper.findAll('[role="option"]').find((option) => option.text() === 'payment.admin.subscriptionOrder')
+    await subscriptionOption!.trigger('click')
+    await flushPromises()
+    expect(mockGetOrders).toHaveBeenLastCalledWith(expect.objectContaining({ payment_type: 'balance', order_type: 'subscription' }))
+
+    const resetButton = wrapper.findAll('button').find((button) => button.text() === 'common.reset')
+    await resetButton!.trigger('click')
+    await flushPromises()
+    expect(mockGetOrders).toHaveBeenLastCalledWith(expect.objectContaining({ payment_type: undefined, order_type: undefined }))
+    wrapper.unmount()
   })
 
   it('后端要求强制退款时保留弹窗并在显式确认后重试', async () => {

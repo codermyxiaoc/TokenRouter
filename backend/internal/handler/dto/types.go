@@ -226,8 +226,11 @@ type SubscriptionPlan struct {
 }
 
 type SubscriptionPlanGroup struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
+	ID             int64    `json:"id"`
+	Name           string   `json:"name"`
+	Platform       string   `json:"platform,omitempty"`
+	DisplayBrand   string   `json:"display_brand,omitempty"`
+	RateMultiplier *float64 `json:"rate_multiplier,omitempty"`
 }
 
 // AdminGroup 是管理员接口使用的 group DTO（包含敏感/内部字段）。

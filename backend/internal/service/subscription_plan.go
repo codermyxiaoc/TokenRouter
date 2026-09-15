@@ -26,8 +26,11 @@ type SubscriptionPlan struct {
 	UpdatedAt            time.Time
 }
 
-// SubscriptionPlanGroup 是订阅套餐分组限制的名称摘要。
+// SubscriptionPlanGroup 是订阅套餐分组的展示元数据及有效倍率摘要。
 type SubscriptionPlanGroup struct {
-	ID   int64
-	Name string
+	ID             int64
+	Name           string
+	Platform       string
+	DisplayBrand   string
+	RateMultiplier *float64
 }

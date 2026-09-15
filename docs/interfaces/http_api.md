@@ -44,6 +44,7 @@ RequestLogger
 | `/api/v1/user/*`、`/keys`、`/team`、`/groups`、`/subscriptions`、`/redeem` 等 | 用户 JWT | `routes/user.go`；用户面板资源、团队、Key、用量和权益自省 |
 | `/api/v1/admin/*` | 管理员 JWT 或受限管理密钥；部分操作另需 step-up | `routes/admin.go`；用户、分组、账号、渠道、设置、运维、备份、支付和安全管理 |
 | `/api/v1/payment/*` | 用户 JWT | `routes/payment.go`；配置/套餐读取、下单、查单、取消、invoice 和退款申请 |
+| `/api/v1/tickets/*`、`/api/v1/admin/tickets/*` | 个人入口为用户 JWT，管理入口为管理员认证 | `routes/tickets.go`；工单、私有附件、后台对话与工单设置，继承面板限流和审计 |
 | `/api/v1/payment/public/*` | 签名 resume token 或遗留订单验证约束 | 支付结果恢复；不得扩展为匿名订单枚举接口 |
 | `/api/v1/payment/webhook/*` | 提供商验签 | EasyPay、Alipay、WeChat Pay、Stripe、Airwallex 通知 |
 | `/v1/*` 和兼容裸别名 | TokenRouter API Key | Anthropic/OpenAI 兼容消息、Responses、Chat、图片、视频、模型、用量与批任务 |
@@ -51,6 +52,22 @@ RequestLogger
 | `/antigravity/*` | TokenRouter API Key + 强制平台 | Antigravity 专用 Claude/Gemini 入口与管理型自省 |
 | `/backend-api/codex/*` | TokenRouter API Key | Codex Responses、Realtime 与 sideband 兼容入口 |
 | `/api/v1/pages/*` 等 page routes | 按页面类型为用户或管理员 JWT | 服务端生成/读取的 pricing、账单或管理页面数据 |
+
+工单创建与回复接收 multipart `payload` JSON 和重复 `files` 字段，支持 `Idempotency-Key`；详情及变更返回完整工单和消息，列表返回标准分页数据。财务关联订单在后端校验归属，附件以鉴权 Blob 预览或下载。超过未关闭数量返回 `TICKET_OPEN_LIMIT`（409），终态回复返回 `TICKET_CLOSED`（409），越权访问与不存在的工单统一返回 `TICKET_NOT_FOUND`（404）。具体状态及配置见[工单](../domains/support_tickets.md)。
+
+用户与管理员工单前缀下的 `GET /:id/attachments/:attachmentId` 保持原件下载，`GET /:id/attachments/:attachmentId/preview` 以 `inline` 返回重新检查后的图片、PDF 或 Word 纯文本，成功时为二进制/文本正文而非 JSON envelope，失败仍使用标准错误格式。Word MIME 为 `text/plain; charset=utf-8`；解析不支持的 Word 返回 `TICKET_ATTACHMENT_PREVIEW_UNAVAILABLE`（400），处理容量不足返回 `TICKET_ATTACHMENT_BUSY`（503）。两个接口均检查登录、角色、工单与附件归属及功能开关，不接受 URL 令牌，不产生公开链接；具体渲染和内容边界见[附件与传输](../domains/support_tickets.md#ticket_attachments)。
+
+新建工单的 `title` 去掉首尾空白后必须为 1–50 个 Unicode 字符，超长返回 `TICKET_TITLE_TOO_LONG`（400）。列表和详情仍返回历史标题全文，省略显示由前端完成，不截断数据库内容。
+
+工单状态协议保留 `pending`（待客服回复）和 `waiting_user`（待用户回复），创建或用户回复进入前者，客服回复进入后者；状态筛选继续使用原协议值。列表、详情及变更响应增加只读 `closed_by`（操作账号 ID 或 `null`）和 `closed_by_role`（`user`、`admin`、`system` 或未记录的空字符串），与 `closed_at` 一起表示首次结束操作。完成和撤销接口从认证上下文及路由确定操作身份，不接受客户端指定结单角色；个人入口的管理员操作也记为 `user`。重复相同结束操作不会覆盖原记录；历史未知角色不能从消息发送者推断。
+
+工单回复和关单邮件仅在相应事务首次成功后触发，内部新建事件标记不进入 JSON 响应。管理员完成、撤销的邮件与客服回复共同受工单邮件开关约束；个人入口和自动过期不触发客服结单通知。
+
+通知邮件链接使用 `/api/v1/settings/email-unsubscribe`。`GET ?token=...` 验证签名后仅展示确认页面，不修改退订偏好；`POST` 表单提交有效 `token` 和明确操作后才退订。已退订的工单收件人可使用同一有效链接主动恢复三类工单通知；其他通知事件不开放工单恢复操作。旧邮件的 GET 链接仍有效，链接预取不再改变收件人的通知选择。
+
+工单正式类型为 `consultation`、`financial`、`technical`；旧类型 `presales`、`aftersales`、`other` 在创建及筛选时兼容为咨询。用户和管理员各自路由前缀下均提供 `POST /:id/complete` 与 `POST /:id/cancel`，管理入口仍需管理员权限。附件通过服务端内容检查后才入库，危险或损坏格式返回 `TICKET_ATTACHMENT_INVALID`（400），图片或 PDF 检查容量不足返回 `TICKET_ATTACHMENT_BUSY`（503），客户端可保留附件稍后重试。
+
+优先级值为 `low`、`normal`、`high`，分别显示低、中、高；旧 `urgent` 在创建、筛选及更新时规范为 `high`。工单响应不再返回 `assigned_to`、`assigned_name`，后台 PATCH 只支持优先级，不再接受单独接单操作。总开关关闭时，两个前缀下的业务接口统一返回 `TICKET_DISABLED`（403），仅用户 `GET /config` 和管理员 `GET/PUT /settings` 保持可用，方便读取关闭状态及重新开启。
 
 <a id="subscription_self_revoke_api"></a>
 用户订阅页面提供一个受额度条件约束的自助撤销接口：
@@ -63,6 +80,8 @@ RequestLogger
 
 <a id="payment_admin_recovery"></a>
 ## 支付管理恢复
+
+`GET /api/v1/admin/payment/orders` 的 `payment_type=balance` 查询站内余额支付，可与 `order_type=subscription` 组合使用；历史订单查询不受当前余额支付开关影响。`GET /api/v1/admin/payment/dashboard` 的支付金额、订单数及分布包含这些交易，金额表示订单交易量而非新增外部收款；`purchase_distribution` 每项返回支付币种 `currency`，同一套餐不同币种分别聚合。日期、状态和购入成本口径见[支付概览统计](../domains/payments_and_entitlements.md#支付概览统计)。
 
 管理员支付订单提供两条恢复接口，均受管理员认证、面板限流和审计中间件保护：
 
@@ -112,7 +131,9 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 
 创建和更新 API Key 时，`quota`、`rate_limit_5h`、`rate_limit_1d`、`rate_limit_7d` 必须是有限、非负且小于 `1e12` 的 USD 数值，以匹配数据库 `DECIMAL(20,8)`；`0` 仍表示不限额。创建请求省略 `expires_in_days` 表示永不过期，显式提供时必须大于 0；更新请求用空 `expires_at` 清除到期时间，用合法 RFC3339 时间设置明确到期点。handler 的早期校验与 service 的最终校验必须使用同一规则，内部调用不能绕过。
 
-`GET /api/v1/keys/billing-options?scope=personal|team` 返回当前作用域可指定的有效订阅摘要，包括 `id`、`plan_id`、`plan_name`、`expires_at`、`groups_restricted` 和 `applicable_groups`。`GET /api/v1/groups/available?scope=personal|team&subscription_id={id}` 在带 `subscription_id` 时返回付款主体原有分组权限与该订阅套餐分组的交集；不带该参数时保持历史的可用分组结果。两个接口都不把成员自己的订阅泄露到团队作用域。
+`GET /api/v1/keys/billing-options?scope=personal|team` 返回当前作用域可指定的有效订阅摘要，包括 `id`、`plan_id`、`plan_name`、`expires_at`、`groups_restricted` 和 `applicable_groups`。`GET /api/v1/groups/available?scope=personal|team&subscription_id={id}` 在带 `subscription_id` 时返回付款主体原有分组权限与该订阅套餐分组的交集，条目的 `rate_multiplier` 已按指定套餐的有效额外倍率优先、分组默认倍率兜底解析；不带该参数时保持历史的可用分组结果。两个接口都不把成员自己的订阅泄露到团队作用域。指定订阅的前端选择器不得再次用用户专属倍率覆盖该值。
+
+用户订阅列表的 `plan.applicable_groups` 条目包含 `id`、`name` 和可选 `platform`、`display_brand`、`rate_multiplier`，平台及展示品牌供前端复用统一的分组标签图标与配色。该倍率采用同一套餐覆盖规则，默认分组 `0` 会显式返回；仅在分组数据不可读取且无有效套餐倍率时省略，前端只隐藏缺失倍率、不补默认数字。上述展示字段不改变套餐授权范围或实际扣费。
 
 网关 `GET /v1/usage` 在原有 Key 配额、订阅或余额字段之外始终返回 `billing` 对象，至少包含 `mode`、`source`、`preferred_subscription_id`、`available` 和 `unit`。`source=subscription` 时只返回实际选择的订阅额度/剩余值；指定订阅失效时仍使用该来源并标记 `available=false`，不返回余额。`source=balance` 时只返回付款主体余额，不加载或展示订阅额度。`auto` 的 `source` 随当前可用订阅动态变化；Key 自身的配额和滚动限额字段不受该展示规则影响。
 

@@ -4,7 +4,18 @@ import { OPENAI_CODEX_DEFAULT_MODEL } from '@/constants/openai'
 export const OPENAI_CC_SWITCH_CODEX_MODEL = OPENAI_CODEX_DEFAULT_MODEL
 export const GROK_CC_SWITCH_MODEL = 'grok-4.5'
 
+export type CcSwitchApp = 'claude' | 'codex' | 'gemini'
 export type CcSwitchClientType = 'claude' | 'gemini'
+
+// 导入弹窗确认后提供完整选择；旧深链接调用仍可省略新增字段。
+export interface CcSwitchImportSelection {
+  app: CcSwitchApp
+  providerName: string
+  model: string
+  haikuModel?: string
+  sonnetModel?: string
+  opusModel?: string
+}
 
 export interface CcSwitchImportConfig {
   app: string
@@ -15,10 +26,16 @@ export interface CcSwitchImportConfig {
 export interface CcSwitchImportDeeplinkInput {
   baseUrl: string
   platform?: GroupPlatform | null
-  clientType: CcSwitchClientType
+  // 显式选择优先于平台推导；调用方负责专用路由或智能路由的入口选择。
+  app?: CcSwitchApp
+  clientType?: CcSwitchClientType
   providerName: string
   apiKey: string
   usageScript: string
+  model?: string
+  haikuModel?: string
+  sonnetModel?: string
+  opusModel?: string
 }
 
 const encodeBase64Utf8 = (value: string) => {
@@ -73,7 +90,7 @@ export function buildCcSwitchUsageScript(baseUrl: string, fallbackUnit: string):
   })`
 }
 
-// 将 Grok Build 端点规范为单个 /v1 后缀。
+// 将 Codex 或旧 Grok Build 端点规范为单个 /v1 后缀。
 function withV1Endpoint(baseUrl: string): string {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, '')
   return normalizedBaseUrl.endsWith('/v1') ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`
@@ -82,8 +99,18 @@ function withV1Endpoint(baseUrl: string): string {
 export function resolveCcSwitchImportConfig(
   platform: GroupPlatform | undefined | null,
   clientType: CcSwitchClientType,
-  baseUrl: string
+  baseUrl: string,
+  app?: CcSwitchApp
 ): CcSwitchImportConfig {
+  if (app) {
+    // 显式导入只按客户端规范化版本后缀，保留调用方选好的部署路径及专用入口。
+    const rootEndpoint = stripTrailingV1(baseUrl.trim())
+    return {
+      app,
+      endpoint: app === 'codex' ? withV1Endpoint(rootEndpoint) : rootEndpoint
+    }
+  }
+
   switch (platform || 'anthropic') {
     case 'antigravity':
       return {
@@ -116,7 +143,7 @@ export function resolveCcSwitchImportConfig(
 }
 
 export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput): string {
-  const config = resolveCcSwitchImportConfig(input.platform, input.clientType, input.baseUrl)
+  const config = resolveCcSwitchImportConfig(input.platform, input.clientType ?? 'claude', input.baseUrl, input.app)
   const entries: [string, string][] = [
     ['resource', 'provider'],
     ['app', config.app],
@@ -130,8 +157,18 @@ export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput):
     ['usageAutoInterval', '30']
   ]
 
-  if (config.model) {
-    entries.splice(2, 0, ['model', config.model])
+  // 新表单显式选择模型，旧调用未提供时继续沿用原平台默认值。
+  const model = input.model === undefined ? config.model : input.model.trim()
+  if (model) {
+    entries.splice(2, 0, ['model', model])
+  }
+
+  // 官方 v1/import 仅在 Claude 配置中消费这三个模型参数。
+  if (config.app === 'claude') {
+    for (const field of ['haikuModel', 'sonnetModel', 'opusModel'] as const) {
+      const value = input[field]?.trim()
+      if (value) entries.push([field, value])
+    }
   }
 
   return `ccswitch://v1/import?${new URLSearchParams(entries).toString()}`

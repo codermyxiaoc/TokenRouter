@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
+import type { SubscriptionPlan, UserSubscription } from '@/types'
 import SubscriptionsView from '../SubscriptionsView.vue'
 
 const mockGetMySubscriptions = vi.fn()
@@ -105,11 +106,114 @@ async function mountView() {
   })
 }
 
+// 构造完整订阅，测试只覆盖接口已解析的分组展示倍率。
+function subscriptionWithGroups(plan: Partial<SubscriptionPlan> = {}): UserSubscription {
+  const startsAt = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+  const planId = plan.id ?? 101
+  return {
+    id: planId,
+    user_id: 7,
+    plan_id: planId,
+    starts_at: startsAt,
+    expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    status: 'active',
+    daily_limit_usd: null,
+    weekly_limit_usd: null,
+    monthly_limit_usd: null,
+    daily_usage_usd: 0,
+    weekly_usage_usd: 0,
+    monthly_usage_usd: 0,
+    daily_window_start: null,
+    weekly_window_start: null,
+    monthly_window_start: null,
+    created_at: startsAt,
+    updated_at: startsAt,
+    plan: {
+      id: planId,
+      name: 'Group access plan',
+      description: '',
+      price: 10,
+      features: [],
+      validity_days: 30,
+      validity_unit: 'day',
+      for_sale: true,
+      sort_order: 0,
+      groups_restricted: true,
+      ...plan
+    }
+  }
+}
+
 describe('SubscriptionsView', () => {
   beforeEach(() => {
     mockGetMySubscriptions.mockReset()
     mockGetActiveSubscriptions.mockReset().mockResolvedValue([])
     mockRevokeExhaustedSubscription.mockReset()
+  })
+
+  it('shows resolved group rates independently for each plan, including a free default group', async () => {
+    mockGetMySubscriptions.mockResolvedValue([
+      subscriptionWithGroups({
+        id: 101,
+        name: 'Plan Alpha',
+        group_rate_multipliers: { 42: 0.65 },
+        applicable_groups: [
+          { id: 42, name: 'Shared group', platform: 'openai', rate_multiplier: 0.65 },
+          { id: 43, name: 'Default group', platform: 'anthropic', rate_multiplier: 2.5 },
+          { id: 44, name: 'Free group', platform: 'gemini', rate_multiplier: 0 }
+        ]
+      }),
+      subscriptionWithGroups({
+        id: 202,
+        name: 'Plan Beta',
+        group_rate_multipliers: { 42: 1.75 },
+        applicable_groups: [{ id: 42, name: 'Shared group', platform: 'openai', rate_multiplier: 1.75 }]
+      })
+    ])
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    expect(wrapper.findAll('[title="Shared group"]').map((group) => (
+      group.findAll('span').map((part) => part.text())
+    ))).toEqual([
+      ['Shared group', '0.65x'],
+      ['Shared group', '1.75x']
+    ])
+    expect(wrapper.get('[title="Default group"]').text()).toMatch(/^Default group\s*2\.5x$/)
+    expect(wrapper.get('[title="Free group"]').text()).toMatch(/^Free group\s*0x$/)
+  })
+
+  it('keeps the full long group name available alongside its rate', async () => {
+    const longName = '用于跨平台模型访问的超长分组名称'.repeat(8)
+    mockGetMySubscriptions.mockResolvedValue([
+      subscriptionWithGroups({
+        applicable_groups: [{ id: 42, name: longName, rate_multiplier: 0.75 }]
+      })
+    ])
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const group = wrapper.get(`[title="${longName}"]`)
+    expect(group.findAll('span').map((part) => part.text())).toEqual([longName, '0.75x'])
+  })
+
+  it('keeps legacy groups without an invented rate and preserves unnamed group fallbacks', async () => {
+    mockGetMySubscriptions.mockResolvedValue([
+      subscriptionWithGroups({
+        applicable_groups: [
+          { id: 41, name: 'Legacy group' },
+          { id: 42, name: '', rate_multiplier: 1.25 }
+        ]
+      })
+    ])
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[title="Legacy group"]').text()).toBe('Legacy group')
+    expect(wrapper.get('[title="#42"]').text()).toMatch(/^#42\s*1\.25x$/)
   })
 
   it('groups same-plan active and pending subscriptions into one chain card', async () => {

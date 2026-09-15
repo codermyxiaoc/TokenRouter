@@ -68,6 +68,11 @@ const messages: Record<string, string> = {
   'admin.usage.billingModeToken': 'Token',
   'admin.usage.billingModePerRequest': 'Per request',
   'admin.usage.billingModeImage': 'Image',
+  'admin.usage.billingTypeBalance': 'Balance',
+  'admin.usage.billingTypeSubscription': 'Subscription',
+  'admin.usage.billingTypeMixed': 'Subscription + Balance',
+  'admin.usage.billingTypeNone': 'No charge',
+  'admin.usage.billingTypeUnknown': 'Not recorded',
   'admin.usage.requestIdCopied': 'Request ID copied',
   'admin.usage.upstreamRequestIdCopied': 'Upstream ID copied',
   'keys.copied': 'Copied',
@@ -106,6 +111,7 @@ const DataTableStub = {
       <div v-for="row in data" :key="row.request_id">
         <slot name="cell-model" :row="row" :value="row.model" />
         <slot name="cell-billing_mode" :row="row" />
+        <slot name="cell-billing_type" :row="row" />
         <slot name="cell-tokens" :row="row" />
         <slot name="cell-cost" :row="row" />
         <slot name="cell-latency" :row="row" />
@@ -143,6 +149,31 @@ const baseImageRow = {
   image_size_source: null,
   image_size_breakdown: null,
 }
+
+describe('使用记录计费类型标签', () => {
+  it('展示本次扣费来源，混合扣费不误标为纯订阅', () => {
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [
+          { ...baseImageRow, request_id: 'balance', billing_type: 0 },
+          { ...baseImageRow, request_id: 'subscription', billing_type: 1 },
+          { ...baseImageRow, request_id: 'mixed', billing_type: 1, subscription_amount_usd: 0.3, balance_amount_usd: 0.1 },
+          { ...baseImageRow, request_id: 'zero', billing_type: 1, actual_cost: 0 },
+          { ...baseImageRow, request_id: 'unknown' },
+        ],
+        columns: [{ key: 'billing_type', label: 'Billing type' }],
+      },
+      global: {
+        stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true },
+      },
+    })
+
+    expect(wrapper.findAll('[data-testid="usage-billing-type"]').map((badge) => badge.text())).toEqual([
+      'Balance', 'Subscription', 'Subscription + Balance', 'No charge', 'Not recorded',
+    ])
+    wrapper.unmount()
+  })
+})
 
 describe('admin UsageTable request ID column', () => {
   beforeEach(() => {

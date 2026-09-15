@@ -104,6 +104,8 @@ export default {
   },
 // Navigation
   nav: {
+    tickets: 'My Tickets',
+    ticketManagement: 'Tickets',
     dashboard: 'Dashboard',
     modelMarketplace: 'Models',
     usageRanking: 'Usage Ranking',

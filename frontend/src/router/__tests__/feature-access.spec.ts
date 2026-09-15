@@ -8,6 +8,7 @@ type NavigationGuard = (
 
 const routerHarness = vi.hoisted(() => ({
   guard: null as NavigationGuard | null,
+  routes: [] as Array<{ path: string, meta?: Record<string, unknown> }>,
 }))
 
 const authStore = vi.hoisted(() => ({
@@ -26,6 +27,7 @@ const appStore = vi.hoisted(() => ({
     payment_enabled?: boolean
     risk_control_enabled?: boolean
     team_enabled?: boolean
+    ticket_enabled?: boolean
     usage_ranking_enabled?: boolean
     custom_menu_items?: []
   },
@@ -34,13 +36,16 @@ const appStore = vi.hoisted(() => ({
 
 vi.mock('vue-router', () => ({
   createWebHistory: vi.fn(() => ({})),
-  createRouter: vi.fn(() => ({
+  createRouter: vi.fn((options) => {
+    routerHarness.routes = options.routes
+    return {
     beforeEach: vi.fn((guard: NavigationGuard) => {
       routerHarness.guard = guard
     }),
     afterEach: vi.fn(),
     onError: vi.fn(),
-  })),
+    }
+  }),
 }))
 
 vi.mock('@/stores/auth', () => ({
@@ -147,6 +152,7 @@ describe('feature route guard', () => {
     ['team', { requiresTeam: true }, '/team'],
     ['usage ranking', { requiresUsageRanking: true }, '/usage-ranking'],
     ['creative', { requiresCreative: true }, '/creative'],
+    ['tickets', { requiresTickets: true }, '/tickets'],
   ])('does not treat a failed %s settings load as explicitly disabled', async (_name, meta, path) => {
     authStore.isAdmin = path.startsWith('/admin/')
     appStore.fetchPublicSettings.mockResolvedValue(null)
@@ -173,6 +179,8 @@ describe('feature route guard', () => {
     ['usage ranking', { requiresUsageRanking: true }, { usage_ranking_enabled: false }, '/dashboard', false],
     ['creative', { requiresCreative: true }, { creative_enabled: false }, '/dashboard', false],
     ['admin creative', { requiresCreative: true }, { creative_enabled: false }, '/admin/settings', true],
+    ['tickets', { requiresTickets: true }, { ticket_enabled: false }, '/dashboard', false],
+    ['admin tickets', { requiresTickets: true }, { ticket_enabled: false }, '/admin/dashboard', true],
   ])('redirects when loaded settings explicitly disable %s', async (_name, meta, settings, target, isAdmin) => {
     authStore.isAdmin = isAdmin
     appStore.cachedPublicSettings = settings
@@ -184,5 +192,27 @@ describe('feature route guard', () => {
     expect(appStore.fetchPublicSettings).not.toHaveBeenCalled()
     expect(next).toHaveBeenCalledOnce()
     expect(next).toHaveBeenCalledWith(target)
+  })
+
+  it.each(['/tickets', '/tickets/:id', '/tickets/:id/attachments/:attachmentId/preview', '/admin/tickets', '/admin/tickets/:id', '/admin/tickets/:id/attachments/:attachmentId/preview'])('gates registered ticket route %s while allowing older public settings', async (path) => {
+    const route = routerHarness.routes.find(item => item.path === path)!
+    expect(route.meta?.requiresTickets).toBe(true)
+    authStore.isAdmin = path.startsWith('/admin/')
+    appStore.publicSettingsLoaded = true
+    appStore.cachedPublicSettings = {}
+    const { navigation, next } = runGuard(route.meta!, path)
+    await navigation
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it('keeps system settings available after tickets are disabled', async () => {
+    const route = routerHarness.routes.find(item => item.path === '/admin/settings')!
+    expect(route.meta?.requiresTickets).not.toBe(true)
+    authStore.isAdmin = true
+    appStore.publicSettingsLoaded = true
+    appStore.cachedPublicSettings = { ticket_enabled: false }
+    const { navigation, next } = runGuard(route.meta!, route.path)
+    await navigation
+    expect(next).toHaveBeenCalledWith()
   })
 })

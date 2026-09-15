@@ -199,6 +199,16 @@
           </div>
         </template>
 
+        <template #cell-billing_type="{ row }">
+          <span
+            data-testid="usage-billing-type"
+            class="inline-flex items-center whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium"
+            :class="getUsageBillingTypeBadgeClass(row)"
+          >
+            {{ getUsageBillingTypeLabel(row, t) }}
+          </span>
+        </template>
+
         <template #cell-cost="{ row }">
           <div class="text-sm">
             <div class="flex items-center gap-1.5">
@@ -680,6 +690,7 @@ function accountBilled(row: { total_cost?: number | null; account_stats_cost?: n
 }
 
 import DataTable from '@/components/common/DataTable.vue'
+import { getUsageBillingTypeBadgeClass, getUsageBillingTypeLabel } from '@/utils/usageBillingType'
 import EmptyState from '@/components/common/EmptyState.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
 import Icon from '@/components/icons/Icon.vue'

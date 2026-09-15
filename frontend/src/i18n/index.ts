@@ -51,6 +51,14 @@ export const i18n = createI18n({
 
 const loadedLocales = new Set<LocaleCode>()
 
+// 开发热更新时同步已加载消息；明确 index.ts 路径才能匹配 Vite 的依赖节点。
+if (import.meta.hot) {
+  import.meta.hot.accept(['./locales/en/index.ts', './locales/zh/index.ts'], ([en, zh]) => {
+    if (en && loadedLocales.has('en')) i18n.global.setLocaleMessage('en', en.default)
+    if (zh && loadedLocales.has('zh')) i18n.global.setLocaleMessage('zh', zh.default)
+  })
+}
+
 export async function loadLocaleMessages(locale: LocaleCode): Promise<void> {
   if (loadedLocales.has(locale)) {
     return

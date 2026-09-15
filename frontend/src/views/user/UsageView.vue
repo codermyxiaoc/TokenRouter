@@ -276,6 +276,7 @@ import UserErrorRequestsTable from '@/components/user/UserErrorRequestsTable.vue
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatReasoningEffortMapping } from '@/utils/format'
 import { getBillingModeLabel, getDisplayBillingMode as resolveDisplayBillingMode } from '@/utils/billingMode'
+import { getUsageBillingTypeLabel } from '@/utils/usageBillingType'
 import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
 import type {
   EndpointStat,
@@ -694,6 +695,7 @@ const exportToCSV = async () => {
       'Cache Read Tokens',
       'Cache Creation Tokens',
       'Rate Multiplier',
+      'Billing Type',
       'Billed Cost',
       'Original Cost',
       'First Token (ms)',
@@ -713,6 +715,7 @@ const exportToCSV = async () => {
       log.cache_read_tokens,
       log.cache_creation_tokens,
       log.rate_multiplier,
+      getUsageBillingTypeLabel(log, t),
       log.actual_cost.toFixed(8),
       log.total_cost.toFixed(8),
       log.first_token_ms ?? '',
@@ -753,6 +756,7 @@ const allColumns = computed<Column[]>(() => [
   { key: 'stream', label: t('usage.type'), sortable: false },
   { key: 'billing_mode', label: t('admin.usage.billingMode'), sortable: false },
   { key: 'tokens', label: t('usage.tokens'), sortable: false },
+  { key: 'billing_type', label: t('admin.usage.billingType'), sortable: false },
   { key: 'cost', label: t('usage.cost'), sortable: false },
   { key: 'latency', label: t('usage.latency'), sortable: false },
   { key: 'created_at', label: t('usage.time'), sortable: true },

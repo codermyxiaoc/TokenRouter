@@ -60,6 +60,8 @@ declare module 'vue-router' {
      * @default false
      */
     requiresTeam?: boolean
+    /** 工单列表和详情由模块总开关控制，系统设置不受此门禁限制。 */
+    requiresTickets?: boolean
 
     /**
      * 是否要求用量排行功能开关已启用

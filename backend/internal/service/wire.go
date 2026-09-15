@@ -411,6 +411,24 @@ func ProvideSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, se
 	return svc
 }
 
+// ProvideTicketConfigService 接入已有设置变更通知，回调在路由装配后才设置，因此调用时再读取。
+func ProvideTicketConfigService(repo SettingRepository, settings *SettingService) *TicketConfigService {
+	svc := NewTicketConfigService(repo)
+	svc.onUpdate = func() {
+		if settings != nil && settings.onUpdate != nil {
+			settings.onUpdate()
+		}
+	}
+	return svc
+}
+
+// ProvideTicketRuntime 启动工单到期扫描和回复通知队列。
+func ProvideTicketRuntime(tickets *TicketService, config *TicketConfigService, mail *NotificationEmailService, settings *SettingService) *TicketRuntime {
+	runtime := NewTicketRuntime(tickets, config, mail, settings)
+	runtime.Start()
+	return runtime
+}
+
 // ProvideAnnouncementExpiryService 创建并启动公告到期归档服务。
 func ProvideAnnouncementExpiryService(announcementRepo AnnouncementRepository) *AnnouncementExpiryService {
 	svc := NewAnnouncementExpiryService(announcementRepo, time.Minute)
@@ -795,6 +813,10 @@ var ProviderSet = wire.NewSet(
 	NewPasskeyService,
 	NewUserService,
 	NewTeamService,
+	ProvideTicketConfigService,
+	wire.Bind(new(TicketConfigProvider), new(*TicketConfigService)),
+	NewTicketService,
+	ProvideTicketRuntime,
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	ProvideAuthCacheInvalidationWorker,

@@ -60,7 +60,7 @@ func NewSubscriptionService(groupRepo GroupRepository, userSubRepo UserSubscript
 	}
 }
 
-// EnrichSubscriptionPlanGroups 为用户订阅列表补充分组名称；套餐未限制分组时返回空列表表示全部分组。
+// EnrichSubscriptionPlanGroups 为用户订阅列表补充分组展示元数据和有效倍率；套餐未限制分组时返回空列表表示全部分组。
 func (s *SubscriptionService) EnrichSubscriptionPlanGroups(ctx context.Context, subscriptions []UserSubscription) {
 	if s == nil {
 		return
@@ -80,7 +80,15 @@ func (s *SubscriptionService) EnrichSubscriptionPlanGroups(ctx context.Context, 
 			if s.groupRepo != nil {
 				if resolved, err := s.groupRepo.GetByIDLite(ctx, groupID); err == nil && resolved != nil {
 					group.Name = resolved.Name
+					group.Platform = resolved.Platform
+					group.DisplayBrand = resolved.DisplayBrand
+					rateMultiplier := resolved.RateMultiplier
+					group.RateMultiplier = &rateMultiplier
 				}
+			}
+			// 复用计费侧的覆盖规则；未找到分组且没有有效覆盖时保留未知倍率。
+			if rateMultiplier, ok := subscriptionPlanGroupRateMultiplier(plan, groupID); ok {
+				group.RateMultiplier = &rateMultiplier
 			}
 			plan.ApplicableGroups = append(plan.ApplicableGroups, *group)
 		}

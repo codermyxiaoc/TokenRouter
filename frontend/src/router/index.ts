@@ -371,6 +371,25 @@ const routes: RouteRecordRaw[] = [
       requiresPayment: true
     }
   },
+  // 工单入口保留历史访问，暂停创建的限制由工单配置和服务端共同执行。
+  {
+    path: '/tickets',
+    name: 'Tickets',
+    component: () => import('@/views/tickets/TicketsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: false, requiresTickets: true, title: 'My Tickets', titleKey: 'tickets.title', descriptionKey: 'tickets.description' }
+  },
+  {
+    path: '/tickets/:id/attachments/:attachmentId/preview',
+    name: 'TicketAttachmentPreview',
+    component: () => import('@/views/tickets/TicketAttachmentPreviewView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: false, requiresTickets: true, title: 'Attachment preview', titleKey: 'tickets.preview.title', hidePageHeading: true }
+  },
+  {
+    path: '/tickets/:id',
+    name: 'TicketDetail',
+    component: () => import('@/views/tickets/TicketDetailView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: false, requiresTickets: true, title: 'Ticket', titleKey: 'tickets.conversation', hidePageHeading: true }
+  },
   {
     path: '/payment/qrcode',
     name: 'PaymentQRCode',
@@ -615,6 +634,27 @@ const routes: RouteRecordRaw[] = [
       titleKey: 'admin.settings.title',
       descriptionKey: 'admin.settings.description'
     }
+  },
+  {
+    path: '/admin/tickets',
+    name: 'AdminTickets',
+    component: () => import('@/views/tickets/TicketsView.vue'),
+    props: { admin: true },
+    meta: { requiresAuth: true, requiresAdmin: true, requiresTickets: true, title: 'Ticket Management', titleKey: 'tickets.adminTitle', descriptionKey: 'tickets.adminDescription' }
+  },
+  {
+    path: '/admin/tickets/:id/attachments/:attachmentId/preview',
+    name: 'AdminTicketAttachmentPreview',
+    component: () => import('@/views/tickets/TicketAttachmentPreviewView.vue'),
+    props: { admin: true },
+    meta: { requiresAuth: true, requiresAdmin: true, requiresTickets: true, title: 'Attachment preview', titleKey: 'tickets.preview.title', hidePageHeading: true }
+  },
+  {
+    path: '/admin/tickets/:id',
+    name: 'AdminTicketDetail',
+    component: () => import('@/views/tickets/TicketDetailView.vue'),
+    props: { admin: true },
+    meta: { requiresAuth: true, requiresAdmin: true, requiresTickets: true, title: 'Ticket', titleKey: 'tickets.conversation', hidePageHeading: true }
   },
   {
     path: '/admin/risk-control',
@@ -888,6 +928,7 @@ router.beforeEach(async (to, _from, next) => {
     || to.meta.requiresTeam
     || to.meta.requiresUsageRanking
     || to.meta.requiresCreative
+    || to.meta.requiresTickets
   if (requiresPublicFeature && !appStore.publicSettingsLoaded) {
     try {
       await appStore.fetchPublicSettings()
@@ -940,6 +981,16 @@ router.beforeEach(async (to, _from, next) => {
     appStore.cachedPublicSettings?.creative_enabled === false
   ) {
     next(authStore.isAdmin ? '/admin/settings' : '/dashboard')
+    return
+  }
+
+  // 工单模块关闭时同时阻止用户页与管理页，系统设置仍可进入以重新开启。
+  if (
+    to.meta.requiresTickets &&
+    appStore.publicSettingsLoaded &&
+    appStore.cachedPublicSettings?.ticket_enabled === false
+  ) {
+    next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
     return
   }
 

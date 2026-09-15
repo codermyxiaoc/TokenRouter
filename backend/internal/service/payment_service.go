@@ -72,7 +72,7 @@ func generateRandomString(n int) string {
 }
 
 type CreateOrderRequest struct {
-	UserID          int64
+	UserID int64
 	// IdempotencyKey 用于站内余额支付的持久去重，防止超时重试重复扣款。
 	IdempotencyKey  string
 	Amount          float64
@@ -156,6 +156,7 @@ type RefundResult struct {
 }
 
 type DashboardStats struct {
+	// 金额与订单数包含站内余额支付，表达订单交易量而非新增外部收入。
 	TodayAmount                        CurrencyAmounts `json:"today_amount"`
 	TotalAmount                        CurrencyAmounts `json:"total_amount"`
 	TodayCount                         int             `json:"today_count"`
@@ -187,11 +188,13 @@ type PaymentMethodStat struct {
 }
 
 type PurchaseDistributionStat struct {
-	Type   string  `json:"type"`
-	Label  string  `json:"label"`
-	PlanID *int64  `json:"plan_id,omitempty"`
-	Amount float64 `json:"amount"`
-	Count  int     `json:"count"`
+	Type   string `json:"type"`
+	Label  string `json:"label"`
+	PlanID *int64 `json:"plan_id,omitempty"`
+	// 同一套餐按支付币种分别聚合，防止余额 USD 与外部 CNY 混加。
+	Currency string  `json:"currency"`
+	Amount   float64 `json:"amount"`
+	Count    int     `json:"count"`
 }
 
 type TopUserStat struct {

@@ -66,6 +66,11 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
+		// 只有实际发送后的网络失败登记尝试；本地构建和凭证拒绝不能触发跨组。
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+			UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()), Kind: "request_error", Message: safeErr,
+		})
 		writeOpenAIResponsesInputTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
 		return fmt.Errorf("responses input_tokens: upstream request failed: %s", safeErr)
 	}
@@ -73,6 +78,10 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 
 	respBody, err := s.readResponsesInputTokensBody(resp)
 	if err != nil {
+		// 空体或读体失败只影响错误详情；已收到的 HTTP 错误仍是确定的上游失败。
+		if resp.StatusCode >= http.StatusBadRequest {
+			recordResponsesInputTokensHTTPError(c, account, resp, "Failed to read upstream error response")
+		}
 		writeOpenAIResponsesInputTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to read response")
 		return err
 	}
@@ -120,7 +129,7 @@ func prepareNativeOpenAIInputTokensCountRequest(body []byte, account *Account) (
 }
 
 func shouldEstimateOpenAIInputTokensLocally(account *Account) bool {
-	if account == nil || account.IsGrok() || account.IsCNProvider() || account.Type == AccountTypeUpstream {
+	if account == nil || account.IsGrok() || account.IsMultiProtocolAPIKey() || account.Type == AccountTypeUpstream {
 		return true
 	}
 	if account.Type != AccountTypeAPIKey {
@@ -186,6 +195,8 @@ func (s *OpenAIGatewayService) handleResponsesInputTokensUpstreamError(
 	body []byte,
 ) error {
 	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))
+	// 错误策略可能提前返回通用错误，先保存实际响应证据与原始状态供智能路由判断。
+	recordResponsesInputTokensHTTPError(c, account, resp, upstreamMsg)
 	var decision UpstreamErrorDecision
 	if account.Platform == PlatformGrok {
 		decision = s.applyGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, prepared.UpstreamModel)
@@ -208,7 +219,6 @@ func (s *OpenAIGatewayService) handleResponsesInputTokensUpstreamError(
 			RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
 		}
 	}
-	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, "")
 	message := "Upstream request failed"
 	if resp.StatusCode == http.StatusTooManyRequests {
 		message = "Rate limit exceeded"
@@ -220,4 +230,14 @@ func (s *OpenAIGatewayService) handleResponsesInputTokensUpstreamError(
 		return fmt.Errorf("responses input_tokens: upstream error %d", resp.StatusCode)
 	}
 	return fmt.Errorf("responses input_tokens: upstream error %d message=%s", resp.StatusCode, upstreamMsg)
+}
+
+// recordResponsesInputTokensHTTPError 统一记录已收到的上游错误，允许错误体缺失但不猜测状态。
+func recordResponsesInputTokensHTTPError(c *gin.Context, account *Account, resp *http.Response, message string) {
+	setOpsUpstreamError(c, resp.StatusCode, message, "")
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+		UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
+		Kind: "http_error", Message: message,
+	})
 }

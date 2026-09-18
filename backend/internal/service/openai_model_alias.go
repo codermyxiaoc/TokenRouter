@@ -82,7 +82,7 @@ func openAIModelSupportsMaxReasoningEffort(model string) bool {
 	normalized := strings.ToLower(lastOpenAIModelSegment(model))
 	normalized = strings.ReplaceAll(normalized, "_", "-")
 	switch {
-	case strings.HasPrefix(normalized, "deepseek-v4"):
+	case strings.HasPrefix(normalized, "deepseek-v4"), normalized == "deepseek-flash":
 		return true
 	case strings.HasPrefix(normalized, "glm-"):
 		return true

@@ -33,6 +33,14 @@ type ModelMarketplacePricing struct {
 	ImagePrice1K                  float64                           `json:"image_price_1k,omitempty"`
 	ImagePrice2K                  float64                           `json:"image_price_2k,omitempty"`
 	ImagePrice4K                  float64                           `json:"image_price_4k,omitempty"`
+	VideoPrices                   []ModelMarketplaceVideoPrice      `json:"video_prices,omitempty"`
+}
+
+// ModelMarketplaceVideoPrice 的零价格不可省略，避免免费档位在前端被误判为未定价。
+type ModelMarketplaceVideoPrice struct {
+	Resolution string  `json:"resolution"`
+	Price      float64 `json:"price"`
+	Unit       string  `json:"unit"`
 }
 
 // ModelMarketplacePricingInterval 是前端模型广场展示用的上下文区间价格。
@@ -187,6 +195,10 @@ func modelMarketplaceCapacityFromService(capacity *service.GroupCapacitySummary)
 
 // modelMarketplacePricingFromService 将服务层价格快照转换为接口 DTO。
 func modelMarketplacePricingFromService(pricing service.ModelDisplayPricing) ModelMarketplacePricing {
+	videoPrices := make([]ModelMarketplaceVideoPrice, 0, len(pricing.VideoPrices))
+	for _, price := range pricing.VideoPrices {
+		videoPrices = append(videoPrices, ModelMarketplaceVideoPrice{Resolution: price.Resolution, Price: price.Price, Unit: price.Unit})
+	}
 	intervals := make([]ModelMarketplacePricingInterval, 0, len(pricing.ContextIntervals))
 	for _, interval := range pricing.ContextIntervals {
 		intervals = append(intervals, ModelMarketplacePricingInterval{
@@ -230,6 +242,7 @@ func modelMarketplacePricingFromService(pricing service.ModelDisplayPricing) Mod
 		ImagePrice1K:                  pricing.ImagePrice1K,
 		ImagePrice2K:                  pricing.ImagePrice2K,
 		ImagePrice4K:                  pricing.ImagePrice4K,
+		VideoPrices:                   videoPrices,
 	}
 }
 

@@ -89,7 +89,15 @@ func runSmartRoutingAuthentication(c *gin.Context, resolver service.SmartRouting
 		if !canRetry {
 			finishSmartRoutingAttempt(current, state.attempt, false)
 			copySmartRoutingOutcome(c, current, history)
-			w.commit()
+			// 只有最终成功且响应写入正常，才将完整失败历史关联到实际恢复分组。
+			// HTTP 200 的失败流、取消请求和写入失败不能被标成已恢复。
+			if err := w.commit(); err == nil && w.status >= 200 && w.status < 300 &&
+				!w.failedResponse() && !streamFailed && current.Request.Context().Err() == nil &&
+				!service.HasOpsClientBusinessLimited(current) && service.GetOpsCyberPolicy(current) == nil {
+				if selected, ok := GetAPIKeyFromContext(current); ok && selected != nil {
+					service.MarkOpsRecoveredGroup(c, selected.Group)
+				}
+			}
 			return
 		}
 		state.visited[state.groupID] = true
@@ -107,6 +115,7 @@ func runSmartRoutingAuthentication(c *gin.Context, resolver service.SmartRouting
 		next.Request = state.request.Clone(state.request.Context())
 		setRequestBody(next.Request, state.body)
 		next.Writer = newSmartRoutingAttemptWriter(state.parent)
+		service.ResetGatewayStreamOutputAccounting(next)
 		state.writer = next.Writer.(*smartRoutingAttemptWriter)
 		state.writer.ctx = next
 		state.groupID = 0
@@ -172,6 +181,7 @@ func prepareSmartRoutingExecution(c *gin.Context, key *service.APIKey) *smartRou
 		state.writer = newSmartRoutingAttemptWriter(state.parent)
 		state.writer.ctx = c
 		c.Writer = state.writer
+		service.ResetGatewayStreamOutputAccounting(c)
 	}
 	state.selectionExhausted = false
 	state.cooldown = time.Duration(key.SmartRoutingCooldownSeconds) * time.Second
@@ -244,22 +254,60 @@ func (s *smartRoutingExecution) continuationRequiresSameCandidate() bool {
 }
 
 func smartRoutingUpstreamRetryable(c *gin.Context) bool {
-	if service.HasOpsClientBusinessLimited(c) {
+	if service.HasOpsClientBusinessLimited(c) || service.GetOpsCyberPolicy(c) != nil {
 		return false
 	}
+	// 内容策略等请求级终态不能借用之前组内重试留下的上游状态换组。
+	if streamErr, ok := service.GetOpsStreamError(c); ok && streamErr.RequestScoped {
+		return false
+	}
+	event := smartRoutingLastUpstreamEvent(c)
+	// 最新的无状态网络失败优先于旧账号的 HTTP 状态，取消不能借历史 5xx 触发冷却。
+	if smartRoutingTransportFailure(event) {
+		return c.Request.Context().Err() == nil
+	}
 	status := smartRoutingUpstreamStatus(c)
-	return status == http.StatusTooManyRequests || status >= 500 && status <= 599
+	if status == http.StatusTooManyRequests || status >= 500 && status <= 599 {
+		return true
+	}
+	// 一些本地参数校验也设置上游状态字段；新增的 4xx 必须有真实上游事件证明。
+	// 只查看本轮最后一条事件，避免旧故障使后续本地错误被错误重放或冷却。
+	if event == nil {
+		return false
+	}
+	if status >= 400 && status <= 499 && event.UpstreamStatusCode == status {
+		return event.Stage != string(service.GatewayFailureStageAccountAuth)
+	}
+	return false
 }
 
 func smartRoutingUpstreamStatus(c *gin.Context) int {
+	if smartRoutingTransportFailure(smartRoutingLastUpstreamEvent(c)) {
+		return 0
+	}
 	status := c.GetInt(service.OpsUpstreamStatusCodeKey)
 	if status == 0 {
-		events := smartRoutingUpstreamEvents(c)
-		if len(events) > 0 {
-			status = events[len(events)-1].UpstreamStatusCode
+		if event := smartRoutingLastUpstreamEvent(c); event != nil {
+			status = event.UpstreamStatusCode
 		}
 	}
 	return status
+}
+
+// smartRoutingTransportFailure 不将凭据、调度等本地阶段的无状态事件误当成上游网络失败。
+func smartRoutingTransportFailure(event *service.OpsUpstreamErrorEvent) bool {
+	return event != nil && event.UpstreamStatusCode == 0 && event.Stage != string(service.GatewayFailureStageAccountAuth) &&
+		(event.Kind == "request_error" || event.Kind == "signature_retry_tools_request_error")
+}
+
+func smartRoutingLastUpstreamEvent(c *gin.Context) *service.OpsUpstreamErrorEvent {
+	events := smartRoutingUpstreamEvents(c)
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i] != nil {
+			return events[i]
+		}
+	}
+	return nil
 }
 
 func smartRoutingUpstreamEvents(c *gin.Context) []*service.OpsUpstreamErrorEvent {
@@ -329,21 +377,23 @@ func (w *smartRoutingAttemptWriter) Write(body []byte) (int, error) {
 		business = w.observeSSE(body)
 	}
 	if w.committed {
-		return w.ResponseWriter.Write(body)
+		return w.writeCommitted(body)
 	}
 	if len(body) > smartRoutingPendingLimit-w.pending.Len() {
 		// 超过上限直接放行，避免一次大 Write 先复制完整响应再检查容量。
 		if err := w.commit(); err != nil {
 			return 0, err
 		}
-		return w.ResponseWriter.Write(body)
+		return w.writeCommitted(body)
 	}
 	_, _ = w.pending.Write(body)
 	if w.status >= 400 {
 		return len(body), nil
 	}
 	if !isSSE {
-		if w.ctx != nil && smartRoutingUpstreamRetryable(w.ctx) && gjson.GetBytes(w.pending.Bytes(), "error").Exists() {
+		// Responses 成功体可包含 error:null，不能借历史故障把它当成新的失败。
+		errorValue := gjson.GetBytes(w.pending.Bytes(), "error")
+		if w.ctx != nil && errorValue.Exists() && errorValue.Type != gjson.Null && smartRoutingUpstreamRetryable(w.ctx) {
 			w.failure = true
 			return len(body), nil
 		}
@@ -356,6 +406,18 @@ func (w *smartRoutingAttemptWriter) Write(body []byte) (int, error) {
 }
 
 func (w *smartRoutingAttemptWriter) failedResponse() bool { return w.status >= 400 || w.failure }
+
+// writeCommitted 保留流放行后的写入错误，避免客户端断流仍被记录为恢复成功。
+func (w *smartRoutingAttemptWriter) writeCommitted(body []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(body)
+	if err == nil && n < len(body) {
+		err = io.ErrShortWrite
+	}
+	if err != nil && w.writeErr == nil {
+		w.writeErr = err
+	}
+	return n, err
+}
 
 // observeSSE 以有限内存扫描完整帧，保留跨 Write 的分隔符；超长业务帧放行后继续观察后续终态。
 func (w *smartRoutingAttemptWriter) observeSSE(body []byte) (business bool) {

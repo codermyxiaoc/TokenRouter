@@ -56,6 +56,13 @@ OpenAI API Key 的 Responses 探测只维护 `extra.openai_responses_probe_statu
 
 实时探测失败时保留最近成功快照并同时暴露当前错误，不把旧数据标为实时。任何配额耗尽或 capability 变化都要触发相关调度投影失效。
 
+<a id="ollama_async_reset"></a>
+## Ollama Cloud 异步窗口恢复
+
+仅 OpenAI/Anthropic 平台中明确匹配官方 Ollama Cloud 的 API Key 账号适用。真实上游 429 先建立新的限流代次，恢复时间保留现值、Retry-After 与既有兜底中的有效下限，再异步查询已配置管理会话对应的用量窗口；人工查询本身仍只用于展示。该功能是确认上游窗口自然重置时间，不调用付费重置或充值接口。
+
+探测不阻塞请求内故障转移，使用有界队列、同 Key 去重和失败退避，单次最多 45 秒。只有已耗尽窗口均有有效未来 reset 时，才按其中最晚时间延长冷却；查询失败或字段不足保留原冷却。异步写回再次校验管理会话、账号配置、代理、当前快照和限流代次，使用原子条件更新及调度 outbox。即便连续 429 的 reset 相同，每次也推进独立代次；管理员清空限流或较新 429 后，旧回调不能重新停调账号，也不能缩短更晚的恢复时间。
+
 ## API Key 上游用量查询
 
 API Key 上游用量由独立的 `UpstreamUsageService` 提供，和 OAuth/Setup Token 的 `AccountUsageService` 语义分离。它只服务管理员展示，不参与调度、自动暂停、倍率、本地配额或结算；列表加载、滚动和自动刷新都不会产生上游流量。管理员手动查询时，服务按账号和规范化配置指纹合并并发请求，单次约 60 秒超时、512 KiB 响应体上限、禁止重定向，并复用代理、TLS 指纹、Header Override 和既有 `HTTPUpstream`。

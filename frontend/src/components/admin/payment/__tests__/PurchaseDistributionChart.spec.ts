@@ -60,7 +60,7 @@ describe('PurchaseDistributionChart', () => {
     wrapper.unmount()
   })
 
-  it('switches both charts and detail rows between external CNY orders and wallet USD purchases', async () => {
+  it('keeps USD purchase counts visible while hiding their amounts and amount chart', async () => {
     const wrapper = mount(PurchaseDistributionChart, {
       props: {
         items: [
@@ -77,7 +77,7 @@ describe('PurchaseDistributionChart', () => {
     expect(wrapper.text()).toContain('¥70.00')
     expect(wrapper.text()).not.toContain('$10.00')
 
-    // 通过项目选择框切换，验证 USD 的余额订阅订单独立展示。
+    // 通过项目选择框切换，美元购买项仍可查看订单数，但不展示金额与金额占比。
     await wrapper.find('button[aria-label="统计币种"]').trigger('click')
     const usdOption = [...document.querySelectorAll<HTMLElement>('[role="option"]')]
       .find(option => option.textContent?.trim() === 'USD')
@@ -86,15 +86,17 @@ describe('PurchaseDistributionChart', () => {
     await wrapper.vm.$nextTick()
 
     expect(wrapper.findComponent(Select).props('modelValue')).toBe('USD')
-    expect(charts()[0].props('data').datasets[0].data).toEqual([10])
-    expect(charts()[1].props('data').datasets[0].data).toEqual([3])
+    expect(charts()).toHaveLength(1)
+    expect(charts()[0].props('data').datasets[0].data).toEqual([3])
     expect(wrapper.findAll('tbody tr')).toHaveLength(1)
-    expect(wrapper.text()).toContain('$10.00')
+    expect(wrapper.text()).not.toContain('$10.00')
+    expect(wrapper.text()).not.toContain('金额占比')
+    expect(wrapper.text()).not.toContain('支付金额')
     expect(wrapper.text()).not.toContain('¥70.00')
     expect(wrapper.text()).not.toContain('按量支付')
 
     const tooltip = charts()[0].props('options').plugins.tooltip.callbacks.label
-    expect(tooltip({ raw: 10, label: '专业版', dataset: { data: [10] } })).toContain('$10.00 (100.0%)')
+    expect(tooltip({ raw: 3, label: '专业版', dataset: { data: [3] } })).toContain('3 (100.0%)')
     wrapper.unmount()
   })
 
@@ -113,7 +115,8 @@ describe('PurchaseDistributionChart', () => {
       ]
     })
     expect(wrapper.findComponent(Select).props('modelValue')).toBe('USD')
-    expect(wrapper.text()).toContain('$20.00')
+    expect(wrapper.text()).not.toContain('$20.00')
+    expect(wrapper.findComponent({ name: 'Doughnut' }).props('data').datasets[0].data).toEqual([2])
 
     await wrapper.setProps({ items: [{ type: 'balance', label: 'balance', currency: 'CNY', amount: 100, count: 1 }] })
     expect(wrapper.findComponent(Select).props('modelValue')).toBe('CNY')

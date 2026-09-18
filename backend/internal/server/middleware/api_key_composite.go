@@ -136,12 +136,28 @@ func isCompositeKeyModelListEndpoint(method, path string) bool {
 	if method != http.MethodGet {
 		return false
 	}
+	if isGatewayModelRetrieveEndpoint(method, path) {
+		return true
+	}
 	switch strings.TrimSuffix(path, "/") {
 	case "/v1/models", "/models", "/v1beta/models", "/antigravity/models", "/antigravity/v1/models", "/antigravity/v1beta/models", "/v1/images/batches/models":
 		return true
 	default:
 		return false
 	}
+}
+
+// 单模型元数据与列表共用可见目录；仅开放已注册的 GET 前缀，不绕过余额或订阅校验。
+func isGatewayModelRetrieveEndpoint(method, path string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	for _, prefix := range []string{"/v1/models/", "/models/", "/antigravity/models/", "/antigravity/v1/models/"} {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isCompositeKeyBillingBypassEndpoint 仅识别按 Key 身份读取既有数据的入口。

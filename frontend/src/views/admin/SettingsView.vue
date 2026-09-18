@@ -1,6 +1,6 @@
 <template>
   <AppLayout>
-    <div class="mx-auto max-w-6xl space-y-6">
+    <div class="mx-auto min-w-0 max-w-6xl space-y-6">
       <!-- Loading State -->
       <div v-if="loading" class="flex items-center justify-center py-12">
         <div
@@ -15,8 +15,12 @@
           <nav
             ref="settingsTabsScrollRef"
             class="settings-tabs-scroll"
+            :class="{ 'is-dragging': draggingTabsContainer && draggingTabsContainer === settingsTabsScrollRef }"
             role="tablist"
             :aria-label="t('admin.settings.title')"
+            @pointerdown="startTabsDrag"
+            @click.capture="handleTabsDragClick"
+            @dragstart.prevent
           >
             <div class="settings-tabs">
               <button
@@ -48,8 +52,12 @@
             v-if="activeTab === 'gateway'"
             ref="gatewaySectionsScrollRef"
             class="gateway-section-tabs-scroll"
+            :class="{ 'is-dragging': draggingTabsContainer && draggingTabsContainer === gatewaySectionsScrollRef }"
             role="tablist"
             :aria-label="t('admin.settings.gatewaySections.label')"
+            @pointerdown="startTabsDrag"
+            @click.capture="handleTabsDragClick"
+            @dragstart.prevent
           >
             <div class="gateway-section-tabs">
               <button
@@ -1387,6 +1395,7 @@
                           | 'all'
                           | 'priority'
                           | 'flex'
+                          | 'missing'
                       "
                       :options="openaiFastPolicyTierOptions"
                     />
@@ -4216,7 +4225,7 @@
                       </tr>
                     </thead>
                     <tbody class="space-y-2">
-                      <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax'] as const)" :key="p" class="align-top">
+                      <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go'] as const)" :key="p" class="align-top">
                         <td class="pr-4 py-1">
                           <span class="font-mono text-xs text-gray-700 dark:text-gray-300">{{ p }}</span>
                         </td>
@@ -4472,7 +4481,7 @@
                             </tr>
                           </thead>
                           <tbody>
-                            <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax'] as const)" :key="`${authSource.source}-pq-${p}`" class="align-top">
+                            <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go'] as const)" :key="`${authSource.source}-pq-${p}`" class="align-top">
                               <td class="pr-4 py-1">
                                 <span class="font-mono text-xs text-gray-700 dark:text-gray-300">{{ p }}</span>
                               </td>
@@ -6957,6 +6966,17 @@
                     />
                   </div>
 
+                  <label class="flex items-center gap-2 sm:col-span-2">
+                    <input
+                      v-model="item.hide_open_button"
+                      type="checkbox"
+                      data-testid="custom-menu-hide-open-button"
+                    />
+                    <span class="text-sm text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.customMenu.hideOpenButton") }}
+                    </span>
+                  </label>
+
                   <!-- SVG Icon (full width) -->
                   <div class="sm:col-span-2">
                     <label
@@ -9127,6 +9147,67 @@ const gatewaySections = [
 const activeGatewaySection = ref<GatewaySection>("general");
 const gatewaySectionsScrollRef = ref<HTMLElement | null>(null);
 const gatewayContentStartRef = ref<HTMLElement | null>(null);
+const draggingTabsContainer = ref<HTMLElement | null>(null);
+let tabsDrag: { container: HTMLElement; pointerId: number; startX: number; scrollLeft: number } | null = null;
+let draggedTabsClickTarget: HTMLElement | null = null;
+
+// 鼠标拖动与普通点击分开处理；触屏继续使用浏览器原生滑动。
+function startTabsDrag(event: PointerEvent): void {
+  if (tabsDrag) return;
+  draggedTabsClickTarget = null;
+  if (event.pointerType !== "mouse" || event.button !== 0) return;
+  const container = event.currentTarget as HTMLElement;
+  if (container.scrollWidth <= container.clientWidth) return;
+  tabsDrag = { container, pointerId: event.pointerId, startX: event.clientX, scrollLeft: container.scrollLeft };
+  window.addEventListener("pointermove", moveTabsDrag);
+  window.addEventListener("pointerup", endTabsDrag);
+  window.addEventListener("pointercancel", cancelTabsDrag);
+  window.addEventListener("blur", cancelTabsDrag);
+}
+
+function moveTabsDrag(event: PointerEvent): void {
+  if (!tabsDrag || event.pointerId !== tabsDrag.pointerId) return;
+  if (!tabsDrag.container.isConnected || !(event.buttons & 1)) {
+    cancelTabsDrag();
+    return;
+  }
+  const distance = event.clientX - tabsDrag.startX;
+  if (!draggingTabsContainer.value && Math.abs(distance) < 6) return;
+  event.preventDefault();
+  draggingTabsContainer.value = tabsDrag.container;
+  draggedTabsClickTarget = tabsDrag.container;
+  tabsDrag.container.scrollLeft = Math.max(0, Math.min(
+    tabsDrag.container.scrollWidth - tabsDrag.container.clientWidth,
+    tabsDrag.scrollLeft - distance,
+  ));
+}
+
+function endTabsDrag(event?: PointerEvent): void {
+  if (event && event.pointerId !== tabsDrag?.pointerId) return;
+  tabsDrag = null;
+  draggingTabsContainer.value = null;
+  window.removeEventListener("pointermove", moveTabsDrag);
+  window.removeEventListener("pointerup", endTabsDrag);
+  window.removeEventListener("pointercancel", cancelTabsDrag);
+  window.removeEventListener("blur", cancelTabsDrag);
+}
+
+function cancelTabsDrag(): void {
+  endTabsDrag();
+  draggedTabsClickTarget = null;
+}
+
+// 拖动松手后不误触标签；新的按下会重置拦截，键盘点击始终放行。
+function handleTabsDragClick(event: MouseEvent): void {
+  if (draggedTabsClickTarget === event.currentTarget && event.detail > 0) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  draggedTabsClickTarget = null;
+}
+
+onUnmounted(cancelTabsDrag);
+
 const gatewayForwardingPlatform = computed(() => {
   if (
     activeGatewaySection.value === "openai" ||
@@ -9760,6 +9841,7 @@ const form = reactive<SettingsForm>({
     url: string;
     visibility: "user" | "admin";
     sort_order: number;
+    hide_open_button?: boolean;
   }>,
   custom_endpoints: [] as Array<{
     name: string;
@@ -12792,6 +12874,7 @@ const openaiFastPolicyTierOptions = computed(() => [
     label: t("admin.settings.openaiFastPolicy.tierUltrafast"),
   },
   { value: "flex", label: t("admin.settings.openaiFastPolicy.tierFlex") },
+  { value: "missing", label: t("admin.settings.openaiFastPolicy.tierMissing") },
 ]);
 
 const openaiFastPolicyActionOptions = computed(() => [
@@ -13368,14 +13451,31 @@ watch(
 }
 
 .settings-tabs-scroll {
-  @apply overflow-x-auto;
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+  @apply min-w-0 max-w-full overflow-x-auto;
   scroll-padding-inline: 0.5rem;
 }
 
-.settings-tabs-scroll::-webkit-scrollbar {
+.settings-tabs-scroll,
+.gateway-section-tabs-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  cursor: grab;
+  user-select: none;
+}
+
+.settings-tabs-scroll::-webkit-scrollbar,
+.gateway-section-tabs-scroll::-webkit-scrollbar {
   display: none;
+}
+
+.settings-tabs-scroll.is-dragging,
+.gateway-section-tabs-scroll.is-dragging {
+  cursor: grabbing;
+}
+
+.settings-tabs-scroll button,
+.gateway-section-tabs-scroll button {
+  cursor: inherit;
 }
 
 .settings-tabs {
@@ -13383,21 +13483,8 @@ watch(
 }
 
 .settings-tab {
-  @apply relative isolate flex h-9 min-w-[6.75rem] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-compact border border-transparent px-3 text-sm font-medium text-gray-600 outline-none transition-colors duration-200 ease-out dark:text-gray-300;
-}
-
-@media (min-width: 768px) {
-  .settings-tabs {
-    @apply min-w-full;
-  }
-
-  .settings-tab {
-    @apply min-w-0 flex-1 basis-0 overflow-hidden px-2 text-[13px];
-  }
-
-  .settings-tab-icon {
-    @apply h-6 w-6;
-  }
+  /* 所有屏幕尺寸保持相同宽度，标签增多时在容器内横向滚动，不挤压名称。 */
+  @apply relative isolate flex h-9 w-[8.5rem] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-compact border border-transparent px-3 text-sm font-medium text-gray-600 outline-none transition-colors duration-200 ease-out dark:text-gray-300;
 }
 
 .settings-tab::before {
@@ -13454,14 +13541,8 @@ watch(
 
 /* 网关二级标签与主标签共用吸顶容器，避免双层导航互相遮挡。 */
 .gateway-section-tabs-scroll {
-  @apply mt-1.5 overflow-x-auto border-t border-gray-100 pt-1.5 dark:border-dark-700;
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+  @apply mt-1.5 min-w-0 max-w-full overflow-x-auto border-t border-gray-100 pt-1.5 dark:border-dark-700;
   scroll-padding-inline: 0.5rem;
-}
-
-.gateway-section-tabs-scroll::-webkit-scrollbar {
-  display: none;
 }
 
 .gateway-section-tabs {
@@ -13469,7 +13550,7 @@ watch(
 }
 
 .gateway-section-tab {
-  @apply flex h-9 min-w-[7.75rem] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-transparent px-3 text-sm font-medium text-gray-600 outline-none transition-colors duration-200 dark:text-gray-300;
+  @apply flex h-9 w-[7.75rem] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-transparent px-3 text-sm font-medium text-gray-600 outline-none transition-colors duration-200 dark:text-gray-300;
 }
 
 .gateway-section-tab:hover,
@@ -13497,15 +13578,6 @@ watch(
   scroll-margin-top: 12.75rem;
 }
 
-@media (min-width: 768px) {
-  .gateway-section-tabs {
-    @apply min-w-full;
-  }
-
-  .gateway-section-tab {
-    @apply min-w-0 flex-1 basis-0;
-  }
-}
 </style>
 
 <style>

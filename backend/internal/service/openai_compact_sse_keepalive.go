@@ -60,9 +60,27 @@ func startOpenAISSEKeepalive(c *gin.Context, interval time.Duration) func() {
 		return func() {}
 	}
 	originalWriter := c.Writer
+	// 同一响应可以先后经过多个账号尝试；替换心跳器前停拍，并保留旧心跳累计。
+	// 新分组拥有独立写入器，由协调器显式重置上下文，不能继承这里的字节数。
+	inheritedBytes := 0
+	inheritedStarted := false
+	if value, ok := c.Get(openAICompactSSEKeepaliveKey); ok {
+		if previous, valid := value.(*openAICompactSSEKeepalive); valid && previous != nil {
+			previous.mu.Lock()
+			previous.markStoppedLocked()
+			inheritedBytes, inheritedStarted = previous.bytes, previous.started
+			previous.mu.Unlock()
+			// 旧停止闭包可能稍后才执行；避免新包装器退出后恢复已经过期的旧包装器。
+			if wrapped, ok := originalWriter.(*openAICompactKeepaliveWriter); ok && wrapped.k == previous {
+				originalWriter = wrapped.ResponseWriter
+			}
+		}
+	}
 	k := &openAICompactSSEKeepalive{
-		writer: originalWriter,
-		stop:   make(chan struct{}),
+		writer:  originalWriter,
+		stop:    make(chan struct{}),
+		bytes:   inheritedBytes,
+		started: inheritedStarted,
 	}
 	c.Set(openAICompactSSEKeepaliveKey, k)
 	wrappedWriter := &openAICompactKeepaliveWriter{ResponseWriter: originalWriter, k: k}
@@ -164,7 +182,7 @@ func StopOpenAICompactSSEKeepaliveCommitted(c *gin.Context) bool {
 	return committed
 }
 
-// OpenAICompactKeepaliveAdjustedWrittenSize 返回排除 compact 心跳注释字节后
+// OpenAICompactKeepaliveAdjustedWrittenSize 返回排除网关排队、普通及 compact 心跳字节后
 // 的响应已写字节数；无心跳的请求等价于 c.Writer.Size()。心跳字节不构成语义
 // 响应——handler 以"Forward 前后 Size 是否变化"判定是否已向客户端写出响应
 // （变化则放弃 failover 换号），该判定不得被心跳污染，否则 compact 请求
@@ -174,10 +192,7 @@ func OpenAICompactKeepaliveAdjustedWrittenSize(c *gin.Context) int {
 	if c == nil || c.Writer == nil {
 		return -1
 	}
-	streamKeepaliveBytes := 0
-	if value, ok := c.Get(openAIStreamKeepaliveBytesKey); ok {
-		streamKeepaliveBytes, _ = value.(int)
-	}
+	streamKeepaliveBytes := c.GetInt(gatewayStreamHeartbeatBytesKey)
 	size := c.Writer.Size()
 	compactKeepaliveBytes := 0
 	if value, ok := c.Get(openAICompactSSEKeepaliveKey); ok {
@@ -192,7 +207,8 @@ func OpenAICompactKeepaliveAdjustedWrittenSize(c *gin.Context) int {
 		return size
 	}
 	keepaliveBytes := compactKeepaliveBytes + streamKeepaliveBytes
-	if keepaliveBytes <= 0 {
+	// 计数超出当前写入器大小说明尝试作用域不一致；保守保留已写状态，禁止错误重放。
+	if keepaliveBytes <= 0 || keepaliveBytes > size {
 		return size
 	}
 	if real := size - keepaliveBytes; real > 0 {

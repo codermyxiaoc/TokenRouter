@@ -345,6 +345,22 @@ describe('useAuthStore', () => {
   // --- refreshUser ---
 
   describe('refreshUser', () => {
+    it('同一用户正常轮换 access token 不阻止资料回写', async () => {
+      mockLogin.mockResolvedValue(fakeAuthResponse)
+      const store = useAuthStore()
+      await store.login({ email: 'test@example.com', password: '123456' })
+      let resolveUser!: (response: unknown) => void
+      mockGetCurrentUser.mockReturnValueOnce(new Promise((resolve) => { resolveUser = resolve }))
+      const pending = store.refreshUser()
+      store.token = 'rotated-access'
+      localStorage.setItem('auth_token', 'rotated-access')
+      localStorage.setItem('refresh_token', 'rotated-refresh')
+      resolveUser({ data: { ...fakeUser, balance: 99 } })
+      await expect(pending).resolves.toMatchObject({ balance: 99 })
+      expect(store.token).toBe('rotated-access')
+      expect(store.user?.balance).toBe(99)
+    })
+
     it('刷新用户数据并更新 localStorage', async () => {
       mockLogin.mockResolvedValue(fakeAuthResponse)
       const store = useAuthStore()
@@ -358,6 +374,40 @@ describe('useAuthStore', () => {
       expect(result).toEqual(updatedUser)
       expect(store.user).toEqual(updatedUser)
       expect(JSON.parse(localStorage.getItem('auth_user')!)).toEqual(updatedUser)
+    })
+
+    it.each([0, 429, 500, 503])('资料读取临时失败 %i 保留登录状态', async (status) => {
+      mockLogin.mockResolvedValue(fakeAuthResponse)
+      const store = useAuthStore()
+      await store.login({ email: 'test@example.com', password: '123456' })
+      mockGetCurrentUser.mockRejectedValue({ status })
+      await expect(store.refreshUser()).rejects.toMatchObject({ status })
+      expect(store.user).toEqual(fakeUser)
+      expect(localStorage.getItem('refresh_token')).toBe(fakeAuthResponse.refresh_token)
+    })
+
+    it('首次资料读取临时故障不删除已签发的新凭据', async () => {
+      const store = useAuthStore()
+      localStorage.setItem('refresh_token', 'new-refresh')
+      mockGetCurrentUser.mockRejectedValue({ status: 503 })
+      await expect(store.setToken('new-access')).rejects.toMatchObject({ status: 503 })
+      expect(localStorage.getItem('auth_token')).toBe('new-access')
+      expect(localStorage.getItem('refresh_token')).toBe('new-refresh')
+    })
+
+    it('换号后旧资料请求的 401 不能清理新会话', async () => {
+      mockLogin.mockResolvedValue(fakeAuthResponse)
+      const store = useAuthStore()
+      await store.login({ email: 'test@example.com', password: '123456' })
+      let rejectOld!: (error: unknown) => void
+      mockGetCurrentUser.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectOld = reject }))
+      const oldRequest = store.refreshUser()
+      mockLogin.mockResolvedValue({ ...fakeAuthResponse, access_token: 'new-access', user: { ...fakeUser, id: 8 } })
+      await store.login({ email: 'other@example.com', password: '123456' })
+      rejectOld({ status: 401 })
+      await expect(oldRequest).rejects.toMatchObject({ status: 401 })
+      expect(store.user?.id).toBe(8)
+      expect(localStorage.getItem('auth_token')).toBe('new-access')
     })
 
     it('未认证时抛出错误', async () => {

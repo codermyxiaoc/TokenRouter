@@ -495,8 +495,8 @@ func scoreAdvancedSchedulerCandidatesWithRanges(
 	hasResetSample := false
 	if weights.Reset > 0 {
 		for _, candidate := range candidates {
-			end := candidate.account.SessionWindowEnd
-			if end == nil || !now.Before(*end) {
+			end, ok := advancedSchedulingResetWindowEnd(candidate.account, now)
+			if !ok {
 				continue
 			}
 			remaining := end.Sub(now).Seconds()
@@ -552,7 +552,7 @@ func scoreAdvancedSchedulerCandidatesWithRanges(
 		}
 		resetFactor := 0.5
 		if weights.Reset > 0 && hasResetSample {
-			if end := item.account.SessionWindowEnd; end != nil && now.Before(*end) {
+			if end, ok := advancedSchedulingResetWindowEnd(item.account, now); ok {
 				if maxResetRemaining > minResetRemaining {
 					resetFactor = 1 - clamp01((end.Sub(now).Seconds()-minResetRemaining)/(maxResetRemaining-minResetRemaining))
 				} else {
@@ -754,4 +754,18 @@ func buildAdvancedAccountSchedulerScoreSnapshot(
 		result[candidate.account.ID] = score
 	}
 	return result
+}
+
+// advancedSchedulingResetWindowEnd 为 OpenAI 适配规范窗口，其余平台仍使用原会话窗口。
+func advancedSchedulingResetWindowEnd(account *Account, now time.Time) (time.Time, bool) {
+	if account == nil {
+		return time.Time{}, false
+	}
+	if account.Platform == PlatformOpenAI {
+		return openAISchedulingResetWindowEnd(account, now)
+	}
+	if end := account.SessionWindowEnd; end != nil && now.Before(*end) {
+		return *end, true
+	}
+	return time.Time{}, false
 }

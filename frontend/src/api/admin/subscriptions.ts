@@ -143,6 +143,37 @@ export async function resetQuota(
   return data
 }
 
+export interface BulkSubscriptionResult {
+  subscription_ids: number[]
+  updated_count: number
+}
+
+// 批量天数是追加时长，同一次确认的重试必须沿用幂等键。
+export async function bulkExtend(
+  subscriptionIds: number[],
+  days: number,
+  idempotencyKey: string
+): Promise<BulkSubscriptionResult> {
+  const { data } = await apiClient.post<BulkSubscriptionResult>('/admin/subscriptions/bulk-extend', {
+    subscription_ids: subscriptionIds,
+    days
+  }, { headers: { 'Idempotency-Key': idempotencyKey } })
+  return data
+}
+
+// 重置只影响明确选择的窗口，不改订阅时效和套餐。
+export async function bulkResetQuota(
+  subscriptionIds: number[],
+  options: { daily: boolean; weekly: boolean; monthly: boolean },
+  idempotencyKey: string
+): Promise<BulkSubscriptionResult> {
+  const { data } = await apiClient.post<BulkSubscriptionResult>('/admin/subscriptions/bulk-reset-quota', {
+    subscription_ids: subscriptionIds,
+    ...options
+  }, { headers: { 'Idempotency-Key': idempotencyKey } })
+  return data
+}
+
 /**
  * List subscriptions by plan
  * @param planId - Plan ID
@@ -195,6 +226,8 @@ export const subscriptionsAPI = {
   revoke,
   restore,
   resetQuota,
+  bulkExtend,
+  bulkResetQuota,
   listByPlan,
   listByUser
 }

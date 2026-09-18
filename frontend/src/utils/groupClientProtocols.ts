@@ -49,6 +49,11 @@ const GROUP_CLIENT_PROTOCOL_POLICIES: Record<GroupPlatform, GroupClientProtocolP
     supported: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
     defaults: ['anthropic_messages', 'openai_responses', 'openai_chat_completions']
   },
+  // OpenCode 可接入三种客户端协议，由账号模型规则选择上游。
+  opencode_go: {
+    supported: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
+    defaults: ['anthropic_messages', 'openai_responses', 'openai_chat_completions']
+  },
   minimax: {
     supported: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
     defaults: ['anthropic_messages', 'openai_responses', 'openai_chat_completions']

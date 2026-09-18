@@ -22,6 +22,20 @@ vi.mock('@/composables/useClipboard', () => ({
 import UseKeyModal from '../UseKeyModal.vue'
 
 describe('UseKeyModal', () => {
+  it('renders OpenCode platform setup with its catalog and current client protocols', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: { show: true, apiKey: 'sk-test', baseUrl: 'https://example.com/v1', platform: 'opencode_go',
+        allowedClientProtocols: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'] },
+      global: { stubs: { BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }, Icon: true } }
+    })
+    const openCodeTab = wrapper.findAll('button').find(button => button.text().includes('keys.useKeyModal.cliTabs.opencode'))
+    await openCodeTab!.trigger('click')
+    const config = JSON.parse(wrapper.get('pre code').text())
+    expect(config.model).toBe('opencode_go/gpt-5.6-luna')
+    expect(config.provider.opencode_go.models).toHaveProperty('minimax-m3')
+    expect(config.provider.opencode_go.options.baseURL).toBe('https://example.com/v1')
+  })
+
   it('shows smart routing groups without the unassigned group warning or model prefixes', () => {
     const wrapper = mount(UseKeyModal, {
       props: {

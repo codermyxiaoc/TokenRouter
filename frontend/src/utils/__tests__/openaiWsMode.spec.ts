@@ -59,10 +59,8 @@ describe('openaiWsMode utils', () => {
     expect(isOpenAIWSModeEnabled(OPENAI_WS_MODE_HTTP_BRIDGE)).toBe(true)
   })
 
-  it('resolves concurrency hint key by mode', () => {
-    expect(resolveOpenAIWSModeConcurrencyHintKey(OPENAI_WS_MODE_OFF)).toBe(
-      'admin.accounts.openai.wsModeConcurrencyHint'
-    )
+  it('hides disabled hints and distinguishes each active connection path', () => {
+    expect(resolveOpenAIWSModeConcurrencyHintKey(OPENAI_WS_MODE_OFF)).toBe('')
     expect(resolveOpenAIWSModeConcurrencyHintKey(OPENAI_WS_MODE_CTX_POOL)).toBe(
       'admin.accounts.openai.wsModeConcurrencyHint'
     )
@@ -70,7 +68,7 @@ describe('openaiWsMode utils', () => {
       'admin.accounts.openai.wsModePassthroughHint'
     )
     expect(resolveOpenAIWSModeConcurrencyHintKey(OPENAI_WS_MODE_HTTP_BRIDGE)).toBe(
-      'admin.accounts.openai.wsModePassthroughHint'
+      'admin.accounts.openai.wsModeHttpBridgeHint'
     )
   })
 })

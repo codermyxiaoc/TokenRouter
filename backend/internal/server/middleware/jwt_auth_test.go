@@ -5,7 +5,6 @@ package middleware
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,7 +25,7 @@ type stubJWTUserRepo struct {
 func (r *stubJWTUserRepo) GetByID(_ context.Context, id int64) (*service.User, error) {
 	u, ok := r.users[id]
 	if !ok {
-		return nil, errors.New("user not found")
+		return nil, service.ErrUserNotFound
 	}
 	return u, nil
 }

@@ -85,7 +85,9 @@
         </div>
 
         <div v-else class="custom-embed-shell">
+          <!-- 此设置只控制打开按钮，不改变页面权限或嵌入内容。 -->
           <a
+            v-if="!menuItem?.hide_open_button"
             :href="embeddedUrl"
             target="_blank"
             rel="noopener noreferrer"

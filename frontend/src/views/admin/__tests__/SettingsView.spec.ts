@@ -1413,6 +1413,28 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
+  // 缺省档位必须由管理员显式选择，且保存后不能变成旧的全部档位规则。
+  it("selects and saves the missing-tier Fast policy without broadening its scope", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_fast_policy_settings: {
+        rules: [{ service_tier: "all", action: "force_priority", scope: "oauth", user_ids: [42], model_whitelist: ["gpt-5.5"], fallback_action: "pass" }],
+      },
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+    const tierSelector = wrapper.findAll(".select-stub").find((node) => node.find('option[value="missing"]').exists());
+    expect(tierSelector).toBeDefined();
+    expect((tierSelector!.element as HTMLSelectElement).value).toBe("all");
+    await tierSelector!.setValue("missing");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      openai_fast_policy_settings: { rules: [expect.objectContaining({ service_tier: "missing", action: "force_priority", scope: "oauth", user_ids: [42], model_whitelist: ["gpt-5.5"] })] },
+    }));
+  });
+
   it("submits Claude OAuth system prompt gateway settings", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
@@ -2980,4 +3002,30 @@ describe("admin SettingsView platform quota matrix", () => {
     // 不管输入是什么，提交值应为 null（而非 "" 或 NaN）
     expect(quotas["anthropic"]?.["daily"]).toBe(null);
   });
+  it("loads and saves the open button visibility for each custom menu", async () => {
+    const menuItems = [
+      { id: "docs", label: "Docs", url: "https://example.com/docs", icon_svg: "", visibility: "user", sort_order: 0 },
+      { id: "help", label: "Help", url: "https://example.com/help", icon_svg: "", visibility: "user", sort_order: 1, hide_open_button: true },
+    ];
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, custom_menu_items: menuItems });
+    const wrapper = mountView();
+    await flushPromises();
+
+    const toggles = wrapper.findAll<HTMLInputElement>('[data-testid="custom-menu-hide-open-button"]');
+    expect(toggles.map(toggle => toggle.element.checked)).toEqual([false, true]);
+    await toggles[0].setValue(true);
+    await toggles[1].setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      custom_menu_items: [
+        { ...menuItems[0], hide_open_button: true },
+        { ...menuItems[1], hide_open_button: false },
+      ],
+    }));
+    wrapper.unmount();
+  });
+
+
 });

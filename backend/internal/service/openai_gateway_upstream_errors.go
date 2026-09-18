@@ -568,6 +568,8 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	}
 
 	if IsOpenAICyberWarningPayload(body, upstreamMsg) {
+		// 明确风控警告是请求终态，不能在组内停止后又被智能路由跨组重放。
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
 		errMsg := ExtractOpenAICyberWarningMessage(body, upstreamMsg)
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
@@ -837,6 +839,10 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 
 	upstreamDetail := ""
+	if IsOpenAICyberWarningPayload(body, upstreamMsg) {
+		// 兼容协议沿用原响应和告警，只补上跨组重放边界。
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+	}
 	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 		maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
 		if maxBytes <= 0 {

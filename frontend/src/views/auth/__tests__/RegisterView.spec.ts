@@ -109,6 +109,7 @@ async function mountView() {
 async function fillRequiredFields(wrapper: ReturnType<typeof mount>) {
   await wrapper.get('#email').setValue('alice@example.com')
   await wrapper.get('#password').setValue('secret123')
+  await wrapper.get('#confirmPassword').setValue('secret123')
 }
 
 describe('RegisterView', () => {
@@ -291,6 +292,7 @@ describe('RegisterView', () => {
     const wrapper = await mountView()
     await wrapper.get('#email').setValue('first@custom.example')
     await wrapper.get('#password').setValue('secret123')
+    await wrapper.get('#confirmPassword').setValue('secret123')
     await wrapper.get('form').trigger('submit.prevent')
     await flushPromises()
 
@@ -326,6 +328,7 @@ describe('RegisterView', () => {
     const wrapper = await mountView()
     await wrapper.get('#email').setValue('second@custom.example')
     await wrapper.get('#password').setValue('secret123')
+    await wrapper.get('#confirmPassword').setValue('secret123')
     await wrapper.get('form').trigger('submit.prevent')
     await flushPromises()
 
@@ -353,6 +356,7 @@ describe('RegisterView', () => {
     const wrapper = await mountView()
     await wrapper.get('#email').setValue('first@custom.example')
     await wrapper.get('#password').setValue('secret123')
+    await wrapper.get('#confirmPassword').setValue('secret123')
     await wrapper.get('form').trigger('submit.prevent')
     await flushPromises()
 
@@ -382,6 +386,7 @@ describe('RegisterView', () => {
     const wrapper = await mountView()
     await wrapper.get('#email').setValue('user@allowed.example')
     await wrapper.get('#password').setValue('secret123')
+    await wrapper.get('#confirmPassword').setValue('secret123')
     await wrapper.get('form').trigger('submit.prevent')
     await flushPromises()
 
@@ -389,4 +394,24 @@ describe('RegisterView', () => {
       expect.objectContaining({ email: 'user@allowed.example' }),
     )
   })
+  // 确认密码不一致时不提交注册，纠正后只发送原有注册字段。
+  it.each([['', 'auth.confirmPasswordRequired'], ['wrong', 'auth.passwordsDoNotMatch']])('校验确认密码 %j', async (confirmation, error) => {
+    getPublicSettingsMock.mockResolvedValueOnce({ registration_enabled: true, invitation_code_enabled: false, email_verify_enabled: false })
+    const wrapper = await mountView()
+    await fillRequiredFields(wrapper)
+    await wrapper.get('#confirmPassword').setValue(confirmation)
+    await wrapper.get('form').trigger('submit.prevent')
+    await flushPromises()
+    expect(showErrorMock).toHaveBeenCalledWith(error)
+    expect(registerMock).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem('register_data')).toBeNull()
+    await wrapper.get('#confirmPassword').setValue('secret123')
+    await wrapper.get('form').trigger('submit.prevent')
+    await flushPromises()
+    expect(registerMock).toHaveBeenCalledOnce()
+    expect(registerMock.mock.calls[0][0]).not.toHaveProperty('confirmPassword')
+    expect(pushMock).toHaveBeenCalledWith('/dashboard')
+    wrapper.unmount()
+  })
+
 })

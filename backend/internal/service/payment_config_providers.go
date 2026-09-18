@@ -267,6 +267,9 @@ func validateProviderRequest(providerKey, name, supportedTypes string) error {
 
 var easyPayCustomMethodCodePattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
+// 上游渠道类型允许点号，本地支付方式标识仍保持原有校验。
+var easyPayUpstreamMethodCodePattern = regexp.MustCompile(`^[a-z0-9_.-]+$`)
+
 type easyPayCustomMethodConfig struct {
 	Type         string `json:"type"`
 	UpstreamType string `json:"upstreamType"`
@@ -295,8 +298,8 @@ func validateEasyPayCustomMethods(config map[string]string, supportedTypes strin
 		if !easyPayCustomMethodCodePattern.MatchString(method.Type) {
 			return infraerrors.BadRequest("VALIDATION_ERROR", "customMethods type may only contain lowercase letters, digits, underscores, and hyphens")
 		}
-		if !easyPayCustomMethodCodePattern.MatchString(method.UpstreamType) {
-			return infraerrors.BadRequest("VALIDATION_ERROR", "customMethods upstreamType may only contain lowercase letters, digits, underscores, and hyphens")
+		if !easyPayUpstreamMethodCodePattern.MatchString(method.UpstreamType) {
+			return infraerrors.BadRequest("VALIDATION_ERROR", "customMethods upstreamType may only contain lowercase letters, digits, periods, underscores, and hyphens")
 		}
 		if easyPayCustomMethodTypeConflictsWithBuiltin(method.Type) {
 			return infraerrors.BadRequest("VALIDATION_ERROR", "customMethods type cannot start with alipay or wxpay")

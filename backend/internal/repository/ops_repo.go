@@ -267,7 +267,14 @@ SELECT
   e.request_type,
   COALESCE(ak.name, ''),
   ak.deleted_at,
-  COALESCE(e.status_code, 0)
+  COALESCE(e.status_code, 0),
+  jsonb_build_object(
+    'group_id', e.upstream_errors -> -1 -> 'group_id',
+    'group_name', e.upstream_errors -> -1 -> 'group_name',
+    'recovered_group_id', e.upstream_errors -> -1 -> 'recovered_group_id',
+    'recovered_group_name', e.upstream_errors -> -1 -> 'recovered_group_name',
+    'recovered_platform', e.upstream_errors -> -1 -> 'recovered_platform'
+  )::text
 FROM ops_error_logs e
 LEFT JOIN accounts a ON e.account_id = a.id
 LEFT JOIN groups g ON e.group_id = g.id
@@ -302,6 +309,8 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 		var requestType sql.NullInt64
 		var apiKeyName string
 		var apiKeyDeletedAt sql.NullTime
+		// 列表仅查询分组快照，避免加载完整上游正文造成不必要的数据传输。
+		var attemptSnapshot string
 		if err := rows.Scan(
 			&item.ID,
 			&item.CreatedAt,
@@ -339,6 +348,7 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 			&apiKeyName,
 			&apiKeyDeletedAt,
 			&item.ClientStatusCode,
+			&attemptSnapshot,
 		); err != nil {
 			return nil, err
 		}
@@ -376,6 +386,10 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 			item.GroupID = &v
 		}
 		item.GroupName = groupName
+		var snapshot service.OpsUpstreamErrorEvent
+		if json.Unmarshal([]byte(attemptSnapshot), &snapshot) == nil {
+			item.ApplyUpstreamAttemptSnapshot(&snapshot)
+		}
 		if requestType.Valid {
 			v := int16(requestType.Int64)
 			item.RequestType = &v
@@ -598,6 +612,9 @@ LIMIT 1`
 	out.UpstreamErrors = strings.TrimSpace(out.UpstreamErrors)
 	if out.UpstreamErrors == "null" {
 		out.UpstreamErrors = ""
+	}
+	if events, parseErr := service.ParseOpsUpstreamErrors(out.UpstreamErrors); parseErr == nil && len(events) > 0 {
+		out.ApplyUpstreamAttemptSnapshot(events[len(events)-1])
 	}
 
 	return &out, nil
@@ -916,9 +933,15 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 	// cyber_policy 流式命中可能是 200，但仍是对用户可见的拒绝，因此始终豁免。
 	if !opsFilterIncludesRecoveredProviderRows(filter, phaseFilter) {
 		guard := "COALESCE(e.status_code, 0) >= 400 OR e.error_type = 'cyber_policy'"
-		if filter != nil && filter.IncludeRecoveredUpstream && phaseFilter == "" && len(filter.ErrorPhasesAny) == 0 {
+		if filter != nil && filter.IncludeRecoveredUpstream && phaseFilter == "" {
 			// 混合列表只额外纳入提供方的恢复记录，不把普通成功或其它阶段放进错误列表。
-			guard += " OR (e.status_code >= 200 AND e.status_code < 300 AND e.error_phase IN ('upstream', 'account_auth'))"
+			// 用户的上游分类同时包含 network，仍由后续 ANY 条件与此提供方范围求交集。
+			recovered := "e.status_code >= 200 AND e.status_code < 300 AND e.error_phase IN ('upstream', 'account_auth')"
+			if filter.RequireConfirmedRecovery {
+				// 与 SetClientStatus 同源：用户只新增确认恢复的行，避免暴露其它 2xx 尝试原文。
+				recovered += " AND ((e.error_phase = 'upstream' AND e.error_message LIKE 'Recovered upstream error%') OR (e.error_phase = 'account_auth' AND e.error_message LIKE 'Recovered account authentication failure%'))"
+			}
+			guard += " OR (" + recovered + ")"
 		}
 		clauses = append(clauses, "("+guard+")")
 	}
@@ -1054,7 +1077,7 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 }
 
 func opsFilterIncludesRecoveredProviderRows(filter *service.OpsErrorLogFilter, phaseFilter string) bool {
-	if filter == nil || !filter.IncludeRecoveredUpstream {
+	if filter == nil || !filter.IncludeRecoveredUpstream || filter.RequireConfirmedRecovery {
 		return false
 	}
 	if phaseFilter != "" {

@@ -516,7 +516,7 @@ affiliates: {
       enterNotes: 'Enter notes (admin only)',
       notesHint: 'This note is only visible to administrators',
       enterNewPassword: 'Enter new password (optional)',
-      leaveEmptyToKeep: 'Leave empty to keep current password',
+      leaveEmptyToKeep: 'Leave untouched to keep; edit to empty to clear',
       generatePassword: 'Generate random password',
       copyPassword: 'Copy password',
       creating: 'Creating...',
@@ -1079,6 +1079,7 @@ affiliates: {
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
+        opencode_go: 'OpenCode',
       },
       deleteConfirm:
         "Are you sure you want to delete '{name}'? All associated API keys will no longer belong to any group.",

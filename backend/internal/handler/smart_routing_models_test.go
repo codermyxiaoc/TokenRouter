@@ -58,4 +58,20 @@ func TestSmartRoutingModelsAggregateWithoutPrefixes(t *testing.T) {
 	require.NotContains(t, ids, "hidden-model")
 	// 第一组的全部模型和别名必须先于下一候选独有模型。
 	require.Equal(t, "claude-model", ids[len(ids)-1])
+	// 检索仍按智能路由的聚合目录匹配，不添加内部前缀，也不恢复已撤销分组。
+	for _, test := range []struct {
+		model  string
+		status int
+	}{
+		{"alias", http.StatusOK}, {"claude-model", http.StatusOK},
+		{"hidden-model", http.StatusNotFound}, {"internal/shared", http.StatusNotFound},
+	} {
+		recorder = httptest.NewRecorder()
+		c, _ = gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/models/"+test.model, nil)
+		c.Params = gin.Params{{Key: "model", Value: "/" + test.model}}
+		c.Set(string(middleware.ContextKeyAPIKey), key)
+		h.Models(c)
+		require.Equal(t, test.status, recorder.Code, test.model)
+	}
 }

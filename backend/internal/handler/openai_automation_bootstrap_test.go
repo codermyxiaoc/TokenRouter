@@ -63,6 +63,18 @@ func TestNormalizeCodexAutomationBootstrapHeartbeat(t *testing.T) {
 	require.Equal(t, got, again)
 }
 
+// 新引导信封仍沿原有规范化入口处理，不能丢失指令或改变重复执行的结果。
+func TestNormalizeCodexAutomationBootstrapFullHeartbeat(t *testing.T) {
+	output := `<heartbeat><automation_id>wiki</automation_id><current_time_iso>2026-09-15T12:34:56.123456789+08:00</current_time_iso><instructions>检查状态 &amp; 记录变化</instructions></heartbeat>`
+	got, changed := normalizeCodexAutomationBootstrap(codexAutomationBootstrapBody(t, output, ""))
+	require.True(t, changed)
+	require.Equal(t, "user", gjson.GetBytes(got, "input.0.role").String())
+	require.Equal(t, output, gjson.GetBytes(got, "input.0.content.0.text").String())
+	again, changedAgain := normalizeCodexAutomationBootstrap(got)
+	require.False(t, changedAgain)
+	require.Equal(t, got, again)
+}
+
 func TestNormalizeCodexAutomationBootstrapRejectsUnsafeShapes(t *testing.T) {
 	validOutput := codexAutomationBootstrap("wiki", "never", automationBootstrapPrompt)
 	tests := []struct {
@@ -141,6 +153,12 @@ func TestNormalizeCodexAutomationBootstrapRejectsUnsafeHeartbeatShapes(t *testin
 		{name: "unsafe id", output: `<heartbeat><automation_id>../wiki</automation_id></heartbeat>`},
 		{name: "comment", output: `<heartbeat><!-- ok --><automation_id>wiki</automation_id></heartbeat>`},
 		{name: "trailing content", output: `<heartbeat><automation_id>wiki</automation_id></heartbeat>extra`},
+		{name: "缺少指令", output: `<heartbeat><automation_id>wiki</automation_id><current_time_iso>2026-09-15T12:00:00Z</current_time_iso></heartbeat>`},
+		{name: "缺少时间", output: `<heartbeat><automation_id>wiki</automation_id><instructions>检查状态</instructions></heartbeat>`},
+		{name: "非法时间", output: `<heartbeat><automation_id>wiki</automation_id><current_time_iso>today</current_time_iso><instructions>检查状态</instructions></heartbeat>`},
+		{name: "空指令", output: `<heartbeat><automation_id>wiki</automation_id><current_time_iso>2026-09-15T12:00:00Z</current_time_iso><instructions> </instructions></heartbeat>`},
+		{name: "重复ID", output: `<heartbeat><automation_id>wiki</automation_id><automation_id>other</automation_id></heartbeat>`},
+		{name: "嵌套指令", output: `<heartbeat><automation_id>wiki</automation_id><current_time_iso>2026-09-15T12:00:00Z</current_time_iso><instructions><task>检查</task></instructions></heartbeat>`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

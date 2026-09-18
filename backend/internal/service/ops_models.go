@@ -133,6 +133,10 @@ type OpsErrorLog struct {
 	// StatusCode 保持既有的上游优先展示值；最终请求结果单独暴露，避免把恢复误当失败。
 	ClientStatusCode  int  `json:"client_status_code"`
 	RecoveredUpstream bool `json:"recovered_upstream"`
+	// 恢复分组仅来自成功时保存的事件快照，历史缺失时不读取账号当前绑定补猜。
+	RecoveredGroupID   *int64 `json:"recovered_group_id,omitempty"`
+	RecoveredGroupName string `json:"recovered_group_name,omitempty"`
+	RecoveredPlatform  string `json:"recovered_platform,omitempty"`
 
 	Resolved           bool       `json:"resolved"`
 	ResolvedAt         *time.Time `json:"resolved_at"`
@@ -201,6 +205,23 @@ func (e *OpsErrorLog) SetClientStatus(status int) {
 			(e.Phase == "account_auth" && strings.HasPrefix(e.Message, "Recovered account authentication failure")))
 }
 
+// ApplyUpstreamAttemptSnapshot 读取列表投影或详情事件中的同一快照；失败结果不展示恢复目标。
+func (e *OpsErrorLog) ApplyUpstreamAttemptSnapshot(event *OpsUpstreamErrorEvent) {
+	if event != nil && e.GroupID != nil && *e.GroupID == event.GroupID && event.GroupName != "" {
+		e.GroupName = event.GroupName
+	}
+	e.RecoveredGroupID = nil
+	e.RecoveredGroupName = ""
+	e.RecoveredPlatform = ""
+	if !e.RecoveredUpstream || event == nil || event.RecoveredGroupID <= 0 {
+		return
+	}
+	id := event.RecoveredGroupID
+	e.RecoveredGroupID = &id
+	e.RecoveredGroupName = event.RecoveredGroupName
+	e.RecoveredPlatform = event.RecoveredPlatform
+}
+
 type OpsErrorLogFilter struct {
 	StartTime *time.Time
 	EndTime   *time.Time
@@ -235,10 +256,13 @@ type OpsErrorLogFilter struct {
 	// ExcludeCountTokens drops count_tokens probe errors (is_count_tokens=true).
 	ExcludeCountTokens bool
 
-	// IncludeRecoveredUpstream 允许管理端显式查询提供方恢复记录。
+	// IncludeRecoveredUpstream 允许管理员或本人错误页显式查询提供方恢复记录。
 	// 未筛阶段时也纳入 upstream/account_auth 的 2xx 记录，其它阶段仍保持失败守卫。
-	// 普通请求错误和用户接口不设置该开关，继续保持客户端错误语义。
+	// 普通请求错误接口不设置该开关，继续保持客户端错误语义。
 	IncludeRecoveredUpstream bool
+	// RequireConfirmedRecovery 由用户查询强制开启，新增可见的 2xx 行必须具有采集器恢复标记。
+	// 管理员上游健康列表保留既有的全部提供方尝试查询语义。
+	RequireConfirmedRecovery bool
 
 	// ErrorPhasesAny 和 ErrorTypesAny 增加普通 ANY() 条件，不改变单值 Phase 的匹配语义。
 	// 开启 IncludeRecoveredUpstream 且阶段列表仅含 upstream/account_auth 时也会绕过守卫；

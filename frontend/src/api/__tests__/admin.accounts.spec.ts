@@ -18,6 +18,7 @@ import {
   previewAdvancedSchedulerScore,
   queryBatchUpstreamUsage,
   queryUpstreamUsage,
+  refreshCredentials,
   syncFromCrs
 } from '@/api/admin/accounts'
 
@@ -25,6 +26,16 @@ describe('admin accounts API', () => {
   beforeEach(() => {
 	get.mockReset()
     post.mockReset()
+  })
+
+  it('将普通刷新账号统一包装，同时保留部分成功警告中的已更新账号', async () => {
+    const account = { id: 42, name: 'refreshed', platform: 'antigravity', credentials: { access_token: 'test' } }
+    post.mockResolvedValueOnce({ data: account })
+    await expect(refreshCredentials(42)).resolves.toEqual({ account })
+    const partial = { account, warning: 'missing_project_id_temporary', message: 'project id is temporarily unavailable' }
+    post.mockResolvedValueOnce({ data: partial })
+    await expect(refreshCredentials(42)).resolves.toEqual(partial)
+    expect(post).toHaveBeenLastCalledWith('/admin/accounts/42/refresh')
   })
 
   it('loads an overview or a single advanced scheduler score group through the dedicated endpoint', async () => {

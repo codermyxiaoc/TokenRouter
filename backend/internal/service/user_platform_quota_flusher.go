@@ -41,7 +41,7 @@ type FlusherMetrics struct {
 const flusherMaxBatchesPerTick = 16
 
 // maxFlushBatchSize 限制单批行数,必须 ≤ repository.BatchSnapshotUsage 的 batchRows(6000),
-// 以保证单次 flush 的 snapshots 仅生成一条 UPSERT(单事务原子)。两处需手动保持一致。
+// 以保证单次 flush 的 snapshots 仅生成一条 UPDATE(单事务原子)。两处需手动保持一致。
 const maxFlushBatchSize = 6000
 
 // defaultFlushBatchSize 是配置 flush_batch_size 非法(≤0)时的回退值。
@@ -143,7 +143,8 @@ func (s *UserPlatformQuotaUsageFlusher) flushOneBatch(parentCtx context.Context)
 		return false
 	}
 
-	// 3. 组装 snapshots（MISS 或任一 WindowStart==nil → 跳过）
+	// 3. 组装快照；保留全空限额的历史缓存，确保已经产生的用量仍能最终落库。
+	// 缺失或软删除目标由仓储 UPDATE 跳过，不通过快照重建配置。
 	snaps := make([]UserPlatformQuotaSnapshot, 0, len(keys))
 	for i, key := range keys {
 		e := entries[i]
@@ -177,13 +178,13 @@ func (s *UserPlatformQuotaUsageFlusher) flushOneBatch(parentCtx context.Context)
 
 	// 已知竞态(admin 写 × flusher 刷,仅 flusher_enabled=true 时存在):
 	// admin ResetExpiredWindow/UpsertForUser 是"先写 DB 再 DeleteCache"。若本批已 SPOP + BatchGet
-	// 读到旧 usage 快照(此刻 member 已离开脏集),而 admin 随后写 DB、本行 UPSERT 又在 admin 写之后落库,
+	// 读到旧 usage 快照(此刻 member 已离开脏集),而 admin 随后写 DB、本行 UPDATE 又在 admin 写之后落库,
 	// 则旧快照会覆盖 admin 刚写入的值;DeleteCache 后 Redis MISS,下次 preflight 从 DB 重载被覆盖的旧值。
 	// 因 member 已被 SPOP,admin 侧 SREM/清脏标记无法拦截本批(故未做)。影响有限,暂列为已知取舍:
-	//   - UpsertForUser 改 limit,而本 UPSERT 不写 limit 列 → limit 配置不受影响;
+	//   - UpsertForUser 改 limit,而本 UPDATE 不写 limit 列 → limit 配置不受影响;
 	//   - ResetExpiredWindow 改 usage,但 preflight windowExpired 会在窗口真正过期时自愈重置,
 	//     仅"强制重置未过期窗口"且与本批精确交错时短暂失效;
-	//   - 低频 admin 操作 + 默认 flusher_enabled=false。彻底消除需 version OCC(DB 加 version 列条件 UPSERT),
+	//   - 低频 admin 操作 + 默认 flusher_enabled=false。彻底消除需 version OCC(DB 加 version 列条件 UPDATE),
 	//     成本高;启用 flusher 后如需强一致再评估。
 
 	// 5. 写入 DB
@@ -193,7 +194,8 @@ func (s *UserPlatformQuotaUsageFlusher) flushOneBatch(parentCtx context.Context)
 
 	if writeErr != nil {
 		if errors.Is(writeErr, ErrUserPlatformQuotaFKViolation) {
-			// 注意:PG FK violation 是整条 INSERT 回滚 → 整批(含同批正常用户)均未写入 DB,
+			// 兼容旧适配器：本仓储已改为 UPDATE，不再因缺失目标用户发生 INSERT 外键错误。
+			// 其他实现若仍返回外键错误，沿用已有计数和丢弃策略；
 			// 且这些 key 已被 SPOP 出脏集、此处不 Readd。活跃 key 会在下次请求重新 SADD,
 			// flusher 读 Redis 当前累计绝对值刷库即自愈;低活跃 key 这轮 DB usage 偏低
 			// (Redis 仍是 enforcement 权威,不受影响;DB 仅展示)。已删用户边角的接受取舍,不做逐行重试。

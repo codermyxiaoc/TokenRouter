@@ -79,6 +79,22 @@ func TestOpenAIGatewayService_APIKeyPreservesDeclaredNamespaceToolCalls(t *testi
 	require.False(t, gjson.GetBytes(forwarded, "input.1.namespace").Exists())
 }
 
+// Lite 声明不在顶层 tools，也必须沿完整 API Key 转发保留历史调用的命名空间。
+func TestOpenAIGatewayService_APIKeyPreservesLiteNamespaceToolCalls(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-terra","stream":false,"instructions":"test","tools":[],"input":[{"type":"additional_tools","tools":[{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent","parameters":{"type":"object"}}]}]},{"type":"function_call","namespace":"collaboration","name":"spawn_agent","call_id":"call_1","arguments":"{}"},{"type":"custom_tool_call","namespace":"collaboration","name":"exec","call_id":"call_2","input":"test"},{"type":"message","role":"user","namespace":"leftover","content":"hello"}]}`)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{newOpenAIRejectedFieldTestResponse(http.StatusOK, namespaceForwardOKResponse)}}
+	c := newOpenAIRejectedFieldTestContext(body)
+	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(context.Background(), c, newOpenAIRejectedFieldTestAccount(), body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 1)
+	forwarded := upstream.bodies[0]
+	require.Equal(t, "namespace", gjson.GetBytes(forwarded, "input.0.tools.0.type").String())
+	require.Equal(t, "collaboration", gjson.GetBytes(forwarded, "input.1.namespace").String())
+	require.Equal(t, "collaboration", gjson.GetBytes(forwarded, "input.2.namespace").String())
+	require.False(t, gjson.GetBytes(forwarded, "input.3.namespace").Exists())
+}
+
 // compact 端点 schema 更窄：input[].namespace 会 400 Unknown parameter（issue #4761），
 // 且没有证据表明它接受 namespace 工具声明。compact 只做历史摘要、不需要模型寻址工具，
 // 因此保持既有的摊平 + 全量清理行为，不随默认值翻转扩大风险面。

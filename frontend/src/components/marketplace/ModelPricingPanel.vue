@@ -271,12 +271,29 @@ function hasImagePricing(pricing: MarketplaceModelPricing): boolean {
   ].some(hasPositiveValue)
 }
 
-function pricingKind(pricing: MarketplaceModelPricing): 'token' | 'image' | 'unpriced' {
+// 视频零价是有效免费档位，不沿用图片正价判定。
+function videoPricingRows(pricing: MarketplaceModelPricing): PricingRow[] {
+  return (pricing.video_prices ?? []).flatMap((item) => {
+    if (!Number.isFinite(item.price) || item.price < 0 || !['second', 'request'].includes(item.unit)) {
+      return []
+    }
+    return [{
+      key: item.resolution,
+      label: item.resolution,
+      value: `${formatPrice(item.price)} ${t(item.unit === 'second' ? 'marketplace.perSecond' : 'marketplace.perRequest')}`,
+    }]
+  })
+}
+
+function pricingKind(pricing: MarketplaceModelPricing): 'token' | 'image' | 'video' | 'unpriced' {
   if (pricing.price_status !== 'priced') {
     return 'unpriced'
   }
   if (pricing.pricing_mode === 'image' && hasImagePricing(pricing)) {
     return 'image'
+  }
+  if (pricing.pricing_mode === 'video' && videoPricingRows(pricing).length > 0) {
+    return 'video'
   }
   if (pricing.pricing_mode === 'token') {
     return 'token'
@@ -303,6 +320,9 @@ const activeSource = computed<MarketplaceModelPricing | MarketplacePricingInterv
 )
 
 const standardRows = computed<PricingRow[]>(() => {
+  if (pricingKind(props.model.pricing) === 'video') {
+    return videoPricingRows(props.model.pricing)
+  }
   if (pricingKind(props.model.pricing) === 'image') {
     return imagePricingRows(props.model.pricing)
   }

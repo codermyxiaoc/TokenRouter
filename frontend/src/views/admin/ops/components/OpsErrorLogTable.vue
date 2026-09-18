@@ -111,20 +111,16 @@
         </template>
 
         <template #cell-status="{ row }">
-          <div class="flex items-center gap-1.5">
+          <div class="flex flex-wrap items-center gap-1.5">
             <span class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium" :class="getStatusClass(row.status_code)">
               {{ row.status_code }}
             </span>
-            <!-- 上游失败与最终请求结果分开展示，不能凭流式 HTTP 200 推断已恢复。 -->
-            <span
-              v-if="row.recovered_upstream"
-              class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"
-              :title="t('usage.errors.recoveredHint')"
-            >{{ t('usage.errors.recovered') }}</span>
-            <span
-              v-if="row.recovered_upstream && row.client_status_code != null"
-              class="whitespace-nowrap text-xs text-gray-500 dark:text-gray-400"
-            >{{ t('usage.errors.finalStatus') }} {{ row.client_status_code }}</span>
+            <ErrorRecoveryStatus
+              :recovered="row.recovered_upstream"
+              :client-status-code="row.client_status_code"
+              :group-id="row.recovered_group_id"
+              :group-name="row.recovered_group_name"
+            />
             <span
               v-if="row.severity"
               :class="['rounded px-1.5 py-0.5 text-[10px] font-medium', getSeverityClass(row.severity)]"
@@ -197,6 +193,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import ErrorRecoveryStatus from '@/components/common/ErrorRecoveryStatus.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
 import IpGeoBatchToolbar from '@/components/common/IpGeoBatchToolbar.vue'
@@ -229,11 +226,18 @@ const allColumns = computed<Column[]>(() => [
 ])
 
 // 传入 visibleColumnKeys 时按其过滤；未传时显示全部列。
-const columns = computed<Column[]>(() =>
-  props.visibleColumnKeys
+const columns = computed<Column[]>(() => {
+  const visibleColumns = props.visibleColumnKeys
     ? allColumns.value.filter((c) => props.visibleColumnKeys!.includes(c.key))
     : allColumns.value
-)
+  // 仅详情弹窗优先展示时间与响应；使用记录的列顺序和可见性保持原约定。
+  if (!props.summaryFirst) return visibleColumns
+  return [
+    ...visibleColumns.filter((c) => c.key === 'created_at'),
+    ...visibleColumns.filter((c) => c.key === 'message'),
+    ...visibleColumns.filter((c) => c.key !== 'created_at' && c.key !== 'message')
+  ]
+})
 
 function isUpstreamRow(log: OpsErrorLog): boolean {
   const phase = String(log.phase || '').toLowerCase()
@@ -303,6 +307,8 @@ interface Props {
   userClickable?: boolean
   /** 列设置，仅显示这些 key 对应的列；未传时显示全部列。 */
   visibleColumnKeys?: string[]
+  /** 详情弹窗优先显示时间和响应内容。 */
+  summaryFirst?: boolean
   /** 嵌入统一卡片内使用：去掉自身卡片外观 */
   flat?: boolean
   /** 页面已有独立批量地区按钮时关闭表格内部工具条。 */

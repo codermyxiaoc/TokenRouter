@@ -970,6 +970,9 @@
             {{ t('admin.accounts.openai.wsModeDesc') }}
           </p>
           <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.wsModeRoutingDesc') }}
+          </p>
+          <p v-if="openAIWSModeConcurrencyHintKey" class="mb-3 text-xs text-gray-500 dark:text-gray-400">
             {{ t(openAIWSModeConcurrencyHintKey) }}
           </p>
           <Select
@@ -1281,6 +1284,9 @@
             {{ t('admin.accounts.openai.wsModeDesc') }}
           </p>
           <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.wsModeRoutingDesc') }}
+          </p>
+          <p v-if="openAIAPIKeyWSModeConcurrencyHintKey" class="mb-3 text-xs text-gray-500 dark:text-gray-400">
             {{ t(openAIAPIKeyWSModeConcurrencyHintKey) }}
           </p>
           <Select

@@ -238,6 +238,11 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 	} else {
 		account.AutoPauseOnExpired = true
 	}
+	if account.IsOpenCodeGo() {
+		if err := normalizeOpenCodeCredentials(account, true); err != nil {
+			return nil, err
+		}
+	}
 	if err := NormalizeUpstreamUsageExtra(account.Extra); err != nil {
 		return nil, err
 	}
@@ -324,6 +329,11 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 		account.Credentials = SanitizeStoredCredentials(account.Platform, *req.Credentials)
 	}
 
+	if account.IsOpenCodeGo() {
+		if err := normalizeOpenCodeCredentials(account, false); err != nil {
+			return nil, err
+		}
+	}
 	if req.Extra != nil {
 		extra := make(map[string]any, len(*req.Extra))
 		for key, value := range *req.Extra {
@@ -517,7 +527,7 @@ func (s *AccountService) TestCredentials(ctx context.Context, id int64) error {
 	case PlatformGrok:
 		// Grok OAuth 凭证通过 token 兑换、刷新和请求路径探测校验。
 		return nil
-	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
 		// 国产 OpenAI 兼容供应商：凭证为 API Key，实际可用性经余额/额度探测与转发路径验证。
 		return nil
 	default:

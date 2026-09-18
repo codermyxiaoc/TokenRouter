@@ -526,8 +526,8 @@ type UpdateProxyInput struct {
 	Protocol       string
 	Host           string
 	Port           int
-	Username       string
-	Password       string
+	Username       *string // nil 保留原值，非 nil 空串显式清空。
+	Password       *string
 	Status         string
 	ExpiresAt      *time.Time
 	FallbackMode   string

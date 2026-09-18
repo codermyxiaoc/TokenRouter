@@ -483,6 +483,7 @@ export default {
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
+        opencode_go: 'OpenCode',
       },
       cnProviders: {
         accountMode: {
@@ -527,6 +528,23 @@ export default {
         probeTooltip: '请求供应商额度端点，查询 5 小时 / 每周滚动窗口用量',
         balanceLow: '余额不足',
         noBalanceEndpoint: '该平台暂无余额查询接口',
+      },
+      opencodeGo: {
+        accountMode: {
+          zen: 'Zen',
+          zenDesc: '按量付费网关，消耗账户余额，按 Token 计费。',
+          go: 'GO',
+          goDesc: '订阅制网关，按 5 小时 / 周 / 月滚动用量窗口限流。',
+        },
+        protocolRules: {
+          title: '模型协议分流',
+          hint: '自适应模式下按模型匹配上游协议。支持精确 ID 或末尾 * 通配（如 grok-*、qwen*）；自上而下第一条命中生效；未命中走 Chat Completions。',
+          patternPlaceholder: 'grok-* 或 deepseek-v4-flash',
+          add: '添加规则',
+          remove: '删除规则',
+          restoreDefaults: '恢复默认',
+          fallback: '未命中以上规则 → Chat Completions（/v1/chat/completions）',
+        },
       },
       types: {
         oauth: 'OAuth',
@@ -828,15 +846,21 @@ export default {
           '默认关闭。开启后可启用 responses_websockets_v2 协议能力（受网关全局开关与账号类型开关约束）。',
         wsMode: 'WS mode',
         wsModeDesc:
-          '仅对当前 OpenAI 账号类型生效；包括 http_bridge 在内的账号 WS mode 仅在全局 gateway.openai_ws.mode_router_v2_enabled=true 时生效。',
+          'off 关闭当前 OpenAI 账号的 WS 能力；其他选项启用 WS，仍受网关全局开关和账号类型开关约束。',
+        wsModeRoutingDesc:
+          '全局 gateway.openai_ws.mode_router_v2_enabled=true 时，按所选模式分流（含 http_bridge）；为 false（默认）时，已启用的账号沿用旧版上下文池链路。',
         wsModeOff: '关闭（off）',
         wsModeCtxPool: '上下文池（ctx_pool）',
         wsModePassthrough: '透传（passthrough）',
         wsModeHttpBridge: 'HTTP 桥接（http_bridge）',
         wsModeShared: '共享（shared）',
         wsModeDedicated: '独享（dedicated）',
-        wsModeConcurrencyHint: '启用 WS mode 后，该账号并发数将作为该账号 WS 连接池上限。',
-        wsModePassthroughHint: 'passthrough 模式不使用 WS 连接池。',
+        wsModeConcurrencyHint:
+          '所选模式生效后：上下文池在账号内复用上游 WS 连接。启用动态容量时按账号并发 × 系数计算，并受每账号连接上限约束；实际请求并发不变，账号并发需大于 0。',
+        wsModePassthroughHint:
+          '所选模式生效后：客户端与上游通过 WS 逐连接转发，不复用上下文池；启用自动桥接时，大体积首帧可能改走 HTTP 桥接。',
+        wsModeHttpBridgeHint:
+          '所选模式生效后：接收客户端 WS 请求，通过 HTTP/SSE 请求上游，再将结果转回客户端 WS；不使用上游 WS 连接池。',
         oauthResponsesWebsocketsV2: 'OAuth WebSocket Mode',
         oauthResponsesWebsocketsV2Desc:
           '仅对 OpenAI OAuth 生效。开启后该账号才允许使用 OpenAI WebSocket Mode 协议。',

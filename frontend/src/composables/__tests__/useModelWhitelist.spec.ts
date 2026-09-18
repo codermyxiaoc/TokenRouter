@@ -16,10 +16,20 @@ import {
 } from '../useModelWhitelist'
 
 describe('useModelWhitelist', () => {
+  it('OpenCode 内置目录与现有平台隔离，并仅列出已登记图片型号', () => {
+    const models = getModelsByPlatform('opencode_go')
+    expect(models).toContain('gpt-5.6-luna')
+    expect(models).toContain('minimax-m3')
+    expect(models).not.toContain('MiniMax-M2.7')
+    expect(getModelsByPlatform('openai')).not.toContain('gpt-image-2.5-unknown')
+  })
+
   it('openai 模型列表使用当前默认白名单', () => {
     const models = getModelsByPlatform('openai')
 
 		expect(models).toEqual([
+    'gpt-image-2.5-flare',
+    'gpt-image-2.5-sunburst',
 			'gpt-5.2',
 			'gpt-5.3',
 			'gpt-5.3-spark',

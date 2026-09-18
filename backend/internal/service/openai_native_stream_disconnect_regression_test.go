@@ -51,20 +51,17 @@ func TestOpenAINativeStreamDisconnectedClientRetainsUpstreamFailure(t *testing.T
 			mode = "passthrough"
 		}
 		for _, test := range []struct {
-			name        string
-			tail        string
-			wantFailure bool
+			name          string
+			tail          string
+			wantFailure   bool
+			wantRecovered bool
 		}{
 			{name: "failed_after_disconnect", tail: failed, wantFailure: true},
 			{name: "bare_then_failed_once", tail: bare + failed, wantFailure: true},
 			{name: "bare_then_eof_once", tail: bare, wantFailure: true},
 			{name: "client_disconnect_with_successful_upstream", tail: completed},
-			{name: "bare_error_recovered_by_successful_terminal", tail: bare + completed},
+			{name: "bare_error_recovered_by_successful_terminal", tail: bare + completed, wantRecovered: true},
 		} {
-			// 原生 OAuth reader 以随后成功终态为准，不能把暂存的裸错误补记为失败。
-			if passthrough && test.name == "bare_error_recovered_by_successful_terminal" {
-				continue
-			}
 			t.Run(mode+"/"+test.name, func(t *testing.T) {
 				recorder := httptest.NewRecorder()
 				c, _ := gin.CreateTestContext(recorder)
@@ -97,8 +94,18 @@ func TestOpenAINativeStreamDisconnectedClientRetainsUpstreamFailure(t *testing.T
 				require.False(t, errors.As(err, &failover), "已输出业务内容不能重放本次请求")
 				if !test.wantFailure {
 					require.NoError(t, err)
-					require.Zero(t, c.GetInt(OpsUpstreamStatusCodeKey), "纯客户端断开不能伪造上游 503")
 					require.Empty(t, GetOpsStreamErrors(c))
+					if test.wantRecovered {
+						// 成功终态不抹去已观测到的上游错误，但不能把请求标为失败。
+						require.Equal(t, http.StatusServiceUnavailable, c.GetInt(OpsUpstreamStatusCodeKey))
+						events := busyTestUpstreamEvents(c)
+						require.Len(t, events, 1)
+						require.Equal(t, "stream_error_recovered", events[0].Kind)
+						require.Equal(t, http.StatusServiceUnavailable, events[0].UpstreamStatusCode)
+					} else {
+						require.Zero(t, c.GetInt(OpsUpstreamStatusCodeKey), "纯客户端断开不能伪造上游 503")
+						require.Empty(t, busyTestUpstreamEvents(c), "没有上游错误帧时不得生成错误事实")
+					}
 					return
 				}
 				require.Error(t, err)

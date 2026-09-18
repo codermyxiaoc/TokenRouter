@@ -15,6 +15,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// 两类粘性分别统计，但总命中率应按请求去重，不能超过一。
+func TestOpenAIAccountSchedulerMetrics_DeduplicatesStickyHits(t *testing.T) {
+	scheduler := newDefaultOpenAIAccountScheduler(nil, nil).(*defaultOpenAIAccountScheduler)
+	for _, decision := range []OpenAIAccountScheduleDecision{
+		{StickyPreviousHit: true, StickySessionHit: true},
+		{StickyPreviousHit: true},
+		{StickySessionHit: true},
+		{},
+	} {
+		scheduler.metrics.recordSelect(decision)
+	}
+	snapshot := scheduler.SnapshotMetrics()
+	require.Equal(t, int64(4), snapshot.SelectTotal)
+	require.Equal(t, int64(2), snapshot.StickyPreviousHitTotal)
+	require.Equal(t, int64(2), snapshot.StickySessionHitTotal)
+	require.Equal(t, 0.75, snapshot.StickyHitRatio)
+}
+
 type openAISnapshotCacheStub struct {
 	SchedulerCache
 	snapshotAccounts []*Account

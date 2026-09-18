@@ -53,6 +53,10 @@
   <svg v-else-if="platform === 'minimax'" :class="sizeClass" viewBox="0 0 24 24" fill="currentColor">
     <path v-for="(path, index) in modelIconData.minimax.paths" :key="index" :d="path" />
   </svg>
+  <!-- OpenCode 官方单色标识，随主题继承当前文字色。 -->
+  <svg v-else-if="platform === 'opencode_go'" :class="sizeClass" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">
+    <path d="M16 6H8v12h8V6zm4 16H4V2h16v20z" />
+  </svg>
   <!-- 通用平台兜底图标 -->
   <svg v-else :class="sizeClass" fill="currentColor" viewBox="0 0 24 24">
     <path

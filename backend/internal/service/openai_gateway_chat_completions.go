@@ -71,6 +71,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	compatPromptCacheTenantIsolated bool,
 	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
 ) (*OpenAIForwardResult, error) {
+	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -121,9 +122,46 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// 自适应协议分流识别，否则会把 input 原样发给只接受 messages 的上游。
 	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
 
+	// OpenCode Go：按模型原生协议分流（与 inbound 协议正交）。
+	// 规则未命中一律兜底 Chat Completions，只有显式 Responses 才走下方转换链。
+	if account.IsOpenCodeGo() {
+		mapped := resolveOpenCodeGoMappedModel(account, body, defaultMappedModel)
+		proto := openCodeGoNativeProtocol(account, mapped)
+		if proto == APIProtocolResponses {
+			SetActualOpenAIUpstreamEndpoint(c, "/v1/responses")
+		}
+		if proto != APIProtocolResponses {
+			if isResponsesShape {
+				if proto == APIProtocolAnthropic {
+					return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, "", tlsRouterMatch...)
+				}
+				var responsesReq apicompat.ResponsesRequest
+				if err := json.Unmarshal(body, &responsesReq); err != nil {
+					return nil, fmt.Errorf("parse responses-shaped chat completions request: %w", err)
+				}
+				chatReq, err := apicompat.ResponsesToChatCompletionsRequestWithOptions(
+					&responsesReq,
+					&apicompat.ResponsesToChatOptions{ReasoningContentByID: s.reasoningContentByID},
+				)
+				if err != nil {
+					return nil, fmt.Errorf("convert responses-shaped chat completions request: %w", err)
+				}
+				chatBody, err := json.Marshal(chatReq)
+				if err != nil {
+					return nil, fmt.Errorf("marshal converted chat completions request: %w", err)
+				}
+				return s.forwardAsRawChatCompletions(ctx, c, account, chatBody, defaultMappedModel, tlsRouterMatch...)
+			}
+			if proto == APIProtocolAnthropic {
+				return s.forwardChatCompletionsViaNativeAnthropic(ctx, c, account, body, defaultMappedModel, tlsRouterMatch...)
+			}
+			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel, tlsRouterMatch...)
+		}
+	}
+
 	// 自适应账号的标准 Chat 入站使用供应商原生 CC 端点；Responses 形状下，
 	// DeepSeek / Kimi 保留原生 Responses，智谱先转换为 Chat。
-	if account.IsAdaptiveAPIProtocol() {
+	if account.IsAdaptiveAPIProtocol() && !account.IsOpenCodeGo() {
 		if !isResponsesShape {
 			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel, tlsRouterMatch...)
 		}
@@ -158,7 +196,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel, tlsRouterMatch...)
 	}
-	if !account.IsCNProvider() && resolveOpenAITextProtocolForAttempt(
+	if !account.IsMultiProtocolAPIKey() && resolveOpenAITextProtocolForAttempt(
 		c,
 		account,
 		openai_compat.TextProtocolChatCompletions,
@@ -424,6 +462,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 	}
 
+	if account.IsOpenCodeGo() {
+		stampOpenAIResponsesUpstreamEndpoint(c, result)
+	}
 	return result, handleErr
 }
 

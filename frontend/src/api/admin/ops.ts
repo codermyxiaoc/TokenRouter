@@ -110,7 +110,7 @@ export interface OpsThroughputTrendResponse {
 
 export type OpsRequestKind = 'success' | 'error'
 export type OpsRequestDetailsKind = OpsRequestKind | 'all'
-export type OpsRequestDetailsSort = 'created_at_desc' | 'duration_desc'
+export type OpsRequestDetailsSort = 'created_at_desc' | 'duration_desc' | 'ttft_desc'
 
 export interface OpsRequestDetail {
   kind: OpsRequestKind
@@ -120,6 +120,7 @@ export interface OpsRequestDetail {
   platform?: string
   model?: string
   duration_ms?: number | null
+  first_token_ms?: number | null
   status_code?: number | null
 
   error_id?: number | null
@@ -919,6 +920,10 @@ export interface OpsErrorLog {
   // status_code 保持上游错误展示口径，最终 HTTP 状态单独返回。
   client_status_code?: number
   recovered_upstream?: boolean
+  // 恢复成功时的分组快照，与失败尝试的 group_id/group_name 独立。
+  recovered_group_id?: number | null
+  recovered_group_name?: string
+  recovered_platform?: string
   platform: string
   model: string
 

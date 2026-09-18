@@ -146,6 +146,7 @@ func TestSmartRoutingAuthenticationBothProtocolsAndModelListQuota(t *testing.T) 
 			c.Status(http.StatusNoContent)
 		})
 		router.GET("/v1/models", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+		router.GET("/v1/models/*model", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"target"}`))
 		req.Header.Set("x-api-key", key.Key)
 		w := httptest.NewRecorder()
@@ -158,6 +159,17 @@ func TestSmartRoutingAuthenticationBothProtocolsAndModelListQuota(t *testing.T) 
 		w = httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		require.Equal(t, http.StatusTooManyRequests, w.Code, w.Body.String())
+		// 新检索入口同样不能绕过额度检查或被禁用的 Key 状态。
+		req = httptest.NewRequest(http.MethodGet, "/v1/models/vendor/model", nil)
+		req.Header.Set("x-api-key", key.Key)
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusTooManyRequests, w.Code, w.Body.String())
+		key.QuotaUsed = 0
+		key.Status = service.StatusDisabled
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
 	}
 }
 

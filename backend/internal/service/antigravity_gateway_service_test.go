@@ -20,6 +20,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// 验证真实转发输出可被严格双换行分帧，LF/CRLF 不产生额外空帧。
+func TestHandleGeminiStreamingResponse_EventSeparatorIsExactlyOneBlankLine(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := newAntigravityTestService(&config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}})
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	first := `{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello"}]}}]}`
+	second := `{"candidates":[{"content":{"role":"model","parts":[{"text":" world"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":3,"thoughtsTokenCount":5}}`
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("data: " + first + "\n\ndata: " + second + "\r\n\r\n"))}
+	result, err := svc.handleGeminiStreamingResponse(c, resp, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "data: "+first+"\n\ndata: "+second+"\n\n", rec.Body.String())
+	for _, frame := range strings.Split(strings.TrimSuffix(rec.Body.String(), "\n\n"), "\n\n") {
+		require.True(t, strings.HasPrefix(frame, "data: "))
+	}
+}
+
+// 非 JSON 终止帧、空 data 及注释也必须保留完整边界，不能和后续帧粘连。
+func TestHandleGeminiStreamingResponse_PreservesSpecialEventBoundaries(t *testing.T) {
+	for _, newline := range []string{"\n", "\r\n"} {
+		for _, frame := range []string{"data: [DONE]", "data:", ": keepalive", "event: ping\nid: 1", "event: done\ndata: [DONE]"} {
+			t.Run(fmt.Sprintf("%q/%s", newline, frame), func(t *testing.T) {
+				gin.SetMode(gin.TestMode)
+				svc := newAntigravityTestService(&config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}})
+				rec := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(rec)
+				c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+				input := strings.ReplaceAll(frame, "\n", newline) + newline + newline + "data: [DONE]" + newline + newline
+				resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(input))}
+				_, err := svc.handleGeminiStreamingResponse(c, resp, time.Now())
+				require.NoError(t, err)
+				require.Equal(t, frame+"\n\ndata: [DONE]\n\n", rec.Body.String())
+			})
+		}
+	}
+}
+
 // antigravityFailingWriter 模拟客户端断开连接的 gin.ResponseWriter
 type antigravityFailingWriter struct {
 	gin.ResponseWriter
@@ -379,7 +418,7 @@ func TestAntigravityGatewayService_ForwardGemini_ImageUsesDefaultMappingAndOAuth
 	require.Equal(t, []any{"TEXT", "IMAGE"}, generationConfig["responseModalities"])
 }
 
-func TestAntigravityGatewayService_ForwardGemini_PreservesServerSideToolInvocationConfig(t *testing.T) {
+func TestAntigravityGatewayService_ForwardGemini_ReconcilesMixedToolInvocationConfig(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}],"tools":[{"functionDeclarations":[{"name":"get_weather","parameters":{"type":"object","additionalProperties":false}}]},{"googleSearch":{}}],"toolConfig":{"includeServerSideToolInvocations":true}}`)
 	writer := httptest.NewRecorder()
@@ -411,10 +450,11 @@ func TestAntigravityGatewayService_ForwardGemini_PreservesServerSideToolInvocati
 	require.NoError(t, json.Unmarshal(upstream.requestBodies[0], &wrapped))
 	request, ok := wrapped["request"].(map[string]any)
 	require.True(t, ok)
-	toolConfig, ok := request["toolConfig"].(map[string]any)
+	require.NotContains(t, request, "toolConfig")
+	tools, ok := request["tools"].([]any)
 	require.True(t, ok)
-	require.Equal(t, true, toolConfig["includeServerSideToolInvocations"])
-	require.NotContains(t, toolConfig, "include_server_side_tool_invocations")
+	require.Len(t, tools, 1)
+	require.Contains(t, tools[0], "functionDeclarations")
 }
 
 func TestAntigravityGatewayService_ForwardGemini_MissingProjectReturnsLocalError(t *testing.T) {

@@ -1,3 +1,4 @@
+import { OPENCODE_MODELS } from '@/constants/opencode'
 import { MINIMAX_MODELS } from '@/constants/minimax'
 
 // =====================
@@ -6,6 +7,9 @@ import { MINIMAX_MODELS } from '@/constants/minimax'
 
 // OpenAI
 const openaiModels = [
+  // 与后端已登记图片型号一致，未知后缀不自动纳入白名单。
+  'gpt-image-2.5-flare',
+  'gpt-image-2.5-sunburst',
 	'gpt-5.2',
 	'gpt-5.3',
 	'gpt-5.3-spark',
@@ -156,6 +160,7 @@ const qwenModels = [
 
 // DeepSeek
 const deepseekModels = [
+  'deepseek-flash',
   'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp',
   'deepseek-coder',
   'deepseek-v3', 'deepseek-v3-0324',
@@ -531,6 +536,7 @@ export function getModelsByPlatform(platform: string, qoderSite?: QoderSite): st
     case 'yi': return yiModels
     case 'moonshot':
     case 'kimi': return moonshotModels
+    case 'opencode_go': return [...OPENCODE_MODELS]
     case 'doubao': return doubaoModels
     case 'minimax': return MINIMAX_MODELS
     case 'baidu': return baiduModels

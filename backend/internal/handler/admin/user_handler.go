@@ -841,7 +841,7 @@ func (h *UserHandler) UpdateUserPlatformQuotas(c *gin.Context) {
 		}
 		changes = append(changes, entry)
 	}
-	// 补充移除条目：更新前存在但更新后缺失，表示该平台被软删除。
+	// 补充移除条目：更新前存在但更新后缺失，表示该平台限额被取消（既有用量仍保留）。
 	// 缺少这条记录，审计消费方无法察觉"管理员把某平台从配额列表移除"的操作（合规盲区）。
 	for _, prev := range beforeRecords {
 		if _, kept := afterPlatforms[prev.Platform]; kept {
@@ -865,9 +865,9 @@ func (h *UserHandler) UpdateUserPlatformQuotas(c *gin.Context) {
 		"changes", changes)
 
 	// 失效缓存：对全部允许的 platform 统一清理。
-	// 取舍：精确失效（仅请求涉及平台 + 被软删平台）需 upsert 前额外 ListByUser，
+	// 取舍：精确失效（仅请求涉及平台 + 被取消限额的平台）需 upsert 前额外 ListByUser，
 	// 增加一次 DB 查询和逻辑复杂度。由于 AllowedQuotaPlatforms 数量很少，
-	// 全量 invalidate 的额外开销可接受，且能可靠覆盖软删除场景。
+	// 全量 invalidate 的额外开销可接受，且能可靠覆盖取消限额场景。
 	if h.billingCache != nil {
 		for _, p := range service.AllowedQuotaPlatforms {
 			if err := h.billingCache.DeleteUserPlatformQuotaCache(ctx, userID, p); err != nil {

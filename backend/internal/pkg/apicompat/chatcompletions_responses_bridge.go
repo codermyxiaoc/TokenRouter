@@ -319,7 +319,70 @@ func responsesInputToChatMessagesWithOptions(instructions string, inputRaw json.
 	if err != nil {
 		return nil, err
 	}
-	return normalizeChatMessagesWithToolOutputMedia(built, mediaByCallID), nil
+	normalized := normalizeChatMessagesWithToolOutputMedia(built, mediaByCallID)
+	return normalizeResponsesDerivedChatMessageRoles(normalized), nil
+}
+
+// normalizeResponsesDerivedChatMessageRoles 仅规范 Responses 派生的 Chat 请求。
+// 严格上游只接受一个开头的 system；中途指令保留位置和内容，降为 user。
+// 原生 Chat 请求不经过此函数，避免改变它原有的角色语义。
+func normalizeResponsesDerivedChatMessageRoles(messages []ChatMessage) []ChatMessage {
+	isInstruction := func(role string) bool { return role == "system" || role == "developer" }
+	leading := 0
+	for leading < len(messages) && isInstruction(messages[leading].Role) {
+		leading++
+	}
+	out := make([]ChatMessage, 0, len(messages))
+	if leading > 1 {
+		if content, ok := mergeResponsesLeadingInstructions(messages[:leading]); ok {
+			out = append(out, ChatMessage{Role: "system", Content: content})
+		} else {
+			// 非法内部内容不强行展平，保留原消息以免静默丢数据。
+			out = append(out, messages[:leading]...)
+		}
+	} else if leading == 1 {
+		// 单条前导消息无需重新编码，保留原始缓存前缀。
+		out = append(out, messages[0])
+	}
+	for _, message := range messages[leading:] {
+		if isInstruction(message.Role) {
+			message.Role = "user"
+		}
+		out = append(out, message)
+	}
+	return out
+}
+
+// mergeResponsesLeadingInstructions 保留多模态块、扩展字段及原文本空白。
+// 纯字符串合成字符串；含内容数组时保留数组结构，不能只提取文本而丢失图片。
+func mergeResponsesLeadingInstructions(messages []ChatMessage) (json.RawMessage, bool) {
+	texts := make([]string, 0, len(messages))
+	parts := make([]json.RawMessage, 0, len(messages))
+	allText := true
+	for i, message := range messages {
+		if i > 0 {
+			parts = append(parts, json.RawMessage(`{"type":"text","text":"\n\n"}`))
+		}
+		var text string
+		if err := json.Unmarshal(message.Content, &text); err == nil {
+			texts = append(texts, text)
+			part, _ := json.Marshal(ChatContentPart{Type: "text", Text: text})
+			parts = append(parts, part)
+			continue
+		}
+		var content []json.RawMessage
+		if err := json.Unmarshal(message.Content, &content); err != nil {
+			return nil, false
+		}
+		allText = false
+		parts = append(parts, content...)
+	}
+	if allText {
+		content, err := json.Marshal(strings.Join(texts, "\n\n"))
+		return content, err == nil
+	}
+	content, err := json.Marshal(parts)
+	return content, err == nil
 }
 
 // buildChatMessagesFromItems 遍历 Responses input items，并追加对应的 Chat message。
@@ -491,6 +554,22 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 			})
 			pendingReasoning = ""
 			continue
+		case "agent_message":
+			// Codex multi_agent_v2 用 agent_message 在父线程与子智能体之间传递任务和回复：
+			// input_text 是信封（消息类型、任务名、发送者），正文放在 encrypted_content 片段里
+			// （自定义 provider 下为明文）。chat 上游没有对应条目，按原顺序拼成一条 user 消息，
+			// 否则子智能体收不到任务却仍返回 200。
+			text := agentMessageText(item["content"])
+			if text == "" {
+				pendingReasoning = ""
+				lastTurnReasoning = ""
+				continue
+			}
+			content, _ := json.Marshal(text)
+			messages = append(messages, ChatMessage{Role: "user", Content: content})
+			pendingReasoning = ""
+			lastTurnReasoning = ""
+			continue
 		case "input_text", "text":
 			content, _ := json.Marshal(rawString(item["text"]))
 			messages = append(messages, ChatMessage{Role: "user", Content: content})
@@ -539,6 +618,33 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 	}
 
 	return messages, mediaByCallID, nil
+}
+
+// agentMessageText 按原顺序拼接任务信封和客户端正文；不解密、不推断密文内容。
+// 自定义提供商可将明文放在 encrypted_content 字段，保持原字符串以免任务丢失。
+func agentMessageText(raw json.RawMessage) string {
+	raw = bytesTrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var parts []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, part := range parts {
+		switch rawString(part["type"]) {
+		case "input_text", "text":
+			_, _ = b.WriteString(rawString(part["text"]))
+		case "encrypted_content":
+			_, _ = b.WriteString(rawString(part["encrypted_content"]))
+		}
+	}
+	return b.String()
 }
 
 // extractToolOutputMedia 只改写可识别的图片节点。无媒体输出返回 rewritten=false，
@@ -903,7 +1009,9 @@ func responsesContentPartsToChatContent(rawParts []json.RawMessage, role string)
 		joined, _ := json.Marshal(strings.Join(textParts, "\n\n"))
 		return joined, nil
 	}
-	if role != "user" {
+	// 指令内容随后可能合并或降为 user；提前只提取文本会静默丢掉图片。
+	// 仅保留 Responses 桥的指令角色，assistant/tool 的原有内容限制不变。
+	if role != "user" && role != "system" && role != "developer" {
 		joined, _ := json.Marshal(strings.Join(textParts, "\n\n"))
 		return joined, nil
 	}

@@ -43,7 +43,7 @@
                   <button
                     type="button"
                     class="text-xs text-gray-400 hover:text-amber-500 disabled:opacity-50"
-                    :disabled="!!resetting[`${row.platform}.daily`]"
+                    :disabled="!row.persisted || !!resetting[`${row.platform}.daily`]"
                     :title="t('admin.users.platformQuota.reset.button')"
                     @click="onReset(row.platform, 'daily')"
                   >↻</button>
@@ -62,7 +62,7 @@
                   <button
                     type="button"
                     class="text-xs text-gray-400 hover:text-amber-500 disabled:opacity-50"
-                    :disabled="!!resetting[`${row.platform}.weekly`]"
+                    :disabled="!row.persisted || !!resetting[`${row.platform}.weekly`]"
                     :title="t('admin.users.platformQuota.reset.button')"
                     @click="onReset(row.platform, 'weekly')"
                   >↻</button>
@@ -81,7 +81,7 @@
                   <button
                     type="button"
                     class="text-xs text-gray-400 hover:text-amber-500 disabled:opacity-50"
-                    :disabled="!!resetting[`${row.platform}.monthly`]"
+                    :disabled="!row.persisted || !!resetting[`${row.platform}.monthly`]"
                     :title="t('admin.users.platformQuota.reset.button')"
                     @click="onReset(row.platform, 'monthly')"
                   >↻</button>
@@ -128,9 +128,10 @@ const emit = defineEmits(['close', 'success'])
 const { t } = useI18n()
 const appStore = useAppStore()
 
-const PLATFORMS: PlatformQuotaPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax']
+const PLATFORMS: PlatformQuotaPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go']
 
 interface QuotaRow {
+  persisted: boolean
   platform: PlatformQuotaPlatform
   daily_limit_usd: number | null
   weekly_limit_usd: number | null
@@ -152,6 +153,7 @@ const quotas = ref<QuotaRow[]>([])
 function emptyRow(p: PlatformQuotaPlatform): QuotaRow {
   return {
     platform: p,
+    persisted: false,
     daily_limit_usd: null,
     weekly_limit_usd: null,
     monthly_limit_usd: null,
@@ -169,6 +171,7 @@ function normalize(items: PlatformQuotaItem[]): QuotaRow[] {
     if (!it) return emptyRow(p)
     return {
       platform: p,
+      persisted: true,
       daily_limit_usd: it.daily_limit_usd ?? null,
       weekly_limit_usd: it.weekly_limit_usd ?? null,
       monthly_limit_usd: it.monthly_limit_usd ?? null,
@@ -262,7 +265,8 @@ function normalizeLimit(v: number | null | undefined): number | null {
 }
 
 async function onReset(platform: PlatformQuotaPlatform, quotaWindow: PlatformQuotaWindow) {
-  if (!props.user) return
+  // 仅输入限额但尚未保存的平台没有可重置的服务端窗口。
+  if (!props.user || !quotas.value.find((row) => row.platform === platform)?.persisted) return
   const windowLabel = t(`admin.users.platformQuota.window${quotaWindow.charAt(0).toUpperCase() + quotaWindow.slice(1)}`)
   const confirmed = window.confirm(
     t('admin.users.platformQuota.reset.confirm', { platform, window: windowLabel })

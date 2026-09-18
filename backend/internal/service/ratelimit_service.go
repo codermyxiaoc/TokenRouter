@@ -31,6 +31,7 @@ type RateLimitService struct {
 	settingService         *SettingService
 	tokenCacheInvalidator  TokenCacheInvalidator
 	runtimeBlocker         AccountRuntimeBlocker
+	ollamaCloudUsageProbe  ollamaCloudUsageProbeScheduler // 仅官方 Ollama Cloud 429 使用异步窗口探测。
 	usageCacheMu           sync.RWMutex
 	usageCache             map[int64]*geminiUsageCacheEntry
 	advancedSchedulerMu    sync.Mutex
@@ -635,7 +636,7 @@ func (s *RateLimitService) handleDefaultUpstreamError(ctx context.Context, accou
 	case 402:
 		// 国产供应商：余额不足是可恢复状态（充值/检测恢复后由周期任务自动解除），
 		// 不能走 handleAuthError 永久置 status=error。改为可恢复的临时停调。
-		if account.IsCNProvider() {
+		if account.IsCNProvider() || account.IsOpenCodeZen() {
 			s.handleCNProviderInsufficientBalance(ctx, account, upstreamMsg)
 			shouldDisable = true
 			break
@@ -1090,7 +1091,7 @@ func buildForbiddenErrorMessage(prefix string, upstreamMsg string, responseBody 
 
 // handle403 处理 403 Forbidden 错误
 // Antigravity 平台区分 validation/violation/generic 三种类型，均 SetError 永久禁用；
-// OpenAI 与国产供应商账号的 403 使用 HTML 豁免和累计冷却；
+// OpenAI、国产供应商与 OpenCode 账号的 403 使用 HTML 豁免和累计冷却；
 // 其他平台保持原有 SetError 行为。
 func (s *RateLimitService) handle403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
 	if account.Platform == PlatformAntigravity {
@@ -1102,7 +1103,7 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 		s.handleCNProviderConcurrencyLimit403(ctx, account)
 		return true
 	}
-	if account.Platform == PlatformOpenAI || account.IsCNProvider() {
+	if account.Platform == PlatformOpenAI || account.IsMultiProtocolAPIKey() {
 		return s.handleOpenAI403(ctx, account, upstreamMsg, responseBody)
 	}
 	// 非 Antigravity 平台：保持原有行为
@@ -1182,7 +1183,7 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 
 	until := time.Now().Add(time.Duration(cooldownMinutes) * time.Minute)
 	platformLabel := "OpenAI"
-	if account.IsCNProvider() {
+	if account.IsMultiProtocolAPIKey() {
 		platformLabel = account.Platform
 	}
 	reason := fmt.Sprintf("%s 403 temporary cooldown: %s", platformLabel, msg)
@@ -1304,9 +1305,14 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 			return
 		}
 	}
+	// 官方 Ollama Cloud 先应用不缩短的冷却，再异步查询其专属窗口；不解析为其它平台配额。
+	if IsOllamaCloudUsageAccount(account) {
+		s.handleOllamaCloudUsage429(ctx, account, headers)
+		return
+	}
 	// 国产供应商（kimi/zhipu/deepseek）的 429 走专用可恢复路径：余额不足 → 临时停调，
 	// Coding Plan 窗口耗尽 → 冷却到快照重置点。未命中则继续默认 429 逻辑。
-	if account.IsCNProvider() {
+	if account.IsMultiProtocolAPIKey() {
 		if s.applyCNProviderReactive429(ctx, account, headers, responseBody) {
 			return
 		}

@@ -169,6 +169,12 @@ func sanitizeAnthropicToolUseInput(name string, raw string) json.RawMessage {
 // Streaming: ResponsesStreamEvent → []AnthropicStreamEvent (stateful converter)
 // ---------------------------------------------------------------------------
 
+// responsesTextPart 同时以输出项和内容索引标识正文片段。
+type responsesTextPart struct {
+	OutputIndex  int
+	ContentIndex int
+}
+
 // ResponsesEventToAnthropicState tracks state for converting a sequence of
 // Responses SSE events directly into Anthropic SSE events.
 type ResponsesEventToAnthropicState struct {
@@ -189,6 +195,11 @@ type ResponsesEventToAnthropicState struct {
 	// OutputIndexToBlockIdx maps Responses output_index → Anthropic content block index.
 	OutputIndexToBlockIdx map[int]int
 
+	// textByPart 记录已交付正文；关闭内容块后仍保留，用于去重和补充尾文。
+	textByPart map[responsesTextPart]*strings.Builder
+	// textDelivered 表示已经生成过客户端正文事件。
+	textDelivered bool
+
 	InputTokens              int
 	OutputTokens             int
 	CacheReadInputTokens     int
@@ -203,12 +214,14 @@ type ResponsesEventToAnthropicState struct {
 func NewResponsesEventToAnthropicState() *ResponsesEventToAnthropicState {
 	return &ResponsesEventToAnthropicState{
 		OutputIndexToBlockIdx: make(map[int]int),
+		textByPart:            make(map[responsesTextPart]*strings.Builder),
 		Created:               time.Now().Unix(),
 	}
 }
 
 // ResponsesEventToAnthropicEvents converts a single Responses SSE event into
 // zero or more Anthropic SSE events, updating state as it goes.
+// @project-doc docs/interfaces/openai_upstream.md#responses_bridge_compatibility
 func ResponsesEventToAnthropicEvents(
 	evt *ResponsesStreamEvent,
 	state *ResponsesEventToAnthropicState,
@@ -221,7 +234,7 @@ func ResponsesEventToAnthropicEvents(
 	case "response.output_text.delta":
 		return resToAnthHandleTextDelta(evt, state)
 	case "response.output_text.done":
-		return resToAnthHandleBlockDone(state)
+		return resToAnthHandleTextDone(evt, state)
 	case "response.function_call_arguments.delta",
 		// custom/freeform 工具的输入增量与 function_call 参数增量同形。
 		"response.custom_tool_call_input.delta":
@@ -388,7 +401,16 @@ func resToAnthHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 }
 
 func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
-	if evt.Delta == "" {
+	return resToAnthEmitText(evt.Delta, resToAnthTextPartOf(evt), state)
+}
+
+func resToAnthTextPartOf(evt *ResponsesStreamEvent) responsesTextPart {
+	return responsesTextPart{OutputIndex: evt.OutputIndex, ContentIndex: evt.ContentIndex}
+}
+
+// resToAnthEmitText 按需开启文本块，并登记已交付片段以供 done 对账。
+func resToAnthEmitText(text string, part responsesTextPart, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	if text == "" {
 		return nil
 	}
 
@@ -411,16 +433,53 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		})
 	}
 
+	delivered, ok := state.textByPart[part]
+	if !ok {
+		delivered = &strings.Builder{}
+		state.textByPart[part] = delivered
+	}
+	_, _ = delivered.WriteString(text)
+	state.textDelivered = true
+
 	idx := state.ContentBlockIndex
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_delta",
 		Index: &idx,
 		Delta: &AnthropicDelta{
 			Type: "text_delta",
-			Text: evt.Delta,
+			Text: text,
 		},
 	})
 	return events
+}
+
+// resToAnthRecoverText 只补已输出前缀之后的尾文；不匹配时不重发正文。
+func resToAnthRecoverText(text string, part responsesTextPart, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	builder, known := state.textByPart[part]
+	if !known && state.textDelivered {
+		// 已输出正文但无法匹配片段身份时保守跳过，避免重复回答。
+		return nil
+	}
+
+	var delivered string
+	if known {
+		delivered = builder.String()
+	}
+	if text == delivered || !strings.HasPrefix(text, delivered) {
+		return nil
+	}
+	return resToAnthEmitText(text[len(delivered):], part, state)
+}
+
+// resToAnthHandleTextDone 恢复仅在 done 中提供的正文，再关闭内容块。
+func resToAnthHandleTextDone(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	if state.MessageStopSent {
+		// 消息已经终止，迟到事件不能在 message_stop 之后开启内容块。
+		return resToAnthHandleBlockDone(state)
+	}
+
+	events := resToAnthRecoverText(evt.Text, resToAnthTextPartOf(evt), state)
+	return append(events, resToAnthHandleBlockDone(state)...)
 }
 
 func resToAnthHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
@@ -623,6 +682,32 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 	return events
 }
 
+// resToAnthRecoverTerminalText 恢复仅在终态 output 中提供的正文。
+// 只有此前未交付正文时才恢复，因为终态数组索引与增量索引不保证一致。
+func resToAnthRecoverTerminalText(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	if state.textDelivered || evt.Response == nil {
+		return nil
+	}
+
+	var events []AnthropicStreamEvent
+	for outputIndex, item := range evt.Response.Output {
+		if item.Type != "message" {
+			continue
+		}
+		for contentIndex, content := range item.Content {
+			if content.Type != "output_text" {
+				continue
+			}
+			part := responsesTextPart{OutputIndex: outputIndex, ContentIndex: contentIndex}
+			events = append(events, resToAnthEmitText(content.Text, part, state)...)
+		}
+	}
+	if len(events) > 0 {
+		events = append(events, closeCurrentBlock(state)...)
+	}
+	return events
+}
+
 func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
 	if state.MessageStopSent {
 		return nil
@@ -630,6 +715,7 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 
 	var events []AnthropicStreamEvent
 	events = append(events, closeCurrentBlock(state)...)
+	events = append(events, resToAnthRecoverTerminalText(evt, state)...)
 
 	stopReason := "end_turn"
 	if evt.Usage != nil {

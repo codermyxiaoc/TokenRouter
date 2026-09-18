@@ -41,17 +41,17 @@ type CreateProxyRequest struct {
 
 // UpdateProxyRequest represents update proxy request
 type UpdateProxyRequest struct {
-	Name           string `json:"name"`
-	Protocol       string `json:"protocol" binding:"omitempty,oneof=http https socks5 socks5h"`
-	Host           string `json:"host"`
-	Port           int    `json:"port" binding:"omitempty,min=1,max=65535"`
-	Username       string `json:"username"`
-	Password       string `json:"password"`
-	Status         string `json:"status" binding:"omitempty,oneof=active inactive"`
-	ExpiresAt      *int64 `json:"expires_at"`
-	FallbackMode   string `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
-	BackupProxyID  *int64 `json:"backup_proxy_id"`
-	ExpiryWarnDays int    `json:"expiry_warn_days" binding:"omitempty,min=0"`
+	Name           string  `json:"name"`
+	Protocol       string  `json:"protocol" binding:"omitempty,oneof=http https socks5 socks5h"`
+	Host           string  `json:"host"`
+	Port           int     `json:"port" binding:"omitempty,min=1,max=65535"`
+	Username       *string `json:"username"` // 省略/null 保留，空串清空。
+	Password       *string `json:"password"`
+	Status         string  `json:"status" binding:"omitempty,oneof=active inactive"`
+	ExpiresAt      *int64  `json:"expires_at"`
+	FallbackMode   string  `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
+	BackupProxyID  *int64  `json:"backup_proxy_id"`
+	ExpiryWarnDays int     `json:"expiry_warn_days" binding:"omitempty,min=0"`
 }
 
 // List handles listing all proxies with pagination
@@ -192,8 +192,8 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 		Protocol:       strings.TrimSpace(req.Protocol),
 		Host:           strings.TrimSpace(req.Host),
 		Port:           req.Port,
-		Username:       strings.TrimSpace(req.Username),
-		Password:       strings.TrimSpace(req.Password),
+		Username:       trimProxyCredential(req.Username),
+		Password:       trimProxyCredential(req.Password),
 		Status:         strings.TrimSpace(req.Status),
 		ExpiresAt:      expiresAt,
 		FallbackMode:   strings.TrimSpace(req.FallbackMode),
@@ -206,6 +206,15 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 	}
 
 	response.Success(c, dto.ProxyFromServiceAdmin(proxy))
+}
+
+// trimProxyCredential 保留字段是否提交的语义，继续沿用代理管理接口的首尾空白规范化。
+func trimProxyCredential(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	return &trimmed
 }
 
 // Delete handles deleting a proxy

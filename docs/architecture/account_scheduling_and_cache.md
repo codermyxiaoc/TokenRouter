@@ -88,10 +88,14 @@ Bedrock 账号的模型筛选包含型号、来源区域及全局推理开关的
 
 命中后服务写入带结构化来源的临时不可调度原因和窗口截止时间，并触发账号状态失效传播；相同阈值状态不重复写入。管理员可从暂停原因区分阈值门禁与普通限流。设置读取使用进程原子缓存和 singleflight 回源；配置项不存在时，默认阈值按正常 TTL 缓存，只有真实数据库故障使用较短错误 TTL。显式保存后立即替换缓存，未提供该字段的部分更新不能用默认值污染现有缓存。
 
+调度元数据投影必须保留账号的 `account_scheduling_threshold` 覆盖，以及 Anthropic session、7d、7d OAuth-inference 的 utilization/reset 字段，保证从 Redis 元数据恢复的账号与完整账号执行同一阈值判断。Anthropic/OpenAI OAuth 投影不携带认证 token；字段调整后依赖启动初始快照重建及后续 outbox 更新刷新已有记录，不能假设无 TTL 的元数据会自动过期。
+
 <a id="session_lifecycle"></a>
 ## 粘性与等待
 
 显式 session、previous response、WebSocket 或平台内部上下文可以建立粘性。命中账号仍需重新通过当前快照的状态、分组、模型和策略校验；账号被禁用、移组、限流、混合调度关闭或能力不再满足时，旧绑定必须失效。
+
+OpenAI WS 的账号粘性继续使用原会话哈希；抢占、turn-state、连接绑定和相关失效密文记录采用独立的 API Key + 原始线程/会话 + 请求类型执行作用域。两种键不能互相替换：前者决定账号亲和，后者避免父子线程及后台任务互相取消或串用状态。池内等待重选仅寻找同账号的兼容连接，不绕过当前账号资格、请求并发或严格 previous-response 续接绑定。身份解析、回退和多实例更新边界见 [执行作用域](../interfaces/openai_upstream.md#openai_execution_scope)。
 
 Anthropic OAuth/Setup Token 账号的 `max_sessions` 限制空闲窗口内的活跃会话数。Messages 正常成功（包括流式和切号后成功）或返回可结算的部分结果后，成功账号的会话注册必须保留，由最后活动时间和空闲超时决定过期；请求结束只释放请求并发槽。未成功服务的失败请求以及已放弃的账号 attempt 立即注销对应会话，避免失败请求占满空闲窗口。
 
@@ -102,6 +106,8 @@ Anthropic OAuth/Setup Token 账号的 `max_sessions` 限制空闲窗口内的活
 流式请求一旦向客户端写出首个分块就固定当前 attempt。之后账号释放、错误处理和流尾事件仍要完成，但不能切换到另一个账号拼接响应。
 
 ## 失效与恢复
+
+OpenCode 的模式和模型规则不能在候选投影中丢失。其 GO 统一用量快照校验依赖完整查询身份，因此 OpenCode 元数据额外保留 Credentials、代理身份及用量查询/TLS 配置，保证窗口阈值与完整账号一致；这些内容仅供内部调度缓存使用，不进入浏览器用量结果。详见 [OpenCode 用量与调度](../interfaces/opencode_upstream.md#opencode_usage_and_scheduling)。
 
 以下变化必须使相关账号投影或 bucket 失效：账号启停/删除、凭据刷新、分组关系、优先级、模型映射/白名单、代理可用性、限流与临时不可调度、mixed scheduling、privacy 和可调度资格。影响多个平台 bucket 的 Antigravity 混合账号要同时更新原生目标平台与 Antigravity bucket。
 
@@ -119,6 +125,7 @@ API Key 上游用量是控制面查询，不属于调度快照。`UpstreamUsageS
 
 - “无可用账号”诊断要区分无分组关联、硬资格过滤、模型/endpoint 不匹配、临时限流、并发等待超时和快照不可用。
 - 日志和 Ops 记录使用账号 ID、bucket、平台、模型和过滤原因，不记录 token 或完整凭据。
+- OpenAI 调度粘性命中率按请求计数：同次请求同时命中 previous response 和 session 只累计一次总体命中，两类独立计数仍各自保留。
 - 修改筛选或评分时同时覆盖缓存命中、数据库回退、粘性命中后失效、多实例乱序事件和流开始后的失败。
 - 管理端账号测试成功不等于所有请求协议都具备 capability；调度仍按实际 endpoint 判定。
 

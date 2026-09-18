@@ -88,11 +88,11 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	// 用于存储 tool_use id -> name 映射
 	toolIDToName := make(map[string]string)
 
-	// 检测是否有 web_search 工具
-	hasWebSearchTool := hasWebSearchTool(claudeReq.Tools)
+	// 内置搜索与客户端工具不能混用；只为纯搜索请求选择搜索模型。
+	useWebSearchRequest := hasWebSearchTool(claudeReq.Tools) && !hasClientFunctionTools(claudeReq.Tools)
 	requestType := "agent"
 	targetModel := mappedModel
-	if hasWebSearchTool {
+	if useWebSearchRequest {
 		requestType = "web_search"
 		if targetModel != webSearchFallbackModel {
 			targetModel = webSearchFallbackModel
@@ -156,11 +156,7 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 				Mode: "VALIDATED",
 			},
 		}
-		// 函数声明与 Google Search 混用时，上游要求显式开启服务端工具调用。
-		if hasMixedToolInvocations(tools) {
-			enabled := true
-			innerRequest.ToolConfig.IncludeServerSideToolInvocations = &enabled
-		}
+
 	}
 
 	if systemInstruction != nil {
@@ -696,6 +692,20 @@ func hasWebSearchTool(tools []ClaudeTool) bool {
 	return false
 }
 
+// hasClientFunctionTools 与 buildTools 共用可转发工具的资格，避免无效 custom 工具关闭纯搜索。
+func hasClientFunctionTools(tools []ClaudeTool) bool {
+	for _, tool := range tools {
+		if isWebSearchTool(tool) || isCodeExecutionTool(tool) || strings.TrimSpace(tool.Name) == "" {
+			continue
+		}
+		if tool.Type == "custom" && (tool.Custom == nil || tool.Custom.InputSchema == nil) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func isWebSearchTool(tool ClaudeTool) bool {
 	if strings.HasPrefix(tool.Type, "web_search") || tool.Type == "google_search" {
 		return true
@@ -712,21 +722,6 @@ func isWebSearchTool(tool ClaudeTool) bool {
 
 func isCodeExecutionTool(tool ClaudeTool) bool {
 	return strings.TrimSpace(tool.Type) == "code_execution"
-}
-
-// hasMixedToolInvocations 判断构建后的工具声明是否同时包含函数声明与内置工具
-// （googleSearch/codeExecution）。仅在两者并存时需要开启 includeServerSideToolInvocations。
-func hasMixedToolInvocations(declarations []GeminiToolDeclaration) bool {
-	hasFunctions, hasBuiltin := false, false
-	for _, declaration := range declarations {
-		if len(declaration.FunctionDeclarations) > 0 {
-			hasFunctions = true
-		}
-		if declaration.GoogleSearch != nil || declaration.CodeExecution != nil {
-			hasBuiltin = true
-		}
-	}
-	return hasFunctions && hasBuiltin
 }
 
 // buildTools 构建 tools
@@ -792,6 +787,12 @@ func buildTools(tools []ClaudeTool) []GeminiToolDeclaration {
 			Description: description,
 			Parameters:  params,
 		})
+	}
+
+	// v1internal 不接受内置搜索/执行与函数声明混用，优先保留客户端工具及原模型。
+	if len(funcDecls) > 0 {
+		hasWebSearch = false
+		hasCodeExecution = false
 	}
 
 	var declarations []GeminiToolDeclaration

@@ -74,6 +74,18 @@ func TestDefaultAntigravityModelMapping_Gemini36FlashModels(t *testing.T) {
 	}
 }
 
+// 新版 Flash 的各思考档位均需出现在默认透传映射中。
+func TestDefaultAntigravityModelMapping_Gemini37And38FlashModels(t *testing.T) {
+	for _, base := range []string{"gemini-3.7-flash", "gemini-3.8-flash"} {
+		for _, suffix := range []string{"", "-high", "-low", "-medium", "-tiered"} {
+			model := base + suffix
+			if got := DefaultAntigravityModelMapping[model]; got != model {
+				t.Fatalf("expected %s to map to itself, got %q", model, got)
+			}
+		}
+	}
+}
+
 func TestDefaultBedrockModelMapping_ContainsNewClaudeModels(t *testing.T) {
 	t.Parallel()
 

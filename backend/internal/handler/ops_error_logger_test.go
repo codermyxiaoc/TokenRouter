@@ -535,7 +535,8 @@ func TestOpsCaptureWriter_CapturesSplitDataOnlyTerminalMarkers(t *testing.T) {
 	}
 }
 
-func TestOpsErrorLoggerMiddleware_StreamFailureUsesTerminalErrorOverAttemptContext(t *testing.T) {
+// 最后一次上游失败由转发层显式登记，不能让此前尝试的状态或消息污染终态。
+func TestOpsErrorLoggerMiddleware_StreamFailureUsesObservedTerminalOverEarlierAttempt(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
 
@@ -544,6 +545,7 @@ func TestOpsErrorLoggerMiddleware_StreamFailureUsesTerminalErrorOverAttemptConte
 	router.Use(OpsErrorLoggerMiddleware(ops))
 	router.POST("/v1/responses", func(c *gin.Context) {
 		service.SetOpsUpstreamError(c, http.StatusBadGateway, "Upstream transport error", "earlier attempt failed")
+		service.SetOpsUpstreamError(c, http.StatusBadRequest, "input exceeds the context window", "final attempt failed")
 		c.Status(http.StatusOK)
 		_, _ = c.Writer.WriteString("event: er")
 		_, _ = c.Writer.WriteString("ror\n")

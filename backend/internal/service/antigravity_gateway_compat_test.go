@@ -335,7 +335,7 @@ func TestBuildAntigravityCompatGeminiBody_ConfiguresMixedToolInvocations(t *test
 		{
 			name:      "mixed server and client tools",
 			tools:     `[{"name":"get_weather","input_schema":{"type":"object"}},{"type":"web_search_20250305","name":"web_search"}]`,
-			wantField: true,
+			wantField: false,
 		},
 		{
 			name:  "client tools only",
@@ -370,7 +370,7 @@ func TestBuildAntigravityCompatGeminiBody_ConfiguresMixedToolInvocations(t *test
 	}
 }
 
-func TestAntigravityCompatChatMixedBuiltInToolsEnableServerSideInvocations(t *testing.T) {
+func TestAntigravityCompatChatMixedBuiltInToolsKeepClientFunctions(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{antigravityCompatSuccessResponse()}}
 	svc := newAntigravityCompatService(config.GatewayConfig{MaxLineSize: defaultMaxLineSize}, upstream)
@@ -393,10 +393,11 @@ func TestAntigravityCompatChatMixedBuiltInToolsEnableServerSideInvocations(t *te
 	require.NotNil(t, result)
 	require.Len(t, upstream.requestBodies, 1)
 	requestBody := upstream.requestBodies[0]
-	require.True(t, gjson.GetBytes(requestBody, "request.toolConfig.includeServerSideToolInvocations").Bool())
+	require.False(t, gjson.GetBytes(requestBody, "request.toolConfig.includeServerSideToolInvocations").Exists())
 	require.Len(t, gjson.GetBytes(requestBody, "request.tools.0.functionDeclarations").Array(), 2)
-	require.True(t, gjson.GetBytes(requestBody, "request.tools.1.googleSearch").Exists())
-	require.True(t, gjson.GetBytes(requestBody, "request.tools.2.codeExecution").Exists())
+	require.False(t, gjson.GetBytes(requestBody, "request.tools.1.googleSearch").Exists())
+	require.False(t, gjson.GetBytes(requestBody, "request.tools.2.codeExecution").Exists())
+	require.Len(t, gjson.GetBytes(requestBody, "request.tools").Array(), 1)
 }
 
 func TestAntigravityCompatPreservesChatTokenLimit(t *testing.T) {

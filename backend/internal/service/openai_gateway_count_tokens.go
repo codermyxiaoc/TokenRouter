@@ -93,7 +93,7 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 
 	// 三家国产供应商的兼容层都没有可依赖的 count_tokens 端点；无论账号使用
 	// Chat、Anthropic 还是 Responses 上游协议，都只做本地估算且不改变账号状态。
-	if account.IsCNProvider() {
+	if account.IsMultiProtocolAPIKey() {
 		estimated, err := estimateAnthropicCountTokensLocally(body)
 		if err != nil {
 			writeAnthropicCountTokensError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")

@@ -230,6 +230,19 @@
             <PlatformIcon platform="minimax" size="sm" />
             MiniMax
           </button>
+          <button
+            type="button"
+            @click="selectOpenCodeGoPlatform()"
+            :class="[
+              'flex h-9 flex-1 items-center justify-center gap-2 rounded-md px-4 py-1.5 text-sm font-medium transition-all',
+              form.platform === 'opencode_go'
+                ? 'bg-white text-amber-600 shadow-sm dark:bg-dark-600 dark:text-amber-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="opencode_go" size="sm" />
+            OpenCode
+          </button>
         </div>
       </div>
 
@@ -482,7 +495,60 @@
       </div>
 
       <!-- 国产供应商账号模式选择 -->
-      <div v-if="isCNPlatform">
+      <!-- OpenCode 的 Zen 按量模式与 GO 订阅模式。 -->
+      <div v-if="isOpenCodeGoPlatform">
+        <label class="input-label">{{ t('admin.accounts.cnProviders.accountMode.title') }}</label>
+        <div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            @click="openCodeAccountMode = 'zen'"
+            :class="[
+              'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+              openCodeAccountMode === 'zen'
+                ? cnAccentActiveClass
+                : 'border-gray-200 hover:border-gray-400 dark:border-dark-600 dark:hover:border-gray-600'
+            ]"
+          >
+            <div
+              :class="[
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                openCodeAccountMode === 'zen' ? cnAccentIconClass : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+              ]"
+            >
+              <Icon name="creditCard" size="sm" />
+            </div>
+            <div>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.accounts.opencodeGo.accountMode.zen') }}</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.accountMode.zenDesc') }}</span>
+            </div>
+          </button>
+          <button
+            type="button"
+            @click="openCodeAccountMode = 'go'"
+            :class="[
+              'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+              openCodeAccountMode === 'go'
+                ? cnAccentActiveClass
+                : 'border-gray-200 hover:border-gray-400 dark:border-dark-600 dark:hover:border-gray-600'
+            ]"
+          >
+            <div
+              :class="[
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                openCodeAccountMode === 'go' ? cnAccentIconClass : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+              ]"
+            >
+              <Icon name="bolt" size="sm" />
+            </div>
+            <div>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.accounts.opencodeGo.accountMode.go') }}</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.opencodeGo.accountMode.goDesc') }}</span>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <div v-if="isCNPlatform && !isOpenCodeGoPlatform">
         <label class="input-label">{{ t('admin.accounts.cnProviders.accountMode.title') }}</label>
         <div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2" data-tour="account-form-mode">
           <!-- 按量付费（Token 余额） -->
@@ -1625,7 +1691,7 @@
                     : 'https://generativelanguage.googleapis.com'
                   : form.platform === 'grok'
                     ? 'https://api.x.ai/v1'
-                    : 'https://api.anthropic.com'
+                    : form.platform === 'opencode_go' ? defaultCNBaseUrl(form.platform, openCodeAccountMode, apiProtocol) : 'https://api.anthropic.com'
             "
           />
           <p v-if="baseUrlHint" class="input-hint">{{ baseUrlHint }}</p>
@@ -1635,7 +1701,7 @@
             @select="apiKeyBaseUrl = $event"
           />
           <CnBaseUrlPresets
-            v-if="isCNPlatform"
+            v-if="isCNPlatform && !isOpenCodeGoPlatform"
             class="mt-2"
             :platform="cnPresetPlatform"
             :mode="accountMode"
@@ -1663,6 +1729,11 @@
             {{ t('admin.accounts.cnProviders.apiProtocol.responsesFallbackDesc') }}
           </p>
         </div>
+        <OpenCodeGoProtocolRulesEditor
+          v-if="isOpenCodeGoPlatform && apiProtocol === 'adaptive'"
+          v-model:rows="openCodeGoProtocolRules"
+          :plan="openCodeAccountMode"
+        />
         <div>
           <label class="input-label">{{ t('admin.accounts.apiKeyRequired') }}</label>
           <input
@@ -1679,7 +1750,7 @@
                     : 'AIza...'
                   : form.platform === 'grok'
                     ? 'xai-...'
-                    : 'sk-ant-...'
+                    : form.platform === 'opencode_go' ? 'sk-...' : 'sk-ant-...'
             "
           />
           <p v-if="apiKeyHint" class="input-hint">{{ apiKeyHint }}</p>
@@ -3324,7 +3395,7 @@
         </div>
       </div>
 
-      <!-- OpenAI WS Mode 三态（off/ctx_pool/passthrough） -->
+      <!-- OpenAI WS 模式：关闭、上下文池、透传与 HTTP 桥接 -->
       <div
         v-if="form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
@@ -3336,6 +3407,9 @@
               {{ t('admin.accounts.openai.wsModeDesc') }}
             </p>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.wsModeRoutingDesc') }}
+            </p>
+            <p v-if="openAIWSModeConcurrencyHintKey" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ t(openAIWSModeConcurrencyHintKey) }}
             </p>
           </div>
@@ -4257,6 +4331,7 @@ import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
+import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import UpstreamUsageConfigEditor from '@/components/account/UpstreamUsageConfigEditor.vue'
@@ -4265,6 +4340,11 @@ import {
   applyHeaderOverride,
   applyInterceptWarmup,
   cnSupportsNativeResponses,
+  applyOpenCodeGoProtocolRules,
+  cloneOpenCodeGoProtocolRules,
+  defaultOpenCodeProtocolRules,
+  type OpenCodeAccountMode,
+  type OpenCodeGoProtocolRule,
   defaultCNAdaptiveBaseUrls,
   defaultCNBaseUrl,
   isHeaderOverrideCapable,
@@ -4336,7 +4416,7 @@ const baseUrlHint = computed(() => {
     return t('admin.accounts.gemini.providerType.thirdPartyBaseUrlHint')
   }
   if (form.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
-  if (form.platform === 'grok') return ''
+  if (form.platform === 'grok' || form.platform === 'opencode_go') return ''
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -4346,7 +4426,7 @@ const apiKeyHint = computed(() => {
     return t('admin.accounts.gemini.providerType.thirdPartyApiKeyHint')
   }
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
-  if (form.platform === 'grok') return ''
+  if (form.platform === 'grok' || form.platform === 'opencode_go') return ''
   return t('admin.accounts.apiKeyHint')
 })
 
@@ -4504,6 +4584,12 @@ const upstreamUsageWalletUserId = ref('')
 
 // 国产供应商账号的计费模式、协议与默认端点彼此联动。
 const accountMode = ref<CnAccountMode>('payg')
+const openCodeAccountMode = ref<OpenCodeAccountMode>('zen')
+const openCodeGoProtocolRules = ref<OpenCodeGoProtocolRule[]>(cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules('zen')))
+const isOpenCodeGoPlatform = computed(() => form.platform === 'opencode_go')
+function currentOpenCodeOrCNMode(): CnAccountMode | OpenCodeAccountMode {
+  return isOpenCodeGoPlatform.value ? openCodeAccountMode.value : accountMode.value
+}
 // 智谱团队版 Coding Plan 的组织/项目 ID，仅在创建团队账号时写入凭据。
 const zhipuOrganization = ref('')
 const zhipuProject = ref('')
@@ -4515,8 +4601,9 @@ const adaptiveBaseUrls = ref<Record<CnNativeApiProtocol, string>>({
   anthropic: '',
   responses: ''
 })
+// 国产供应商与 OpenCode 共用多协议表单；各自的模式和端点预设分别处理。
 const isCNPlatform = computed(
-  () => form.platform === 'kimi' || form.platform === 'zhipu' || form.platform === 'deepseek' || form.platform === 'minimax'
+  () => form.platform === 'kimi' || form.platform === 'zhipu' || form.platform === 'deepseek' || form.platform === 'minimax' || form.platform === 'opencode_go'
 )
 // 模板不支持联合类型断言，因此在脚本中收窄预设组件的平台类型。
 const cnPresetPlatform = computed<'kimi' | 'zhipu' | 'deepseek' | 'minimax'>(() => {
@@ -4526,6 +4613,7 @@ const cnPresetPlatform = computed<'kimi' | 'zhipu' | 'deepseek' | 'minimax'>(() 
   return 'kimi'
 })
 // 当前平台可选的协议档（responses 仅 DeepSeek / Kimi / MiniMax）。
+const adaptivePresetPlatform = computed(() => isOpenCodeGoPlatform.value ? 'opencode_go' as const : cnPresetPlatform.value)
 const cnProtocolOptions = computed<Array<{ value: CnApiProtocol; labelKey: string }>>(() => {
   const options: Array<{ value: CnApiProtocol; labelKey: string }> = [
     { value: 'adaptive', labelKey: 'adaptive' },
@@ -4546,7 +4634,7 @@ const cnAdaptiveProtocolOptions = computed<Array<{ value: CnNativeApiProtocol; l
   return opts
 })
 
-function resetAdaptiveBaseUrls(platform: 'kimi' | 'zhipu' | 'deepseek' | 'minimax', mode: CnAccountMode) {
+function resetAdaptiveBaseUrls(platform: 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go', mode: CnAccountMode | OpenCodeAccountMode) {
   adaptiveBaseUrls.value = defaultCNAdaptiveBaseUrls(platform, mode)
 }
 // 当前选中平台的品牌色（选中卡片描边 / 图标底色），与 platformColors 取色一致。
@@ -4596,8 +4684,43 @@ function selectCNPlatform(platform: 'kimi' | 'zhipu' | 'deepseek' | 'minimax') {
   resetAdaptiveBaseUrls(platform, accountMode.value)
 }
 // 账号类型 / 协议变更时同步默认 base url。
+function selectOpenCodeGoPlatform() {
+  form.platform = 'opencode_go'
+  form.type = 'apikey'
+  accountCategory.value = 'apikey'
+  apiProtocol.value = 'adaptive'
+  openCodeAccountMode.value = 'zen'
+  // 切换到自动适配平台时，不携带上一平台的独立钱包查询凭据。
+  upstreamUsageAdapter.value = 'sub2api'
+  upstreamUsageBaseUrl.value = ''
+  upstreamUsageWalletAccessToken.value = ''
+  upstreamUsageWalletUserId.value = ''
+  apiKeyBaseUrl.value = defaultCNBaseUrl('opencode_go', openCodeAccountMode.value, 'adaptive')
+  resetAdaptiveBaseUrls('opencode_go', openCodeAccountMode.value)
+  openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules(openCodeAccountMode.value))
+}
+// 账号类型 / 协议变更时同步默认 base url。
+watch(openCodeAccountMode, (mode, previousMode) => {
+  if (!isOpenCodeGoPlatform.value) return
+  if (apiProtocol.value === 'adaptive') {
+    const previousDefaults = defaultCNAdaptiveBaseUrls('opencode_go', previousMode)
+    const nextDefaults = defaultCNAdaptiveBaseUrls('opencode_go', mode)
+    for (const item of cnAdaptiveProtocolOptions.value) {
+      if (!adaptiveBaseUrls.value[item.value] || adaptiveBaseUrls.value[item.value] === previousDefaults[item.value]) {
+        adaptiveBaseUrls.value[item.value] = nextDefaults[item.value]
+      }
+    }
+    apiKeyBaseUrl.value = adaptiveBaseUrls.value.chat_completions
+  } else if (!apiKeyBaseUrl.value.trim() || apiKeyBaseUrl.value === defaultCNBaseUrl('opencode_go', previousMode, apiProtocol.value)) {
+    apiKeyBaseUrl.value = defaultCNBaseUrl('opencode_go', mode, apiProtocol.value)
+  }
+  const previousRules = JSON.stringify(defaultOpenCodeProtocolRules(previousMode))
+  if (JSON.stringify(openCodeGoProtocolRules.value) === previousRules) {
+    openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules(mode))
+  }
+})
 watch(accountMode, (mode, previousMode) => {
-  if (!isCNPlatform.value) return
+  if (!isCNPlatform.value || isOpenCodeGoPlatform.value) return
   if (apiProtocol.value === 'adaptive') {
     const previousDefaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, previousMode)
     const nextDefaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, mode)
@@ -4614,14 +4737,14 @@ watch(accountMode, (mode, previousMode) => {
 watch(apiProtocol, protocol => {
   if (!isCNPlatform.value) return
   if (protocol === 'adaptive') {
-    const defaults = defaultCNAdaptiveBaseUrls(cnPresetPlatform.value, accountMode.value)
+    const defaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, currentOpenCodeOrCNMode())
     for (const item of cnAdaptiveProtocolOptions.value) {
       if (!adaptiveBaseUrls.value[item.value]) adaptiveBaseUrls.value[item.value] = defaults[item.value]
     }
     apiKeyBaseUrl.value = adaptiveBaseUrls.value.chat_completions
     return
   }
-  apiKeyBaseUrl.value = defaultCNBaseUrl(form.platform, accountMode.value, protocol)
+  apiKeyBaseUrl.value = defaultCNBaseUrl(form.platform, currentOpenCodeOrCNMode(), protocol)
 })
 
 // 端点预设同时更新模式和协议，保持表单字段一致。
@@ -5328,6 +5451,7 @@ watch(
       form.platform = props.initialPlatform || 'anthropic'
       // MiniMax 仅支持 API Key，筛选入口打开时也必须初始化协议端点。
       if (form.platform === 'minimax') selectCNPlatform('minimax')
+      if (form.platform === 'opencode_go') selectOpenCodeGoPlatform()
       // Load TLS fingerprint profiles
       adminAPI.tlsFingerprintProfiles.list()
         .then(profiles => { tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name })) })
@@ -5413,6 +5537,11 @@ watch(
           : newPlatform === 'grok'
             ? 'https://api.x.ai/v1'
             : 'https://api.anthropic.com'
+    if (newPlatform === 'opencode_go') {
+      form.type = 'apikey'
+      accountCategory.value = 'apikey'
+      apiKeyBaseUrl.value = defaultCNBaseUrl(newPlatform, openCodeAccountMode.value, apiProtocol.value)
+    }
     // 切换平台时旧平台模型不再适用。Qoder 由账号 model_mapping
     // 配置展示/请求模型，默认不填充会过期的前端硬编码白名单。
     allowedModels.value = newPlatform === 'qoder' ? [] : [...getModelsByPlatform(newPlatform)]
@@ -5935,6 +6064,8 @@ const resetForm = () => {
   accountCategory.value = 'oauth-based'
   addMethod.value = 'oauth'
   accountMode.value = 'payg'
+  openCodeAccountMode.value = 'zen'
+  openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules('zen'))
   apiProtocol.value = 'adaptive'
   zhipuOrganization.value = ''
   zhipuProject.value = ''
@@ -6559,14 +6690,13 @@ const handleSubmit = async () => {
     }
   }
 
-  // 国产供应商：账号模式 + 协议 + 对应端点写入凭据；后端按 account_mode 路由
-  // 额度/余额探测，按 api_protocol 路由转发端点与格式。注意 CN apikey 走本函数
-  // 的通用路径（直接 doCreateAccount），不经过 createAccountAndFinish。
-  if (form.platform === 'kimi' || form.platform === 'zhipu' || form.platform === 'deepseek' || form.platform === 'minimax') {
-    credentials.account_mode = accountMode.value
+  // 国产供应商与 OpenCode 将账号模式、协议、端点写入凭据，
+  // 通过通用 API Key 创建路径保留配额与上游用量查询设置。
+  if (form.platform === 'kimi' || form.platform === 'zhipu' || form.platform === 'deepseek' || form.platform === 'minimax' || form.platform === 'opencode_go') {
+    credentials.account_mode = currentOpenCodeOrCNMode()
     credentials.api_protocol = apiProtocol.value
     if (apiProtocol.value === 'adaptive') {
-      const defaults = defaultCNAdaptiveBaseUrls(form.platform, accountMode.value)
+      const defaults = defaultCNAdaptiveBaseUrls(form.platform, currentOpenCodeOrCNMode())
       const protocolBaseUrls: Record<string, string> = {}
       for (const item of cnAdaptiveProtocolOptions.value) {
         protocolBaseUrls[item.value] = (adaptiveBaseUrls.value[item.value] || defaults[item.value]).trim()
@@ -6575,10 +6705,13 @@ const handleSubmit = async () => {
       credentials.base_url = protocolBaseUrls.chat_completions
     }
     const resolvedCNBase = (
-      apiKeyBaseUrl.value.trim() || defaultCNBaseUrl(form.platform, accountMode.value, apiProtocol.value)
+      apiKeyBaseUrl.value.trim() || defaultCNBaseUrl(form.platform, currentOpenCodeOrCNMode(), apiProtocol.value)
     ).trim()
     if (apiProtocol.value !== 'adaptive' && resolvedCNBase) {
       credentials.base_url = resolvedCNBase
+    }
+    if (form.platform === 'opencode_go') {
+      applyOpenCodeGoProtocolRules(credentials, openCodeGoProtocolRules.value, 'create')
     }
     if (form.platform === 'zhipu' && accountMode.value === 'coding') {
       const organization = zhipuOrganization.value.trim()
@@ -6895,7 +7028,7 @@ const createAccountAndFinish = async (
     if (type === 'apikey') {
       const upstreamConfig: Record<string, unknown> = {
         enabled: upstreamUsageEnabled.value,
-        adapter: upstreamUsageAdapter.value
+        adapter: form.platform === 'opencode_go' ? 'opencode_go' : upstreamUsageAdapter.value
       }
       if (upstreamUsageBaseUrl.value.trim()) {
         upstreamConfig.base_url = upstreamUsageBaseUrl.value.trim()

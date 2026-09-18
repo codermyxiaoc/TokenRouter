@@ -1583,4 +1583,70 @@ describe('user KeysView column settings', () => {
     expect(showError).toHaveBeenCalledWith('Duplicate source model')
     expect(createKey).not.toHaveBeenCalled()
   })
+  it.each([
+    { initialStatus: 'quota_exhausted', status: 'active', formStatus: 'active' },
+    { initialStatus: 'inactive', status: 'inactive', formStatus: 'inactive' },
+    { initialStatus: 'active', status: 'active', formStatus: 'inactive' },
+  ] as const)('syncs quota reset from $initialStatus to $status with form status $formStatus', async ({ initialStatus, status, formStatus }) => {
+    const key: ApiKey = {
+      ...createApiKey(), group_id: 1, quota: 10, quota_used: 10,
+      status: initialStatus,
+    }
+    listKeys.mockResolvedValueOnce({ items: [key], total: 1, page: 1, page_size: 20, pages: 1 })
+    updateKey.mockResolvedValue({ ...key, status, quota_used: 0 })
+    const wrapper = await mountView()
+    await getButtonByText(wrapper, 'Edit').trigger('click')
+    await wrapper.get('[data-tour="key-form-name"]').setValue('Unsaved name')
+    const statusToggle = wrapper.getComponent('[data-test="key-status-toggle"]')
+    statusToggle.vm.$emit('update:modelValue', false)
+    await wrapper.get('button[title="keys.resetQuotaUsed"]').trigger('click')
+    const confirmation = wrapper.findAllComponents({ name: 'ConfirmDialog' })
+      .find((dialog) => dialog.props('title') === 'keys.resetQuotaTitle')!
+    confirmation.vm.$emit('confirm')
+    await flushPromises()
+
+    expect(updateKey).toHaveBeenNthCalledWith(1, key.id, { reset_quota: true })
+    expect(wrapper.findComponent({ name: 'DataTable' }).props('data')[0])
+      .toMatchObject({ status, quota_used: 0 })
+    expect(statusToggle.props('modelValue')).toBe(formStatus === 'active')
+    expect((wrapper.get('[data-tour="key-form-name"]').element as HTMLInputElement).value)
+      .toBe('Unsaved name')
+
+    await wrapper.get('#key-form').trigger('submit')
+    await flushPromises()
+    expect(updateKey).toHaveBeenNthCalledWith(2, key.id, expect.objectContaining({ name: 'Unsaved name', status: formStatus }))
+    wrapper.unmount()
+  })
+
+
+  // 重置中的请求只属于原密钥，关闭弹窗后编辑另一把密钥不能串写。
+  it('重置返回时保持新编辑密钥的额度和未保存状态', async () => {
+    const first = { ...createApiKey(), status: 'quota_exhausted' as const, quota: 10, quota_used: 10 }
+    const second = { ...createApiKey(), id: 2, name: 'second', status: 'inactive' as const, quota_used: 7 }
+    listKeys.mockResolvedValueOnce({ items: [first, second], total: 2, pages: 1 })
+    let finish!: (key: ApiKey) => void
+    updateKey.mockReturnValueOnce(new Promise<ApiKey>((resolve) => { finish = resolve }))
+    const wrapper = await mountView()
+    await getButtonByText(wrapper, 'Edit').trigger('click')
+    await wrapper.get('button[title="keys.resetQuotaUsed"]').trigger('click')
+    const confirmation = wrapper.findAllComponents({ name: 'ConfirmDialog' })
+      .find((dialog) => dialog.props('title') === 'keys.resetQuotaTitle')!
+    confirmation.vm.$emit('confirm')
+    await nextTick()
+    const vm = wrapper.vm as unknown as { closeModals: () => void; editKey: (key: ApiKey) => void }
+    vm.closeModals()
+    vm.editKey(second)
+    await nextTick()
+    await wrapper.get('[data-tour="key-form-name"]').setValue('second draft')
+    finish({ ...first, status: 'active', quota_used: 0.00000012 })
+    await flushPromises()
+    expect(first.status).toBe('active')
+    expect(first.quota_used).toBe(0.00000012)
+    expect(second.status).toBe('inactive')
+    expect(second.quota_used).toBe(7)
+    expect(wrapper.getComponent('[data-test="key-status-toggle"]').props('modelValue')).toBe(false)
+    expect((wrapper.get('[data-tour="key-form-name"]').element as HTMLInputElement).value).toBe('second draft')
+    wrapper.unmount()
+  })
+
 })

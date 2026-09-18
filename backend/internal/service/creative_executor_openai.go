@@ -27,6 +27,9 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 	if err != nil {
 		return nil, err
 	}
+	if account.IsOpenAIOAuthLike() {
+		return e.executeOpenAIOAuth(ctx, run, account, upstreamModel, endpoint, contentType, body)
+	}
 	token, _, err := e.gateway.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, creativeHTTPStatusError(0, err.Error())

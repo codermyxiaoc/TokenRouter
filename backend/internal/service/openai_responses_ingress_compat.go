@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/apicompat"
+	"github.com/tidwall/gjson"
 )
 
 // normalizeOpenAIResponsesLegacyIngress accepts the Chat Completions-shaped
@@ -14,6 +15,21 @@ import (
 func normalizeOpenAIResponsesLegacyIngress(body []byte) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
+	}
+	// 原生请求可能携带很大的图片；没有旧版顶层字段时无需解码整包内容。
+	view := parseRawJSONView(body)
+	if view.IsObject() && gjson.ValidBytes(body) {
+		hasLegacyField := false
+		view.ForEach(func(key, _ gjson.Result) bool {
+			switch key.Str {
+			case "messages", "prompt", "commands":
+				hasLegacyField = true
+			}
+			return !hasLegacyField
+		})
+		if !hasLegacyField {
+			return body, false, nil
+		}
 	}
 
 	var request map[string]any

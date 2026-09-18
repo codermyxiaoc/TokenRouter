@@ -201,7 +201,10 @@
             class="card overflow-hidden"
             data-testid="marketplace-group-section"
           >
-            <div class="card-header flex flex-col gap-4 px-4 py-4 md:px-5 xl:flex-row xl:items-center xl:justify-between">
+            <div
+              class="card-header flex flex-col gap-4 px-4 py-4 md:px-5 xl:flex-row xl:items-center xl:justify-between"
+              :class="{ 'border-b-0': !expandedGroupIds.has(group.id) }"
+            >
               <div class="min-w-0 flex-1 space-y-3">
                 <div class="flex flex-wrap items-center gap-2">
                   <span :class="brandBadgeClass(group)">
@@ -260,20 +263,42 @@
                   </div>
                 </div>
               </div>
-              <div
-                v-if="group.availability"
-                class="w-full xl:ml-6 xl:w-[560px] xl:shrink-0"
-                data-testid="marketplace-group-availability"
-              >
-                <!-- 用户侧只展示可用率，并利用释放出的空间将状态条靠右放置。 -->
-                <GroupAvailabilityBar
-                  :availability="group.availability"
-                  class="min-w-0"
-                />
+              <div class="flex w-full flex-col items-end gap-3 xl:ml-6 xl:w-[560px] xl:shrink-0">
+                <div
+                  v-if="group.availability"
+                  class="w-full"
+                  data-testid="marketplace-group-availability"
+                >
+                  <!-- 分组渠道状态始终可见，模型定价按需在下方展开。 -->
+                  <GroupAvailabilityBar
+                    :availability="group.availability"
+                    class="min-w-0"
+                  />
+                </div>
+                <button
+                  type="button"
+                  class="btn btn-secondary gap-2 text-sm"
+                  data-testid="marketplace-group-pricing-toggle"
+                  :aria-expanded="expandedGroupIds.has(group.id)"
+                  :aria-controls="`marketplace-group-pricing-${group.id}`"
+                  @click="toggleGroupPricing(group.id)"
+                >
+                  {{ t(expandedGroupIds.has(group.id) ? 'marketplace.collapseGroupPricing' : 'marketplace.viewGroupPricing') }}
+                  <Icon
+                    name="chevronDown"
+                    size="sm"
+                    class="transition-transform"
+                    :class="{ 'rotate-180': expandedGroupIds.has(group.id) }"
+                  />
+                </button>
               </div>
             </div>
 
-            <div class="grid items-start gap-3 p-4 md:grid-cols-2 lg:grid-cols-3 md:p-5">
+            <div
+              v-if="expandedGroupIds.has(group.id)"
+              :id="`marketplace-group-pricing-${group.id}`"
+              class="grid items-start gap-3 p-4 md:grid-cols-2 lg:grid-cols-3 md:p-5"
+            >
               <!-- 大屏固定三列展示，避免宽屏下只排两列造成右侧留白。 -->
               <article
                 v-for="model in group.models"
@@ -342,7 +367,7 @@ import type { MarketplaceGroup, MarketplaceModelPricing, MarketplacePricingInter
 import { useAppStore, useAuthStore } from '@/stores'
 
 type VisibleMarketplaceGroup = MarketplaceGroup
-type PricingFilter = 'all' | 'token' | 'image' | 'unpriced'
+type PricingFilter = 'all' | 'token' | 'image' | 'video' | 'unpriced'
 
 interface PricingRow {
   key: string
@@ -358,6 +383,8 @@ const authStore = useAuthStore()
 const { isDark, toggleTheme } = useTheme()
 
 const groups = ref<MarketplaceGroup[]>([])
+// 每次进入页面默认只展示分组概览；各分组的展开状态独立且不写入本地存储。
+const expandedGroupIds = ref(new Set<number>())
 const loading = ref(true)
 const errorMessage = ref('')
 const search = ref('')
@@ -417,6 +444,7 @@ const pricingSelectOptions = computed(() => [
   { value: 'all', label: t('marketplace.allTypes') },
   { value: 'token', label: t('marketplace.tokenPricing') },
   { value: 'image', label: t('marketplace.imagePricing') },
+  { value: 'video', label: t('marketplace.videoPricing') },
   { value: 'unpriced', label: t('marketplace.unpriced') },
 ])
 
@@ -470,6 +498,14 @@ const filteredGroups = computed<VisibleMarketplaceGroup[]>(() => {
 
 const hasMarketplaceResults = computed(() => filteredGroups.value.length > 0)
 
+function toggleGroupPricing(groupId: number) {
+  if (expandedGroupIds.value.has(groupId)) {
+    expandedGroupIds.value.delete(groupId)
+  } else {
+    expandedGroupIds.value.add(groupId)
+  }
+}
+
 function hasPositiveValue(value?: number | null): value is number {
   return typeof value === 'number' && value > 0
 }
@@ -507,6 +543,9 @@ function pricingKind(pricing: MarketplaceModelPricing): Exclude<PricingFilter, '
   }
   if (pricing.pricing_mode === 'image' && hasImagePricing(pricing)) {
     return 'image'
+  }
+  if (pricing.pricing_mode === 'video' && videoPricingRows(pricing).length > 0) {
+    return 'video'
   }
   if (pricing.pricing_mode === 'token') {
     return 'token'
@@ -783,7 +822,24 @@ function compactPricingRows(pricing: MarketplaceModelPricing): PricingRow[] {
   if (kind === 'image') {
     return imagePricingRows(pricing)
   }
+  if (kind === 'video') {
+    return videoPricingRows(pricing)
+  }
   return []
+}
+
+// 视频价卡与详情使用相同的实际单位，显式零价仍展示。
+function videoPricingRows(pricing: MarketplaceModelPricing): PricingRow[] {
+  return (pricing.video_prices ?? []).flatMap((item) => {
+    if (!Number.isFinite(item.price) || item.price < 0 || !['second', 'request'].includes(item.unit)) {
+      return []
+    }
+    return [{
+      key: item.resolution,
+      label: item.resolution,
+      value: `${formatPrice(item.price)} ${t(item.unit === 'second' ? 'marketplace.perSecond' : 'marketplace.perRequest')}`,
+    }]
+  })
 }
 
 function imagePricingRows(pricing: MarketplaceModelPricing): PricingRow[] {

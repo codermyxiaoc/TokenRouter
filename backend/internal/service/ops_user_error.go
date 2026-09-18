@@ -16,16 +16,22 @@ type UserErrorRequest struct {
 	Model           string    `json:"model"`
 	InboundEndpoint string    `json:"inbound_endpoint"`
 	StatusCode      int       `json:"status_code"`
-	Category        string    `json:"category"`
-	Platform        string    `json:"platform"`
-	Message         string    `json:"message"`
-	KeyName         string    `json:"key_name"`
-	KeyDeleted      bool      `json:"key_deleted"`
-	ClientIP        string    `json:"client_ip,omitempty"`
-	GroupName       string    `json:"group_name,omitempty"`
-	RequestType     *int16    `json:"request_type,omitempty"`
-	Stream          bool      `json:"stream"`
-	UserAgent       string    `json:"user_agent,omitempty"`
+	// 请求结果与恢复分组都是本人请求的安全摘要，不暴露上游账号或原始尝试。
+	ClientStatusCode   int    `json:"client_status_code"`
+	RecoveredUpstream  bool   `json:"recovered_upstream"`
+	RecoveredGroupID   *int64 `json:"recovered_group_id,omitempty"`
+	RecoveredGroupName string `json:"recovered_group_name,omitempty"`
+	RecoveredPlatform  string `json:"recovered_platform,omitempty"`
+	Category           string `json:"category"`
+	Platform           string `json:"platform"`
+	Message            string `json:"message"`
+	KeyName            string `json:"key_name"`
+	KeyDeleted         bool   `json:"key_deleted"`
+	ClientIP           string `json:"client_ip,omitempty"`
+	GroupName          string `json:"group_name,omitempty"`
+	RequestType        *int16 `json:"request_type,omitempty"`
+	Stream             bool   `json:"stream"`
+	UserAgent          string `json:"user_agent,omitempty"`
 }
 
 // UserErrorRequestList 是用户错误请求分页结果。
@@ -102,22 +108,32 @@ func ToUserErrorRequest(e *OpsErrorLog) *UserErrorRequest {
 	if e.ClientIP != nil {
 		clientIP = *e.ClientIP
 	}
+	message := e.Message
+	if e.RecoveredUpstream {
+		// 恢复记录的内部消息包含失败尝试细节，用户只需要成功恢复的安全摘要。
+		message = "Request recovered after an upstream error"
+	}
 	return &UserErrorRequest{
-		ID:              e.ID,
-		CreatedAt:       e.CreatedAt,
-		Model:           model,
-		InboundEndpoint: e.InboundEndpoint,
-		StatusCode:      e.StatusCode,
-		Category:        MapUserErrorCategory(e.Phase, e.Type),
-		Platform:        e.Platform,
-		Message:         e.Message,
-		KeyName:         e.APIKeyName,
-		KeyDeleted:      e.APIKeyDeleted,
-		ClientIP:        clientIP,
-		GroupName:       e.GroupName,
-		RequestType:     e.RequestType,
-		Stream:          e.Stream,
-		UserAgent:       e.UserAgent,
+		ID:                 e.ID,
+		CreatedAt:          e.CreatedAt,
+		Model:              model,
+		InboundEndpoint:    e.InboundEndpoint,
+		StatusCode:         e.StatusCode,
+		ClientStatusCode:   e.ClientStatusCode,
+		RecoveredUpstream:  e.RecoveredUpstream,
+		RecoveredGroupID:   e.RecoveredGroupID,
+		RecoveredGroupName: e.RecoveredGroupName,
+		RecoveredPlatform:  e.RecoveredPlatform,
+		Category:           MapUserErrorCategory(e.Phase, e.Type),
+		Platform:           e.Platform,
+		Message:            message,
+		KeyName:            e.APIKeyName,
+		KeyDeleted:         e.APIKeyDeleted,
+		ClientIP:           clientIP,
+		GroupName:          e.GroupName,
+		RequestType:        e.RequestType,
+		Stream:             e.Stream,
+		UserAgent:          e.UserAgent,
 	}
 }
 
@@ -136,9 +152,14 @@ func ToUserErrorRequestDetail(e *OpsErrorLogDetail) *UserErrorRequestDetail {
 		return nil
 	}
 	base := ToUserErrorRequest(&e.OpsErrorLog)
+	errorBody := e.ErrorBody
+	if e.RecoveredUpstream {
+		// 新增可见的恢复记录不返回上游原文；管理员诊断仍可读取完整事件。
+		errorBody = ""
+	}
 	return &UserErrorRequestDetail{
 		UserErrorRequest:   *base,
-		ErrorBody:          e.ErrorBody,
+		ErrorBody:          errorBody,
 		UpstreamStatusCode: e.UpstreamStatusCode,
 	}
 }

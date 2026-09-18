@@ -9,7 +9,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// 断连后的显式流失败也须落入 Ops；由流函数退出时调用一次，不重复执行账号副作用。
+// 已确认的显式流失败须落入 Ops；正常连接与断连排水均由流函数退出时调用一次。
+// 仅补充失败归属和流失败标记，不重新执行账号健康副作用或用量结算。
 // @project-doc docs/operations/ops_monitoring_and_alerting.md#ops_signal_pipeline
 func (s *OpenAIGatewayService) recordOpenAIStreamDrainFailure(c *gin.Context, account *Account, passthrough bool, requestID string, payload []byte, message string) {
 	if len(payload) == 0 {

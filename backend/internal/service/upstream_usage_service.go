@@ -37,6 +37,7 @@ const (
 	UpstreamUsageAdapterMiniMaxCoding   = "minimax_coding"
 	UpstreamUsageAdapterKimiBalance     = "kimi_balance"
 	UpstreamUsageAdapterDeepseekBalance = "deepseek_balance"
+	UpstreamUsageAdapterOpenCodeGo      = "opencode_go"
 
 	// New API 钱包接口在官方部署中需要用户级访问令牌；它与转发 API Key
 	// 分开保存，避免把一个 token 的额度误当成用户钱包余额。
@@ -209,6 +210,7 @@ var upstreamUsageAdapterRegistry = []upstreamUsageAdapterRegistration{
 	{Name: UpstreamUsageAdapterMiniMaxCoding, Label: "MiniMax Coding Plan", Automatic: true, Factory: func() UpstreamUsageAdapter { return &minimaxCodingUsageAdapter{} }},
 	{Name: UpstreamUsageAdapterKimiBalance, Label: "Kimi Balance", Automatic: true, Factory: func() UpstreamUsageAdapter { return &kimiBalanceUsageAdapter{} }},
 	{Name: UpstreamUsageAdapterDeepseekBalance, Label: "DeepSeek Balance", Automatic: true, Factory: func() UpstreamUsageAdapter { return &deepseekBalanceUsageAdapter{} }},
+	{Name: UpstreamUsageAdapterOpenCodeGo, Label: "OpenCode GO", Automatic: true, Factory: func() UpstreamUsageAdapter { return &openCodeGoUsageAdapter{} }},
 }
 
 // UpstreamUsageAdapterOptions 返回稳定排序的内置适配器列表。
@@ -337,7 +339,7 @@ func EffectiveUpstreamUsageConfig(account *Account) (UpstreamUsageQueryConfig, e
 		if !ok || strings.TrimSpace(parsed) == "" {
 			return UpstreamUsageQueryConfig{}, ErrUpstreamUsageConfigInvalid
 		}
-		if !account.IsCNProvider() {
+		if !account.IsCNProvider() && !account.IsOpenCodeGo() {
 			config.Adapter = strings.TrimSpace(parsed)
 		}
 	}
@@ -500,9 +502,9 @@ func (s *UpstreamUsageService) QueryAccount(ctx context.Context, accountID int64
 	if !queryConfig.Enabled {
 		return nil, ErrUpstreamUsageDisabled
 	}
-	// 国产供应商不允许管理员把协议适配器误选成通用站点适配器；按平台和
+	// 国产供应商及 OpenCode 不允许把协议适配器误选成通用站点适配器；按平台和
 	// account_mode 自动选择只读适配器，保留现有查询开关与身份指纹语义。
-	if account.IsCNProvider() {
+	if account.IsCNProvider() || account.IsOpenCodeGo() {
 		queryConfig.Adapter = cnUpstreamUsageAdapterName(account)
 		if queryConfig.Adapter == "" {
 			return nil, ErrUpstreamUsageUnsupported
@@ -536,6 +538,10 @@ func (s *UpstreamUsageService) QueryAccount(ctx context.Context, accountID int64
 }
 
 func cnUpstreamUsageAdapterName(account *Account) string {
+	// GO 使用独立订阅窗口协议；Zen 没有已接入的余额接口，不能回退到通用站点查询。
+	if account != nil && account.IsOpenCodeGoPlan() {
+		return UpstreamUsageAdapterOpenCodeGo
+	}
 	if account == nil || !account.IsCNProvider() {
 		return ""
 	}
@@ -812,7 +818,7 @@ func upstreamUsageAccountBaseURL(account *Account) string {
 		return account.GetGeminiBaseURL("https://generativelanguage.googleapis.com")
 	case PlatformAntigravity:
 		return account.GetGeminiBaseURL("https://generativelanguage.googleapis.com")
-	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
 		// 用量端点只替换路径并保留账号主机；缺少自定义地址时使用平台默认值。
 		return account.GetOpenAIBaseURL()
 	default:

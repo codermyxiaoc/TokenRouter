@@ -2,12 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import UsageView from '../UsageView.vue'
+import Select, { type SelectOption } from '@/components/common/Select.vue'
+import DateRangePicker from '@/components/common/DateRangePicker.vue'
 
 const {
   query,
   getStats,
   getDashboardModels,
   getDashboardSnapshotV2,
+  listMyErrorRequests,
   list,
   getAvailable,
   getCurrentTeam,
@@ -23,6 +26,7 @@ const {
   getStats: vi.fn(),
   getDashboardModels: vi.fn(),
   getDashboardSnapshotV2: vi.fn(),
+  listMyErrorRequests: vi.fn(),
   list: vi.fn(),
   getAvailable: vi.fn(),
   getCurrentTeam: vi.fn(),
@@ -79,6 +83,7 @@ vi.mock('@/api', () => ({
     getStats,
     getDashboardModels,
     getDashboardSnapshotV2,
+    listMyErrorRequests,
   },
   keysAPI: {
     list,
@@ -98,7 +103,7 @@ vi.mock('@/api/team', () => ({
 }))
 
 vi.mock('@/stores/app', () => ({
-  useAppStore: () => ({ showError, showWarning, showSuccess, showInfo }),
+  useAppStore: () => ({ showError, showWarning, showSuccess, showInfo, cachedPublicSettings: { allow_user_view_error_requests: true } }),
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -166,6 +171,7 @@ function mountUsageView() {
         EndpointDistributionChart: chartStub,
         TokenUsageTrend: chartStub,
         TeamMemberUsageCharts: chartStub,
+        UserErrorRequestsTable: true,
       },
     },
   })
@@ -177,6 +183,8 @@ describe('user UsageView', () => {
     getStats.mockReset()
     getDashboardModels.mockReset()
     getDashboardSnapshotV2.mockReset()
+    listMyErrorRequests.mockReset()
+    listMyErrorRequests.mockResolvedValue({ items: [], total: 0, pages: 0 })
     list.mockReset()
     getAvailable.mockReset()
     getCurrentTeam.mockReset()
@@ -221,6 +229,22 @@ describe('user UsageView', () => {
     getTeamKeys.mockResolvedValue([])
     getTeamMembers.mockResolvedValue([])
     getTeamMemberUsage.mockResolvedValue([])
+  })
+
+  // 用户主动进入错误页时扩大查询口径，仍沿用服务端分页与排序。
+  it('includes recovered attempts when opening error requests', async () => {
+    const wrapper = mountUsageView()
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'usage.tabs.errors')!.trigger('click')
+    await flushPromises()
+
+    expect(listMyErrorRequests).toHaveBeenCalledWith(expect.objectContaining({
+      page: 1,
+      page_size: 20,
+      include_recovered_upstream: true,
+      sort_by: 'created_at',
+      sort_order: 'desc',
+    }))
   })
 
   it('loads logs, stats, model stats, and snapshot on first render', async () => {
@@ -401,4 +425,67 @@ describe('user UsageView', () => {
     vi.unstubAllGlobals()
     clickSpy.mockRestore()
   })
+  it('keeps the initial filters, sort, and filename while exporting multiple pages', async () => {
+    const pageResponse = { items: [usageLog], total: 101, pages: 2 }
+    query.mockResolvedValue(pageResponse)
+    const wrapper = mountUsageView()
+    await flushPromises()
+
+    const datePicker = wrapper.findComponent(DateRangePicker)
+    datePicker.vm.$emit('change', { startDate: '2026-03-01', endDate: '2026-03-08', preset: null })
+    await flushPromises()
+
+    let resolveFirstPage!: (value: typeof pageResponse) => void
+    const firstPage = new Promise<typeof pageResponse>((resolve) => { resolveFirstPage = resolve })
+    query.mockClear()
+    query.mockImplementation((params, options) =>
+      !options && params.page === 1 ? firstPage : Promise.resolve(pageResponse)
+    )
+    const originalCreateObjectURL = window.URL.createObjectURL
+    const originalRevokeObjectURL = window.URL.revokeObjectURL
+    window.URL.createObjectURL = vi.fn(() => 'blob:usage-export')
+    window.URL.revokeObjectURL = vi.fn()
+    let filename = ''
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () {
+      filename = this.download
+    })
+
+    try {
+      await wrapper.findAll('button').find((button) => button.text() === 'Export')!.trigger('click')
+      const initialParams = { ...query.mock.calls[0][0] }
+      expect(initialParams).toMatchObject({
+        page: 1, page_size: 100, start_date: '2026-03-01', end_date: '2026-03-08',
+        sort_by: 'created_at', sort_order: 'desc',
+      })
+
+      const keySelect = wrapper.findAllComponents(Select).find((select) =>
+        select.props('options').some((option: SelectOption) => option.label === 'All API Keys')
+      )!
+      keySelect.vm.$emit('update:modelValue', 1)
+      keySelect.vm.$emit('change', 1)
+      datePicker.vm.$emit('change', { startDate: '2026-04-01', endDate: '2026-04-08', preset: null })
+      wrapper.findComponent(UsageTableStub).vm.$emit('sort', 'actual_cost', 'asc')
+      await flushPromises()
+      expect(query).toHaveBeenCalledWith(expect.objectContaining({
+        api_key_id: 1, start_date: '2026-04-01', end_date: '2026-04-08',
+        sort_by: 'actual_cost', sort_order: 'asc',
+      }), expect.anything())
+
+      resolveFirstPage(pageResponse)
+      await flushPromises()
+
+      const exportCalls = query.mock.calls.filter((call) => call.length === 1)
+      expect.soft(exportCalls).toEqual([[initialParams], [{ ...initialParams, page: 2 }]])
+      expect.soft(filename).toBe('usage_2026-03-01_to_2026-03-08.csv')
+      expect(showSuccess).toHaveBeenCalledWith('Export success')
+      expect(showError).not.toHaveBeenCalled()
+    } finally {
+      window.URL.createObjectURL = originalCreateObjectURL
+      window.URL.revokeObjectURL = originalRevokeObjectURL
+      clickSpy.mockRestore()
+      wrapper.unmount()
+    }
+  })
+
+
 })

@@ -2068,7 +2068,16 @@ func (s *AuthService) snapshotPlatformQuotaDefaults(ctx context.Context, userID 
 			rec.WeeklyLimitUSD = q.WeeklyLimitUSD
 			rec.MonthlyLimitUSD = q.MonthlyLimitUSD
 		}
+		// 未配置限额的平台无需持久化空行；零限额是有效的禁用配置。
+		if rec.DailyLimitUSD == nil && rec.WeeklyLimitUSD == nil && rec.MonthlyLimitUSD == nil {
+			continue
+		}
+
 		records = append(records, rec)
+	}
+
+	if len(records) == 0 {
+		return nil
 	}
 
 	if err := s.runFailOpenDBStep(ctx, "auth_platform_quota_snapshot", func(stepCtx context.Context) error {

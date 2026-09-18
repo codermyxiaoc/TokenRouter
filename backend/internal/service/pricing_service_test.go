@@ -743,6 +743,45 @@ func TestBillingService_Gemini36FlashThinkingTierFallbacksAreBillable(t *testing
 	}
 }
 
+// 新模型使用通用档位别名，且显式档位价格仍优先于基础价。
+func TestPricingService_Gemini37And38FlashTierPricing(t *testing.T) {
+	for _, base := range []string{"gemini-3.7-flash", "gemini-3.8-flash"} {
+		t.Run(base, func(t *testing.T) {
+			basePricing := &LiteLLMModelPricing{InputCostPerToken: 0.75e-6}
+			tierPricing := &LiteLLMModelPricing{InputCostPerToken: 2e-6}
+			svc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+				base: basePricing,
+			}}
+			for _, suffix := range []string{"", "-high", "-low", "-medium", "-tiered"} {
+				require.Same(t, basePricing, svc.GetModelPricing(base+suffix))
+			}
+			svc.pricingData[base+"-low"] = tierPricing
+			require.Same(t, tierPricing, svc.GetModelPricing("models/"+base+"-low"))
+		})
+	}
+}
+
+// 远程价格缺失时新增模型仍能计费，并保持已有 3.6 回退费率。
+func TestBillingService_Gemini37And38FlashThinkingTierFallbacksAreBillable(t *testing.T) {
+	svc := NewBillingService(&config.Config{}, nil)
+	tokens := UsageTokens{InputTokens: 1_000_000, OutputTokens: 1_000_000, CacheReadTokens: 1_000_000}
+	for _, base := range []string{"gemini-3.7-flash", "gemini-3.8-flash"} {
+		for _, suffix := range []string{"", "-high", "-low", "-medium", "-tiered"} {
+			t.Run(base+suffix, func(t *testing.T) {
+				cost, err := svc.CalculateCost(base+suffix, tokens, 1)
+				require.NoError(t, err)
+				require.InDelta(t, 0.75, cost.InputCost, 1e-12)
+				require.InDelta(t, 3.75, cost.OutputCost, 1e-12)
+				require.InDelta(t, 0.075, cost.CacheReadCost, 1e-12)
+				require.InDelta(t, 4.575, cost.TotalCost, 1e-12)
+			})
+		}
+	}
+	cost, err := svc.CalculateCost("gemini-3.6-flash-high", tokens, 1)
+	require.NoError(t, err)
+	require.InDelta(t, 9.15, cost.TotalCost, 1e-12)
+}
+
 func TestDefaultPricingIncludesGemini36FlashRates(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "resources", "model-pricing", "model_prices_and_context_window.json"))
 	require.NoError(t, err)

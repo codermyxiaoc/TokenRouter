@@ -17,8 +17,8 @@ vi.mock('@/composables/useBalanceDisplay', () => ({
   useBalanceDisplay: () => ({
     balanceUnitSymbol: { value: '$' },
     usdUnitSymbol: '$',
-    formatBalanceAmount: (value: number | null | undefined) => `$${(value ?? 0).toFixed(6)}`,
-    formatUsdAmount: (value: number | null | undefined) => `$${(value ?? 0).toFixed(6)}`,
+    formatBalanceAmount: (value: number | null | undefined, options?: { fractionDigits?: number }) => `$${(value ?? 0).toFixed(options?.fractionDigits ?? 2)}`,
+    formatUsdAmount: (value: number | null | undefined, options?: { fractionDigits?: number }) => `$${(value ?? 0).toFixed(options?.fractionDigits ?? 2)}`,
   }),
 }))
 
@@ -358,10 +358,10 @@ describe('admin UsageTable tooltip', () => {
     expect(text).toContain('Account rate')
     expect(text).toContain('User billed')
     expect(text).toContain('Account billed')
-    expect(text).toContain('$0.092883')
+    expect(text).toContain('$0.09288300')
     expect(text).toContain('$5.0000 / 1M tokens')
     expect(text).toContain('$30.0000 / 1M tokens')
-    expect(text).toContain('$0.069568')
+    expect(text).toContain('$0.06956800')
   })
 
   it.each([

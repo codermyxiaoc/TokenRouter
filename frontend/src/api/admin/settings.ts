@@ -53,7 +53,7 @@ type DefaultSubscriptionInput = Partial<DefaultSubscriptionSetting> & {
 };
 
 // ── 平台限额类型 ──────────────────────────────────────────────────
-export type PlatformType = "anthropic" | "openai" | "gemini" | "antigravity" | "qoder" | "grok" | "kimi" | "zhipu" | "deepseek" | "minimax"
+export type PlatformType = "anthropic" | "openai" | "gemini" | "antigravity" | "qoder" | "grok" | "kimi" | "zhipu" | "deepseek" | "minimax" | "opencode_go"
 export type QuotaWindowType = "daily" | "weekly" | "monthly"
 
 /** 单平台三档限额；null = 不限制，undefined = 未填（等价 null） */
@@ -66,9 +66,9 @@ export interface PlatformQuotaLimits {
 /** 全平台默认限额 map（key = PlatformType） */
 export type DefaultPlatformQuotasMap = Partial<Record<PlatformType, PlatformQuotaLimits>>
 
-const PLATFORMS: PlatformType[] = ["anthropic", "openai", "gemini", "antigravity", "qoder", "grok", "kimi", "zhipu", "deepseek", "minimax"]
+const PLATFORMS: PlatformType[] = ["anthropic", "openai", "gemini", "antigravity", "qoder", "grok", "kimi", "zhipu", "deepseek", "minimax", "opencode_go"]
 
-export type SchedulingThresholdPlatformType = "openai" | "anthropic" | "grok" | "kimi" | "zhipu" | "minimax"
+export type SchedulingThresholdPlatformType = "openai" | "anthropic" | "grok" | "kimi" | "zhipu" | "minimax" | "opencode_go"
 
 export type AccountSchedulingThresholdsMap = Record<SchedulingThresholdPlatformType, number>
 
@@ -81,6 +81,7 @@ export const SCHEDULING_THRESHOLD_PLATFORMS: SchedulingThresholdPlatformType[] =
   "kimi",
   "zhipu",
   "minimax",
+  "opencode_go",
 ]
 
 /** 将各平台自动停调阈值归一化到 1 到 100，100 表示关闭。 */
@@ -1577,7 +1578,7 @@ export async function updateRectifierSettings(
  * Matches backend dto.OpenAIFastPolicyRule.
  */
 export interface OpenAIFastPolicyRule {
-  service_tier: "all" | "priority" | "flex" | "ultrafast";
+  service_tier: "all" | "priority" | "flex" | "ultrafast" | "missing";
   action: "pass" | "filter" | "block" | "force_priority";
   scope: "all" | "oauth" | "apikey" | "bedrock";
   user_ids?: number[];

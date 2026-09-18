@@ -31,7 +31,7 @@ func TestUpsertForUser_NewUserInsertsAllRecords(t *testing.T) {
 	require.Len(t, got, 2)
 }
 
-func TestUpsertForUser_PartialUpdateSoftDeletesMissingPlatforms(t *testing.T) {
+func TestUpsertForUser_PartialUpdateClearsMissingLimits(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
 	userID := mustCreateUserForQuota(t, client)
@@ -52,14 +52,15 @@ func TestUpsertForUser_PartialUpdateSoftDeletesMissingPlatforms(t *testing.T) {
 	require.NoError(t, err)
 	platforms := map[string]float64{}
 	for _, r := range active {
-		require.NotNil(t, r.DailyLimitUSD)
-		platforms[r.Platform] = *r.DailyLimitUSD
+		if r.DailyLimitUSD != nil {
+			platforms[r.Platform] = *r.DailyLimitUSD
+		}
 	}
 	require.Len(t, platforms, 2)
 	require.InDelta(t, 20.0, platforms["anthropic"], 1e-9)
 	require.InDelta(t, 10.0, platforms["gemini"], 1e-9)
 	_, openaiActive := platforms["openai"]
-	require.False(t, openaiActive, "openai should be soft-deleted")
+	require.False(t, openaiActive, "未提交平台的限额应取消")
 }
 
 func TestUpsertForUser_PreservesUsageAndWindowStart(t *testing.T) {
@@ -89,7 +90,7 @@ func TestUpsertForUser_PreservesUsageAndWindowStart(t *testing.T) {
 	require.NotNil(t, rec.DailyWindowStart, "window_start must be preserved")
 }
 
-func TestUpsertForUser_ReactivatesSoftDeleted(t *testing.T) {
+func TestUpsertForUser_ReusesClearedLimitsRow(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
 	userID := mustCreateUserForQuota(t, client)
@@ -103,7 +104,8 @@ func TestUpsertForUser_ReactivatesSoftDeleted(t *testing.T) {
 
 	gone, err := repo.GetByUserPlatform(ctx, userID, "anthropic")
 	require.NoError(t, err)
-	require.Nil(t, gone, "anthropic should be soft-deleted (not active)")
+	require.NotNil(t, gone, "保留既有行用于历史和待刷用量")
+	require.Nil(t, gone.DailyLimitUSD)
 
 	d2 := 20.0
 	require.NoError(t, repo.UpsertForUser(ctx, userID, []UserPlatformQuotaRecord{
@@ -144,5 +146,8 @@ func TestUpsertForUser_EmptyClearsAll(t *testing.T) {
 
 	got, err := repo.ListByUser(ctx, userID)
 	require.NoError(t, err)
-	require.Empty(t, got)
+	require.Len(t, got, 2)
+	for _, rec := range got {
+		require.False(t, rec.HasAnyLimit())
+	}
 }

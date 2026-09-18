@@ -416,8 +416,13 @@ const handleRedeem = async () => {
 
     redeemResult.value = result
 
-    // Refresh user data to get updated balance/concurrency
-    await authStore.refreshUser()
+    // 兑换已成功提交，资料刷新失败只能提示，不能覆盖兑换结果。
+    try {
+      await authStore.refreshUser()
+    } catch (error) {
+      console.error('Failed to refresh user after redeem:', error)
+      appStore.showWarning(t('redeem.userRefreshFailed'))
+    }
 
     // If subscription type, immediately refresh subscription status
     if (result.type === 'subscription') {

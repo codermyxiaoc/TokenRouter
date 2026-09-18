@@ -735,7 +735,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 					- 'ollama_cloud_usage_auto_refresh'
 					- 'ollama_cloud_usage_snapshot'
 				ELSE CASE
-					WHEN platform IN ('kimi', 'zhipu', 'deepseek', 'minimax')
+					WHEN platform IN ('kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go')
 						AND type = 'apikey'
 						AND credentials IS DISTINCT FROM $1::jsonb
 					THEN (COALESCE(extra, '{}'::jsonb)
@@ -2097,6 +2097,69 @@ func (r *accountRepository) ClearRateLimitIfObserved(ctx context.Context, id int
 	return true, nil
 }
 
+// BeginOllamaCloudRateLimit 每次真实 429 都生成新代次，恢复时间只延长；关闭短冷却时仍失效旧探测。
+// PostgreSQL 时间戳精度为微秒，显式递增避免同 tick 的相同/更短 429 与前次代次碰撞。
+func (r *accountRepository) BeginOllamaCloudRateLimit(ctx context.Context, id int64, resetAt *time.Time) error {
+	_, err := clientFromContext(ctx, r.client).ExecContext(ctx, `
+		WITH updated AS (
+			UPDATE accounts SET
+				rate_limited_at = GREATEST(clock_timestamp(), rate_limited_at + INTERVAL '1 microsecond'),
+				rate_limit_reset_at = CASE WHEN $2::timestamptz IS NULL THEN rate_limit_reset_at
+					ELSE GREATEST(rate_limit_reset_at, $2::timestamptz) END,
+				updated_at = clock_timestamp()
+			WHERE id = $1 AND deleted_at IS NULL
+				AND platform IN ('openai', 'anthropic') AND type = 'apikey'
+			RETURNING id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $3, updated.id, NULL, NULL FROM updated
+	`, id, resetAt, service.SchedulerOutboxEventAccountChanged)
+	if err != nil {
+		return err
+	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
+	return nil
+}
+
+// SetRateLimitedIfUnchanged 在一条更新语句中核对行版本和限流代次，阻止异步旧结果覆盖新状态。
+// 只允许延长重置点；成功后沿用 outbox 和本实例调度快照更新，不再追加无条件写入。
+func (r *accountRepository) SetRateLimitedIfUnchanged(
+	ctx context.Context,
+	id int64,
+	expectedUpdatedAt time.Time,
+	expectedLimitedAt, expectedResetAt *time.Time,
+	newResetAt time.Time,
+) (bool, error) {
+	if expectedResetAt != nil && !newResetAt.After(*expectedResetAt) {
+		return false, nil
+	}
+	preds := []dbpredicate.Account{dbaccount.IDEQ(id), dbaccount.UpdatedAtEQ(expectedUpdatedAt)}
+	if expectedLimitedAt == nil {
+		preds = append(preds, dbaccount.RateLimitedAtIsNil())
+	} else {
+		preds = append(preds, dbaccount.RateLimitedAtEQ(*expectedLimitedAt))
+	}
+	if expectedResetAt == nil {
+		preds = append(preds, dbaccount.RateLimitResetAtIsNil())
+	} else {
+		preds = append(preds, dbaccount.RateLimitResetAtEQ(*expectedResetAt))
+	}
+	updated, err := r.client.Account.Update().Where(preds...).
+		SetRateLimitedAt(time.Now()).SetRateLimitResetAt(newResetAt).Save(ctx)
+	if err != nil {
+		return false, err
+	}
+	if updated == 0 {
+		r.syncSchedulerAccountSnapshot(ctx, id)
+		return false, nil
+	}
+	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue conditional rate limit failed: account=%d err=%v", id, err)
+	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
+	return true, nil
+}
+
 func (r *accountRepository) SetModelRateLimit(ctx context.Context, id int64, scope string, resetAt time.Time, reason ...string) error {
 	if scope == "" {
 		return nil
@@ -2767,7 +2830,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			extraExpression = "CASE WHEN " + snapshotIdentityChanged + " THEN (" + extraExpression + ") - 'ollama_cloud_usage_snapshot' ELSE " + extraExpression + " END"
 		}
 		if cnUsageIdentityChanged {
-			extraExpression = "CASE WHEN platform IN ('kimi', 'zhipu', 'deepseek', 'minimax') AND type = 'apikey'" +
+			extraExpression = "CASE WHEN platform IN ('kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go') AND type = 'apikey'" +
 				" THEN (" + extraExpression + ") - '" + service.CNUsageMonitorSnapshotExtraKey + "' ELSE " + extraExpression + " END"
 		}
 		if updates.EnsureCodexFingerprintSeed {

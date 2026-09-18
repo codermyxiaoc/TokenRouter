@@ -50,6 +50,13 @@ Anthropic 请求策略包括：
 - prompt caching、cache TTL 注入和消息缓存重写；缓存读写 token 进入用量与定价，而不是仅作为诊断字段。
 - 可选 web search emulation、Claude Code 客户端约束、metadata/header 策略和长上下文计价。
 
+<a id="anthropic_cache_and_output_config"></a>
+### 缓存断点与消息级输出配置
+
+OAuth 请求保留客户端 system 中的 cache_control 与 TTL；Messages 和 CountTokens 都在最终出站前执行最多四个缓存块的兜底，超限依次移除 tools、messages，最后才移除 system 断点。原有消息缓存重写、TTL 注入和价格口径继续按设置生效。
+
+Claude Code 伪装链路补充中途 output_config 对应 beta；最终过滤后的 beta 与 messages[].output_config 必须一致。上游不允许该 beta 时删除消息级配置，配置移除后完全空的 system 控制消息可删除，其它正文和未知块保留。顶层 output_config.effort、原 Fast/Fallback 规则以及 Bedrock/Vertex beta 白名单保持原有边界。
+
 <a id="bedrock_region_routing"></a>
 ### Bedrock 模型与来源区域
 

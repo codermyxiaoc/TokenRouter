@@ -557,11 +557,11 @@
               </div>
               <div class="flex items-center justify-between gap-4">
                 <span class="text-gray-400">{{ t('usage.imageUnitPrice') }}</span>
-                <span class="font-medium text-sky-300">${{ imageUnitPrice(tooltipData).toFixed(6) }}</span>
+                <span class="font-medium text-sky-300">{{ formatDetailedUsdAmount(imageUnitPrice(tooltipData)) }}</span>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <span class="text-gray-400">{{ t('usage.imageTotalPrice') }}</span>
-                <span class="font-medium text-white">${{ tooltipData.total_cost?.toFixed(6) || '0.000000' }}</span>
+                <span class="font-medium text-white">{{ formatDetailedUsdAmount(tooltipData.total_cost) }}</span>
               </div>
             </template>
             <template v-else-if="!getDisplayBillingMode(tooltipData) || getDisplayBillingMode(tooltipData) === BILLING_MODE_TOKEN">
@@ -925,16 +925,17 @@ const formatUserAgent = (ua: string): string => {
   return ua
 }
 
+// 明细使用八位精度，并保留站内余额单位与美元成本各自的展示口径。
 const formatDetailedBalance = (value: number | null | undefined): string =>
   formatBalanceAmount(value, {
-    fractionDigits: 6,
-    fallback: `${balanceUnitSymbol.value}0.000000`
+    fractionDigits: 8,
+    fallback: `${balanceUnitSymbol.value}0.00000000`
   })
 
 const formatDetailedUsdAmount = (value: number | null | undefined): string =>
   formatUsdAmount(value, {
-    fractionDigits: 6,
-    fallback: `${usdUnitSymbol}0.000000`
+    fractionDigits: 8,
+    fallback: `${usdUnitSymbol}0.00000000`
   })
 
 // 超过 1 分钟简化为 "Xm Ys"，免去人工换算（超过 1 小时再进位为 "Xh Ym"）

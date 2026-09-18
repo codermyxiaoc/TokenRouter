@@ -443,6 +443,7 @@ func multiplyModelPricing(pricing *ModelPricing, multiplier float64) *ModelPrici
 	scaled.InputPricePerToken *= multiplier
 	scaled.InputPricePerTokenPriority *= multiplier
 	scaled.ImageInputPricePerToken *= multiplier
+	scaled.ImageCacheReadPricePerToken *= multiplier
 	scaled.OutputPricePerToken *= multiplier
 	scaled.OutputPricePerTokenPriority *= multiplier
 	scaled.CacheCreationPricePerToken *= multiplier
@@ -603,9 +604,12 @@ func intervalToModelPricingWithBase(iv *PricingInterval, supportsCacheBreakdown 
 		priority := channelTierOverridePrice(pricing.CacheReadPricePerToken, pricing.CacheReadPricePerTokenPriority, *iv.CacheReadPrice)
 		pricing.CacheReadPricePerToken = *iv.CacheReadPrice
 		pricing.CacheReadPricePerTokenPriority = priority
+		// 显式缓存读价格（包括 0）统一覆盖图文缓存，不能被默认图片缓存价绕过。
+		pricing.ImageCacheReadPricePerToken = 0
 	} else if iv.CacheReadMultiplier != nil {
 		pricing.CacheReadPricePerToken *= *iv.CacheReadMultiplier
 		pricing.CacheReadPricePerTokenPriority *= *iv.CacheReadMultiplier
+		pricing.ImageCacheReadPricePerToken *= *iv.CacheReadMultiplier
 	}
 	// 渠道定价存在时显式覆盖图片输出价格；图片输入价格沿用渠道级配置，区间本身不携带该字段。
 	if chPricing != nil {

@@ -26,6 +26,12 @@ func openAICodexTurnStateSeed(c *gin.Context) string {
 	if c == nil || c.Request == nil {
 		return ""
 	}
+	// 来源追踪与 WS 执行身份对齐，但仍只验证账号来源，不注入或共享 WS 状态。
+	if value, exists := c.Get(openAIWSExecutionScopeContextKey); exists {
+		if scope, _ := value.(string); scope != "" {
+			return "exec:" + scope
+		}
+	}
 	sessionID := extractClientSessionID(c.Request.Header)
 	if sessionID == "" {
 		return ""

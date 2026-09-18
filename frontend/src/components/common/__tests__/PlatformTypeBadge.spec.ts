@@ -15,6 +15,37 @@ vi.mock('vue-i18n', async () => {
 })
 
 describe('PlatformTypeBadge', () => {
+  it.each([
+    ['pro', 'Pro 20x', 'bg-violet-100'],
+    ['CHATGPTPRO', 'Pro 20x', 'bg-violet-100'],
+    ['pro_lite', 'Pro 5x', 'bg-violet-100'],
+    ['team', 'Business Standard', 'bg-indigo-100'],
+    ['self_serve_business_prolite', 'Business Premium', 'bg-indigo-100']
+  ])('displays OpenAI plan %s with its current label', (planType, label, color) => {
+    const wrapper = mount(PlatformTypeBadge, {
+      props: { platform: 'openai', type: 'oauth', planType }
+    })
+    expect(wrapper.text()).toContain(label)
+    expect(wrapper.html()).toContain(color)
+  })
+
+  it('keeps other platforms and unknown OpenAI plan labels unchanged', async () => {
+    const wrapper = mount(PlatformTypeBadge, {
+      props: { platform: 'antigravity', type: 'oauth', planType: 'pro' }
+    })
+    // 其他平台的 Pro/Team 含义不跟随 ChatGPT 改名。
+    expect(wrapper.text()).toContain('Pro')
+    expect(wrapper.text()).not.toContain('Pro 20x')
+    await wrapper.setProps({ planType: 'team' })
+    expect(wrapper.text()).toContain('Team')
+    expect(wrapper.text()).not.toContain('Business Standard')
+    await wrapper.setProps({ platform: 'grok', planType: 'pro_lite' })
+    expect(wrapper.text()).toContain('pro_lite')
+    expect(wrapper.html()).toContain('bg-amber-100')
+    await wrapper.setProps({ platform: 'openai', planType: 'custom-plan' })
+    expect(wrapper.text()).toContain('custom-plan')
+  })
+
   it('renders Qoder COSY accounts as Qoder instead of Gemini', () => {
     const wrapper = mount(PlatformTypeBadge, {
       props: {

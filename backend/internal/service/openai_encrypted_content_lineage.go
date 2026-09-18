@@ -295,6 +295,9 @@ func (s *OpenAIGatewayService) openAIWSLineageSessionHashFromContext(c *gin.Cont
 			return fromCtx
 		}
 	}
+	if scope := rememberOpenAIWSExecutionScope(c, body); scope != "" {
+		return scope
+	}
 	return s.GenerateSessionHash(c, body)
 }
 

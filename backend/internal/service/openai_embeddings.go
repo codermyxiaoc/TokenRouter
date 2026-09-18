@@ -117,6 +117,7 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 		if isOpenAIClientInvalidRequestError(resp.StatusCode, upstreamMsg, respBody) {
+			recordOpenAIEmbeddingsHTTPError(c, account, resp, upstreamMsg)
 			writeOpenAIEmbeddingsUpstreamResponse(c, resp, respBody, s.responseHeaderFilter)
 			return nil, fmt.Errorf("upstream invalid request: %d", resp.StatusCode)
 		}
@@ -127,6 +128,7 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 			decision = s.applyOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
 		}
 		if decision.ShouldReturnGenericError() {
+			recordOpenAIEmbeddingsHTTPError(c, account, resp, upstreamMsg)
 			writeOpenAIEmbeddingsError(c, http.StatusInternalServerError, "upstream_error", "Upstream gateway error")
 			return nil, fmt.Errorf("upstream error: %d (not in custom error codes)", resp.StatusCode)
 		}
@@ -163,6 +165,7 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 			}
 			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody, RetryableOnSameAccount: retryableOnSameAccount}
 		}
+		recordOpenAIEmbeddingsHTTPError(c, account, resp, upstreamMsg)
 		writeOpenAIEmbeddingsUpstreamResponse(c, resp, respBody, s.responseHeaderFilter)
 		return nil, fmt.Errorf("upstream returned status %d", resp.StatusCode)
 	}
@@ -187,6 +190,16 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 		Stream:          false,
 		Duration:        time.Since(startTime),
 	}, nil
+}
+
+// 非切号错误也必须保留真实上游来源，不能仅从客户端的 400 或策略改写后的 500 推断。
+func recordOpenAIEmbeddingsHTTPError(c *gin.Context, account *Account, resp *http.Response, message string) {
+	setOpsUpstreamError(c, resp.StatusCode, message, "")
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+		UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
+		Kind: "http_error", Message: message,
+	})
 }
 
 func writeOpenAIEmbeddingsUpstreamResponse(c *gin.Context, resp *http.Response, body []byte, filter *responseheaders.CompiledHeaderFilter) {

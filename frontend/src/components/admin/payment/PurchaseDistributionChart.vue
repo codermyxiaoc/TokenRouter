@@ -18,8 +18,12 @@
     >
       {{ t('payment.admin.noData') }}
     </div>
-    <div v-else class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(260px,0.9fr)]">
-      <div class="min-w-0">
+    <div
+      v-else
+      class="grid gap-6"
+      :class="showAmounts ? 'xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(260px,0.9fr)]' : 'xl:grid-cols-2'"
+    >
+      <div v-if="showAmounts" class="min-w-0">
         <p class="mb-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400">
           {{ t('payment.admin.amountShare') }} ({{ selectedCurrency }})
         </p>
@@ -40,7 +44,7 @@
           <thead>
             <tr class="text-gray-500 dark:text-gray-400">
               <th class="pb-2 text-left">{{ t('payment.admin.purchaseItem') }}</th>
-              <th class="pb-2 text-right">{{ t('payment.admin.revenue') }}</th>
+              <th v-if="showAmounts" class="pb-2 text-right">{{ t('payment.admin.revenue') }}</th>
               <th class="pb-2 text-right">{{ t('payment.admin.orderCount') }}</th>
             </tr>
           </thead>
@@ -61,7 +65,7 @@
                   </span>
                 </div>
               </td>
-              <td class="py-2 text-right font-medium text-gray-900 dark:text-white">
+              <td v-if="showAmounts" class="py-2 text-right font-medium text-gray-900 dark:text-white">
                 {{ formatPaymentAmount(item.amount, item.currency) }}
               </td>
               <td class="py-2 text-right text-gray-600 dark:text-gray-400">
@@ -98,6 +102,8 @@ const props = defineProps<{
 }>()
 
 const selectedCurrency = ref(DEFAULT_PAYMENT_CURRENCY)
+// 美元金额在概览中隐藏，但该币种的购买项和订单数仍可单独查看。
+const showAmounts = computed(() => selectedCurrency.value !== 'USD')
 const currencyOptions = computed(() => {
   const currencies = [...new Set((props.items || []).map(item => normalizePaymentCurrency(item.currency)))].sort()
   return currencies.map(currency => ({ value: currency, label: currency }))
@@ -129,6 +135,7 @@ const chartColors = [
 const sortedItems = computed(() => {
   // 余额支付是 USD，外部订单可能是 CNY；同套餐也不能跨币种合并金额占比。
   return (props.items || []).filter(item => normalizePaymentCurrency(item.currency) === selectedCurrency.value).sort((a, b) => {
+    if (!showAmounts.value) return b.count - a.count
     if (b.amount === a.amount) return b.count - a.count
     return b.amount - a.amount
   })

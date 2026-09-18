@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import OpsErrorLogTable from '../OpsErrorLogTable.vue'
+import DataTable from '@/components/common/DataTable.vue'
 import zhLocale from '@/i18n/locales/zh'
 import enLocale from '@/i18n/locales/en'
 import type { OpsErrorLog } from '@/api/admin/ops'
@@ -45,6 +46,19 @@ function mountTable(row: Partial<OpsErrorLog>) {
 }
 
 describe('OpsErrorLogTable user/api-key/account columns', () => {
+  it('仅详情模式优先展示时间与响应内容，并保留列显隐选择', async () => {
+    const wrapper = mountTable({})
+    const keys = () => wrapper.findComponent(DataTable).props('columns').map((column: { key: string }) => column.key)
+    const original = keys()
+    expect(original.slice(0, 2)).not.toEqual(['created_at', 'message'])
+    await wrapper.setProps({ summaryFirst: true })
+    expect(keys().slice(0, 2)).toEqual(['created_at', 'message'])
+    expect(keys().slice(2)).toEqual(original.filter((key: string) => key !== 'created_at' && key !== 'message'))
+    await wrapper.setProps({ visibleColumnKeys: ['user', 'message'] })
+    expect(keys()).toEqual(['message', 'user'])
+    await wrapper.setProps({ summaryFirst: false })
+    expect(keys()).toEqual(['user', 'message'])
+  })
   // 回归:上游错误行(phase=upstream, owner=provider)以前在单一「用户」列里只显示账号、
   // 丢失用户;现在用户/API Key/账号各占独立列,三者同时可见。
   it('renders user, api key and account in separate columns for an upstream row', () => {
@@ -80,11 +94,26 @@ describe('OpsErrorLogTable user/api-key/account columns', () => {
       status_code: 503,
       client_status_code: 200,
       recovered_upstream: true,
+      group_id: 2,
+      group_name: '失败分组',
+      recovered_group_id: 3,
+      recovered_group_name: '恢复分组',
     })
 
     expect(wrapper.text()).toContain('503')
     expect(wrapper.text()).toContain('usage.errors.recovered')
     expect(wrapper.text()).toContain('usage.errors.finalStatus 200')
+    expect(wrapper.text()).toContain('失败分组')
+    expect(wrapper.text()).toContain('usage.errors.recoveredTo')
+    expect(wrapper.text()).toContain('恢复分组')
+  })
+
+  // 历史恢复记录可能没有目标快照，禁止把失败分组当作成功目标。
+  it('does not infer a recovery target from the failed group', () => {
+    const wrapper = mountTable({ recovered_upstream: true, group_id: 2, group_name: '失败分组' })
+
+    expect(wrapper.text()).toContain('usage.errors.recovered')
+    expect(wrapper.text()).not.toContain('usage.errors.recoveredTo')
   })
 
   // 流式响应可能在 HTTP 200 后失败，只接受后端明确提供的恢复标记。
@@ -93,11 +122,13 @@ describe('OpsErrorLogTable user/api-key/account columns', () => {
       status_code: 503,
       client_status_code: 200,
       recovered_upstream: false,
+      recovered_group_name: '不应显示的目标',
     })
 
     expect(wrapper.text()).toContain('503')
     expect(wrapper.text()).not.toContain('usage.errors.recovered')
     expect(wrapper.text()).not.toContain('usage.errors.finalStatus')
+    expect(wrapper.text()).not.toContain('不应显示的目标')
   })
 })
 
@@ -117,6 +148,8 @@ describe('OpsErrorLogTable i18n keys exist in the errorLog namespace', () => {
       expect(msgs?.usage?.errors?.recovered).toBeTruthy()
       expect(msgs?.usage?.errors?.recoveredHint).toBeTruthy()
       expect(msgs?.usage?.errors?.finalStatus).toBeTruthy()
+      expect(msgs?.usage?.errors?.recoveredTo).toBeTruthy()
+      expect(msgs?.usage?.errors?.finalFailed).toBeTruthy()
     })
   }
 })

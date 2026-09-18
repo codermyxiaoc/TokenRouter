@@ -403,7 +403,7 @@ func isAPIKeyNonConsumingRequest(method, path string) bool {
 		return true
 	}
 	if method == http.MethodGet {
-		if strings.HasSuffix(path, "/models") || isBatchImageManagementRequest(method, path) || isGrokVideoTaskRead(method, path) {
+		if isCompositeKeyModelListEndpoint(method, path) || isBatchImageManagementRequest(method, path) || isGrokVideoTaskRead(method, path) {
 			return true
 		}
 	}

@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/apicompat"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -38,6 +39,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 	account *Account,
 	body []byte,
 	defaultMappedModel string,
+	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
 ) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
 
@@ -94,13 +96,13 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 	}
 
 	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, clientStream)
-	upstreamReq, _, err := s.buildNativeAnthropicUpstreamRequest(upstreamCtx, c, account, body, apiKey, targetURL)
+	upstreamReq, _, err := s.buildNativeAnthropicUpstreamRequest(upstreamCtx, c, account, body, apiKey, targetURL, tlsRouterMatch...)
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.sendNativeAnthropicUpstreamRequest(upstreamReq, proxyURL, account, tlsRouterMatch...)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 	}
@@ -116,6 +118,13 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 		return s.handleAnthropicErrorResponse(resp, c, account, billingModel)
 	}
 
+	if account.IsOpenCodeGo() {
+		result, err := s.handleOpenCodeNativeAnthropicResponse(resp, c, account, APIProtocolAnthropic, clientStream, originalModel, billingModel, upstreamModel, reasoningEffort, startTime, apicompat.ResponsesClientToolMapping{}, false)
+		if result != nil {
+			result.RequestedReasoningEffort = requestedReasoningEffort
+		}
+		return result, err
+	}
 	if clientStream {
 		result, err := s.handleNativeAnthropicStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, reasoningEffort, startTime)
 		if result != nil {
@@ -141,6 +150,9 @@ func (s *OpenAIGatewayService) nativeAnthropicTargetURL(account *Account) (strin
 	if err != nil {
 		return "", fmt.Errorf("invalid base_url: %w", err)
 	}
+	if account.IsOpenCodeGo() {
+		return buildOpenAIEndpointURL(validatedURL, "/v1/messages"), nil
+	}
 	return strings.TrimRight(validatedURL, "/") + "/v1/messages", nil
 }
 
@@ -151,6 +163,7 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	body []byte,
 	apiKey string,
 	targetURL string,
+	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
 ) (*http.Request, []byte, error) {
 	if account.IsMiniMax() {
 		// 三种客户端最终进入同一构建入口，统一适配 MiniMax 的思考开关。
@@ -205,10 +218,27 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 		setHeaderRaw(req.Header, "anthropic-version", "2023-06-01")
 	}
 
+	if account.IsOpenCodeGo() {
+		// OpenCode 的三种原生协议都遵守当前 UA/TLS 路由，原有 CN 请求保持原行为。
+		s.applyOpenAIUpstreamUserAgent(ctx, c, account, req, false, tlsRouterMatch...)
+	}
 	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
 	account.ApplyHeaderOverrides(req.Header)
+	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body)
+	if account.IsOpenCodeGo() {
+		// 错误尚未生成用量结果，也要记录实际 Anthropic 端点。
+		SetActualOpenAIUpstreamEndpoint(c, req.URL.Path)
+	}
 
 	return req, body, nil
+}
+
+// OpenCode 的原生 Anthropic 请求保留账号或路由指纹；既有 CN 路径仍使用原传输入口。
+func (s *OpenAIGatewayService) sendNativeAnthropicUpstreamRequest(req *http.Request, proxyURL string, account *Account, tlsRouterMatch ...TLSFingerprintRouterMatchResult) (*http.Response, error) {
+	if account.IsOpenCodeGo() {
+		return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
+	}
+	return s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 }
 
 // handleNativeAnthropicBufferedResponse 处理非流式原生 Anthropic 响应：

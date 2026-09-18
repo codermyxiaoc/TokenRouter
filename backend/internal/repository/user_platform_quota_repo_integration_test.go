@@ -46,7 +46,7 @@ func TestUserPlatformQuotaRepository_BulkInsertInitial_Idempotent(t *testing.T) 
 
 	list, err := repo.ListByUser(txCtx, userID)
 	require.NoError(t, err, "list")
-	require.Len(t, list, 2, "expected 2 records after idempotent insert")
+	require.Len(t, list, 1, "未配置限额的平台不建行")
 
 	// 校验 daily_limit_usd 保留
 	var anthropicRec *UserPlatformQuotaRecord
@@ -120,8 +120,8 @@ func TestUserPlatformQuotaRepository_BulkInsertInitial_CNProvidersAllowed(t *tes
 	daily := 12.0
 	records := []UserPlatformQuotaRecord{
 		{UserID: userID, Platform: "kimi", DailyLimitUSD: &daily},
-		{UserID: userID, Platform: "zhipu"},
-		{UserID: userID, Platform: "deepseek"},
+		{UserID: userID, Platform: "zhipu", DailyLimitUSD: &daily},
+		{UserID: userID, Platform: "deepseek", DailyLimitUSD: &daily},
 	}
 	require.NoError(t, repo.BulkInsertInitial(txCtx, records),
 		"kimi/zhipu/deepseek 平台应可写入（迁移 248 后 CHECK 约束已含国产供应商）")
@@ -172,9 +172,12 @@ func TestUserPlatformQuotaRepository_IncrementUsageWithReset_SameWindow(t *testi
 	userID := mustCreateUserForQuota(t, client)
 
 	repo := NewUserPlatformQuotaRepository(client)
+	limit := 100.0
+	require.NoError(t, repo.BulkInsertInitial(ctx, []UserPlatformQuotaRecord{{UserID: userID, Platform: "anthropic", DailyLimitUSD: &limit}}))
+
 	now := time.Date(2026, 5, 22, 10, 0, 0, 0, time.UTC) // 周五
 
-	// 首次调用：应新建记录
+	// 首次调用：累加已配置限额的记录
 	require.NoError(t, repo.IncrementUsageWithReset(ctx, userID, "anthropic", 1.5, now))
 
 	rec, err := repo.GetByUserPlatform(ctx, userID, "anthropic")
@@ -200,6 +203,8 @@ func TestUserPlatformQuotaRepository_IncrementUsageWithReset_DailyReset(t *testi
 	userID := mustCreateUserForQuota(t, client)
 
 	repo := NewUserPlatformQuotaRepository(client)
+	limit := 100.0
+	require.NoError(t, repo.BulkInsertInitial(ctx, []UserPlatformQuotaRecord{{UserID: userID, Platform: "anthropic", DailyLimitUSD: &limit}}))
 
 	day1 := time.Date(2026, 5, 22, 10, 0, 0, 0, time.UTC) // 周五（同一周、同一月）
 	day2 := time.Date(2026, 5, 23, 10, 0, 0, 0, time.UTC) // 周六（同一周、同一月）
@@ -220,6 +225,8 @@ func TestUserPlatformQuotaRepository_IncrementUsageWithReset_WeeklyReset(t *test
 	userID := mustCreateUserForQuota(t, client)
 
 	repo := NewUserPlatformQuotaRepository(client)
+	limit := 100.0
+	require.NoError(t, repo.BulkInsertInitial(ctx, []UserPlatformQuotaRecord{{UserID: userID, Platform: "openai", DailyLimitUSD: &limit}}))
 
 	// 5月22日（周五）和 5月25日（下周一），不同周
 	fri := time.Date(2026, 5, 22, 10, 0, 0, 0, time.UTC)
@@ -329,10 +336,10 @@ func TestUserPlatformQuotaRepository_ResetExpiredWindow_NotFoundReturnsSentinel(
 		"expected ErrUserPlatformQuotaNotFound, got %v", err)
 }
 
-// TestBatchSnapshotUsage_InsertOverwriteMultiKey 验证 BatchSnapshotUsage 的绝对值覆盖语义：
-//  1. 首批插入 2 条（不同 user），验证 daily 等于首批值；
+// TestBatchSnapshotUsage_OverwriteExistingMultiKey 验证 BatchSnapshotUsage 的绝对值覆盖语义：
+//  1. 首批更新 2 条既有配置（不同 user），验证 daily 等于首批值；
 //  2. 对同一 key 传不同值，验证 daily 等于新值（绝对覆盖，非累加）。
-func TestBatchSnapshotUsage_InsertOverwriteMultiKey(t *testing.T) {
+func TestBatchSnapshotUsage_OverwriteExistingMultiKey(t *testing.T) {
 	ctx := context.Background()
 	// BatchSnapshotUsage 不开事务（直接写），使用独立 client 保证跨调用可见性。
 	client := testEntClient(t)
@@ -342,12 +349,18 @@ func TestBatchSnapshotUsage_InsertOverwriteMultiKey(t *testing.T) {
 
 	repo := NewUserPlatformQuotaRepository(client)
 
+	limit := 100.0
+	require.NoError(t, repo.BulkInsertInitial(ctx, []UserPlatformQuotaRecord{
+		{UserID: userID1, Platform: "anthropic", DailyLimitUSD: &limit},
+		{UserID: userID2, Platform: "openai", DailyLimitUSD: &limit},
+	}))
+
 	now := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
 	dailyStart := time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
 	weeklyStart := time.Date(2026, 5, 25, 0, 0, 0, 0, time.UTC) // 当周一
 	monthlyStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 
-	// ── 第一批：插入 2 行 ──────────────────────────────────────────────────────
+	// ── 第一批：更新 2 行 ──────────────────────────────────────────────────────
 	firstBatch := []UserPlatformQuotaSnapshot{
 		{
 			UserID:             userID1,
@@ -425,4 +438,33 @@ func TestBatchSnapshotUsage_InsertOverwriteMultiKey(t *testing.T) {
 	require.InDelta(t, 8.8, rec2After.DailyUsageUSD, 1e-9, "user2 daily must be overwritten to 8.8 (not accumulated)")
 	require.InDelta(t, 18.8, rec2After.WeeklyUsageUSD, 1e-9, "user2 weekly must be overwritten to 18.8")
 	require.InDelta(t, 28.8, rec2After.MonthlyUsageUSD, 1e-9, "user2 monthly must be overwritten to 28.8")
+}
+
+// 迁移 277 扩展新平台时保留已有平台约束，不能使注册配额整批写入失败。
+func TestUserPlatformQuotaRepository_BulkInsertInitial_OpenCodeAndExistingPlatforms(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	txCtx := dbent.NewTxContext(ctx, tx)
+	client := tx.Client()
+
+	userID := mustCreateUserForQuota(t, client)
+	repo := NewUserPlatformQuotaRepository(client)
+
+	daily := 12.0
+	records := []UserPlatformQuotaRecord{
+		{UserID: userID, Platform: "kimi", DailyLimitUSD: &daily},
+		{UserID: userID, Platform: "zhipu", DailyLimitUSD: &daily},
+		{UserID: userID, Platform: "deepseek", DailyLimitUSD: &daily},
+		{UserID: userID, Platform: "minimax", DailyLimitUSD: &daily},
+		{UserID: userID, Platform: "qoder", DailyLimitUSD: &daily},
+		{UserID: userID, Platform: "opencode_go", DailyLimitUSD: &daily},
+	}
+	require.NoError(t, repo.BulkInsertInitial(txCtx, records),
+		"新平台和已有平台必须可同时写入")
+
+	for _, platform := range []string{"kimi", "zhipu", "deepseek", "minimax", "qoder", "opencode_go"} {
+		rec, err := repo.GetByUserPlatform(txCtx, userID, platform)
+		require.NoError(t, err)
+		require.NotNil(t, rec, "%s 配额行应已写入", platform)
+	}
 }

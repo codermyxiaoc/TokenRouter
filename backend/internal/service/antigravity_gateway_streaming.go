@@ -186,6 +186,8 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 	lastDataAt := time.Now()
 
 	cw := newAntigravityClientWriter(c.Writer, flusher, "antigravity gemini")
+	// 非 data 帧仍使用上游空行收尾，避免吞掉注释或事件元数据的边界。
+	passthroughFrameOpen := false
 
 	// 仅发送一次错误事件，避免多次写入导致协议混乱
 	errorEventSent := false
@@ -222,9 +224,11 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 			line := ev.line
 			trimmed := strings.TrimRight(line, "\r\n")
 			if strings.HasPrefix(trimmed, "data:") {
+				passthroughFrameOpen = false
 				payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
 				if payload == "" || payload == "[DONE]" {
-					cw.Fprintf("%s\n", line)
+					// 空 data 和结束标记也要写出完整帧，后续空行才可安全去重。
+					cw.Fprintf("%s\n\n", trimmed)
 					continue
 				}
 
@@ -264,7 +268,16 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 				continue
 			}
 
-			cw.Fprintf("%s\n", line)
+			// data 分支已写出完整分隔符；仅给尚未收尾的透传帧补空行。
+			if trimmed == "" {
+				if passthroughFrameOpen {
+					cw.Fprintf("\n")
+					passthroughFrameOpen = false
+				}
+				continue
+			}
+			cw.Fprintf("%s\n", trimmed)
+			passthroughFrameOpen = true
 
 		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))

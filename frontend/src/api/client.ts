@@ -13,6 +13,7 @@ import {
   shouldMarkUserUIRequest,
 } from './adminUIRequest'
 import { refreshAuthTokens } from './tokenRefresh'
+import { isTemporaryAuthFailure } from './authFailure'
 import { getAPIBaseURL } from './url'
 export { buildApiUrl, buildGatewayUrl } from './url'
 
@@ -172,7 +173,7 @@ apiClient.interceptors.response.use(
               originalRequest.headers.Authorization = `Bearer ${tokens.access_token}`
             }
             return apiClient(originalRequest)
-          } catch {
+          } catch (refreshError) {
             // 旧请求刷新期间若已登出或换号，不能清除后来建立的新会话。
             const sessionChanged =
               localStorage.getItem('refresh_token') !== refreshToken ||
@@ -182,6 +183,18 @@ apiClient.interceptors.response.use(
                 status: 401,
                 code: 'AUTH_SESSION_CHANGED',
                 message: 'Authentication session changed while refreshing.'
+              })
+            }
+
+            // 刷新暂时不可用时只拒绝当前请求，保留凭据供恢复后再次刷新。
+            if (isTemporaryAuthFailure(refreshError)) {
+              const refreshStatus = axios.isAxiosError(refreshError)
+                ? refreshError.response?.status ?? 0
+                : (refreshError as { status?: number }).status ?? 0
+              return Promise.reject({
+                status: refreshStatus,
+                code: 'TOKEN_REFRESH_UNAVAILABLE',
+                message: 'Authentication service temporarily unavailable. Please try again.'
               })
             }
 

@@ -1,6 +1,6 @@
 # 开发、验证与上游同步
 
-本文记录 TokenRouter 当前工具链、代码生成、测试分层、仓库约束、发布和 fork 同步流程。它替代旧开发指南中的个人机器路径、固定本地凭据和临时故障处置；具体版本始终以 manifest 与 CI 为准。
+本文记录 TokenRouter 当前工具链、代码生成、测试分层、仓库约束、发布和 fork 同步流程。它替代旧开发指南中的个人机器路径、固定本地凭据和临时故障处置；具体版本以当前 manifest、Makefile 和 Dockerfile 为准。当前检出没有 `.github/workflows/`，不能把未执行的 CI 或自动发布视为验证结果。
 
 ## 章节导航
 
@@ -16,19 +16,13 @@
 
 | 工具 | 当前来源 | 当前约束 |
 | --- | --- | --- |
-| Go | `backend/go.mod`、CI | `1.27.0` |
-| Node.js | `.github/workflows/backend-ci.yml` | `20` |
-| pnpm | CI 与根 Makefile | `9`；根命令默认使用 `npx --yes pnpm@9` |
-| golangci-lint | CI | `v2.13`，配置在 `backend/.golangci.yml` |
+| Go | `backend/go.mod`、根与部署 Dockerfile | `1.27.0` |
+| Node.js | 根与部署 Dockerfile | 镜像构建使用 `node:24-alpine`；本地使用满足前端依赖要求的工具链 |
+| pnpm | 根 Makefile 与 Dockerfile | `9`；根命令默认使用 `npx --yes pnpm@9` |
+| golangci-lint | `backend/Makefile`、`backend/.golangci.yml` | 后端检查执行 `golangci-lint run ./...`；安装版本由本地工具链提供 |
 | PostgreSQL、Redis | Compose 与集成测试 | 生产必需；测试可由 Testcontainers/Compose 提供 |
 
-本地应安装与 CI 相同的 lint 版本，避免规则集差异造成只在 CI 出现的结果：
-
-```bash
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13
-```
-
-升级 Go 时必须同时修改 `backend/go.mod`，以及 `backend-ci.yml`（两处）、`release.yml`（两处）和 `security-scan.yml` 中的 `go version` 硬断言；workflow 都通过 `go-version-file: backend/go.mod` 安装工具链，任一断言遗漏都会在版本校验步骤失败。
+记录实际使用的 Go、Node、pnpm 和 lint 版本，以便复现构建与验证。升级 Go 时同步 `backend/go.mod`、根与部署 Dockerfile 中的工具链镜像，并核对当前存在的构建入口；不要假设历史 workflow 的版本断言仍在执行。
 
 不要把个人数据库路径、固定密码或某台机器的服务配置写入工程文档。开发配置使用未提交的环境文件或 `backend/config.yaml`；可提交样例在 `deploy/`。前端开发服务器默认通过 `VITE_DEV_PROXY_TARGET` 代理后端，端口由 `VITE_DEV_PORT` 控制。
 
@@ -61,7 +55,7 @@ docker compose -f deploy/docker-compose.dev.yml up --build
 - 选择项使用 `frontend/src/components/common/Select.vue` 等自研选择框，不使用原生 `<select>`。
 - 用户可见文案进入 `src/i18n/locales/`，中英文 key 保持同构。
 - API 类型和调用放在 `src/api/`，跨页面状态进入 store/composable，避免在 view 复制协议。
-- 修改依赖必须同步 `frontend/pnpm-lock.yaml`，CI 使用 frozen lockfile。
+- 修改依赖必须同步 `frontend/pnpm-lock.yaml`，发布安装使用 `--frozen-lockfile`。
 
 ## 生成代码与迁移
 
@@ -83,7 +77,7 @@ Ent schema 不是生产迁移器。数据库权威变更仍须新增 `backend/mi
 # 受影响包
 (cd backend && go test ./internal/service ./internal/handler)
 
-# 与 CI 一致的测试分层
+# 后端 Makefile 提供的测试分层
 make -C backend test-unit
 make -C backend test-integration
 
@@ -96,7 +90,7 @@ make -C backend test
 前端门禁：
 
 ```bash
-# CI 使用 lint、类型检查和关键 Vitest 集
+# 根 Makefile 执行 lint、类型检查和关键 Vitest 集
 make test-frontend
 
 # 变更涉及其它组件时运行其测试或完整套件
@@ -104,7 +98,7 @@ npx --yes pnpm@9 --dir frontend run test:run
 npx --yes pnpm@9 --dir frontend run build
 ```
 
-部署文件变更要运行 `.github/workflows/backend-ci.yml` 中对应的 shell/Compose 检查；依赖或安全边界变更还应运行 `make secret-scan`、`govulncheck` 或相应审计。最终至少执行 `git diff --check`，并确认没有意外生成物、环境文件或秘密。
+部署文件变更要运行 `deploy/tests/` 中对应的 shell/Compose 检查，并对所交付的 Compose 变体执行 `docker compose config --quiet`；校验时使用独立的测试变量，避免输出真实配置。依赖或安全边界变更还应运行 `make secret-scan`、`govulncheck` 或相应审计。最终至少执行 `git diff --check`，并确认没有意外生成物、环境文件或秘密。
 
 ## 提交与文档
 
@@ -127,8 +121,14 @@ npx --yes pnpm@9 --dir frontend run build
 
 ## 发布
 
-`.github/workflows/release.yml` 由 `v*` tag 或手动 dispatch 触发。标准发布只构建一次前端，再把 Linux、Windows 和 macOS 的五个 Go 目标分配到独立 runner 并行编译；最终 job 通过 `tools/goreleaser_prebuilt.sh` 把这些二进制导入 GoReleaser，统一生成 Release 归档、校验和、双架构镜像与 manifest。每个镜像架构只执行一次构建，并同时附加 GHCR 与可选 DockerHub 标签；未配置 DockerHub 时不会创建占位镜像。simple release 跳过二进制 matrix，只构建精简镜像集合。workflow 从 annotated tag body 读取 release notes，并在成功后把 `backend/cmd/server/VERSION` 同步回默认分支。
+当前检出没有 `.github/workflows/`。创建 tag 不会在本检出自动触发发布，也没有自动创建 Release、构建其他平台或回写 `backend/cmd/server/VERSION` 的流程。发布前按本次范围同步程序版本、Compose 默认镜像和部署说明；程序内部版本号不带 `v`，镜像标签保留 `v` 前缀。
 
-发布前确保目标提交已推送、CI 通过、数据库迁移可滚动升级且备份已验证。发布后检查 Release、镜像、二进制、VERSION 回写和部署 smoke test；tag 只标识代码版本，不替代迁移/恢复检查。
+Ubuntu amd64 手工发布可先构建一次前端，再以 `CGO_ENABLED=0`、`GOOS=linux`、`GOARCH=amd64`、`GOAMD64=v1` 和 `-tags embed` 编译后端，把同一个程序交付到二进制归档与 `Dockerfile.goreleaser` 镜像。镜像的最小构建上下文必须携带同次源码的运行时定价资源和入口脚本，镜像内外程序哈希应一致。根 `Dockerfile` 仍可完整构建源码镜像，具体命令与发布核对见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+
+仓库保留 `.goreleaser.yaml`、`.goreleaser.simple.yaml` 和 `tools/goreleaser_prebuilt.sh`。标准配置支持多个二进制平台及 GHCR/DockerHub 镜像标签，不能把它等同于只发布单个 amd64 标签的流程；其前置 hook 会执行 `go mod tidy`，归档文件列表也不等同于手工更新包，使用前需核对本次范围、工作区变化和资源完整性。预编译适配器按 `GORELEASER_PREBUILT_DIR/sub2api_<GOOS>_<GOARCH>` 导入程序，只复制文件，不改写其版本信息。
+
+发布记录应包含源码提交与未提交状态、工具链、程序版本与哈希、目标平台、镜像远端摘要，以及实际执行的验证。二进制包需检查可执行位、嵌入前端/迁移和定价资源；镜像需检查版本、入口权限及 PostgreSQL 客户端，并在隔离环境验证健康、前端和升级。只记录已经完成的检查，不把 tag、构建完成或旧版测试结果写成本次发布成功。
+
+从 v1.2 更新到 v1.3 的迁移 277、WS `request_kind` 作用域、Antigravity 缓存键和调度快照切换要求见 [v1.3 升级与缓存切换](deployment_and_migrations.md#v1_3_upgrade)。部署前核实备份可恢复性及所有待应用迁移的兼容边界，按要求完成全部实例升级；推送镜像或交付更新包与服务器部署是独立步骤。
 
 相关文档：[项目总览](../project_overview.md)、[系统架构](../architecture/system_architecture.md)、[配置边界](../interfaces/configuration.md)、[部署与数据库迁移](deployment_and_migrations.md)、[运维目录](index.md)。

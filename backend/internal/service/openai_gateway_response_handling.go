@@ -139,6 +139,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		}
 		return int64(bufferedWriter.Buffered())
 	}
+	diagnostic := openAIStreamAttemptDiagnostic{}
+	pendingCommitEvent := ""
+	pendingCommitVisible := false
 	flushBuffered := func() error {
 		// 空缓冲区的 Flush 只是整理写入边界，不代表已向下游发送响应数据。
 		hadPendingBytes := pendingBytes() > 0
@@ -154,6 +157,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		flusher.Flush()
 		if hadPendingBytes {
 			MarkOpsTimestamp(c, ctxkey.FirstDownstreamFlushAt)
+			diagnostic.commit(pendingCommitEvent, pendingCommitVisible)
 		}
 		return nil
 	}
@@ -254,10 +258,11 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	failedMessage := ""
 	var failedPayload []byte
 	var streamEarlyErr error
-	// 终态记录不能依赖失败帧被下游接收；裸 error 被后续成功终态恢复时不会留下失败。
+	// 正常连接和断连排水都记录最终失败；提前 failover 已记录的尝试不重复登记。
 	defer func() {
-		if clientDisconnected && sawFailedEvent && streamEarlyErr == nil {
+		if sawFailedEvent && streamEarlyErr == nil {
 			s.recordOpenAIStreamDrainFailure(c, account, false, resp.Header.Get("x-request-id"), failedPayload, failedMessage)
+			diagnostic.log(ctx, account, "native_sse", resp.Header.Get("x-request-id"), "failed", clientDisconnected)
 		}
 	}()
 	clientOutputStarted := false
@@ -389,6 +394,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			bareErrorAccountSideEffectsPending = false
 		}
 		applyAttemptResponseHeaders()
+		if pendingCommitEvent == "" {
+			pendingCommitEvent = "response.failed"
+		}
 		if _, err := writePendingString(buildOpenAIResponseFailedSSE(responseID, originalModel, bareErrorPayload, failedMessage)); err != nil {
 			handlePendingWriteError(err)
 			return false
@@ -506,8 +514,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			eventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
 			if codexFailureTerminal && sawBareError && !sawResponseFailed &&
 				(eventType == "response.completed" || eventType == "response.done") {
-				// A later successful terminal is authoritative over a pending bare
-				// error. Keep its usage and terminal visible to the client.
+				// 成功终态恢复暂存错误，但上游错误事实仍保留为已恢复记录。
+				s.recordOpenAIStreamUpstreamError(c, account, false, upstreamRequestID, "stream_error_recovered", bareErrorPayload, failedMessage)
+				diagnostic.log(ctx, account, "native_sse", upstreamRequestID, "recovered", clientDisconnected)
 				sawBareError = false
 				sawFailedEvent = false
 				terminalFailurePending = false
@@ -564,14 +573,19 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 					})
 				}
 				outputStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)
-				if !outputStarted && !cyberHit {
+				usageObserved := openAIUsageHasTokens(usage)
+				if outputStarted || usageObserved {
+					diagnostic.failoverBlocked(outputStarted, usageObserved)
+				}
+				if !outputStarted && !usageObserved && !cyberHit {
 					if compactErr := newOpenAICompactFallbackSignal(c, dataBytes, failedMessage); compactErr != nil {
 						sawFailedEvent = true
 						streamEarlyErr = compactErr
 						return
 					}
 				}
-				if outputStarted && !cyberHit {
+				// 已观测用量禁止重放，但仍需执行终态错误的账号策略。
+				if (outputStarted || usageObserved) && !cyberHit {
 					if codexFailureTerminal && eventType == "error" {
 						// OpenAI commonly follows a bare error with response.failed.
 						// Defer account health updates so the pair is applied once.
@@ -590,7 +604,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 							shouldFailover = openAIStreamFailedEventShouldFailover(dataBytes, failedMessage)
 						}
 					}
-					if shouldFailover {
+					if shouldFailover && !usageObserved {
 						sawFailedEvent = true
 						streamEarlyErr = s.newOpenAIStreamFailoverErrorWithModel(c, account, false, upstreamRequestID, dataBytes, failedMessage, mappedModel, resp.Header)
 						return
@@ -710,6 +724,10 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 
 			// 写入客户端（客户端断开后继续 drain 上游）
 			if !clientDisconnected && !failureDelivered && !suppressCurrentEvent {
+				if startsClientOutput && pendingCommitEvent == "" {
+					pendingCommitEvent = eventType
+					pendingCommitVisible = startsVisibleOutput
+				}
 				shouldFlush := queueDrained && (clientOutputStarted || startsClientOutput)
 				if firstTokenMs == nil && startsTTFTOutput {
 					// 保证首个 token 事件尽快出站，避免影响 TTFT。
@@ -1247,6 +1265,9 @@ func mergeOpenAIUsageNonZero(dst *OpenAIUsage, src OpenAIUsage) {
 	}
 	if src.ImageInputTokens > 0 {
 		dst.ImageInputTokens = src.ImageInputTokens
+	}
+	if src.ImageCacheReadTokens > 0 {
+		dst.ImageCacheReadTokens = src.ImageCacheReadTokens
 	}
 	if src.OutputTokens > 0 {
 		dst.OutputTokens = src.OutputTokens

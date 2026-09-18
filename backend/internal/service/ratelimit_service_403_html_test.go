@@ -89,7 +89,7 @@ func TestHandleUpstreamError_OpenAIHTML403DoesNotPenalizeAccount(t *testing.T) {
 }
 
 func TestHandleUpstreamErrorCNProviderHTML403DoesNotPenalizeAccount(t *testing.T) {
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformOpenCodeGo} {
 		t.Run(platform, func(t *testing.T) {
 			h := newOpenAI403TestHarness(t, 507, 1)
 			h.account.Platform = platform
@@ -102,7 +102,7 @@ func TestHandleUpstreamErrorCNProviderHTML403DoesNotPenalizeAccount(t *testing.T
 }
 
 func TestHandleUpstreamErrorCNProviderStructured403UsesCumulativeCooldown(t *testing.T) {
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformOpenCodeGo} {
 		t.Run(platform, func(t *testing.T) {
 			h := newOpenAI403TestHarness(t, 508, 1)
 			h.account.Platform = platform

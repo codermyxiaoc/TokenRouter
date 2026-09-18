@@ -939,6 +939,10 @@ func sanitizeAnthropicBodyForBetaTokens(body []byte, anthropicBetaHeader string)
 	if b, deleted := stripAnthropicBodyFieldUnlessBeta(updated, "fallback_credit_token", anthropicBetaHeader, claude.BetaServerSideFallback, claude.BetaFallbackCredit, claude.BetaFallbackCreditLegacy); deleted {
 		updated, changed = b, true
 	}
+	// 消息级 output_config 依赖中途配置 beta，顶层 effort 与现有 Fast 策略保持不变。
+	if b, deleted := stripAnthropicMessageOutputConfigUnlessBeta(updated, anthropicBetaHeader); deleted {
+		updated, changed = b, true
+	}
 	return updated, changed
 }
 
@@ -972,6 +976,106 @@ func anthropicBetaTokensContains(header, token string) bool {
 		}
 	}
 	return false
+}
+
+// stripAnthropicMessageOutputConfigUnlessBeta 在 anthropic-beta header 缺
+// mid-conversation-output-config beta 时，净化 **messages[].output_config**：
+//   - 仅为携带 message-level output_config 的消息剥该字段；
+//   - 若该消息 role=system 且 content 无正文（缺失 / null / 空 string / 空 array /
+//     仅空 text 块），整条删除（pi-ai 为 opus5 生成的空 system 控制消息即此形态）；
+//   - system 有正文则保留正文与其余字段；user/assistant 只剥字段，绝不整条删除；
+//   - 无任何消息携带该字段时返回原 body（字节 no-op）。
+//
+// header 含该 beta 时完全保留。顶层 output_config / effort 不属于该 beta 保护范围，
+// 本函数不做任何处理。多条删除用「稳健重建」实现，保留其余字段与消息先后顺序。
+func stripAnthropicMessageOutputConfigUnlessBeta(body []byte, anthropicBetaHeader string) ([]byte, bool) {
+	if anthropicBetaTokensContains(anthropicBetaHeader, claude.BetaMidConversationOutputConfig) {
+		return body, false
+	}
+	// 快速路径：body 中不含 output_config 字面量时无需解析。
+	if !bytes.Contains(body, []byte("output_config")) {
+		return body, false
+	}
+	msgsRes := gjson.GetBytes(body, "messages")
+	if !msgsRes.Exists() || !msgsRes.IsArray() {
+		return body, false
+	}
+
+	hasMessageOutputConfig := false
+	for _, msg := range msgsRes.Array() {
+		if msg.Get("output_config").Exists() {
+			hasMessageOutputConfig = true
+			break
+		}
+	}
+	if !hasMessageOutputConfig {
+		return body, false
+	}
+
+	var messages []json.RawMessage
+	if err := json.Unmarshal([]byte(msgsRes.Raw), &messages); err != nil {
+		// gjson 的 IsArray 只做形态判断、不保证 JSON 完整合法；此分支保守返回原 body。
+		return body, false
+	}
+
+	changed := false
+	rebuilt := make([]json.RawMessage, 0, len(messages))
+	for _, msg := range messages {
+		if !gjson.GetBytes(msg, "output_config").Exists() {
+			rebuilt = append(rebuilt, msg)
+			continue
+		}
+		changed = true
+
+		// 空正文的 system 控制消息整条删除；其余消息只剥字段。
+		if gjson.GetBytes(msg, "role").String() == "system" &&
+			!anthropicMessageContentHasBody(gjson.GetBytes(msg, "content")) {
+			continue
+		}
+		stripped, err := sjson.DeleteBytes(msg, "output_config")
+		if err != nil {
+			// 不应发生：字段存在且 msg 是合法 JSON。保守整条保留，不产出半成品。
+			rebuilt = append(rebuilt, msg)
+			continue
+		}
+		rebuilt = append(rebuilt, json.RawMessage(stripped))
+	}
+	if !changed {
+		return body, false
+	}
+
+	rebuiltBytes, err := json.Marshal(rebuilt)
+	if err != nil {
+		return body, false
+	}
+	out, err := sjson.SetRawBytes(body, "messages", rebuiltBytes)
+	if err != nil {
+		return body, false
+	}
+	return out, true
+}
+
+// anthropicMessageContentHasBody 判断单条消息的 content 是否携带正文。
+// 返回 false 表示「无正文」：content 缺失 / null / 空 string / 空 array /
+// 仅由空 text 块构成。未知或非 text 内容块（image / tool_use / tool_result 等）
+// 一律视为有正文，避免把未来新增内容块误判为空而连带删除整条 system 消息。
+func anthropicMessageContentHasBody(content gjson.Result) bool {
+	switch {
+	case !content.Exists():
+		return false
+	case content.Type == gjson.String:
+		return content.String() != ""
+	case content.IsArray():
+		var blocks []any
+		if err := json.Unmarshal([]byte(content.Raw), &blocks); err != nil {
+			return true // 无法解析时保守视为有正文
+		}
+		cleaned, _ := stripEmptyTextBlocksFromSlice(blocks)
+		return len(cleaned) > 0
+	default:
+		// null 视为无正文；object / number / bool 等非标准形态保守保留。
+		return content.Type != gjson.Null
+	}
 }
 
 // FilterSignatureSensitiveBlocksForRetry 是更强的 retry 过滤器，用于上游错误明确指向

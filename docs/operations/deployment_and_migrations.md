@@ -9,11 +9,15 @@
 - [迁移执行](#migration_execution)：修改 runner 或迁移格式时读取。
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
+- [v1.3 升级与缓存切换](#v1_3_upgrade)：从 v1.2 更新 OpenCode、WS 和账号缓存时读取。
+- [WS 池与作用域更新](#ws-连接池与执行作用域更新)：更新连接容量和跨实例会话隔离时读取。
 - [数据共享功能下线](#数据共享功能下线)：执行迁移 265 或处理遗留导出对象时读取。
 
 ## 构建与运行形态
 
-源码镜像由根 `Dockerfile` 多阶段构建：先生成前端静态资源，再嵌入 Go 二进制，最后加入运行时资源和 PostgreSQL 客户端。`buildx --platform` 决定目标架构，`VERSION`、`COMMIT` 和 `DATE` 构建参数写入版本信息。二进制归档与多架构发布的另一条入口由 [GoReleaser 配置](../../.goreleaser.yaml) 定义；当前检出内容没有 `.github/workflows/release.yml`，不能依赖该工作流自动发布。
+源码镜像由根 `Dockerfile` 多阶段构建：先生成前端静态资源，再嵌入 Go 二进制，最后加入运行时资源和 PostgreSQL 客户端。`buildx --platform` 决定目标架构，`VERSION`、`COMMIT` 和 `DATE` 构建参数写入版本信息。需要让 Ubuntu 二进制包与镜像使用完全相同的程序时，可先完成一次带 `embed` 的静态 `linux/amd64` 构建，再用 `Dockerfile.goreleaser` 打包该程序；最小上下文仍须包含同次源码的 `backend/resources/` 与 `deploy/docker-entrypoint.sh`，并核对镜像内外程序哈希相同。镜像打包阶段不会修正已经编入程序的版本。
+
+二进制归档与多架构发布的另一条入口由 [GoReleaser 配置](../../.goreleaser.yaml) 定义。当前检出没有 `.github/workflows/`，不能依赖 tag 触发自动发布、自动归档或 `VERSION` 回写；发布范围和验证记录由实际执行的流程决定。
 
 仓库支持以下运行形态：
 
@@ -29,10 +33,12 @@
 
 手工二进制更新包包含嵌入前端和迁移的 `sub2api`，并携带 `resources/model-pricing/model_prices_and_context_window.json` 作为离线定价回退资源。默认 `pricing.fallback_file` 相对于进程工作目录解析：标准 systemd 的 `WorkingDirectory=/opt/sub2api` 对应 `/opt/sub2api/resources/model-pricing/`；自定义目录或显式定价覆盖继续沿用原配置。Ubuntu 部署的 `pg_dump`、`psql` 是宿主机独立依赖，不能直接复制 Alpine 镜像中的动态链接客户端。
 
+手工归档应保留程序 `0755` 可执行位，并附带校验和及构建来源。带顶层版本目录的更新包用于手工解压替换，不直接交给期待根部 `sub2api` 的安装器。更新默认离线定价文件时，先识别并备份旧官方文件，再安装同版本资源；用户修改过的回退文件和 `pricing.override_file` 保持原有配置，不能只为更新程序覆盖自定义定价。
+
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v1.2`，保留 `pull_policy: always`。发布端在当前源码根目录构建 `linux/amd64` 镜像并推送 DockerHub；部署端只拉取指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v1.5`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -92,6 +98,25 @@
 ## 升级与恢复
 
 升级前先创建并实际验证 PostgreSQL 备份，同时保存 Redis/对象存储中业务要求恢复的数据。后台备份服务可把数据库 dump 流式写入本地或 S3 兼容存储，并用维护锁串行化备份/恢复；敏感存储配置需要稳定的安全密钥。备份内容策略可能排除大体量历史表，恢复目标必须先核对备份范围。
+
+从 `v0.1.278-ct-v1.4` 更新到 `v0.1.278-ct-v1.5` 不新增 SQL 迁移，当前最高迁移仍为 `277_allow_opencode_user_platform_quotas.sql`；此前 v1.3 到 v1.4 同样没有新增迁移。沿用既有数据库、配置、数据目录和稳定安全密钥，更新应用后检查程序版本、健康状态、登录、网关调用和用量记录；从 v1.2 或更早版本跨级更新时，仍须遵守下文的 v1.3 缓存切换及所有待应用迁移的升级要求。
+
+v1.5 扩大智能路由对已确认上游失败的恢复范围，并在已有错误事件 JSON 中保存最终恢复分组快照。完整更新后，应抽样验证换组、冷却、管理员与用户错误页的恢复目标展示；旧实例不会产生新恢复快照，历史缺失目标的记录不补填猜测值。重放仍受已输出内容、已产生用量及本地业务拒绝等边界约束，详见[智能路由换组与冷却](../domains/smart_routing_api_keys.md#group_failover)和[恢复错误的查询与归属](ops_monitoring_and_alerting.md#recovered_error_visibility)。
+
+<a id="v1_3_upgrade"></a>
+### v1.3 升级与缓存切换
+
+从 `v0.1.278-ct-v1.2` 更新到 `v0.1.278-ct-v1.3` 新增 `277_allow_opencode_user_platform_quotas.sql`。迁移扩展用户平台额度 CHECK 约束，保留全部已有平台，仅加入 `opencode_go`；不新增额度记录、不修改余额或订阅，不复用上游迁移编号。上线时沿用原数据库、配置及数据目录，并完成所有实例升级与初始调度快照重建后再启用 OpenCode 账号。旧实例没有新平台处理器，不能处理新平台流量；较早版本跨版本升级还须遵守其间所有迁移的升级要求。
+
+本次缓存切换包括 Antigravity access token 缓存与刷新锁统一改用 `ag:account:<账号ID>`，避免同 project 的账号共享凭据。失效流程同时清理当前账号键和历史 project 键，但旧实例仍可能写入旧键；应完成全部实例升级后再依赖新的隔离规则，不需要清空整个 Redis。账号调度元数据同时补充阈值字段、Anthropic 用量窗口和 OpenCode 查询身份；已有元数据不能仅等待 TTL 过期，应确认新实例完成初始快照重建。具体契约见 [Antigravity 账号与凭据](../interfaces/antigravity_upstream.md#antigravity_account_contract)和[调度快照一致性](../architecture/account_scheduling_and_cache.md#scheduler_snapshot_consistency)。
+
+WS 执行作用域也在本版本切换。升级前排空旧 WS，完成全部实例升级及快照重建，再让客户端重连；不要依赖新旧版本混跑提供一致的 `request_kind` 隔离、抢占或凭据缓存行为。单实例同样需要重连。升级后检查迁移 277、原用户与额度数据、登录、网关调用、用量记录及后台快照状态；验证范围和结果应记录在本次产物说明中。
+
+### WS 连接池与执行作用域更新
+
+WS 池和 Responses 内存优化本身不新增数据库迁移。OAuth/API Key 连接容量系数的缺省值改为 5.0；已有 YAML 或环境变量显式值继续优先，不会被启动时覆盖。连接容量仍受每账号硬上限约束，请求并发准入不变，但活跃会话较多时可能增加 socket、reader 和代理资源占用，容量公式与配置边界见[OpenAI 上游](../interfaces/openai_upstream.md#openai_ws_pool_lifecycle)。
+
+执行状态和抢占由旧 session 键改为 API Key、原始线程/显式会话与 `request_kind` 共同派生的作用域，不双读旧键。`turn`、`prewarm`、`compaction` 和未声明的 kind 共用主通道，`memory` 与其他非空 kind 分别隔离。账号调度粘性仍使用原 session hash，不能把它当作执行状态键。单实例更新后需客户端重连；多实例应排空旧 WS 并完成全部实例更新后再依赖新隔离规则，混跑新旧版本不能保证一致抢占。无需清空 Redis 或重置业务数据；本次规则不替代同一更新包中其它迁移的升级要求，详细边界见[执行作用域](../interfaces/openai_upstream.md#openai_execution_scope)。
 
 ### 数据共享功能下线
 

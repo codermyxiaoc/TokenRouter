@@ -464,6 +464,9 @@ func (s *ModelMarketplaceService) getPublicModelDisplayPricing(ctx context.Conte
 	if s.billingService == nil {
 		return unknownDisplayPricing()
 	}
+	if group != nil && group.Platform == PlatformGrok && strings.HasPrefix(strings.ToLower(xai.StripGrokProviderPrefix(model)), "grok-") && CanonicalGrokImagineVideoPriceFamily(model) != "" {
+		return s.getPublicVideoDisplayPricing(ctx, group, model)
+	}
 	imageRateMultiplier := marketplaceImageRateMultiplier(group)
 	if group != nil && group.Platform == PlatformQoder {
 		billingModel := strings.TrimSpace(model)
@@ -494,6 +497,53 @@ func (s *ModelMarketplaceService) getPublicModelDisplayPricing(ctx context.Conte
 		return s.billingService.getDisplayPricingWithResolvedMultipliers(model, group.RateMultiplier, imageRateMultiplier, imageConfig, resolved)
 	}
 	return s.billingService.getDisplayPricing(model, group.RateMultiplier, imageRateMultiplier, imageConfig)
+}
+
+// @project-doc docs/interfaces/model_catalog_and_marketplace.md#marketplace_video_pricing
+// getPublicVideoDisplayPricing 使用视频结算的优先级生成分辨率价卡，不走文本价格兜底。
+func (s *ModelMarketplaceService) getPublicVideoDisplayPricing(ctx context.Context, group *Group, model string) ModelDisplayPricing {
+	resolver := NewModelPricingResolver(nil, s.billingService)
+	if s.gatewayService != nil && s.gatewayService.resolver != nil {
+		resolver = s.gatewayService.resolver
+	}
+	resolved := resolver.Resolve(ctx, PricingInput{Model: model, GroupID: &group.ID, Group: group})
+	multiplier := resolveVideoRateMultiplier(&APIKey{Group: group}, group.RateMultiplier)
+	if multiplier < 0 {
+		multiplier = 0
+	}
+	pricing := ModelDisplayPricing{PricingMode: "video", PriceStatus: "priced"}
+	for _, resolution := range []string{VideoBillingResolution480P, VideoBillingResolution720P, VideoBillingResolution1080P} {
+		// 分组逐模型视频价优先；其次是分组视频专属覆盖，再使用渠道视频/历史按次价。
+		useResolved := resolved.Source == PricingSourceGroup && resolved.Mode == BillingModeVideo
+		if !useResolved && group.GetVideoPriceForModel(model, resolution) == nil {
+			useResolved = resolved.Source == PricingSourceChannel &&
+				(resolved.Mode == BillingModeVideo || resolved.Mode == BillingModePerRequest || resolved.Mode == BillingModeImage)
+		}
+		unit := "second"
+		var price float64
+		if useResolved {
+			cost, err := s.billingService.CalculateCostUnified(CostInput{
+				Ctx: ctx, Model: model, GroupID: &group.ID, Group: group,
+				RequestCount: 1, UsageUnits: 1, SizeTier: resolution, RateMultiplier: multiplier,
+				Resolver: resolver, Resolved: resolved,
+			})
+			if err != nil || cost == nil {
+				return unknownDisplayPricing()
+			}
+			price = cost.ActualCost
+			if resolved.Mode != BillingModeVideo {
+				unit = "request"
+			}
+		} else {
+			price = s.billingService.getVideoUnitPrice(model, resolution, group.VideoPriceConfig()) * multiplier
+		}
+		// 非法价格保持未知；显式零价必须作为免费档位传到浏览器。
+		if price < 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+			return unknownDisplayPricing()
+		}
+		pricing.VideoPrices = append(pricing.VideoPrices, ModelDisplayVideoPrice{Resolution: resolution, Price: price, Unit: unit})
+	}
+	return pricing
 }
 
 // marketplaceImageRateMultiplier 返回模型广场图片价格应使用的倍率。

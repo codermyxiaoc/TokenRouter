@@ -151,6 +151,9 @@ const labelClass = computed(() => {
   if (props.platform === 'minimax') {
     return `${base} bg-rose-200/60 text-rose-800 dark:bg-rose-800/40 dark:text-rose-300`
   }
+  if (props.platform === 'opencode_go') {
+    return `${base} bg-amber-200/60 text-amber-800 dark:bg-amber-800/40 dark:text-amber-300`
+  }
   return `${base} bg-violet-200/60 text-violet-800 dark:bg-violet-800/40 dark:text-violet-300`
 })
 
@@ -188,6 +191,9 @@ const badgeClass = computed(() => {
   }
   if (props.platform === 'minimax') {
     return 'bg-rose-50 text-rose-700 dark:bg-rose-900/20 dark:text-rose-400'
+  }
+  if (props.platform === 'opencode_go') {
+    return 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
   }
   return 'bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-400'
 })

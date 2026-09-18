@@ -1129,12 +1129,23 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		}
 		if status < 400 {
 			if parsed.StreamFailure {
+				// 显式请求级终态不继承此前尝试的上游归属或跳过规则；Responses
+				// SSE 与 Gemini 带内信号采用相同口径，历史尝试单独保留恢复记录。
+				if streamErrs := service.GetOpsStreamErrors(c); len(streamErrs) > 0 && opsStreamErrorsAllRequestScoped(streamErrs) {
+					logOpsStreamError(c, ops, status)
+					logOpsRecoveredUpstream(c, ops, status)
+					return
+				}
 				status = inferStreamFailureStatus(c, parsed)
 			} else {
 				// 已固化为 200 的流内错误按请求失败记录；其余重试或切号事件保留
 				// 2xx 状态，只用于展示被恢复的上游健康异常。
-				if len(service.GetOpsStreamErrors(c)) > 0 {
+				if streamErrs := service.GetOpsStreamErrors(c); len(streamErrs) > 0 {
 					logOpsStreamError(c, ops, status)
+					// 请求级拦截独立归因，先前失败账号仍必须保留恢复记录。
+					if opsStreamErrorsAllRequestScoped(streamErrs) {
+						logOpsRecoveredUpstream(c, ops, status)
+					}
 				} else {
 					logOpsRecoveredUpstream(c, ops, status)
 				}
@@ -1244,16 +1255,10 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			CreatedAt: time.Now(),
 		}
 		applyOpsLatencyFieldsFromContext(c, entry)
+		// 上游归属只来自转发层实际观测的上下文。下游 SSE 也可能由本地限流、
+		// Redis 故障等路径生成；其语义状态只用于请求失败统计，不能反填为上游事实，
+		// 也不能覆盖此前已登记的尝试。真正的最终上游失败应在转发层补齐上下文。
 		applyOpsUpstreamFieldsFromContext(c, entry)
-		if parsed.StreamFailure {
-			if message := strings.TrimSpace(parsed.Message); message != "" {
-				entry.UpstreamErrorMessage = &message
-			}
-			if status >= 400 {
-				finalStatus := status
-				entry.UpstreamStatusCode = &finalStatus
-			}
-		}
 		if apiKey != nil {
 			entry.APIKeyID = &apiKey.ID
 			// 有效 key 报错时快照前缀，key 之后被删也保留。
@@ -1424,9 +1429,22 @@ func logOpsStreamError(c *gin.Context, ops *service.OpsService, wireStatus int) 
 	}
 }
 
+// opsStreamErrorsAllRequestScoped 判断是否需另外保存此前上游尝试的恢复记录。
+func opsStreamErrorsAllRequestScoped(streamErrs []service.OpsStreamError) bool {
+	if len(streamErrs) == 0 {
+		return false
+	}
+	for _, e := range streamErrs {
+		if !e.RequestScoped {
+			return false
+		}
+	}
+	return true
+}
+
 func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus int, streamErr service.OpsStreamError) {
 	// 命中 skip_monitoring=true 透传规则的请求跳过落库，与其它分支一致。
-	if streamErr.SkipMonitoring || (streamErr.Turn == 0 && shouldSkipFinalOpsFailure(c)) {
+	if streamErr.SkipMonitoring || (streamErr.Turn == 0 && !streamErr.RequestScoped && shouldSkipFinalOpsFailure(c)) {
 		return
 	}
 
@@ -1441,9 +1459,19 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 		classifyStatus = wireStatus
 	}
 	normalizedType := normalizeOpsErrorType(streamErr.ErrType, streamErr.Code, streamErr.Message)
-	phase, isBusinessLimited, errorOwner, errorSource := classifyOpsErrorLog(c, normalizedType, streamErr.Message, streamErr.Code, classifyStatus)
+	var phase, errorOwner, errorSource string
+	var isBusinessLimited bool
+	if streamErr.RequestScoped {
+		// 内容策略只归属于本请求，不能继承先前账号的错误/跳过监控规则。
+		phase = classifyOpsPhase(normalizedType, streamErr.Message, streamErr.Code)
+		isBusinessLimited = true
+		errorOwner = classifyOpsErrorOwner(phase, streamErr.Message)
+		errorSource = classifyOpsErrorSource(phase, streamErr.Message)
+	} else {
+		phase, isBusinessLimited, errorOwner, errorSource = classifyOpsErrorLog(c, normalizedType, streamErr.Message, streamErr.Code, classifyStatus)
+	}
 	recordedStatus := wireStatus
-	if streamErr.CountTowardsSLA && streamErr.IntendedStatus >= 400 {
+	if streamErr.IntendedStatus >= 400 && (streamErr.CountTowardsSLA || streamErr.RequestScoped) {
 		recordedStatus = streamErr.IntendedStatus
 	}
 	errorBody := ""
@@ -1494,8 +1522,8 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 			}
 			return ""
 		}(),
-		// 就地 SSE 错误只出现在流式请求上。
-		Stream:           true,
+		// 非流式 2xx 正文中的错误不能显示为流式故障。
+		Stream:           !streamErr.NonStream,
 		InboundEndpoint:  GetInboundEndpoint(c),
 		UpstreamEndpoint: GetUpstreamEndpoint(c, platform),
 		RequestedModel:   modelName,
@@ -1536,8 +1564,10 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 		CreatedAt: time.Now(),
 	}
 	applyOpsLatencyFieldsFromContext(c, entry)
-	applyOpsUpstreamFieldsFromContext(c, entry)
-	if streamErr.Turn > 0 {
+	if !streamErr.RequestScoped {
+		applyOpsUpstreamFieldsFromContext(c, entry)
+	}
+	if streamErr.Turn > 0 && !streamErr.RequestScoped {
 		applyOpsStreamErrorSnapshot(entry, streamErr)
 	}
 

@@ -524,6 +524,11 @@ func logOpenAIWSModeInfo(format string, args ...any) {
 	logger.LegacyPrintf("service.openai_gateway", "[OpenAI WS Mode][openai_ws_mode=true] "+format, args...)
 }
 
+// 连接故障使用真正的告警级别，便于区分空闲正常关闭与影响请求的异常。
+func logOpenAIWSModeWarn(format string, args ...any) {
+	logger.L().Warn(fmt.Sprintf("[OpenAI WS Mode][openai_ws_mode=true] "+format, args...), zap.String("component", "service.openai_gateway"))
+}
+
 func isOpenAIWSModeDebugEnabled() bool {
 	return logger.L().Core().Enabled(zap.DebugLevel)
 }

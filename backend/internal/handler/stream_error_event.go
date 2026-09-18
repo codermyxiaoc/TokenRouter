@@ -33,10 +33,11 @@ type responsesFailedBody struct {
 }
 
 // responsesFailedEvent 是写入 SSE data 行的顶层结构。
-// 故意不带 sequence_number：spec 标记可选，且本函数被调用时无法可靠拿到 last seq。
+// 严格客户端要求序号字段；无法取得上一帧序号的终止事件使用 0，不承诺全流递增。
 type responsesFailedEvent struct {
-	Type     string              `json:"type"`
-	Response responsesFailedBody `json:"response"`
+	Type           string              `json:"type"`
+	SequenceNumber int                 `json:"sequence_number"`
+	Response       responsesFailedBody `json:"response"`
 }
 
 // writeResponsesFailedSSE 在流已经开始后，按 OpenAI Responses 协议写出 response.failed SSE 事件。
@@ -48,8 +49,7 @@ type responsesFailedEvent struct {
 // 而抛出 "stream closed before response.completed"。
 //
 // 字段集对齐 apicompat.makeResponsesCompletedEvent：id/object/model/status/output/error。
-// 故意不写 sequence_number：本函数被调用时无法可靠拿到当前流的 last sequence，
-// 而 OpenAI spec 将 sequence_number 设为可选；省略避免破坏单调性约束。
+// sequence_number 始终写出；未知上一帧序号时使用 0，避免客户端拒绝整个失败事件。
 //
 // 返回 true 表示已尝试 SSE 写出（不论 Write 是否成功，caller 都应直接 return）。
 // 返回 false 表示 writer 不支持 Flusher，无法以 SSE 形式回报错误；

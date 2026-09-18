@@ -1151,13 +1151,20 @@ func diagnosticResetMetric(candidate *advancedSchedulerCandidateScore, ranges ad
 		metric.Neutral = true
 		return metric
 	}
-	if candidate.account.SessionWindowEnd == nil || !now.Before(*candidate.account.SessionWindowEnd) {
+	end, hasReset := advancedSchedulingResetWindowEnd(candidate.account, now)
+	if !hasReset {
 		metric.RawValue = "未观测"
 		metric.Normalization = "未观测，使用中性值 0.5000"
 		metric.Neutral = true
 		return metric
 	}
-	remaining := candidate.account.SessionWindowEnd.Sub(now).Seconds()
+	// 与真实评分同源，诊断不能仍然显示已被规范 5h 窗口替代的会话列。
+	if candidate.account.Platform == PlatformOpenAI {
+		if reset, ok := openAICodexWindowResetAt(candidate.account.Extra, "5h"); ok && now.Before(reset) {
+			metric.Source = "account.extra.codex_5h_reset_at"
+		}
+	}
+	remaining := end.Sub(now).Seconds()
 	metric.Available = true
 	metric.RawValue = diagnosticFloat(remaining) + " 秒"
 	if !ranges.HasResetSample || ranges.MaxResetRemaining <= ranges.MinResetRemaining {

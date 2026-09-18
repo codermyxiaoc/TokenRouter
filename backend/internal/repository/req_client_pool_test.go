@@ -88,6 +88,29 @@ func TestGetSharedReqClient_ImpersonateAndProxy(t *testing.T) {
 	require.Equal(t, "http://proxy.local:8080|4s|true|false", buildReqClientKey(opts))
 }
 
+// 仅站点检查客户端采用 Firefox，普通客户端仍使用独立配置和连接池。
+func TestCreatePrivacyReqClient_FirefoxIsIsolatedFromDefaultClient(t *testing.T) {
+	sharedReqClients = sync.Map{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(r.UserAgent()))
+	}))
+	defer server.Close()
+
+	privacyClient, err := CreatePrivacyReqClient("")
+	require.NoError(t, err)
+	defaultClient, err := getSharedReqClient(reqClientOptions{Timeout: 30 * time.Second})
+	require.NoError(t, err)
+	require.NotSame(t, defaultClient, privacyClient)
+
+	response, err := privacyClient.R().Get(server.URL)
+	require.NoError(t, err)
+	require.Contains(t, response.String(), "Firefox/")
+	require.NotContains(t, response.String(), "Chrome/")
+	response, err = defaultClient.R().Get(server.URL)
+	require.NoError(t, err)
+	require.NotContains(t, response.String(), "Firefox/")
+}
+
 func TestGetSharedReqClient_InvalidProxyURL(t *testing.T) {
 	sharedReqClients = sync.Map{}
 	opts := reqClientOptions{

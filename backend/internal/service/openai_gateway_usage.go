@@ -171,7 +171,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		return errors.New("openai usage result is nil")
 	}
 	if s.rateLimitService != nil && input.Account != nil &&
-		(input.Account.Platform == PlatformOpenAI || input.Account.IsCNProvider()) {
+		(input.Account.Platform == PlatformOpenAI || input.Account.IsMultiProtocolAPIKey()) {
 		s.rateLimitService.ResetOpenAI403Counter(ctx, input.Account.ID)
 	}
 
@@ -200,12 +200,13 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	// Calculate cost
 	tokens := UsageTokens{
-		InputTokens:         actualInputTokens,
-		ImageInputTokens:    result.Usage.ImageInputTokens,
-		OutputTokens:        result.Usage.OutputTokens,
-		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
-		CacheReadTokens:     result.Usage.CacheReadInputTokens,
-		ImageOutputTokens:   result.Usage.ImageOutputTokens,
+		InputTokens:          actualInputTokens,
+		ImageInputTokens:     max(result.Usage.ImageInputTokens-result.Usage.ImageCacheReadTokens, 0),
+		ImageCacheReadTokens: result.Usage.ImageCacheReadTokens,
+		OutputTokens:         result.Usage.OutputTokens,
+		CacheCreationTokens:  result.Usage.CacheCreationInputTokens,
+		CacheReadTokens:      result.Usage.CacheReadInputTokens,
+		ImageOutputTokens:    result.Usage.ImageOutputTokens,
 	}
 
 	// Get rate multiplier
@@ -257,7 +258,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		result.UpstreamModel,
 		result.Model,
 	)
-	billingModels = s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, billingModels)
+	billingModels = s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, billingModels, result.UpstreamModel)
 	serviceTier := ""
 	if result.ServiceTier != nil {
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
@@ -359,6 +360,14 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		requestedModel = input.OriginalModel
 	}
 
+	imageSizeBreakdown := cloneImageSizeBreakdown(result.ImageSizeBreakdown)
+	if result.Usage.ImageCacheReadTokens > 0 {
+		if imageSizeBreakdown == nil {
+			imageSizeBreakdown = make(map[string]int)
+		}
+		// 使用既有 JSONB 保留图片缓存明细，不覆盖尺寸桶或修改结果快照。
+		imageSizeBreakdown["image_cache_read_tokens"] = result.Usage.ImageCacheReadTokens
+	}
 	usageLog := &UsageLog{
 		UserID:            usageActorUserID(apiKey, user),
 		BillingUserID:     user.ID,
@@ -389,7 +398,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		ImageInputSize:      optionalTrimmedStringPtr(result.ImageInputSize),
 		ImageOutputSize:     optionalTrimmedStringPtr(result.ImageOutputSize),
 		ImageSizeSource:     optionalTrimmedStringPtr(result.ImageSizeSource),
-		ImageSizeBreakdown:  result.ImageSizeBreakdown,
+		ImageSizeBreakdown:  imageSizeBreakdown,
 	}
 	isVideoUsage := isGrokVideoUsageResult(result, billingModels)
 	if isVideoUsage {
@@ -899,8 +908,14 @@ func (s *OpenAIGatewayService) filterCNProviderBillingModelCandidates(
 	account *Account,
 	apiKey *APIKey,
 	candidates []string,
+	upstreamModels ...string,
 ) []string {
-	if account == nil || !account.IsCNProvider() {
+	if account == nil || !account.IsMultiProtocolAPIKey() {
+		return candidates
+	}
+	// Zen 可原生服务 Claude；只有映射到其它家族的客户端别名才需要过滤。
+	if account.IsOpenCodeGo() && len(upstreamModels) > 0 &&
+		strings.HasPrefix(strings.ToLower(lastOpenAIModelSegment(upstreamModels[0])), "claude-") {
 		return candidates
 	}
 	filtered := make([]string, 0, len(candidates))

@@ -83,7 +83,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCodeCT
 
 	if shouldMimicClaudeCode {
-		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: true}
+		normalizeOpts := claudeOAuthNormalizeOptions{}
 		var normalizedBody []byte
 		normalizedBody, reqModel = normalizeClaudeOAuthRequestBody(body, reqModel, normalizeOpts)
 		if err := replaceBody(normalizedBody); err != nil {
@@ -101,6 +101,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			if err := replaceBody(applyToolsLastCacheBreakpoint(body)); err != nil {
 				return err
 			}
+		}
+		// system、messages 与新增 tools 断点共用四块上限，避免保留客户端断点后超限。
+		if err := replaceBody(enforceCacheControlLimit(body)); err != nil {
+			return err
 		}
 	}
 
@@ -131,7 +135,13 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	// 发送请求
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 	if err != nil {
-		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(err.Error()), "")
+		safeErr := sanitizeUpstreamErrorMessage(err.Error())
+		setOpsUpstreamError(c, 0, safeErr, "")
+		// 实际发送后的网络失败保留尝试证据，本地凭证与构建失败不登记为上游错误。
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+			UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()), Kind: "request_error", Message: safeErr,
+		})
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
 		return fmt.Errorf("upstream request failed: %w", err)
 	}
@@ -143,6 +153,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, countTokensTooLarge)
 	_ = resp.Body.Close()
 	if err != nil {
+		// 错误体读取失败不能抹去已收到的 HTTP 错误状态，客户端仍沿用原读取失败响应。
+		if resp.StatusCode >= http.StatusBadRequest {
+			s.recordCountTokensUpstreamHTTPError(c, account, resp, upstreamReq, nil, "Failed to read upstream error response", false)
+		}
 		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
 			s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to read response")
 		}
@@ -166,6 +180,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 				respBody, err = ReadUpstreamResponseBody(resp.Body, s.cfg, c, countTokensTooLarge)
 				_ = resp.Body.Close()
 				if err != nil {
+					// 签名修复后的响应归属本次真实重试，不复用前一次 400 的错误事实。
+					if resp.StatusCode >= http.StatusBadRequest {
+						s.recordCountTokensUpstreamHTTPError(c, account, resp, retryReq, nil, "Failed to read upstream error response", false)
+					}
 					if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
 						s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to read response")
 					}
@@ -186,6 +204,11 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	if resp.StatusCode >= 400 {
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+		// 在错误策略或端点不支持分支返回前保存真实 HTTP 失败，供智能路由识别来源。
+		// 普通 Key 的端点 404 继续保留既有客户端本地估算语义。
+		if !isCountTokensUnsupported404(resp.StatusCode, respBody) || smartRoutingAttemptFromContext(ctx) != nil {
+			s.recordCountTokensUpstreamHTTPError(c, account, resp, upstreamReq, respBody, upstreamMsg, false)
+		}
 		if isCountTokensUnsupported404(resp.StatusCode, respBody) {
 			s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported by upstream")
 			return nil
@@ -206,16 +229,6 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 				RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
 			}
 		}
-		upstreamDetail := ""
-		if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
-			maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
-			if maxBytes <= 0 {
-				maxBytes = 2048
-			}
-			upstreamDetail = truncateString(string(respBody), maxBytes)
-		}
-		setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
-
 		// 记录上游错误摘要便于排障（不回显请求内容）
 		if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 			logger.LegacyPrintf("service.gateway",
@@ -293,6 +306,10 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, countTokensTooLarge)
 	_ = resp.Body.Close()
 	if err != nil {
+		// 透传错误体中断同样保留实际上游状态，而不把对客 502 当成上游状态。
+		if resp.StatusCode >= http.StatusBadRequest {
+			s.recordCountTokensUpstreamHTTPError(c, account, resp, upstreamReq, nil, "Failed to read upstream error response", true)
+		}
 		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
 			s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to read response")
 		}
@@ -302,10 +319,14 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 	if resp.StatusCode >= 400 {
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+		// 智能路由需要识别实际返回的 404；普通 Key 的端点不支持处理保持原行为。
+		if !isCountTokensUnsupported404(resp.StatusCode, respBody) || smartRoutingAttemptFromContext(ctx) != nil {
+			s.recordCountTokensUpstreamHTTPError(c, account, resp, upstreamReq, respBody, upstreamMsg, true)
+		}
 
 		// 中转站不支持 count_tokens 端点时（404），返回 404 让客户端 fallback 到本地估算。
 		// 仅在错误消息明确指向 count_tokens endpoint 不存在时生效，避免误吞其他 404（如错误 base_url）。
-		// 返回 nil 避免 handler 层记录为错误，也不设置 ops 上游错误上下文。
+		// 返回 nil 避免 handler 补写错误；智能路由仍保留本轮实际上游失败证据。
 		if isCountTokensUnsupported404(resp.StatusCode, respBody) {
 			logger.LegacyPrintf("service.gateway",
 				"[count_tokens] Upstream does not support count_tokens (404), returning 404: account=%d name=%s msg=%s",
@@ -330,28 +351,6 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 			}
 		}
 
-		upstreamDetail := ""
-		if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
-			maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
-			if maxBytes <= 0 {
-				maxBytes = 2048
-			}
-			upstreamDetail = truncateString(string(respBody), maxBytes)
-		}
-		setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-			Platform:           account.Platform,
-			AccountID:          account.ID,
-			AccountName:        account.Name,
-			UpstreamStatusCode: resp.StatusCode,
-			UpstreamRequestID:  resp.Header.Get("x-request-id"),
-			UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
-			Passthrough:        true,
-			Kind:               "http_error",
-			Message:            upstreamMsg,
-			Detail:             upstreamDetail,
-		})
-
 		errMsg := "Upstream request failed"
 		switch resp.StatusCode {
 		case 429:
@@ -373,6 +372,25 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 	}
 	c.Data(resp.StatusCode, contentType, respBody)
 	return nil
+}
+
+// recordCountTokensUpstreamHTTPError 只接收已经获得的 HTTP 错误响应，避免把本地校验误记为上游失败。
+func (s *GatewayService) recordCountTokensUpstreamHTTPError(c *gin.Context, account *Account, resp *http.Response, req *http.Request, body []byte, message string, passthrough bool) {
+	detail := ""
+	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+		maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = 2048
+		}
+		detail = truncateString(string(body), maxBytes)
+	}
+	setOpsUpstreamError(c, resp.StatusCode, message, detail)
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+		UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
+		UpstreamURL: safeUpstreamURL(req.URL.String()), Passthrough: passthrough,
+		Kind: "http_error", Message: message, Detail: detail,
+	})
 }
 
 func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(

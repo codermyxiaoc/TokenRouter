@@ -174,13 +174,8 @@
       </div>
     </template>
 
-    <!-- 国产供应商 API Key：复用统一的显式上游用量查询与会话缓存。 -->
-    <template
-      v-else-if="
-        account.type === 'apikey' &&
-        (account.platform === 'kimi' || account.platform === 'zhipu' || account.platform === 'deepseek' || account.platform === 'minimax')
-      "
-    >
+    <!-- 内置供应商的用量组件同时负责查询入口及不支持模式提示。 -->
+    <template v-else-if="usesEmbeddedUpstreamUsage">
       <AccountUpstreamUsageCell
         :account="account"
         :result="upstreamUsage"
@@ -755,7 +750,7 @@
       >-</div>
     </div>
   </div>
-  <div v-if="account.type === 'apikey'" class="mt-0.5 flex items-center gap-1.5">
+  <div v-if="account.type === 'apikey' && !usesEmbeddedUpstreamUsage" class="mt-0.5 flex items-center gap-1.5">
     <AccountUpstreamUsageQueryButton
       :account="account"
       :loading="upstreamUsageLoading"
@@ -864,12 +859,15 @@ const upstreamUsageDisabled = computed(() => {
   return config?.enabled === false
 })
 
+// 内置用量组件自带查询按钮，外层不重复提供入口，避免绕过子组件的不支持模式判断。
+const usesEmbeddedUpstreamUsage = computed(() =>
+  props.account.type === 'apikey' &&
+  ['kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go'].includes(props.account.platform)
+)
+
 // Show usage windows for OAuth and Setup Token accounts
 const showUsageWindows = computed(() => {
-  if (
-    props.account.type === 'apikey' &&
-    (props.account.platform === 'kimi' || props.account.platform === 'zhipu' || props.account.platform === 'deepseek' || props.account.platform === 'minimax')
-  ) return true
+  if (usesEmbeddedUpstreamUsage.value) return true
   // API Key 的上游余额由独立子组件按需查询；不能沿用 OAuth/Gemini
   // 用量模型在列表加载或进入视口时主动请求上游。
   if (props.account.type === 'apikey') return false

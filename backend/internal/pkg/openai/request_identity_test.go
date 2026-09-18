@@ -73,6 +73,11 @@ func TestPairCodexClientIdentity(t *testing.T) {
 		{name: "浏览器 UA 不可配对", ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36", wantOK: false},
 		{name: "无斜杠不可配对", ua: "curl", wantOK: false},
 		{name: "空 UA 不可配对", ua: "", wantOK: false},
+		{name: "前导换行不能被裁剪成合法身份", ua: "\ncodex-tui/1.0.0", wantOK: false},
+		{name: "尾随回车不能被裁剪成合法身份", ua: "codex-tui/1.0.0\r", wantOK: false},
+		{name: "拒绝过时折行", ua: "codex-tui/1.0.0\r\n terminal", wantOK: false},
+		{name: "拒绝正文控制字节", ua: "codex-tui/1.0.0 term\x00inal", wantOK: false},
+		{name: "拒绝DEL", ua: "codex-tui/1.0.0\x7f", wantOK: false},
 	}
 
 	for _, tt := range tests {

@@ -118,6 +118,13 @@ func (s *RateLimitService) cnBalanceCooldownDuration() time.Duration {
 // 周期额度探测刷新快照后阈值评估会再次停调到正确的时间点。
 // 无快照或均已过期返回 nil。
 func cnProviderQuotaSnapshotReset(account *Account, now time.Time) *time.Time {
+	if account != nil && account.IsOpenCodeGoPlan() {
+		// GO 有月窗口：只选择已确认耗尽窗口中的最晚恢复点，不能用未耗尽窗口推测 429。
+		if candidate := pickLatestResetSchedulingCandidate(openCodeGoThresholdCandidates(account, now), 100, now); candidate != nil {
+			return cloneTimePtr(candidate.until)
+		}
+		return nil
+	}
 	if account == nil || !account.IsCNProvider() || !account.IsCodingPlan() {
 		return nil
 	}
@@ -146,6 +153,29 @@ func (s *RateLimitService) applyCNProviderReactive429(
 	headers http.Header,
 	responseBody []byte,
 ) bool {
+	if account != nil && account.IsOpenCodeGoPlan() {
+		now := time.Now()
+		until := cnProviderQuotaSnapshotReset(account, now)
+		if until == nil {
+			if resetAt := parseOpenAIRateLimitResetTime(responseBody); resetAt != nil {
+				reset := time.Unix(*resetAt, 0)
+				if reset.After(now) {
+					until = &reset
+				}
+			}
+		}
+		if until == nil {
+			return false
+		}
+		// 真实 429 继续走既有错误记录与切号链路，这里只补账号恢复时间。
+		s.notifyAccountSchedulingBlocked(account, *until, "429")
+		if err := s.accountRepo.SetRateLimited(ctx, account.ID, *until); err != nil {
+			slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+			return true
+		}
+		slog.Info("opencode_go_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", *until)
+		return true
+	}
 	if !account.IsCNProvider() {
 		return false
 	}

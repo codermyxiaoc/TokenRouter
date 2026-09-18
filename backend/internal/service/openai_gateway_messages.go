@@ -35,6 +35,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	defaultMappedModel string,
 	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
 ) (*OpenAIForwardResult, error) {
+	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -48,7 +49,16 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 国产供应商 Anthropic / adaptive 协议使用原生 Messages 端点，
 	// /v1/messages 请求零转换直通（仅模型名映射 + 少量 body 清洗），完整保留
 	// thinking / tool_use / cache 语义，适配 Claude Code 等原生客户端。
-	if account.IsAnthropicProtocol() || account.IsAdaptiveAPIProtocol() {
+	if account.IsOpenCodeGo() {
+		switch openCodeGoNativeProtocol(account, resolveOpenCodeGoMappedModel(account, body, defaultMappedModel)) {
+		case APIProtocolAnthropic:
+			return s.forwardAnthropicViaNativeAnthropicEndpoint(ctx, c, account, body, defaultMappedModel, tlsRouterMatch...)
+		case APIProtocolResponses:
+			SetActualOpenAIUpstreamEndpoint(c, "/v1/responses")
+		default:
+			return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel, tlsRouterMatch...)
+		}
+	} else if account.IsAnthropicProtocol() || account.IsAdaptiveAPIProtocol() {
 		return s.forwardAnthropicViaNativeAnthropicEndpoint(ctx, c, account, body, defaultMappedModel)
 	}
 
@@ -57,7 +67,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel, tlsRouterMatch...)
 	}
-	if !account.IsCNProvider() && resolveOpenAITextProtocolForAttempt(
+	if !account.IsMultiProtocolAPIKey() && resolveOpenAITextProtocolForAttempt(
 		c,
 		account,
 		openai_compat.TextProtocolResponses,
@@ -102,7 +112,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			compatPromptCacheInjected = true
 		}
 	}
-	if promptCacheKey == "" && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
+	// OpenCode 仅派生缓存会话，不能继承 OpenAI 兼容层的历史裁剪、续接状态或指令注入。
+	openAICompatStateEnabled := !account.IsOpenCodeGo()
+	if openAICompatStateEnabled && promptCacheKey == "" && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 		promptCacheKey = promptCacheKeyFromAnthropicMetadataSession(&anthropicReq)
 		if promptCacheKey == "" {
 			promptCacheKey = deriveAnthropicCacheControlPromptCacheKey(&anthropicReq)
@@ -119,8 +131,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		compatPromptCacheInjected = promptCacheKey != ""
 	}
 	compatReplayTrimmed := false
-	compatReplayGuardEnabled := shouldAutoInjectPromptCacheKeyForCompat(upstreamModel)
-	compatContinuationEnabled := openAICompatContinuationEnabled(account, upstreamModel)
+	compatReplayGuardEnabled := openAICompatStateEnabled && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel)
+	compatContinuationEnabled := openAICompatStateEnabled && openAICompatContinuationEnabled(account, upstreamModel)
 	previousResponseID := ""
 	if compatContinuationEnabled {
 		previousResponseID = s.getOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey)
@@ -552,6 +564,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 	}
 
+	if account.IsOpenCodeGo() {
+		stampOpenAIResponsesUpstreamEndpoint(c, result)
+	}
 	return result, handleErr
 }
 

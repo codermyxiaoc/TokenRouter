@@ -16,6 +16,8 @@
 
 代理支持 `http`、`https`、`socks5` 和 `socks5h`，可保存过期时间、健康状态和延迟结果。管理端测试与周期健康检查使用真实代理链，但不得把代理密码写入日志或响应。
 
+管理员更新代理的 `username`/`password` 使用字段存在性区分操作：省略或 JSON `null` 保留原值，显式空字符串清空；HTTP 入口继续移除首尾空白，因此全空白输入也表示清空。前端只有实际编辑过密码才提交该字段，未编辑不覆盖；账号或代理导入在复用既有代理、仅补充状态或到期元数据时省略凭据，避免旧读取值覆盖并发更新的新密码。更新继续经过现有仓储失效边界，到期、备份代理和直连回退配置沿用原契约。
+
 代理到期后，维护服务按配置选择：
 
 - `none`：保持账号原绑定，调度仍按不可用代理处理。
@@ -39,6 +41,8 @@ TLS fingerprint profile 描述 ClientHello/HTTP 行为，账号可以直接绑�
 
 TLS collector 可采集受控会话以建立或检查 profile。采集入口是管理员诊断面，不允许接收任意公网目标或把捕获的 Authorization/Cookie 作为普通样本保存。OAuth token/reset 等特殊请求可以使用专用 profile/UA，但仍遵守目标和代理校验。
 
+OpenAI 隐私设置和 `chatgpt.com` 账号/套餐检查使用独立的 Firefox 指纹客户端，与普通推理传输分离。指纹不保证绕过站点质询；`cf-mitigated: challenge` 及兼容正文特征用于记录失败原因，辅助元数据查询失败仍遵守原有尽力补全语义。
+
 ## 目标与重定向校验
 
 自定义 base URL 在转发和账号测试等使用入口至少经过格式与 scheme 校验。启用 `security.url_allowlist` 后，入口还要求目标命中对应 host allowlist，并按 `allow_private_hosts` 决定是否允许本地或私网字面量地址；关闭 allowlist 时只保留最小格式校验，HTTP 还必须由 `allow_insecure_http` 显式放行，启动日志会提示 SSRF 检查已关闭。
@@ -52,6 +56,8 @@ TLS collector 可采集受控会话以建立或检查 profile。采集入口是�
 Header override 只对 Anthropic/OpenAI/Kimi/Zhipu/DeepSeek/MiniMax 的 API Key 账号，以及 Grok 的 API Key/OAuth 账号生效。保存时会规范化名称和值并拒绝重复或非法条目，读取旧数据时还会再次过滤。Authorization、API Key、Proxy-Authorization、Host、Cookie、会话隔离头、hop-by-hop 和 transport 控制头都在禁止名单中，不能通过账号字段覆盖。OpenAI 的 `x-codex-routing-hint` 也属于网关自有控制头：出站构造会先删除调用方与账号覆盖提供的所有大小写变体，再仅为 OAuth 请求按最终模型和有效服务层级生成，API Key 路径不得透传。
 
 构建器通常先写入平台认证、客户端身份和会话头，再在末尾应用允许的 override；因此允许项可以有意覆盖 User-Agent 等内置头，而禁止项不会遮蔽真实凭据或固定会话身份。新增转发路径时必须复用同一套过滤与应用函数，不能直接遍历原始 credentials。
+
+进入 Go 标准 Transport 的 `Accept-Encoding` 必须保持规范 Header 键名，避免小写 map 键与 Transport 自动追加的 gzip 头同时出现在 HTTP/1.1 或 HTTP/2 请求中。显式 identity、多编码取值与未指定时的自动压缩行为仍遵循原有传输规则。
 
 代理 URL、API Key、OAuth token、AWS/Google 凭据和 TLS 采集内容不得进入普通错误、Ops body 或前端公开设置。错误日志只记录代理/TLS/profile ID、目标 host、阶段和脱敏分类。
 

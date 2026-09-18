@@ -99,4 +99,20 @@ describe('ProfileEditForm', () => {
     expect(showSuccessMock).toHaveBeenCalledWith('Profile updated')
     expect(showErrorMock).not.toHaveBeenCalled()
   })
+  it.each([
+    [{ status: 400, message: 'username is too long' }, 'username is too long'],
+    [{ response: { data: { detail: 'backend failure' } } }, 'backend failure'],
+    [{}, 'Update failed'],
+  ])('显示规范化错误且保留已保存资料 %j', async (error, expected) => {
+    authStoreState.user = createUser({ username: 'alice' })
+    updateProfileMock.mockRejectedValue(error)
+    const wrapper = mount(ProfileEditForm, { props: { initialUsername: 'alice' } })
+    await wrapper.get('#username').setValue('new-name')
+    await wrapper.get('form').trigger('submit.prevent')
+    expect(showErrorMock).toHaveBeenLastCalledWith(expected)
+    expect(authStoreState.user.username).toBe('alice')
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
 })

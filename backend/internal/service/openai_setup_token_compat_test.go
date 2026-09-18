@@ -92,7 +92,7 @@ func TestOpenAISetupTokenImagesUsesOAuthResponsesPath(t *testing.T) {
 		ResponseFormat: "b64_json",
 	}
 
-	result, err := svc.ForwardImages(context.Background(), c, account, nil, parsed, "")
+	result, err := svc.ForwardImages(withOpenAIImagesForceResponses(context.Background()), c, account, nil, parsed, "")
 
 	require.Nil(t, result)
 	var failoverErr *UpstreamFailoverError

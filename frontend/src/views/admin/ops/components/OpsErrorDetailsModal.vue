@@ -277,6 +277,7 @@ watch(
         </div>
 
           <OpsErrorLogTable
+            summary-first
             class="min-h-0 flex-1"
             :rows="rows"
             :total="total"

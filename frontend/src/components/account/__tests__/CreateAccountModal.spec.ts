@@ -220,6 +220,41 @@ describe('CreateAccountModal OpenAI account options', () => {
       .mockResolvedValue({ credentials: { model_whitelist: [] }, extra: {} })
   })
 
+  // 使用真实表单提交校验模式、端点和清空规则的后端契约。
+  it('creates OpenCode Zen with adaptive endpoints and explicit model rules', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenCode')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('OpenCode Zen')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload).toMatchObject({ platform: 'opencode_go', type: 'apikey' })
+    expect(payload.credentials).toMatchObject({
+      account_mode: 'zen', api_protocol: 'adaptive', base_url: 'https://opencode.ai/zen/v1',
+      api_base_urls: { chat_completions: 'https://opencode.ai/zen/v1', responses: 'https://opencode.ai/zen/v1', anthropic: 'https://opencode.ai/zen' }
+    })
+    expect(payload.credentials.protocol_rules).toContainEqual({ pattern: 'claude-*', protocol: 'anthropic' })
+    expect(payload.extra.upstream_usage_query.adapter).toBe('opencode_go')
+  })
+
+  it('switches OpenCode GO defaults while preserving a custom endpoint, and submits cleared rules', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenCode')
+    await wrapper.get('[data-testid="cn-adaptive-base-url-anthropic"]').setValue('https://custom.example.test/messages')
+    await selectButtonByText(wrapper, 'admin.accounts.opencodeGo.accountMode.go')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="cn-adaptive-base-url-responses"]').element.value).toBe('https://opencode.ai/zen/go/v1')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="cn-adaptive-base-url-anthropic"]').element.value).toBe('https://custom.example.test/messages')
+    for (const button of wrapper.findAll('[aria-label="admin.accounts.opencodeGo.protocolRules.remove"]')) {
+      await button.trigger('click')
+    }
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('OpenCode GO')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({ account_mode: 'go', protocol_rules: [] })
+  })
+
   it('submits the explicit OpenAI text protocol defaults with the new configuration shape', async () => {
     await submitApiKeyAccount('openai')
 

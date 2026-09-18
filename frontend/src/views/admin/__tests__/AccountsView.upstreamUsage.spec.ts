@@ -11,10 +11,12 @@ const {
   getById,
   queryUpstreamUsage,
   queryBatchUpstreamUsage,
+  refreshCredentials,
   getAllProxies,
   getAllGroups,
   showError,
-  showSuccess
+  showSuccess,
+  showWarning
 } = vi.hoisted(() => ({
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
@@ -22,10 +24,12 @@ const {
   getById: vi.fn(),
   queryUpstreamUsage: vi.fn(),
   queryBatchUpstreamUsage: vi.fn(),
+  refreshCredentials: vi.fn(),
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn(),
   showError: vi.fn(),
-  showSuccess: vi.fn()
+  showSuccess: vi.fn(),
+  showWarning: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -37,6 +41,7 @@ vi.mock('@/api/admin', () => ({
       getById,
       queryUpstreamUsage,
       queryBatchUpstreamUsage,
+      refreshCredentials,
       delete: vi.fn(),
       batchClearError: vi.fn(),
       batchRefresh: vi.fn(),
@@ -52,7 +57,7 @@ vi.mock('@/stores/app', () => ({
     showError,
     showSuccess,
     showInfo: vi.fn(),
-    showWarning: vi.fn()
+    showWarning
   })
 }))
 
@@ -78,6 +83,7 @@ const DataTableStub = {
   template: `
     <div>
       <div v-for="row in data" :key="row.id" :data-row-id="row.id">
+        <span data-test="account-name">{{ row.name }}</span>
         <slot name="cell-select" :row="row" />
         <slot name="cell-usage" :row="row" />
       </div>
@@ -176,6 +182,29 @@ describe('admin AccountsView upstream usage', () => {
     getById.mockRejectedValue(new Error('unexpected getById call'))
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
+  })
+
+  it('部分刷新成功显示警告并更新账号，仍清理旧上游用量缓存', async () => {
+    const original = account(1)
+    listAccounts.mockResolvedValue({ items: [original], total: 1, page: 1, page_size: 20, pages: 1 })
+    queryUpstreamUsage.mockResolvedValue(result(1))
+    refreshCredentials.mockResolvedValue({ account: { ...original, name: 'updated-account' }, warning: 'missing_project_id_temporary', message: 'project id pending' })
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-test="query-upstream"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="upstream-remaining"]').text()).toBe('12.5')
+
+    wrapper.findComponent({ name: 'AccountActionMenu' }).vm.$emit('refresh-token', original)
+    await flushPromises()
+
+    expect(refreshCredentials).toHaveBeenCalledWith(1)
+    expect(showWarning).toHaveBeenCalledWith('project id pending')
+    expect(wrapper.get('[data-test="account-name"]').text()).toBe('updated-account')
+    expect(wrapper.get('[data-test="upstream-remaining"]').text()).toBe('')
+    expect(sessionStorage.length).toBe(0)
+    expect(showError).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('只在手动查询时访问上游，并在五分钟会话缓存中恢复成功结果', async () => {

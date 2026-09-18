@@ -43,7 +43,8 @@ RUN addgroup -g 1000 sub2api && \
 WORKDIR /app
 
 # 从 GoReleaser 构建上下文复制预编译二进制及运行时兜底资源
-COPY sub2api /app/sub2api
+# 显式设置可执行权限，兼容 Windows 宿主机交叉编译后提供的构建上下文。
+COPY --chmod=0755 sub2api /app/sub2api
 COPY --chown=sub2api:sub2api backend/resources /app/resources
 
 # Create data directory

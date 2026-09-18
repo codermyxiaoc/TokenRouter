@@ -115,6 +115,21 @@ func TestSmartRoutingWriterPropagatesFirstClientWriteError(t *testing.T) {
 	require.ErrorIs(t, writer.commit(), clientErr)
 }
 
+func TestSmartRoutingWriterRemembersClientErrorAfterCommit(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	writer := newSmartRoutingAttemptWriter(ctx.Writer)
+	writer.Header().Set("Content-Type", "text/event-stream")
+	_, err := writer.WriteString("data: {\"choices\":[{\"delta\":{\"content\":\"first\"}}]}\n\n")
+	require.NoError(t, err)
+	require.True(t, writer.committed)
+	// 首段成功、后续失败也不能让最终恢复标记把中途断流误判为完整交付。
+	clientErr := errors.New("client disconnected after output")
+	writer.ResponseWriter = &smartRoutingFailedClientWriter{ResponseWriter: ctx.Writer, err: clientErr}
+	_, err = writer.WriteString("data: [DONE]\n\n")
+	require.ErrorIs(t, err, clientErr)
+	require.ErrorIs(t, writer.commit(), clientErr)
+}
+
 func TestSmartRoutingWriterLargeFrameKeepsBoundedTerminalObservation(t *testing.T) {
 	response := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(response)

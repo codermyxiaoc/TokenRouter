@@ -199,14 +199,56 @@
 
       <!-- Subscriptions Table -->
       <template #table>
+        <!-- 沿用账号管理的表格顶部批量栏，选择范围仍仅限当前页。 -->
+        <div
+          v-if="selectedSubscriptionIDs.length"
+          class="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-lg bg-primary-50 p-3 dark:bg-primary-900/20 lg:mb-0"
+        >
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-medium text-primary-900 dark:text-primary-100">
+              {{ t('admin.subscriptions.bulkSelected', { count: selectedSubscriptionIDs.length }) }}
+            </span>
+            <span aria-hidden="true" class="text-gray-300 dark:text-primary-800">•</span>
+            <button
+              type="button"
+              class="text-xs font-medium text-primary-700 hover:text-primary-800 disabled:cursor-not-allowed disabled:opacity-60 dark:text-primary-300 dark:hover:text-primary-200"
+              :disabled="bulkSubmitting"
+              @click="selectedSubscriptionIDs = []"
+            >
+              {{ t('common.clearSelection') }}
+            </button>
+          </div>
+          <div class="flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              :disabled="loading || bulkSubmitting"
+              @click="openBulkDialog('reset')"
+            >
+              {{ t('admin.subscriptions.bulkReset') }}
+            </button>
+            <button
+              type="button"
+              class="btn btn-primary btn-sm"
+              :disabled="loading || bulkSubmitting"
+              @click="openBulkDialog('extend')"
+            >
+              {{ t('admin.subscriptions.bulkExtend') }}
+            </button>
+          </div>
+        </div>
         <DataTable
           :columns="columns"
           :data="subscriptions"
           :loading="loading"
+          :selectable="!bulkSubmitting"
+          :selected-keys="selectedSubscriptionIDs"
+          row-key="id"
           :server-side-sort="true"
           default-sort-key="created_at"
           default-sort-order="desc"
           @sort="handleSort"
+          @update:selected-keys="updateSelectedSubscriptions"
         >
           <template #cell-user="{ row }">
             <div class="flex items-center gap-2">
@@ -687,6 +729,34 @@
       @confirm="confirmResetQuota"
       @cancel="showResetQuotaConfirm = false"
     />
+    <!-- 批量操作确认保留本次请求快照，网络失败后沿用同一幂等键重试。 -->
+    <BaseDialog :show="bulkAction !== null" :title="t(bulkAction === 'extend' ? 'admin.subscriptions.bulkExtend' : 'admin.subscriptions.bulkReset')" width="narrow" :close-on-escape="!bulkSubmitting" @close="closeBulkDialog">
+      <form id="bulk-subscription-form" class="space-y-4" @submit.prevent="submitBulkAction">
+        <p class="text-sm text-gray-600 dark:text-gray-300">{{ t('admin.subscriptions.bulkSelected', { count: bulkSubscriptionIDs.length }) }}</p>
+        <div v-if="bulkAction === 'extend'">
+          <label for="bulk-subscription-days" class="input-label">{{ t('admin.subscriptions.bulkExtendDays') }}</label>
+          <input id="bulk-subscription-days" v-model.number="bulkDays" type="number" min="1" max="36500" step="1" required class="input" :disabled="bulkSubmitting || bulkRequest !== null" />
+          <p class="input-hint">{{ t('admin.subscriptions.bulkExtendHint') }}</p>
+        </div>
+        <fieldset v-else class="space-y-2" :disabled="bulkSubmitting || bulkRequest !== null">
+          <legend class="input-label">{{ t('admin.subscriptions.bulkResetWindows') }}</legend>
+          <label v-for="period in (['daily', 'weekly', 'monthly'] as const)" :key="period" class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input v-model="bulkResetWindows[period]" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-600" :data-bulk-window="period" />
+            {{ t(`admin.subscriptions.${period}`) }}
+          </label>
+          <p class="input-hint">{{ t('admin.subscriptions.bulkResetHint') }}</p>
+        </fieldset>
+        <p v-if="bulkError" role="alert" class="text-sm text-red-600 dark:text-red-400">{{ bulkError }}</p>
+      </form>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button type="button" class="btn btn-secondary" :disabled="bulkSubmitting" @click="closeBulkDialog">{{ t('common.cancel') }}</button>
+          <button type="submit" form="bulk-subscription-form" class="btn btn-primary" :disabled="bulkSubmitting">
+            {{ bulkSubmitting ? t('common.processing') : t('common.confirm') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
     <!-- Subscription Guide Modal -->
     <teleport to="body">
       <transition name="modal">
@@ -775,7 +845,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
-import type { UserSubscription } from '@/types'
+import type { AdminUser, UserSubscription } from '@/types'
 import type { SubscriptionPlan } from '@/types/payment'
 import type { SimpleUser } from '@/api/admin/usage'
 import type { Column } from '@/components/common/types'
@@ -1009,6 +1079,83 @@ const statusOptions = computed(() => [
 ])
 
 const subscriptions = ref<UserSubscription[]>([])
+const selectedSubscriptionIDs = ref<number[]>([])
+const bulkAction = ref<'extend' | 'reset' | null>(null)
+const bulkSubscriptionIDs = ref<number[]>([])
+const bulkDays = ref(1)
+const bulkResetWindows = reactive({ daily: true, weekly: true, monthly: true })
+const bulkSubmitting = ref(false)
+const bulkError = ref('')
+const bulkRequest = ref<{ key: string; days: number; windows: { daily: boolean; weekly: boolean; monthly: boolean } } | null>(null)
+
+const updateSelectedSubscriptions = (keys: Array<string | number>) => {
+  if (bulkSubmitting.value) return
+  const visibleIDs = new Set(subscriptions.value.map(sub => sub.id))
+  selectedSubscriptionIDs.value = [...new Set(keys.map(Number).filter(id => visibleIDs.has(id)))]
+}
+
+const openBulkDialog = (action: 'extend' | 'reset') => {
+  if (!selectedSubscriptionIDs.value.length || selectedSubscriptionIDs.value.length > 100) {
+    appStore.showError(t('admin.subscriptions.bulkSelectionLimit'))
+    return
+  }
+  const selected = subscriptions.value.filter(sub => selectedSubscriptionIDs.value.includes(sub.id))
+  if (selected.some(sub => !['active', 'pending', 'expired'].includes(sub.status))) {
+    appStore.showError(t('admin.subscriptions.bulkInvalidStatus'))
+    return
+  }
+  bulkSubscriptionIDs.value = [...selectedSubscriptionIDs.value]
+  bulkAction.value = action
+  bulkDays.value = 1
+  Object.assign(bulkResetWindows, { daily: true, weekly: true, monthly: true })
+  bulkRequest.value = null
+  bulkError.value = ''
+}
+
+const closeBulkDialog = () => {
+  if (bulkSubmitting.value) return
+  bulkAction.value = null
+  bulkRequest.value = null
+  bulkError.value = ''
+}
+
+const submitBulkAction = async () => {
+  if (!bulkAction.value || bulkSubmitting.value) return
+  if (bulkAction.value === 'extend' && (!Number.isInteger(bulkDays.value) || bulkDays.value < 1 || bulkDays.value > 36500)) {
+    bulkError.value = t('admin.subscriptions.bulkInvalidDays')
+    return
+  }
+  if (bulkAction.value === 'reset' && !Object.values(bulkResetWindows).some(Boolean)) {
+    bulkError.value = t('admin.subscriptions.bulkSelectWindow')
+    return
+  }
+  // 固定确认时的参数，失败后点击确认只重试同一批次。
+  bulkRequest.value ??= {
+    key: `subscription-bulk-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`,
+    days: bulkDays.value,
+    windows: { ...bulkResetWindows }
+  }
+  bulkSubmitting.value = true
+  bulkError.value = ''
+  try {
+    const request = bulkRequest.value
+    const result = bulkAction.value === 'extend'
+      ? await adminAPI.subscriptions.bulkExtend(bulkSubscriptionIDs.value, request.days, request.key)
+      : await adminAPI.subscriptions.bulkResetQuota(bulkSubscriptionIDs.value, request.windows, request.key)
+    appStore.showSuccess(t('admin.subscriptions.bulkSuccess', { count: result.updated_count }))
+    selectedSubscriptionIDs.value = []
+    bulkAction.value = null
+    bulkRequest.value = null
+    await loadSubscriptions()
+  } catch (error: any) {
+    const failure = error.response?.data
+    bulkError.value = failure?.reason === 'SUBSCRIPTION_BULK_EXPIRED_HAS_SUCCESSOR'
+      ? t('admin.subscriptions.bulkExpiredHasSuccessor', { id: failure.metadata?.subscription_id ?? '-' })
+      : failure?.message || t('admin.subscriptions.bulkFailed')
+  } finally {
+    bulkSubmitting.value = false
+  }
+}
 const plans = ref<SubscriptionPlan[]>([])
 const loading = ref(false)
 let abortController: AbortController | null = null
@@ -1023,10 +1170,10 @@ let filterUserSearchTimeout: ReturnType<typeof setTimeout> | null = null
 
 // User search state
 const userSearchKeyword = ref('')
-const userSearchResults = ref<SimpleUser[]>([])
+const userSearchResults = ref<AdminUser[]>([])
 const userSearchLoading = ref(false)
 const showUserDropdown = ref(false)
-const selectedUser = ref<SimpleUser | null>(null)
+const selectedUser = ref<AdminUser | null>(null)
 let userSearchTimeout: ReturnType<typeof setTimeout> | null = null
 
 const filters = reactive({
@@ -1099,6 +1246,7 @@ const subscriptionPlanOptions = computed<PlanOption[]>(() =>
 )
 
 const applyFilters = () => {
+  selectedSubscriptionIDs.value = []
   pagination.page = 1
   loadSubscriptions()
 }
@@ -1130,6 +1278,7 @@ const loadSubscriptions = async () => {
     )
     if (signal.aborted || abortController !== requestController) return
     subscriptions.value = response.items
+    selectedSubscriptionIDs.value = selectedSubscriptionIDs.value.filter(id => response.items.some(sub => sub.id === id))
     pagination.total = response.total
     pagination.pages = response.pages
   } catch (error: any) {
@@ -1208,6 +1357,11 @@ const clearFilterUser = () => {
 
 // User search with debounce
 const debounceSearchUsers = () => {
+  // 输入发生变化时立即清除发放目标，不能等防抖查询完成。
+  if (selectedUser.value && userSearchKeyword.value.trim() !== selectedUser.value.email) {
+    selectedUser.value = null
+    assignForm.user_id = null
+  }
   if (userSearchTimeout) {
     clearTimeout(userSearchTimeout)
   }
@@ -1217,12 +1371,6 @@ const debounceSearchUsers = () => {
 const searchUsers = async () => {
   const keyword = userSearchKeyword.value.trim()
 
-  // Clear selection if user modified the search keyword
-  if (selectedUser.value && keyword !== selectedUser.value.email) {
-    selectedUser.value = null
-    assignForm.user_id = null
-  }
-
   if (!keyword) {
     userSearchResults.value = []
     return
@@ -1230,7 +1378,11 @@ const searchUsers = async () => {
 
   userSearchLoading.value = true
   try {
-    userSearchResults.value = await adminAPI.usage.searchUsers(keyword)
+    // 发放订阅只查询现存用户；历史用量筛选仍使用原有查询。
+    const result = await adminAPI.users.list(1, 30, {
+      search: keyword, sort_by: 'email', sort_order: 'asc'
+    })
+    userSearchResults.value = result.items
   } catch (error) {
     console.error('Failed to search users:', error)
     userSearchResults.value = []
@@ -1239,7 +1391,7 @@ const searchUsers = async () => {
   }
 }
 
-const selectUser = (user: SimpleUser) => {
+const selectUser = (user: AdminUser) => {
   selectedUser.value = user
   userSearchKeyword.value = user.email
   showUserDropdown.value = false
@@ -1254,17 +1406,20 @@ const clearUserSelection = () => {
 }
 
 const handlePageChange = (page: number) => {
+  selectedSubscriptionIDs.value = []
   pagination.page = page
   loadSubscriptions()
 }
 
 const handlePageSizeChange = (pageSize: number) => {
+  selectedSubscriptionIDs.value = []
   pagination.page_size = pageSize
   pagination.page = 1
   loadSubscriptions()
 }
 
 const handleSort = (key: string, order: 'asc' | 'desc') => {
+  selectedSubscriptionIDs.value = []
   sortState.sort_by = key
   sortState.sort_order = order
   pagination.page = 1

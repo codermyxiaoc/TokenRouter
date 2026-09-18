@@ -104,7 +104,8 @@ const { t } = useI18n()
 
 // 查询按钮只负责发出管理员显式操作，组件挂载和滚动不会触发请求。
 const unsupportedCNQuery = computed(() =>
-  (props.account.platform === 'zhipu' || props.account.platform === 'minimax') && props.account.credentials?.account_mode !== 'coding'
+  ((props.account.platform === 'zhipu' || props.account.platform === 'minimax') && props.account.credentials?.account_mode !== 'coding') ||
+  (props.account.platform === 'opencode_go' && props.account.credentials?.account_mode === 'zen')
 )
 
 const queryEnabled = computed(() => {
@@ -115,7 +116,7 @@ const queryEnabled = computed(() => {
 
 // 未执行本次会话的手动查询时，可展示后台监控最近一次成功快照；组件挂载不会发请求。
 const monitorResult = computed<UpstreamUsageQueryResult | null>(() => {
-  if (!['kimi', 'zhipu', 'deepseek', 'minimax'].includes(props.account.platform)) return null
+  if (!['kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go'].includes(props.account.platform)) return null
   const raw = props.account.extra?.cn_usage_monitor_snapshot
   if (!raw || typeof raw !== 'object') return null
   const snapshot = raw as Record<string, unknown>
@@ -164,13 +165,15 @@ const formatExactNumber = (value: number | null | undefined) => {
 
 const formatAmount = (value: number | null | undefined, unit?: string) => {
   if (value == null) return '-'
-  const suffix = unit ? ` ${unit}` : ''
+  // GO 用量接口以 PERCENT 表示窗口占比，界面展示常用百分号。
+  const suffix = props.account.platform === 'opencode_go' && unit === 'PERCENT' ? '%' : unit ? ` ${unit}` : ''
   return `${formatNumber(value)}${suffix}`
 }
 
 const formatExactAmount = (value: number | null | undefined, unit?: string) => {
   if (value == null) return '-'
-  const suffix = unit ? ` ${unit}` : ''
+  // GO 用量接口以 PERCENT 表示窗口占比，界面展示常用百分号。
+  const suffix = props.account.platform === 'opencode_go' && unit === 'PERCENT' ? '%' : unit ? ` ${unit}` : ''
   return `${formatExactNumber(value)}${suffix}`
 }
 

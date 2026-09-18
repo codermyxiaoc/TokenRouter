@@ -141,9 +141,9 @@ export default {
     selectGroup: 'Select a group',
     smartRouting: {
       label: 'Smart routing',
-      hint: 'Select up to 10 groups across platforms and set their order. Groups with mismatched account model catalogs, active cooldowns, or no schedulable accounts are skipped. Text, token-count, and Embeddings requests first exhaust retries within the group; only a final upstream 429/5xx with no business output allows the next candidate. Image/video tasks and streams that have already produced output are not retried across groups. Client probes and empty models never reach mismatched groups.',
+      hint: 'Select up to 10 groups across platforms and set their order. Groups with mismatched account model catalogs, active cooldowns, or no schedulable accounts are skipped. Text, token-count, and Embeddings requests can try the next group after upstream errors persist, provided no business output or usage settlement has started and the request is not canceled. Local validation, spending limits, and explicit content policy rejections stop retries. Image/video tasks and requests dependent on remote state are not replayed across groups.',
       cooldownLabel: 'Failed group cooldown (seconds)',
-      cooldownHint: 'Defaults to 60 seconds; enter an integer from 0 to 3600. When an upstream 429/5xx triggers failover, the failed group is temporarily skipped for this key only. Other keys are unaffected. Zero disables cooldown, not failover. If every matching candidate is cooling down, the request returns 503.',
+      cooldownHint: 'Defaults to 60 seconds; enter an integer from 0 to 3600. A confirmed upstream error temporarily skips the failed group for this key only. Replay still depends on business output, settlement, and request state. Zero disables cooldown, not failover. If every matching candidate is cooling down, the request returns 503.',
       cooldownInvalid: 'Enter a whole number of seconds from 0 to 3600',
       route: 'Route {index}',
       addGroup: 'Add group',
@@ -153,7 +153,7 @@ export default {
       unavailableGroup: 'Group #{id} (unavailable)',
       moveUp: 'Move candidate group up',
       moveDown: 'Move candidate group down',
-      useDescription: 'Use model IDs directly without a group prefix. Candidates are selected in order by model support and schedulability. Text, token-count, and Embeddings requests can advance only after retries within the group end in an upstream 429/5xx with no business output. Failed groups cool down only for this key; if every matching candidate is cooling down, the request returns 503. Image/video tasks and streams that have already produced output are not retried across groups.'
+      useDescription: 'Use model IDs directly without a group prefix. Candidates are selected in order by model support and schedulability. Text, token-count, and Embeddings requests can advance after upstream errors persist, provided no business output or usage settlement has started and the request is not canceled. Local validation, spending limits, and explicit content policy rejections stop retries. Failed groups cool down only for this key. Image/video tasks and requests dependent on remote state are not replayed across groups.'
     },
     composite: {
       label: 'Composite key',
@@ -547,6 +547,7 @@ export default {
       modelPlaceholder: 'Search model', allCategories: 'All categories', allStatuses: 'All status codes',
       empty: 'No error requests', failedToLoad: 'Failed to load error requests',
       recovered: 'Recovered', finalStatus: 'Final HTTP',
+      recoveredTo: 'Recovered to:', finalFailed: 'Final failure',
       recoveredHint: 'Recovered through a retry or group switch. The upstream error is retained for troubleshooting.',
       categories: {
         auth: 'Auth failed', rate_limit: 'Rate limited', quota: 'Balance/Subscription',
@@ -597,6 +598,7 @@ export default {
     codeMaxUsed: 'This redeem code has reached its redemption limit',
     codeAlreadyUsed: 'You have already redeemed this code',
     failedToRedeem: 'Failed to redeem code. Please check the code and try again.',
+    userRefreshFailed: 'Redeemed successfully, but failed to refresh account information.',
     subscriptionRefreshFailed: 'Redeemed successfully, but failed to refresh subscription status.',
     pleaseEnterCode: 'Please enter a redeem code'
   },

@@ -27,6 +27,12 @@ import (
 )
 
 var (
+	// 固定参考 v0.2.5 登记的 GPT Image 2.5 价格，避免新图片型号落到旧型号价格。
+	openAIGPTImage25FallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 5e-6, CacheReadInputTokenCost: 1.25e-6,
+		InputCostPerImageToken: 8e-6, CacheReadInputImageTokenCost: 2e-6,
+		OutputCostPerImageToken: 3e-5, LiteLLMProvider: "openai", Mode: "image_generation", SupportsPromptCaching: true,
+	}
 	openAIModelDatePattern = regexp.MustCompile(`-(?:\d{8}|\d{4}-\d{2}-\d{2})$`)
 	openAIModelBasePattern = regexp.MustCompile(`^(gpt-\d+(?:\.\d+)?)(?:-|$)`)
 	// 只移除已知档位，保留版本和产品名；Spark 的价格重定向仍由专用回退处理。
@@ -179,9 +185,10 @@ type LiteLLMModelPricing struct {
 	LiteLLMProvider                     string  `json:"litellm_provider"`
 	Mode                                string  `json:"mode"`
 	SupportsPromptCaching               bool    `json:"supports_prompt_caching"`
-	OutputCostPerImage                  float64 `json:"output_cost_per_image"`       // 图片生成模型每张图片价格
-	OutputCostPerImageToken             float64 `json:"output_cost_per_image_token"` // 图片输出 token 价格
-	InputCostPerImageToken              float64 `json:"input_cost_per_image_token"`  // 图片输入 token 价格（如 gpt-image-2 图片编辑）
+	OutputCostPerImage                  float64 `json:"output_cost_per_image"`             // 图片生成模型每张图片价格
+	OutputCostPerImageToken             float64 `json:"output_cost_per_image_token"`       // 图片输出 token 价格
+	InputCostPerImageToken              float64 `json:"input_cost_per_image_token"`        // 图片输入 token 价格（如 gpt-image-2 图片编辑）
+	CacheReadInputImageTokenCost        float64 `json:"cache_read_input_image_token_cost"` // 图片缓存输入价格。
 
 	// 模型能力元数据：由模型广场下发给前端展示输入/输出模态，不参与计费。
 	SupportedModalities       []string `json:"supported_modalities"`
@@ -224,6 +231,7 @@ type LiteLLMRawEntry struct {
 	OutputCostPerImage                  *float64 `json:"output_cost_per_image"`
 	OutputCostPerImageToken             *float64 `json:"output_cost_per_image_token"`
 	InputCostPerImageToken              *float64 `json:"input_cost_per_image_token"`
+	CacheReadInputImageTokenCost        *float64 `json:"cache_read_input_image_token_cost"`
 	SupportedModalities                 []string `json:"supported_modalities"`
 	SupportedInputModalities            []string `json:"supported_input_modalities"`
 	SupportedOutputModalities           []string `json:"supported_output_modalities"`
@@ -708,6 +716,9 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 		}
 		if entry.InputCostPerImageToken != nil {
 			pricing.InputCostPerImageToken = *entry.InputCostPerImageToken
+		}
+		if entry.CacheReadInputImageTokenCost != nil {
+			pricing.CacheReadInputImageTokenCost = *entry.CacheReadInputImageTokenCost
 		}
 
 		// 显式 long_context 字段（包括显式 0）优先于目录中的 above 绝对价字段。
@@ -1597,6 +1608,12 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 				return pricing
 			}
 		}
+	}
+	// 同产品目录价（包括日期快照对应的基名）优先于静态价，显式零价也必须保留。
+	// 仅登记的 2.5 型号使用固定兜底价；未知未来快照沿用既有价格解析规则。
+	switch model {
+	case "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08":
+		return openAIGPTImage25FallbackPricing
 	}
 	// 裸 GPT-5.6 不注册为内置型号，缺少显式目录时不得借用 Sol 或默认 GPT 价格。
 	if sameModel == "gpt-5.6" {

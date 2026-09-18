@@ -40,6 +40,7 @@ func TestOpsErrorLoggerMiddleware_RecoveredUsesFailedAttemptAttribution(t *testi
 			{GroupID: 3, GroupName: "test1", AccountID: 22, Platform: service.PlatformOpenAI, UpstreamEndpoint: "/v1/chat/completions", UpstreamModel: "failed-model-1", UpstreamStatusCode: 503, Message: "first error"},
 			{GroupID: 5, GroupName: "test2", AccountID: 19, Platform: service.PlatformOpenAI, UpstreamEndpoint: "/backend-api/codex/responses", UpstreamModel: "failed-model-2", UpstreamStatusCode: 429, Message: "second error"},
 		})
+		service.MarkOpsRecoveredGroup(c, finalGroup)
 		c.JSON(http.StatusOK, gin.H{"status": "completed"})
 	})
 	response := httptest.NewRecorder()
@@ -61,6 +62,11 @@ func TestOpsErrorLoggerMiddleware_RecoveredUsesFailedAttemptAttribution(t *testi
 	require.Len(t, events, 2)
 	require.Equal(t, int64(3), events[0].GroupID)
 	require.Equal(t, "/v1/chat/completions", events[0].UpstreamEndpoint)
+	for _, event := range events {
+		require.Equal(t, int64(7), event.RecoveredGroupID)
+		require.Equal(t, "test3", event.RecoveredGroupName)
+		require.Equal(t, service.PlatformAnthropic, event.RecoveredPlatform)
+	}
 }
 
 // 老事件没有归属快照时维持原回退；新事件跨组且端点未知时不得借用成功组的端点。

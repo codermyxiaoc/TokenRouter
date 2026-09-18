@@ -72,6 +72,8 @@ func defaultRequestModelIDsForPlatform(platform string) []string {
 		return qoder.DefaultRequestModelIDs()
 	case PlatformGrok:
 		return xai.DefaultModelIDs()
+	case PlatformOpenCodeGo:
+		return DefaultOpenCodeGoModelIDs()
 	case PlatformMiniMax:
 		return domain.DefaultMiniMaxModelIDs()
 	default:

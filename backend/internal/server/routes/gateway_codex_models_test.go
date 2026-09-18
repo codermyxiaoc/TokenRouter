@@ -110,3 +110,35 @@ func TestGatewayRoutesCodexModelsManifestPathIsRemoved(t *testing.T) {
 	require.Empty(t, registered[http.MethodGet+" /backend-api/codex/models"])
 	require.Equal(t, registered[http.MethodGet+" /v1/models"], registered[http.MethodGet+" /models"])
 }
+
+// 模型标识中的斜杠是 ID 的一部分，只做路由正常解码，不能二次解码或猜测供应商。
+func TestGatewayRoutesRetrieveModelWithSlash(t *testing.T) {
+	repo := &codexModelsRemovalAccountRepo{accounts: []service.Account{{ID: 1, Platform: service.PlatformOpenAI,
+		Type: service.AccountTypeAPIKey, Credentials: map[string]any{
+			"api_key": "sk-test", "model_mapping": map[string]any{"vendor/model": "vendor/model"},
+		}}}}
+	router := newGatewayRoutesTestRouterWithGatewayHandler(newCodexModelsRemovalGatewayHandler(repo), service.PlatformOpenAI)
+	for _, test := range []struct {
+		path   string
+		status int
+	}{
+		{"/v1/models/vendor/model", http.StatusOK}, {"/models/vendor/model", http.StatusOK},
+		{"/v1/models/vendor%2Fmodel", http.StatusOK}, {"/v1/models/vendor%252Fmodel", http.StatusNotFound},
+		{"/v1/models/vendor/unknown", http.StatusNotFound}, {"/v1/models/model", http.StatusNotFound},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, test.path, nil))
+			require.Equal(t, test.status, recorder.Code, recorder.Body.String())
+			if test.status == http.StatusOK {
+				var model struct {
+					ID   string `json:"id"`
+					Type string `json:"type"`
+				}
+				require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &model))
+				require.Equal(t, "vendor/model", model.ID)
+				require.Equal(t, "model", model.Type)
+			}
+		})
+	}
+}

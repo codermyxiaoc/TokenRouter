@@ -34,9 +34,24 @@
         <!-- 状态码 -->
         <div>
           <span class="font-medium text-gray-500 dark:text-dark-400">{{ t('usage.errors.status') }}</span>
-          <p class="mt-0.5">
+          <div class="mt-0.5 flex flex-wrap items-center gap-1.5">
             <span class="badge" :class="statusClass(detail.status_code)">{{ detail.status_code || '-' }}</span>
-          </p>
+            <ErrorRecoveryStatus
+              :recovered="detail.recovered_upstream"
+              :client-status-code="detail.client_status_code"
+              :group-id="detail.recovered_group_id"
+              :group-name="detail.recovered_group_name"
+              show-final-failure
+            />
+          </div>
+        </div>
+        <!-- 失败尝试的原分组独立展示，成功目标由恢复状态区域显示。 -->
+        <div>
+          <span class="font-medium text-gray-500 dark:text-dark-400">{{ t('admin.usage.group') }}</span>
+          <div class="mt-0.5">
+            <GroupBadge v-if="detail.group_name" :name="detail.group_name" :show-rate="false" />
+            <span v-else class="text-gray-400">-</span>
+          </div>
         </div>
         <!-- 分类 -->
         <div>
@@ -74,6 +89,8 @@
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import ErrorRecoveryStatus from '@/components/common/ErrorRecoveryStatus.vue'
+import GroupBadge from '@/components/common/GroupBadge.vue'
 import { getMyErrorDetail } from '@/api/usage'
 import { formatDateTime } from '@/utils/format'
 import type { UserErrorRequestDetail } from '@/types'

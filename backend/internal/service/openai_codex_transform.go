@@ -1278,6 +1278,10 @@ func normalizeOpenAIModelForUpstream(account *Account, model string) string {
 	if account.UsesOpenAICodexProtocol() {
 		return normalizeCodexModel(model)
 	}
+	if account.Platform == PlatformDeepseek {
+		// 上下文后缀是客户端提示，不属于 DeepSeek 上游模型 ID。
+		return normalizeClaudeCodeLongContextModel(strings.TrimSpace(model))
+	}
 	return strings.TrimSpace(model)
 }
 

@@ -108,6 +108,8 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const importing = ref(false)
+// 部分导入完成后先保留错误明细，关闭弹窗时再通知列表刷新。
+const hasImportedData = ref(false)
 const file = ref<File | null>(null)
 const result = ref<AdminDataImportResult | null>(null)
 
@@ -121,6 +123,7 @@ watch(
   (open) => {
     if (open) {
       file.value = null
+      hasImportedData.value = false
       result.value = null
       if (fileInput.value) {
         fileInput.value.value = ''
@@ -140,6 +143,10 @@ const handleFileChange = (event: Event) => {
 
 const handleClose = () => {
   if (importing.value) return
+  if (hasImportedData.value) {
+    hasImportedData.value = false
+    emit('imported')
+  }
   emit('close')
 }
 
@@ -183,8 +190,10 @@ const handleImport = async () => {
     }
 
     if (res.proxy_failed > 0) {
+      hasImportedData.value ||= res.proxy_created > 0 || res.proxy_reused > 0
       appStore.showError(t('admin.proxies.dataImportCompletedWithErrors', msgParams))
     } else {
+      hasImportedData.value = false
       appStore.showSuccess(t('admin.proxies.dataImportSuccess', msgParams))
       emit('imported')
     }

@@ -67,8 +67,8 @@ func TestSnapshotPlatformQuotaDefaults_PassesToRepoBulkInsert(t *testing.T) {
 	if err := s.snapshotPlatformQuotaDefaults(context.Background(), 999, plan); err != nil {
 		t.Fatal(err)
 	}
-	if len(fakeRepo.records) != 4 {
-		t.Errorf("expected 4 records, got %d", len(fakeRepo.records))
+	if len(fakeRepo.records) != 1 {
+		t.Errorf("expected only configured record, got %d", len(fakeRepo.records))
 	}
 	found := false
 	for _, r := range fakeRepo.records {
@@ -114,6 +114,27 @@ func TestSnapshotPlatformQuotaDefaults_NilPlanIsNoop(t *testing.T) {
 	}
 	if len(fakeRepo.records) != 0 {
 		t.Errorf("expected no records, got %d", len(fakeRepo.records))
+	}
+}
+
+func TestSnapshotPlatformQuotaDefaults_OnlyExplicitLimitsCreateRows(t *testing.T) {
+	fakeRepo := &fakeInsertRecorder{}
+	s := &AuthService{userPlatformQuotaRepo: fakeRepo}
+	plan := &signupGrantPlan{PlatformQuotas: map[string]*DefaultPlatformQuotaSetting{"openai": nil, "anthropic": {}}}
+	if err := s.snapshotPlatformQuotaDefaults(context.Background(), 1, plan); err != nil {
+		t.Fatal(err)
+	}
+	if fakeRepo.lastCtx != nil {
+		t.Fatal("全空配置不应发起数据库写入")
+	}
+	zero := 0.0
+	plan.PlatformQuotas["minimax"] = &DefaultPlatformQuotaSetting{DailyLimitUSD: &zero}
+	plan.PlatformQuotas["opencode_go"] = &DefaultPlatformQuotaSetting{MonthlyLimitUSD: &zero}
+	if err := s.snapshotPlatformQuotaDefaults(context.Background(), 1, plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(fakeRepo.records) != 2 {
+		t.Fatalf("显式零限额应保存，got %d", len(fakeRepo.records))
 	}
 }
 

@@ -39,9 +39,18 @@
         </template>
 
         <template #cell-status="{ row }">
-          <span class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium" :class="statusClass(row.status_code)">
-            {{ row.status_code || '-' }}
-          </span>
+          <div class="flex flex-wrap items-center gap-1.5">
+            <span class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium" :class="statusClass(row.status_code)">
+              {{ row.status_code || '-' }}
+            </span>
+            <ErrorRecoveryStatus
+              :recovered="row.recovered_upstream"
+              :client-status-code="row.client_status_code"
+              :group-id="row.recovered_group_id"
+              :group-name="row.recovered_group_name"
+              show-final-failure
+            />
+          </div>
         </template>
 
         <template #cell-category="{ row }">
@@ -125,6 +134,7 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import ErrorRecoveryStatus from '@/components/common/ErrorRecoveryStatus.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import UserErrorDetailModal from '@/components/user/UserErrorDetailModal.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'

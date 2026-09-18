@@ -212,6 +212,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		var imageCfgErr error
 		imageCfg, imageCfgErr := resolveOpenAIResponsesImageBillingConfigDetailedFromBody(body, reqModel)
 		if imageCfgErr != nil {
+			// 本地尺寸校验失败不能因历史同状态上游事件被智能路由重放。
+			MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
 			setOpsUpstreamError(c, http.StatusBadRequest, imageCfgErr.Error(), "")
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": gin.H{
@@ -500,7 +502,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		}
 	case AccountTypeAPIKey:
 		baseURL := account.GetOpenAIBaseURL()
-		if account.UsesNativeCNResponses() && account.IsAdaptiveAPIProtocol() {
+		if (account.UsesNativeCNResponses() || account.IsOpenCodeGo()) && account.IsAdaptiveAPIProtocol() {
 			baseURL = account.GetCNProtocolBaseURL(APIProtocolResponses)
 		}
 		if baseURL != "" {
@@ -619,7 +621,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	}
 
 	account.ApplyHeaderOverrides(req.Header)
-	applyOpenCodeSessionHeader(c, account, targetURL, req.Header)
+	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body)
 	// x-codex-beta-features：按真实 Codex 的会话级行为补注（在账号级覆写之后，
 	// 保证不被覆盖丢失）。
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
@@ -861,6 +863,10 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
 	clientInvalidRequest := isOpenAIClientInvalidRequestError(resp.StatusCode, upstreamMsg, body)
+	if cyberHit || IsOpenAICyberWarningPayload(body, upstreamMsg) {
+		// 透传路径也保留明确风控终态，其它真实上游参数错误仍可换组恢复。
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+	}
 	requestScopedError := cyberHit || clientInvalidRequest || isOpenAIContextWindowError(upstreamMsg, body) ||
 		isOpenAIRequestBodyTooLargeError(resp.StatusCode, upstreamMsg, body)
 	// 错误体虽不会原样透传，运行态账号状态仍需更新，避免粘性路由继续复用
@@ -973,17 +979,8 @@ type openaiNonStreamingResultPassthrough struct {
 	imageOutputSizes []string
 }
 
-const openAIStreamKeepaliveBytesKey = "openai_stream_keepalive_bytes"
-
 func recordOpenAIStreamKeepaliveBytes(c *gin.Context, written int) {
-	if c == nil || written <= 0 {
-		return
-	}
-	current := 0
-	if value, ok := c.Get(openAIStreamKeepaliveBytesKey); ok {
-		current, _ = value.(int)
-	}
-	c.Set(openAIStreamKeepaliveBytesKey, current+written)
+	RecordGatewayStreamHeartbeat(c, written)
 }
 
 func openAIStreamClientOutputStarted(c *gin.Context, localStarted bool) bool {
@@ -1088,6 +1085,9 @@ func openAIStreamAddedEventStartsClientOutput(payload []byte, eventType string) 
 func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 	trimmed := strings.TrimSpace(data)
 	if trimmed == "" {
+		return false
+	}
+	if openAIStreamSafeEmptyEvent(trimmed, strings.TrimSpace(eventType)) {
 		return false
 	}
 	switch strings.TrimSpace(eventType) {
@@ -1918,10 +1918,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	failedMessage := ""
 	var failedPayload []byte
 	drainFailureHandled := false
-	// 退出时只记录最终确认的显式失败，保证客户端断连后排水的错误仍可观测。
+	diagnostic := openAIStreamAttemptDiagnostic{}
+	// 正常连接和断连排水共用一次终态登记，组内重试已记录的错误不重复写入。
 	defer func() {
-		if clientDisconnected && sawFailedEvent && !drainFailureHandled {
+		if sawFailedEvent && !drainFailureHandled {
 			s.recordOpenAIStreamDrainFailure(c, account, true, resp.Header.Get("x-request-id"), failedPayload, failedMessage)
+			diagnostic.log(ctx, account, "passthrough_sse", resp.Header.Get("x-request-id"), "failed", clientDisconnected)
 		}
 	}()
 	clientOutputStarted := false
@@ -2010,6 +2012,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			clientDisconnected = true
 			return
 		}
+		diagnostic.commit("response.failed", false)
 		clientOutputStarted = true
 		failureDelivered = true
 		flushPending = true
@@ -2050,6 +2053,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		}
 		lineStartsClientOutput := false
 		forceFlushFailedEvent := false
+		commitEventType := ""
+		commitVisible := false
 		if data, ok := extractOpenAISSEDataLine(line); ok {
 			MarkOpsTimestamp(c, ctxkey.FirstSSEDataAt)
 			dataBytes := []byte(data)
@@ -2085,6 +2090,19 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				}
 			}
 			eventType := effectiveOpenAISSEEventType(dataBytes, rawEventType)
+			if codexFailureTerminal && sawBareError && !sawResponseFailed &&
+				(eventType == "response.completed" || eventType == "response.done") {
+				// 与原生流一致：后续成功终态可以恢复暂存裸错误，保留运维事实。
+				s.recordOpenAIStreamUpstreamError(c, account, true, upstreamRequestID, "stream_error_recovered", bareErrorPayload, failedMessage)
+				diagnostic.log(ctx, account, "passthrough_sse", upstreamRequestID, "recovered", clientDisconnected)
+				sawBareError = false
+				sawFailedEvent = false
+				suppressCurrentEvent = false
+				responseFailedPending = false
+				bareErrorPayload = nil
+				bareErrorAccountSideEffectsPending = false
+				failedMessage = ""
+			}
 			if codexFailureTerminal && sawBareError && !sawResponseFailed && eventType != "response.failed" {
 				suppressCurrentEvent = true
 			}
@@ -2125,13 +2143,18 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 					})
 				}
 				outputStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)
-				if !outputStarted && !cyberHit {
+				usageObserved := openAIUsageHasTokens(usage)
+				if outputStarted || usageObserved {
+					diagnostic.failoverBlocked(outputStarted, usageObserved)
+				}
+				if !outputStarted && !usageObserved && !cyberHit {
 					if compactErr := newOpenAICompactFallbackSignal(c, dataBytes, failedMessage); compactErr != nil {
 						drainFailureHandled = true
 						return resultWithUsage(), compactErr
 					}
 				}
-				if outputStarted && !cyberHit {
+				// 已观测用量禁止重放，但仍需执行终态错误的账号策略。
+				if (outputStarted || usageObserved) && !cyberHit {
 					if codexFailureTerminal && eventType == "error" {
 						// Wait for the authoritative response.failed before mutating
 						// account health; EOF synthesis applies the pending effect.
@@ -2150,7 +2173,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 							shouldFailover = openAIStreamFailedEventShouldFailover(dataBytes, failedMessage)
 						}
 					}
-					if shouldFailover {
+					if shouldFailover && !usageObserved {
 						drainFailureHandled = true
 						return resultWithUsage(),
 							s.newOpenAIStreamFailoverErrorWithModel(c, account, true, upstreamRequestID, dataBytes, failedMessage, mappedModel)
@@ -2227,6 +2250,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				return resultWithUsage(), newOpenAIResponsesEmptyCompletedFailoverError(c, account, upstreamRequestID)
 			}
 			startsVisibleOutput := openAIStreamDataStartsVisibleOutput(trimmedData, eventType)
+			commitEventType = eventType
+			commitVisible = startsVisibleOutput
 			if startsVisibleOutput {
 				MarkOpsTimestamp(c, ctxkey.FirstVisibleOutputAt)
 			}
@@ -2264,6 +2289,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				clientDisconnected = true
 				logOpenAIStreamClientDisconnect(ctx, account, "passthrough_write", err)
 			} else {
+				if lineStartsClientOutput {
+					diagnostic.commit(commitEventType, commitVisible)
+				}
 				clientOutputStarted = true
 				flushPending = true
 				if line == "" {

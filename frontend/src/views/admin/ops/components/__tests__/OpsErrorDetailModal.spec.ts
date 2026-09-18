@@ -90,6 +90,9 @@ describe('OpsErrorDetailModal', () => {
       upstream_status_code: 503,
       client_status_code: 200,
       recovered_upstream: true,
+      group_name: '失败分组',
+      recovered_group_id: 3,
+      recovered_group_name: '恢复分组',
       platform: 'openai',
       model: 'gpt-6-astra',
       request_id: 'recovered-request',
@@ -100,12 +103,15 @@ describe('OpsErrorDetailModal', () => {
 
     const wrapper = shallowMount(OpsErrorDetailModal, {
       props: { show: true, errorId: 2, errorType: 'request' },
-      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true, ErrorRecoveryStatus: false, GroupBadge: false } },
     })
     await flushPromises()
 
     expect(wrapper.text()).toContain('503')
     expect(wrapper.text()).toContain('usage.errors.recovered')
     expect(wrapper.text()).toContain('usage.errors.finalStatus 200')
+    expect(wrapper.text()).toContain('失败分组')
+    expect(wrapper.text()).toContain('usage.errors.recoveredTo')
+    expect(wrapper.text()).toContain('恢复分组')
   })
 })

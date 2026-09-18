@@ -86,20 +86,16 @@
 
         <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-950">
           <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.status') }}</div>
-          <div class="mt-1">
+          <div class="mt-1 flex flex-wrap items-center gap-2">
             <span :class="['inline-flex items-center rounded-lg px-2 py-1 text-xs font-black ring-1 ring-inset shadow-sm', statusClass]">
               {{ detail.status_code }}
             </span>
-            <!-- 恢复状态由后端判定，避免把 HTTP 200 的流内失败标成成功恢复。 -->
-            <span
-              v-if="detail.recovered_upstream"
-              class="ml-2 inline-flex items-center rounded-lg bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"
-              :title="t('usage.errors.recoveredHint')"
-            >{{ t('usage.errors.recovered') }}</span>
-            <span
-              v-if="detail.recovered_upstream && detail.client_status_code != null"
-              class="ml-2 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400"
-            >{{ t('usage.errors.finalStatus') }} {{ detail.client_status_code }}</span>
+            <ErrorRecoveryStatus
+              :recovered="detail.recovered_upstream"
+              :client-status-code="detail.client_status_code"
+              :group-id="detail.recovered_group_id"
+              :group-name="detail.recovered_group_name"
+            />
           </div>
         </div>
 
@@ -238,6 +234,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import ErrorRecoveryStatus from '@/components/common/ErrorRecoveryStatus.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores'
 import { opsAPI, type OpsErrorDetail } from '@/api/admin/ops'

@@ -37,8 +37,8 @@
                   <button v-if="activeFilterCount > 0" type="button" class="text-xs font-medium text-primary-600 dark:text-primary-400" @click="resetProxyFilters">{{ t('common.reset') }}</button>
                 </div>
                 <div class="space-y-3">
-                  <Select v-model="filters.protocol" :options="protocolOptions" :placeholder="t('admin.proxies.allProtocols')" @change="loadProxies" />
-                  <Select v-model="filters.status" :options="statusOptions" :placeholder="t('admin.proxies.allStatus')" @change="loadProxies" />
+                  <Select v-model="filters.protocol" :options="protocolOptions" :placeholder="t('admin.proxies.allProtocols')" @change="handleFilterChange" />
+                  <Select v-model="filters.status" :options="statusOptions" :placeholder="t('admin.proxies.allStatus')" @change="handleFilterChange" />
                 </div>
               </div>
             </div>
@@ -1275,6 +1275,12 @@ const loadProxies = async () => {
   }
 }
 
+// 筛选变化从第一页重新查询，避免旧页码使有效结果看起来为空。
+const handleFilterChange = () => {
+  pagination.page = 1
+  loadProxies()
+}
+
 let searchTimeout: ReturnType<typeof setTimeout>
 const handleSearch = () => {
   clearTimeout(searchTimeout)
@@ -1509,7 +1515,7 @@ const handleUpdateProxy = async () => {
       protocol: editForm.protocol,
       host: editForm.host.trim(),
       port: editForm.port,
-      username: editForm.username.trim() || null,
+      username: editForm.username.trim(),
       status: editForm.status,
       expires_at: editForm.expires_at ? Math.floor(new Date(editForm.expires_at).getTime() / 1000) : null,
       fallback_mode: editForm.fallback_mode,
@@ -1517,9 +1523,9 @@ const handleUpdateProxy = async () => {
       expiry_warn_days: editForm.expiry_warn_days,
     }
 
-    // Only include password if user actually modified the field
+    // 仅编辑过密码时发送；空串明确清空，未编辑则保留服务端原值。
     if (editPasswordDirty.value) {
-      updateData.password = editForm.password.trim() || null
+      updateData.password = editForm.password.trim()
     }
 
     await adminAPI.proxies.update(editingProxy.value.id, updateData)

@@ -52,7 +52,7 @@ func shouldStripOpenAIResponsesInputNamespaces(account *Account, transport OpenA
 // shouldKeepOpenAIResponsesToolCallNamespaces 判定清理 input 残留 namespace 时是否
 // 保留工具调用项上的 namespace。
 //
-// 上游对这个字段有两套互斥要求，判定按「出口 + 端点」而非工具声明内容：
+// 上游对这个字段有两套互斥要求，先判断出口与端点，API Key 再核对工具声明：
 //   - /backend-api/codex/responses 会按 namespace 解析历史调用，缺字段直接 400
 //     `Missing namespace for function_call '...'. Round-trip the model's
 //     function_call item with its namespace field included.`（issue #4761 回帖），
@@ -60,7 +60,7 @@ func shouldStripOpenAIResponsesInputNamespaces(account *Account, transport OpenA
 //   - compact 端点的 schema 不含该字段，携带即 400 `Unknown parameter:
 //     input[N].namespace`（issue #4761 正文），故 compact 一律清理。
 //   - API Key 出口默认按标准 Responses API 处理并清理该字段；但当请求本身声明
-//     namespace 工具时，上游显然使用了 namespace 扩展，此时必须保留调用项上的
+//     namespace 工具时（含 Lite 的 additional_tools 输入项），必须保留调用项上的
 //     namespace，否则声明与历史调用会失配并触发 Missing namespace。
 //   - 摊平模式下调用项已被改写成平名，残留 namespace 指向的声明已不存在，一律清理。
 func shouldKeepOpenAIResponsesToolCallNamespaces(
@@ -86,13 +86,31 @@ func shouldKeepOpenAIResponsesToolCallNamespaces(
 }
 
 func hasOpenAIResponsesNamespaceToolDeclaration(body []byte) bool {
-	tools := gjson.GetBytes(body, "tools")
-	if !tools.IsArray() {
+	hasNamespaceTool := func(tools gjson.Result) bool {
+		if !tools.IsArray() {
+			return false
+		}
+		found := false
+		tools.ForEach(func(_, tool gjson.Result) bool {
+			if strings.EqualFold(strings.TrimSpace(tool.Get("type").String()), "namespace") {
+				found = true
+				return false
+			}
+			return true
+		})
+		return found
+	}
+	if hasNamespaceTool(gjson.GetBytes(body, "tools")) {
+		return true
+	}
+	// Lite 把工具声明放入独立历史项；只检查该载体，不能误认正文内的同名字段。
+	input := gjson.GetBytes(body, "input")
+	if !input.IsArray() {
 		return false
 	}
 	found := false
-	tools.ForEach(func(_, tool gjson.Result) bool {
-		if strings.EqualFold(strings.TrimSpace(tool.Get("type").String()), "namespace") {
+	input.ForEach(func(_, item gjson.Result) bool {
+		if strings.EqualFold(strings.TrimSpace(item.Get("type").String()), "additional_tools") && hasNamespaceTool(item.Get("tools")) {
 			found = true
 			return false
 		}

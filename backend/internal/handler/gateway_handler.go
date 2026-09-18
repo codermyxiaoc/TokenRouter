@@ -1083,7 +1083,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	}
 }
 
-// Models 处理 GET /v1/models，并返回通过账号能力与渠道规则校验的客户端模型。
+// Models 处理模型列表和单模型检索，返回通过账号能力与渠道规则校验的客户端模型。
 // 仅未绑定分组的兼容调用会在没有显式结果时回退平台默认模型。
 func (h *GatewayHandler) Models(c *gin.Context) {
 	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
@@ -1228,7 +1228,7 @@ func writeCompositeModelsList(c *gin.Context, modelIDs []string) {
 			"created_at": "2024-01-01T00:00:00Z", "owned_by": "token-router", "display_name": modelID,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"object": "list", "data": models})
+	writeGatewayModelsResponse(c, models)
 }
 
 func writeModelsList(c *gin.Context, modelIDs []string) {
@@ -1241,10 +1241,7 @@ func writeModelsList(c *gin.Context, modelIDs []string) {
 			CreatedAt:   "2024-01-01T00:00:00Z",
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data":   models,
-	})
+	writeGatewayModelsResponse(c, models)
 }
 
 // writeCustomModelsList 保持分组自定义列表原有的响应结构。
@@ -1314,10 +1311,7 @@ func writeGrokModelsList(c *gin.Context, modelIDs []string) {
 		models = append(models, item)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data":   models,
-	})
+	writeGatewayModelsResponse(c, models)
 }
 
 // grokModelSupportsConfigurableReasoning 判断模型是否支持 Grok Build 可配置推理档位。
@@ -1365,10 +1359,7 @@ func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
 			DisplayName: modelID,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data":   models,
-	})
+	writeGatewayModelsResponse(c, models)
 }
 
 // writeClaudeCompatiblePlatformModelsList 保留各平台默认模型的展示元数据。
@@ -1415,10 +1406,7 @@ func writeClaudeCompatiblePlatformModelsList(c *gin.Context, platform string, mo
 			CreatedAt:   "2024-01-01T00:00:00Z",
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data":   models,
-	})
+	writeGatewayModelsResponse(c, models)
 }
 
 func filterModelsByCustomList(availableModels, fallbackModels, selectedModels []string) []string {
@@ -1500,6 +1488,8 @@ func defaultModelIDsForPlatform(platform string) []string {
 			ids = append(ids, model.ID)
 		}
 		return mergeModelIDs(ids, nil)
+	case service.PlatformOpenCodeGo:
+		return service.DefaultOpenCodeGoModelIDs()
 	case service.PlatformGrok:
 		return xai.DefaultModelIDs()
 	default:

@@ -365,6 +365,15 @@ func (h *UsageHandler) ListErrors(c *gin.Context) {
 	}
 
 	filter := &service.OpsErrorLogFilter{Page: page, PageSize: pageSize}
+	// 用户主动查看恢复记录时仍由服务层强制本人范围，并返回字段白名单。
+	if raw := strings.TrimSpace(c.Query("include_recovered_upstream")); raw != "" {
+		includeRecovered, err := strconv.ParseBool(raw)
+		if err != nil {
+			response.BadRequest(c, "Invalid include_recovered_upstream")
+			return
+		}
+		filter.IncludeRecoveredUpstream = includeRecovered
+	}
 
 	// 日期范围使用半开区间 [start, end)，与用量列表语义一致。
 	userTZ := c.Query("timezone")

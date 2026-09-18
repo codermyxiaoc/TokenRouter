@@ -69,7 +69,7 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 
 	if resp.StatusCode == 403 || resp.StatusCode == 503 {
 		body := resp.String()
-		if strings.Contains(body, "cloudflare") || strings.Contains(body, "cf-") || strings.Contains(body, "Just a moment") {
+		if isCloudflareChallengeResponse(resp.Header.Get("cf-mitigated"), body) {
 			slog.Warn("openai_privacy_cf_blocked", "status", resp.StatusCode)
 			return PrivacyModeCFBlocked
 		}
@@ -82,6 +82,14 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 
 	slog.Info("openai_privacy_training_disabled")
 	return PrivacyModeTrainingOff
+}
+
+// isCloudflareChallengeResponse 优先识别站点质询响应头，兼容旧响应的正文特征。
+func isCloudflareChallengeResponse(cfMitigated, body string) bool {
+	if strings.EqualFold(strings.TrimSpace(cfMitigated), "challenge") {
+		return true
+	}
+	return strings.Contains(body, "cloudflare") || strings.Contains(body, "cf-") || strings.Contains(body, "Just a moment")
 }
 
 // ChatGPTAccountInfo 从 chatgpt.com/backend-api/accounts/check 获取的账号信息
@@ -129,12 +137,12 @@ func fetchChatGPTAccountInfo(ctx context.Context, clientFactory PrivacyClientFac
 		Get(chatGPTAccountsCheckURL)
 
 	if err != nil {
-		slog.Debug("chatgpt_account_check_request_error", "error", err.Error())
+		slog.Warn("chatgpt_account_check_request_error", "error", err.Error())
 		return nil
 	}
 
 	if !resp.IsSuccessState() {
-		slog.Debug("chatgpt_account_check_failed", "status", resp.StatusCode, "body", truncate(resp.String(), 200))
+		slog.Warn("chatgpt_account_check_failed", "status", resp.StatusCode, "cf_challenge", isCloudflareChallengeResponse(resp.Header.Get("cf-mitigated"), resp.String()), "body", truncate(resp.String(), 200))
 		return nil
 	}
 
@@ -245,11 +253,11 @@ func fetchChatGPTSubscriptionExpiresAt(ctx context.Context, clientFactory Privac
 		SetQueryParam("account_id", accountID).
 		Get(chatGPTSubscriptionsURL)
 	if err != nil {
-		slog.Debug("chatgpt_subscription_request_error", "error", err.Error())
+		slog.Warn("chatgpt_subscription_request_error", "error", err.Error())
 		return ""
 	}
 	if !resp.IsSuccessState() {
-		slog.Debug("chatgpt_subscription_failed", "status", resp.StatusCode, "body", truncate(resp.String(), 200))
+		slog.Warn("chatgpt_subscription_failed", "status", resp.StatusCode, "cf_challenge", isCloudflareChallengeResponse(resp.Header.Get("cf-mitigated"), resp.String()), "body", truncate(resp.String(), 200))
 		return ""
 	}
 

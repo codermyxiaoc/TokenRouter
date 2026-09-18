@@ -74,6 +74,23 @@ beforeEach(() => {
 })
 
 describe('UserPlatformQuotaModal', () => {
+  it('未保存且无既有记录的平台不可重置，仅编辑限额不会启用重置', async () => {
+    const w = await mountAndOpen()
+    const row = w.findAll('tbody tr')[0]
+    expect(row.findAll('button').every((button) => button.attributes('disabled') !== undefined)).toBe(true)
+    await row.findAll('input')[0].setValue('0')
+    expect(row.findAll('button').every((button) => button.attributes('disabled') !== undefined)).toBe(true)
+    await row.findAll('button')[0].trigger('click')
+    expect(apiMocks.resetPlatformQuotaWindow).not.toHaveBeenCalled()
+  })
+
+  it('既有无限额历史行仍显示用量并允许管理员显式重置', async () => {
+    apiMocks.getPlatformQuotas.mockResolvedValueOnce({ platform_quotas: [{ platform: 'opencode_go', monthly_usage_usd: 9.5 }] })
+    const w = await mountAndOpen()
+    const row = w.findAll('tbody tr').find((item) => item.text().includes('opencode_go'))!
+    expect(row.text()).toContain('9.50')
+    expect(row.findAll('button').every((button) => button.attributes('disabled') === undefined)).toBe(true)
+  })
   it('挂载并 show=true 时调用 getPlatformQuotas', async () => {
     await mountAndOpen()
     expect(apiMocks.getPlatformQuotas).toHaveBeenCalledWith(99)
@@ -187,6 +204,7 @@ describe('UserPlatformQuotaModal', () => {
 
   it('重置按钮 confirm 确认则调用 API', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    apiMocks.getPlatformQuotas.mockResolvedValueOnce({ platform_quotas: [{ platform: 'anthropic', daily_limit_usd: 0 }] })
     const w = await mountAndOpen()
     const resetBtns = w.findAll('button').filter((b) => b.text() === '↻')
     await resetBtns[0].trigger('click') // 第一个是 anthropic.daily

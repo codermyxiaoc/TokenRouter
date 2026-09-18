@@ -120,6 +120,9 @@ func (s *AccountTestService) ProbeOpenAIAPIKeyResponsesSupport(ctx context.Conte
 	if account.Type != AccountTypeAPIKey {
 		return
 	}
+	if account.IsOpenCodeGo() {
+		return // 模型规则是权威协议配置，不触发 OpenAI 端点探针。
+	}
 	if account.IsCNProvider() {
 		// 国产供应商协议由 credentials.api_protocol 明确配置，无需网络探测。
 		// 写入当前 fork 的文本路由配置，让所有客户端入口使用同一协议决策。

@@ -297,7 +297,7 @@ func (a *Account) IsCNProvider() bool {
 // 兼容上游，也经 OpenAI 网关转发。
 func (a *Account) IsOpenAICompatible() bool {
 	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok ||
-		a.Platform == PlatformKimi || a.Platform == PlatformZhipu || a.Platform == PlatformDeepseek || a.Platform == PlatformMiniMax)
+		a.Platform == PlatformKimi || a.Platform == PlatformZhipu || a.Platform == PlatformDeepseek || a.Platform == PlatformMiniMax || a.Platform == PlatformOpenCodeGo)
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -677,6 +677,16 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 				"gemini-3.6-flash-low",
 				"gemini-3.6-flash-medium",
 				"gemini-3.6-flash-tiered",
+				"gemini-3.7-flash",
+				"gemini-3.7-flash-high",
+				"gemini-3.7-flash-low",
+				"gemini-3.7-flash-medium",
+				"gemini-3.7-flash-tiered",
+				"gemini-3.8-flash",
+				"gemini-3.8-flash-high",
+				"gemini-3.8-flash-low",
+				"gemini-3.8-flash-medium",
+				"gemini-3.8-flash-tiered",
 			})
 			applyAntigravityGemini31ProAliases(result)
 		}
@@ -953,7 +963,7 @@ func normalizeQoderModelForWhitelist(model string) string {
 // 3. 若请求模型未命中映射，则把它当作隐式透传模型，直接按最终模型做白名单校验；
 // 4. 当不存在任何白名单时，mapping 仅作为可选改写规则，不限制请求模型。
 // 5. 为兼容旧数据，非 Qoder 平台若未配置独立 model_whitelist，会继续把精确自映射条目视作最终白名单。
-// 6. OpenAI OAuth 非透传账号还会排除明确属于其他厂商的模型，避免 Codex 上游返回不可重试的 400。
+// 6. OpenAI OAuth 非透传账号排除明确的其它厂商模型；DeepSeek 无有效映射/白名单时按平台目录校验。
 func (a *Account) IsModelSupported(requestedModel string) bool {
 	// OpenAI 透传模式仅替换认证，模型能力由上游决定；必须在 model_mapping
 	// 分支前短路，否则调度快照中的历史映射会把可用账号误判为不支持模型。
@@ -989,6 +999,10 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 		}
 		if a.IsOpenAIOAuth() && !a.IsOpenAIPassthroughEnabled() {
 			return isOpenAIOAuthServableModel(requestedModel)
+		}
+		// DeepSeek 未配置有效白名单或映射时采用固定平台目录；显式白名单保留自定义模型。
+		if a.Platform == PlatformDeepseek && len(whitelist) == 0 {
+			return isDeepseekServableModel(requestedModel)
 		}
 		return true
 	}
@@ -1586,6 +1600,9 @@ func (a *Account) IsOpenAIApiKey() bool {
 // 适用 openai 与国产 OpenAI 兼容供应商；grok 走 GetGrokBaseURL，
 // 此处对 grok 返回 "" 以保持原有行为。
 func (a *Account) GetOpenAIBaseURL() string {
+	if a.IsOpenCodeGo() {
+		return a.openCodeProtocolBaseURL(APIProtocolChatCompletions)
+	}
 	if !a.IsOpenAI() && !a.IsCNProvider() {
 		return ""
 	}
@@ -1644,6 +1661,12 @@ func (a *Account) IsCodingPlan() bool {
 // credentials["api_protocol"]；缺失或与平台不匹配时回退 chat_completions
 // （与既有行为完全一致）。DeepSeek、Kimi、MiniMax 支持原生 Responses；Zhipu 无此端点。
 func (a *Account) GetAPIProtocol() string {
+	if a.IsOpenCodeGo() {
+		if protocol := strings.TrimSpace(a.GetCredential("api_protocol")); isNativeOpenCodeGoProtocol(protocol) {
+			return protocol
+		}
+		return APIProtocolAdaptive
+	}
 	if a == nil || !a.IsCNProvider() {
 		return APIProtocolChatCompletions
 	}
@@ -1700,6 +1723,9 @@ func (a *Account) IsAdaptiveAPIProtocol() bool {
 // adaptive 账号优先使用 api_base_urls 中的分协议地址，缺失时按平台和
 // account_mode 使用官方默认端点。base_url 继续作为 Chat Completions 地址兼容旧字段。
 func (a *Account) GetCNProtocolBaseURL(protocol string) string {
+	if a.IsOpenCodeGo() {
+		return a.openCodeProtocolBaseURL(protocol)
+	}
 	if a == nil || !a.IsCNProvider() {
 		return ""
 	}
@@ -1765,6 +1791,9 @@ func (a *Account) IsAnthropicProtocol() bool {
 // （上游路径为 {base}/v1/messages）。优先取凭证 base_url，缺失时按
 // 供应商 × 接入模式返回默认端点。非 Anthropic 协议账号返回空串。
 func (a *Account) GetAnthropicProtocolBaseURL() string {
+	if a.IsOpenCodeGo() {
+		return a.openCodeProtocolBaseURL(APIProtocolAnthropic)
+	}
 	if a == nil || (!a.IsAnthropicProtocol() && !a.IsAdaptiveAPIProtocol()) {
 		return ""
 	}
@@ -1798,6 +1827,9 @@ func (a *Account) GetAnthropicProtocolBaseURL() string {
 // 一致；anthropic 协议下，官方端点映射到对应的 OpenAI 格式端点，自定义中继则
 // 只移除末尾的 /anthropic 协议段，保留中继 host 与路径前缀。
 func (a *Account) GetOpenAIFormatBaseURL() string {
+	if a.IsOpenCodeGo() {
+		return a.openCodeProtocolBaseURL(APIProtocolChatCompletions)
+	}
 	if a == nil {
 		return ""
 	}
@@ -1867,7 +1899,7 @@ func stripCNAnthropicPathSuffix(baseURL string) string {
 // GetCNAPIKey 返回国产 OpenAI 兼容供应商账号的 api_key 凭据。
 // 与 openai 的 GetOpenAIApiKey 区分：后者仅对 openai 平台返回。
 func (a *Account) GetCNAPIKey() string {
-	if a == nil || !a.IsCNProvider() {
+	if a == nil || !a.IsMultiProtocolAPIKey() {
 		return ""
 	}
 	return a.GetCredential("api_key")
@@ -2000,7 +2032,7 @@ func (a *Account) GetOpenAIProtocolAPIKey() string {
 	if a == nil {
 		return ""
 	}
-	if a.IsCNProvider() {
+	if a.IsMultiProtocolAPIKey() {
 		if a.Type != AccountTypeAPIKey {
 			return ""
 		}
@@ -2674,7 +2706,7 @@ func (a *Account) SupportsTLSFingerprint() bool {
 		return true
 	}
 	return (a.Platform == PlatformOpenAI && a.Type == AccountTypeOAuth) ||
-		(a.IsCNProvider() && a.Type == AccountTypeAPIKey) ||
+		(a.IsMultiProtocolAPIKey() && a.Type == AccountTypeAPIKey) ||
 		a.IsQoderCosy()
 }
 

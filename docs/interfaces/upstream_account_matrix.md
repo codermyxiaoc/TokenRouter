@@ -1,6 +1,6 @@
 # 上游账号能力矩阵
 
-本文统一记录 TokenRouter 十个平台、七类账号和公开网关协议的当前支持边界。它是账号能力的路由入口，不替代各平台专题中的认证、转换、限流和诊断细节，也不把数据导入器能够保存的历史组合视为正式支持。
+本文统一记录 TokenRouter 十一个平台、七类账号和公开网关协议的当前支持边界。它是账号能力的路由入口，不替代各平台专题中的认证、转换、限流和诊断细节，也不把数据导入器能够保存的历史组合视为正式支持。
 
 ## 章节导航
 
@@ -12,7 +12,7 @@
 
 ## 判定口径
 
-后端常量定义十个平台 `anthropic`、`openai`、`gemini`、`antigravity`、`grok`、`qoder`、`kimi`、`zhipu`、`deepseek`、`minimax`，以及七类账号 `oauth`、`setup-token`、`apikey`、`upstream`、`bedrock`、`service_account`、`cosy`。矩阵使用以下等级：
+后端常量定义十一个平台 `anthropic`、`openai`、`gemini`、`antigravity`、`grok`、`qoder`、`kimi`、`zhipu`、`deepseek`、`minimax`、`opencode_go`，以及七类账号 `oauth`、`setup-token`、`apikey`、`upstream`、`bedrock`、`service_account`、`cosy`。矩阵使用以下等级：
 
 - **正式支持**：管理端有创建或授权流程，平台运行时也有对应凭据、转发和维护契约。
 - **兼容保留**：通用创建/导入层可以保存，或旧运行路径仍会识别，但管理端不推荐该组合；不能据此推导完整平台能力。
@@ -35,6 +35,7 @@
 | Zhipu | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 | DeepSeek | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 | MiniMax | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| OpenCode Zen / GO | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 
 API Key 账号可以在管理员列表配置并手动查询上游用量。普通兼容上游缺省使用 Sub2API 适配器，New API 和 Zivv 必须显式选择；Kimi、Zhipu、DeepSeek、MiniMax 则由平台与 `account_mode` 自动选择固定只读适配器，Zhipu payg 和 MiniMax payg 因没有接入公开余额协议而明确不支持。手动查询协议错误只影响展示，不改变转发资格。API Key 行同时保留 TokenRouter 本地今日统计/本地配额和上游余额/周期限额两个来源；只有显式开启的 CN 周期监控可以把同一查询结果写入统一快照并形成身份绑定的临时停调，详见[API Key 上游用量查询](upstream_usage.md)。
 
@@ -43,6 +44,8 @@ Kimi、Zhipu 和 DeepSeek 只接受 `type=apikey`。`credentials.account_mode` �
 MiniMax 同样仅支持 API Key，可选择 `payg` 或 `coding`，协议支持 `chat_completions`、`anthropic`、`responses` 和 `adaptive`。默认按量付费与 Chat Completions；自适应模式使用三个独立端点。两种账号模式使用相同官方端点，详情见 [MiniMax 上游](minimax_upstream.md)。
 
 四个 CN 平台的 `adaptive` 均按客户端入口选择已有的协议转发路径。`credentials.api_base_urls` 分别保存 Chat Completions、Anthropic 与平台支持的 Responses 地址，未设置时按平台和账号模式读取默认端点；旧 `base_url` 在自适应模式中仅作为 Chat Completions 地址回退。Zhipu 不提供原生 Responses，Responses 入站继续经 Chat Completions 转换，不因开启自适应新增上游能力。账号创建、编辑和批量更新采用与运行时一致的协议校验，导入复用账号创建流程；未知协议、Zhipu 固定 `responses` 和 DeepSeek `coding` 仍会被拒绝。
+
+OpenCode 以 `opencode_go` 平台和 `account_mode=zen|go` 接入，按映射后模型选择三种原生协议，详见 [OpenCode 上游](opencode_upstream.md)。Zen/GO 共用用户平台额度，GO 另有上游五小时/周/月窗口；这两类额度不混用。
 
 平台专题：
 
@@ -53,6 +56,7 @@ MiniMax 同样仅支持 API Key，可选择 `payg` 或 `coding`，协议支持 `
 - [Grok / xAI 上游](grok_upstream.md)
 - [Qoder 原生上游](qoder_upstream.md)
 - [MiniMax 上游](minimax_upstream.md)
+- [OpenCode 上游](opencode_upstream.md)
 
 Kimi、Zhipu、DeepSeek 的账号类型、模式与协议矩阵暂由本页和[API Key 上游用量查询](upstream_usage.md)共同拥有；新增独立认证、OAuth 或供应商专属管理 API 前必须先建立对应平台专题。
 
@@ -73,15 +77,16 @@ Kimi、Zhipu、DeepSeek 的账号类型、模式与协议矩阵暂由本页和[A
 | Zhipu | Messages、Responses、Chat | 三项全部启用 | 不适用，新增平台 |
 | DeepSeek | Messages、Responses、Chat | 三项全部启用 | 不适用，新增平台 |
 | MiniMax | Messages、Responses、Chat | 三项全部启用 | 不适用，新增平台 |
+| OpenCode Zen / GO | Messages、Responses、Chat | 三项全部启用 | 不适用，新增平台 |
 
 集合顺序固定为 Messages、Responses、Chat、Gemini，空集合对所有平台都合法。准入只控制文本生成协议；Live、WebSocket、Embedding、图片和视频继续使用独立能力规则。
 
 | 协议族或入口 | 当前平台边界 | 专题路由 |
 | --- | --- | --- |
-| Anthropic Messages：`/v1/messages` | 十个平台均有平台分派；最终分组允许 Messages 时按平台转换或原生转发 | 各平台契约；共同链路见[网关请求生命周期](../architecture/gateway_request_lifecycle.md) |
-| Anthropic token count：`/v1/messages/count_tokens`、`/messages/count_tokens` | Anthropic、OpenAI、Gemini 进入各自统计路径，Grok 与四个 CN 平台使用本地估算；Antigravity、Qoder 明确返回 `404`，Anthropic Bedrock 账号也不支持 | 各平台契约；客户端仍应保留本地估算回退 |
-| OpenAI Responses：`/v1/responses`、`/responses` 及允许的子路径 | 十个平台在最终分组允许 Responses 时进入平台适配；Kimi/Zhipu 不要求账号拥有上游原生 Responses，DeepSeek、MiniMax 可显式使用其 `/responses`；Qoder 不支持 Responses 子路径和 WebSocket | 各平台契约；WebSocket/Realtime 重点见 [OpenAI 上游](openai_upstream.md) |
-| OpenAI Chat Completions：`/v1/chat/completions`、`/chat/completions` | 最终分组允许 Chat 时，十个平台均按平台转换或原生转发 | 各平台契约 |
+| Anthropic Messages：`/v1/messages` | 十一个平台均有平台分派；最终分组允许 Messages 时按平台转换或原生转发 | 各平台契约；共同链路见[网关请求生命周期](../architecture/gateway_request_lifecycle.md) |
+| Anthropic token count：`/v1/messages/count_tokens`、`/messages/count_tokens` | Anthropic、OpenAI、Gemini 进入各自统计路径，Grok、OpenCode 与四个 CN 平台使用本地估算；Antigravity、Qoder 明确返回 `404`，Anthropic Bedrock 账号也不支持 | 各平台契约；客户端仍应保留本地估算回退 |
+| OpenAI Responses：`/v1/responses`、`/responses` 及允许的子路径 | 十一个平台在最终分组允许 Responses 时进入平台适配；Kimi/Zhipu 不要求账号拥有上游原生 Responses，DeepSeek、MiniMax 可显式使用其 `/responses`；Qoder 不支持 Responses 子路径和 WebSocket | 各平台契约；WebSocket/Realtime 重点见 [OpenAI 上游](openai_upstream.md) |
+| OpenAI Chat Completions：`/v1/chat/completions`、`/chat/completions` | 最终分组允许 Chat 时，十一个平台均按平台转换或原生转发 | 各平台契约 |
 | 模型与用量：`/v1/models`、`/models`、`/v1/usage` | 按 Key、分组、账号和渠道解析可请求模型与本地额度；不是上游模型列表或账单的原样代理 | [模型目录与市场](model_catalog_and_marketplace.md)及各平台专题 |
 | Embeddings：`/v1/embeddings`、`/embeddings` | 仅 OpenAI 分组 | [OpenAI 上游](openai_upstream.md) |
 | Realtime、Live 与 Alpha Search | Live/sideband、Codex realtime 和 alpha search 仅 OpenAI 平台；是否可用还受分组和账号能力限制 | [OpenAI 上游](openai_upstream.md) |

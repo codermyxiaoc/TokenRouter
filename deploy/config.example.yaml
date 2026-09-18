@@ -335,9 +335,10 @@ gateway:
     # 是否按账号并发动态计算连接池上限：
     # effective_max_conns = min(max_conns_per_account, ceil(account.concurrency * factor))
     dynamic_max_conns_by_account_concurrency_enabled: true
-    # 按账号类型分别设置系数（OAuth / API Key）
-    oauth_max_conns_factor: 1.0
-    apikey_max_conns_factor: 1.0
+    # 按账号类型分别设置系数（OAuth / API Key），只扩大连接容量，不扩大实际请求并发。
+    # 已有部署若显式配置 1.0，升级后继续使用 1.0；连接硬上限按每个账号计算。
+    oauth_max_conns_factor: 5.0
+    apikey_max_conns_factor: 5.0
     dial_timeout_seconds: 10
     read_timeout_seconds: 900
     write_timeout_seconds: 120

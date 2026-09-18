@@ -203,7 +203,8 @@ func (s *CNProviderBalanceCheckService) runOnce(parents ...context.Context) {
 
 func (s *CNProviderBalanceCheckService) monitorCandidates(ctx context.Context) []Account {
 	result := make([]Account, 0)
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax} {
+	// OpenCode 只让有窗口查询协议的 GO 进入监控，Zen 由适配器选择器过滤。
+	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo} {
 		accounts, err := s.accountRepo.ListByPlatform(ctx, platform)
 		if err != nil {
 			slog.Warn("cn_usage_monitor_list_failed", "platform", platform, "error", err)
@@ -409,7 +410,7 @@ func cnUsageMonitorSnapshotFromExtra(extra map[string]any) *CNUsageMonitorSnapsh
 
 // validCNUsageMonitorSnapshot 只返回与账号当前完整查询身份匹配的快照。
 func validCNUsageMonitorSnapshot(account *Account) *CNUsageMonitorSnapshot {
-	if account == nil || !account.IsCNProvider() {
+	if account == nil || (!account.IsCNProvider() && !account.IsOpenCodeGoPlan()) {
 		return nil
 	}
 	queryConfig, err := EffectiveUpstreamUsageConfig(account)
@@ -430,7 +431,7 @@ func validCNUsageMonitorSnapshot(account *Account) *CNUsageMonitorSnapshot {
 }
 
 func cnUsageMonitorIdentityFingerprint(account *Account) string {
-	if account == nil || !account.IsCNProvider() || account.Type != AccountTypeAPIKey {
+	if account == nil || (!account.IsCNProvider() && !account.IsOpenCodeGoPlan()) || account.Type != AccountTypeAPIKey {
 		return ""
 	}
 	queryConfig, err := EffectiveUpstreamUsageConfig(account)
@@ -490,6 +491,8 @@ func cnUsageOfficialHost(platform, host string) bool {
 	case PlatformMiniMax:
 		// 国内新旧域名与国际站均为官方入口，仍由统一 HTTP 客户端执行 URL 安全校验。
 		return host == "api.minimax.io" || host == "api.minimax.cn" || host == "api.minimaxi.com"
+	case PlatformOpenCodeGo:
+		return host == "opencode.ai"
 	default:
 		return false
 	}

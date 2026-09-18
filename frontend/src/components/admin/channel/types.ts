@@ -451,6 +451,7 @@ export function getPlatformTagClass(platform: string): string {
     case 'zhipu': return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
     case 'deepseek': return 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400'
     case 'minimax': return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
+    case 'opencode_go': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
     default: return 'bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400'
   }
 }
@@ -467,6 +468,7 @@ export function getPlatformTextClass(platform: string): string {
     case 'zhipu': return 'text-indigo-700 dark:text-indigo-400'
     case 'deepseek': return 'text-teal-700 dark:text-teal-400'
     case 'minimax': return 'text-rose-700 dark:text-rose-400'
+    case 'opencode_go': return 'text-amber-700 dark:text-amber-400'
     default: return ''
   }
 }

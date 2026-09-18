@@ -219,10 +219,57 @@ describe('ModelMarketplaceView', () => {
     copyToClipboard.mockClear()
   })
 
-  it('默认按分组-模型展示', async () => {
+  it('视频模型按秒展示价格并可筛选，分组仍默认收起', async () => {
+    const video = marketplaceModel('grok-imagine-video-1.5', 'Grok Imagine Video 1.5', {
+      pricing_mode: 'video',
+      price_status: 'priced',
+      video_prices: [
+        { resolution: '480p', price: 0, unit: 'second' },
+        { resolution: '720p', price: 0.14, unit: 'second' },
+        { resolution: '1080p', price: 0.25, unit: 'second' },
+      ],
+    })
+    getMarketplaceModels.mockResolvedValue([marketplaceGroup(1, 'Grok', [video, marketplaceModel('grok-4.6', 'Grok 4.6', tokenPricing)])])
+    const wrapper = await mountMarketplace()
+    expect(wrapper.findAll('article')).toHaveLength(0)
+    await wrapper.get('[data-testid="marketplace-group-pricing-toggle"]').trigger('click')
+    const card = wrapper.findAll('article')[0]
+    expect(card.text()).toContain('0.0000 点 marketplace.perSecond')
+    expect(card.text()).toContain('0.1400 点 marketplace.perSecond')
+    expect(card.text()).not.toContain('marketplace.pricingUnavailable')
+    // 自研选择框的模型值事件应按视频类型筛选，仍保留当前分组的展开状态。
+    const pricingSelect = wrapper.findAllComponents(SelectStub).find((select) =>
+      (select.props('options') as Array<{ value: string }>).some((option) => option.value === 'video'))
+    expect(pricingSelect).toBeDefined()
+    pricingSelect!.vm.$emit('update:modelValue', 'video')
+    await nextTick()
+    expect(wrapper.findAll('article')).toHaveLength(1)
+    expect(wrapper.findAll('article')[0].text()).toContain('Grok Imagine Video 1.5')
+  })
+
+  it('默认只展示分组头部，模型定价可按分组独立展开和收起', async () => {
     const wrapper = await mountMarketplace()
 
-    expect(wrapper.findAll('[data-testid="marketplace-group-section"]')).toHaveLength(4)
+    const sections = wrapper.findAll('[data-testid="marketplace-group-section"]')
+    expect(sections).toHaveLength(4)
+    expect(wrapper.findAll('article')).toHaveLength(0)
+    const firstToggle = sections[0].get('[data-testid="marketplace-group-pricing-toggle"]')
+    const secondToggle = sections[1].get('[data-testid="marketplace-group-pricing-toggle"]')
+    expect(firstToggle.attributes('aria-expanded')).toBe('false')
+
+    // 展开与收起仅影响当前分组，其他分组的渠道状态始终保留。
+    await firstToggle.trigger('click')
+    expect(firstToggle.attributes('aria-expanded')).toBe('true')
+    expect(sections[0].findAll('article')).toHaveLength(2)
+    expect(sections[1].findAll('article')).toHaveLength(0)
+    expect(sections[0].get(`#${firstToggle.attributes('aria-controls')}`).exists()).toBe(true)
+
+    await secondToggle.trigger('click')
+    await firstToggle.trigger('click')
+    expect(firstToggle.attributes('aria-expanded')).toBe('false')
+    expect(sections[0].findAll('article')).toHaveLength(0)
+    expect(sections[1].findAll('article')).toHaveLength(1)
+    expect(sections[0].get('h2').text()).toBe('Plus')
   })
 
   it('用户侧不展示分组容量，并将可用率状态条靠右放置', async () => {
@@ -243,7 +290,7 @@ describe('ModelMarketplaceView', () => {
     const wrapper = await mountMarketplace()
 
     expect(wrapper.findAll('[data-testid="group-capacity"]')).toHaveLength(0)
-    expect(wrapper.get('[data-testid="marketplace-group-availability"]').classes()).toContain('xl:w-[560px]')
+    expect(wrapper.get('[data-testid="marketplace-group-availability"]').element.parentElement?.classList.contains('xl:w-[560px]')).toBe(true)
   })
 
   it('分组头部用最高优惠标签替换模型数标签，无有效折扣的分组不渲染', async () => {
@@ -274,6 +321,7 @@ describe('ModelMarketplaceView', () => {
 
   it('模型卡片中的模型 ID 支持一键复制', async () => {
     const wrapper = await mountMarketplace()
+    await wrapper.get('[data-testid="marketplace-group-pricing-toggle"]').trigger('click')
 
     // 卡片 ID 行的复制按钮直接复制模型 ID。
     const cardCopyButtons = wrapper.findAll('[data-testid="model-id-copy"]')
@@ -286,6 +334,7 @@ describe('ModelMarketplaceView', () => {
     const wrapper = await mountMarketplace()
 
     const sections = wrapper.findAll('[data-testid="marketplace-group-section"]')
+    await sections[0].get('[data-testid="marketplace-group-pricing-toggle"]').trigger('click')
     const gptCards = sections[0].findAll('article')
     // fixture 中 gpt-5.5 定价数据带图片输入价，应展示 文字·图片 -> 文字。
     expect(gptCards[0].get('[data-testid="model-capability-tags"]').findAll('[data-modality]').map((tag) => tag.attributes('data-modality')))
@@ -308,6 +357,7 @@ describe('ModelMarketplaceView', () => {
 
     const wrapper = await mountMarketplace()
     const sections = wrapper.findAll('[data-testid="marketplace-group-section"]')
+    await sections[0].get('[data-testid="marketplace-group-pricing-toggle"]').trigger('click')
 
     expect(sections[0].get('[data-testid="model-capability-tags"]').findAll('[data-modality]').map((tag) => tag.attributes('data-modality')))
       .toEqual(['input-text', 'output-image'])
@@ -323,6 +373,7 @@ describe('ModelMarketplaceView', () => {
     }))
     getMarketplaceModels.mockResolvedValue(fixture)
     const wrapper = await mountMarketplace()
+    await wrapper.get('[data-testid="marketplace-group-pricing-toggle"]').trigger('click')
     const cards = wrapper.findAll('[data-testid="marketplace-group-section"]')[0].findAll('article')
     expect(cards).toHaveLength(2)
     for (const card of cards) {
@@ -368,6 +419,7 @@ describe('ModelMarketplaceView', () => {
 
   it('模型卡片可展开抽屉式定价面板并切换 fast mode', async () => {
     const wrapper = await mountMarketplace()
+    await wrapper.get('[data-testid="marketplace-group-pricing-toggle"]').trigger('click')
 
     const toggle = wrapper.get('[data-testid="model-pricing-toggle"]')
     expect(toggle.attributes('aria-expanded')).toBe('false')

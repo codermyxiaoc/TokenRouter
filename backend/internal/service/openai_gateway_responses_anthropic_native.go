@@ -40,6 +40,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 	account *Account,
 	body []byte,
 	defaultMappedModel string,
+	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
 ) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
 
@@ -116,13 +117,13 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 	}
 
 	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
-	upstreamReq, _, err := s.buildNativeAnthropicUpstreamRequest(upstreamCtx, c, account, anthropicBody, apiKey, targetURL)
+	upstreamReq, _, err := s.buildNativeAnthropicUpstreamRequest(upstreamCtx, c, account, anthropicBody, apiKey, targetURL, tlsRouterMatch...)
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
 
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.sendNativeAnthropicUpstreamRequest(upstreamReq, proxyURL, account, tlsRouterMatch...)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 	}
@@ -137,6 +138,9 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 		return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
 	}
 
+	if account.IsOpenCodeGo() {
+		return s.handleOpenCodeNativeAnthropicResponse(resp, c, account, APIProtocolResponses, clientStream, originalModel, billingModel, upstreamModel, reasoningEffort, startTime, clientToolMapping, false)
+	}
 	if clientStream {
 		return s.handleResponsesStreamingFromNativeAnthropic(resp, c, originalModel, billingModel, upstreamModel, reasoningEffort, startTime, clientToolMapping)
 	}

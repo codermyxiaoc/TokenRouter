@@ -376,6 +376,38 @@ func (s *OpenAIGatewayService) ResolveGrokMediaVideoRequestAccount(
 	return s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), cacheKey)
 }
 
+// SelectGrokMediaVideoRequestAccount 只选择经过归属鉴权的视频任务原账号。
+// 查询不得健康逃逸、改绑或刷新为文字会话 TTL，账号满载时仅在原账号有界等待。
+// @project-doc docs/interfaces/grok_upstream.md#grok_video_ownership
+func (s *OpenAIGatewayService) SelectGrokMediaVideoRequestAccount(
+	ctx context.Context, groupID *int64, sessionHash string, accountID int64, requestedModel string,
+) (selection *AccountSelectionResult, decision OpenAIAccountScheduleDecision, err error) {
+	started := time.Now()
+	decision.Layer = openAIAccountScheduleLayerSessionSticky
+	defer func() { decision.LatencyMs = time.Since(started).Milliseconds() }()
+	if s == nil || accountID <= 0 || strings.TrimSpace(sessionHash) == "" {
+		return nil, decision, ErrNoAvailableAccounts
+	}
+	ctx = s.withOpenAIGroupPrivacyRequirement(ctx, groupID)
+	scheduler := &defaultOpenAIAccountScheduler{service: s}
+	selection, _, err = scheduler.selectBySessionHash(ctx, OpenAIAccountScheduleRequest{
+		GroupID: groupID, Platform: PlatformGrok, SessionHash: sessionHash,
+		StickyAccountID: accountID, PreserveStickyBinding: true, DisableStickyEscape: true,
+		RequestedModel: requestedModel, RequiredTransport: OpenAIUpstreamTransportHTTPSSE,
+		RequirePrivacySet: s.openAIGroupRequiresPrivacySet(ctx, groupID),
+	})
+	if err != nil {
+		return selection, decision, err
+	}
+	if selection == nil || selection.Account == nil {
+		return selection, decision, ErrNoAvailableAccounts
+	}
+	decision.StickySessionHit = true
+	decision.SelectedAccountID = selection.Account.ID
+	decision.SelectedAccountType = selection.Account.Type
+	return selection, decision, nil
+}
+
 // GrokVideoPendingBilling 是创建任务时保存的快照，用于状态轮询首次发现已完成视频地址时计费。
 // 状态响应可能省略模型或时长，此时先回退到该快照，再回退到默认值。
 type GrokVideoPendingBilling struct {

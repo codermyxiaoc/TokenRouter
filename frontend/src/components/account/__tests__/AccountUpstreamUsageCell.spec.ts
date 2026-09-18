@@ -41,6 +41,26 @@ const mountCell = (props: Record<string, unknown> = {}) => mount(AccountUpstream
 })
 
 describe('AccountUpstreamUsageCell', () => {
+  it('OpenCode GO only queries on click, while Zen has no balance query', async () => {
+    const request = vi.fn()
+    const wrapper = mountCell({ account: { ...account(), platform: 'opencode_go', credentials: { account_mode: 'go' } }, request })
+    expect(request).not.toHaveBeenCalled()
+    await wrapper.get('button').trigger('click')
+    expect(request).toHaveBeenCalledTimes(1)
+    await wrapper.setProps({ account: { ...account(), platform: 'opencode_go', credentials: { account_mode: 'zen' } } })
+    expect(wrapper.find('button').exists()).toBe(false)
+    expect(wrapper.text()).toContain('admin.accounts.cnProviders.noBalanceEndpoint')
+  })
+
+  it('OpenCode GO renders window percentages without exposing wire unit names', () => {
+    const wrapper = mountCell({ account: { ...account(), platform: 'opencode_go', credentials: { account_mode: 'go' } },
+      result: { account_id: 17, adapter: 'opencode_go', provider: 'opencode_go', mode: 'limits', unit: 'PERCENT',
+        observed_at: '2026-09-15T01:00:00Z', limits: [{ name: '5h', used: 25, limit: 100, remaining: 75 }] } })
+    expect(wrapper.text()).toContain('5h|25')
+    expect(wrapper.text()).toContain('75% / 100%')
+    expect(wrapper.text()).not.toContain('PERCENT')
+  })
+
   it('只在手动点击时触发强制查询', async () => {
     const request = vi.fn()
     const wrapper = mountCell({ request })

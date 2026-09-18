@@ -609,7 +609,8 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		if accountReleaseFunc != nil {
 			accountReleaseFunc()
 		}
-		h.gatewayService.ReportAdvancedAccountScheduleResult(selection, account.ID, err == nil, result)
+		unbilledUpstreamFailure := err == nil && smartRoutingGeminiFailureWithoutUsage(c, apiKey, result)
+		h.gatewayService.ReportAdvancedAccountScheduleResult(selection, account.ID, err == nil && !unbilledUpstreamFailure, result)
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
@@ -628,6 +629,11 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 			}
 			// ForwardNative already wrote the response
 			reqLog.Error("gemini.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			return
+		}
+		// 原生 HTTP 200 错误信封已被智能写入器暂存，不能安排零用量成功结算关闭换组窗口。
+		// 有输出时写入器仍禁止重放；有实际计量时继续现有结算，避免丢失上游成本。
+		if unbilledUpstreamFailure {
 			return
 		}
 
@@ -694,6 +700,27 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		)
 		return
 	}
+}
+
+// smartRoutingGeminiFailureWithoutUsage 仅跳过真实带内失败的零用量成功后处理。
+// 请求级策略拒绝不借用历史错误，普通 Key 与已观测计量仍沿用原有结算路径。
+func smartRoutingGeminiFailureWithoutUsage(c *gin.Context, key *service.APIKey, result *service.ForwardResult) bool {
+	if key == nil || !key.SmartRouting || result == nil {
+		return false
+	}
+	failure, exists := service.GetOpsStreamError(c)
+	if !exists || failure.RequestScoped || failure.UpstreamStatus < http.StatusBadRequest || failure.UpstreamStatus > 599 || len(failure.UpstreamErrors) == 0 {
+		return false
+	}
+	latest := failure.UpstreamErrors[len(failure.UpstreamErrors)-1]
+	if latest == nil || latest.UpstreamStatusCode != failure.UpstreamStatus {
+		return false
+	}
+	usage := result.Usage
+	return usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.CacheCreationInputTokens == 0 &&
+		usage.CacheReadInputTokens == 0 && usage.CacheCreation5mTokens == 0 && usage.CacheCreation1hTokens == 0 &&
+		usage.ImageOutputTokens == 0 && result.ImageCount == 0 && len(result.ImageOutputSizes) == 0 &&
+		len(result.ImageSizeBreakdown) == 0 && result.SearchCount == 0 && result.AudioUsage == nil
 }
 
 func parseGeminiModelAction(rest string) (model string, action string, err error) {

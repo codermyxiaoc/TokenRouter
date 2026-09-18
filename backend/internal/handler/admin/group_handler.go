@@ -46,7 +46,7 @@ func NewGroupHandler(adminService service.AdminService, dashboardService *servic
 type CreateGroupRequest struct {
 	Name                       string                                  `json:"name" binding:"required"`
 	Description                string                                  `json:"description"`
-	Platform                   string                                  `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity qoder grok kimi zhipu deepseek minimax"`
+	Platform                   string                                  `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity qoder grok kimi zhipu deepseek minimax opencode_go"`
 	SchedulerType              string                                  `json:"scheduler_type" binding:"omitempty,oneof=basic advanced"`
 	AdvancedSchedulerOverrides service.GroupAdvancedSchedulerOverrides `json:"advanced_scheduler_overrides"`
 	DisplayBrand               string                                  `json:"display_brand"`
@@ -125,7 +125,7 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name                       string                                   `json:"name"`
 	Description                *string                                  `json:"description"`
-	Platform                   string                                   `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity qoder grok kimi zhipu deepseek minimax"`
+	Platform                   string                                   `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity qoder grok kimi zhipu deepseek minimax opencode_go"`
 	SchedulerType              *string                                  `json:"scheduler_type" binding:"omitempty,oneof=basic advanced"`
 	AdvancedSchedulerOverrides *service.GroupAdvancedSchedulerOverrides `json:"advanced_scheduler_overrides"`
 	DisplayBrand               *string                                  `json:"display_brand"`

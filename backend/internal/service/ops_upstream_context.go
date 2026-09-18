@@ -152,12 +152,11 @@ func OpsClientBusinessLimitedReason(c *gin.Context) string {
 	return strings.TrimSpace(reason)
 }
 
-// OpsStreamError 描述网关在「响应状态已固化为 200」之后（keepalive ping 或部分数据
-// 已 flush）就地以 SSE error 帧形式返回的错误。由于 HTTP 状态码停留在 200，
-// 而 ops_error_logger 以 status>=400 为采集触发条件，这类流内失败
-// （并发限流回退、Wait 后二次计费校验失败、流开始后才无可用账号等）本会在错误看板里
-// 完全隐形。handler.handleStreamingAwareError 负责标记，ops_error_logger 中间件在
-// status<400 分支消费它并补记一条错误日志。
+// OpsStreamError 描述承载在 2xx 响应上的带内错误：网关在响应状态已固化为 200 之后
+// 就地以 SSE error 帧返回的错误（并发限流回退、Wait 后二次计费校验失败、流开始后才无
+// 可用账号等），以及上游 2xx 正文或事件里携带的错误结果（NonStream 标记非流式正文）。
+// 由于 HTTP 状态码停留在 2xx，ops_error_logger 中间件在 status<400 分支消费该标记并
+// 补记错误日志；标记方是 handler.handleStreamingAwareError 或各 service 的带内检测。
 type OpsStreamError struct {
 	// ErrType 是写入 SSE 帧的对客错误类型（如 rate_limit_error / upstream_error / api_error）。
 	ErrType string
@@ -167,7 +166,7 @@ type OpsStreamError struct {
 	// Message 是写入 SSE 帧的对客错误消息。
 	Message string
 	// IntendedStatus 是流若未固化本应返回的 HTTP 状态码（如并发限流的 429）。
-	// 默认仅用于错误分级；CountTowardsSLA=true 时也作为 Ops 的逻辑状态码。
+	// 默认仅用于错误分级；CountTowardsSLA 或 RequestScoped 为 true 时也作为 Ops 的逻辑状态码。
 	IntendedStatus int
 	// CountTowardsSLA 表示虽然 wire 状态已固化为 200，请求在应用语义上仍然失败，
 	// Ops 应使用 IntendedStatus 计入错误率/SLA。
@@ -182,6 +181,12 @@ type OpsStreamError struct {
 	UpstreamMessage string
 	UpstreamDetail  string
 	UpstreamErrors  []*OpsUpstreamErrorEvent
+	// RequestScoped 表示该带内失败是请求级结果（如上游内容策略截停），与本请求此前的
+	// 上游尝试无关：分类不受上游错误上下文影响、不快照也不落库上游归因、不继承透传规则的
+	// skip_monitoring，按业务限制计，落库状态取 IntendedStatus 以便进入错误列表。
+	RequestScoped bool
+	// NonStream 表示带内信号来自非流式 2xx 响应体，落库 stream=false。
+	NonStream bool
 }
 
 const maxOpsStreamErrorsPerRequest = 64
@@ -222,6 +227,16 @@ func MarkOpsStreamFailure(c *gin.Context, errType, code, message string, intende
 	})
 }
 
+// MarkOpsStreamErrorValue 以完整的 OpsStreamError 记录一次带内错误，供需要
+// RequestScoped / NonStream 等附加语义的调用方使用；首个标记生效的规则不变。
+// 调用方只填 ErrType / Code / Message / IntendedStatus / CountTowardsSLA / RequestScoped / NonStream。
+// AccountID、UpstreamModel 与 Turn 由请求上下文接管；UpstreamStatus、UpstreamMessage、
+// UpstreamDetail、UpstreamErrors 与 SkipMonitoring 在非 RequestScoped 时由上下文接管，
+// RequestScoped 时被忽略。
+func MarkOpsStreamErrorValue(c *gin.Context, streamErr OpsStreamError) {
+	markOpsStreamError(c, streamErr)
+}
+
 func markOpsStreamError(c *gin.Context, streamErr OpsStreamError) {
 	if c == nil {
 		return
@@ -229,7 +244,9 @@ func markOpsStreamError(c *gin.Context, streamErr OpsStreamError) {
 	streamErr.ErrType = strings.TrimSpace(streamErr.ErrType)
 	streamErr.Code = strings.TrimSpace(streamErr.Code)
 	streamErr.Message = strings.TrimSpace(streamErr.Message)
-	streamErr.SkipMonitoring = currentOpsFailureSkipMonitoring(c)
+	if !streamErr.RequestScoped {
+		streamErr.SkipMonitoring = currentOpsFailureSkipMonitoring(c)
+	}
 	snapshotOpsStreamErrorContext(c, &streamErr)
 	if GetOpenAIClientTransport(c) == OpenAIClientTransportWS {
 		if value, ok := c.Get(OpsStreamTurnKey); ok {
@@ -268,6 +285,9 @@ func snapshotOpsStreamErrorContext(c *gin.Context, streamErr *OpsStreamError) {
 	if value, ok := c.Get(OpsUpstreamModelKey); ok {
 		streamErr.UpstreamModel, _ = value.(string)
 		streamErr.UpstreamModel = strings.TrimSpace(streamErr.UpstreamModel)
+	}
+	if streamErr.RequestScoped {
+		return
 	}
 	if value, ok := c.Get(OpsUpstreamStatusCodeKey); ok {
 		switch status := value.(type) {
@@ -389,6 +409,10 @@ type OpsUpstreamErrorEvent struct {
 	GroupName        string `json:"group_name,omitempty"`
 	UpstreamEndpoint string `json:"upstream_endpoint,omitempty"`
 	UpstreamModel    string `json:"upstream_model,omitempty"`
+	// 恢复目标由协调器确认请求成功后快照，独立于失败尝试的分组归属。
+	RecoveredGroupID   int64  `json:"recovered_group_id,omitempty"`
+	RecoveredGroupName string `json:"recovered_group_name,omitempty"`
+	RecoveredPlatform  string `json:"recovered_platform,omitempty"`
 
 	// Outcome
 	UpstreamStatusCode int    `json:"upstream_status_code,omitempty"`
@@ -416,6 +440,32 @@ type OpsUpstreamErrorEvent struct {
 	// the final client-visible failure; recovered attempts remain provider-health
 	// telemetry and do not count as failed requests.
 	SkipMonitoring bool `json:"-"`
+}
+
+// MarkOpsRecoveredGroup 仅在调用方确认智能路由成功后，为已有失败事件补充恢复目标。
+// 拷贝事件和分组值，避免污染此前保存的失败流快照或受后续分组改名影响。
+// @project-doc docs/operations/ops_monitoring_and_alerting.md#recovered_error_visibility
+func MarkOpsRecoveredGroup(c *gin.Context, group *Group) {
+	if c == nil || group == nil || group.ID <= 0 {
+		return
+	}
+	value, _ := c.Get(OpsUpstreamErrorsKey)
+	events, _ := value.([]*OpsUpstreamErrorEvent)
+	if len(events) == 0 {
+		return
+	}
+	recovered := make([]*OpsUpstreamErrorEvent, len(events))
+	for i, event := range events {
+		if event == nil {
+			continue
+		}
+		copyOfEvent := *event
+		copyOfEvent.RecoveredGroupID = group.ID
+		copyOfEvent.RecoveredGroupName = group.Name
+		copyOfEvent.RecoveredPlatform = group.Platform
+		recovered[i] = &copyOfEvent
+	}
+	c.Set(OpsUpstreamErrorsKey, recovered)
 }
 
 func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
@@ -472,7 +522,7 @@ func snapshotOpsUpstreamAttemptContext(c *gin.Context, ev *OpsUpstreamErrorEvent
 	if ev.UpstreamModel == "" {
 		ev.UpstreamModel = strings.TrimSpace(c.GetString(OpsUpstreamModelKey))
 	}
-	if ev.UpstreamEndpoint == "" && (ev.Platform == PlatformOpenAI || ev.Platform == PlatformGrok || IsCNProvider(ev.Platform)) {
+	if ev.UpstreamEndpoint == "" && (ev.Platform == PlatformOpenAI || ev.Platform == PlatformGrok || IsMultiProtocolAPIKeyProvider(ev.Platform)) {
 		ev.UpstreamEndpoint = GetActualOpenAIUpstreamEndpoint(c)
 	}
 	if ev.UpstreamEndpoint == "" {

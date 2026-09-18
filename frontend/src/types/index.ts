@@ -192,6 +192,7 @@ export interface CustomMenuItem {
   icon_svg: string
   url: string
   page_slug?: string
+  hide_open_button?: boolean
   visibility: 'user' | 'admin'
   sort_order: number
 }
@@ -569,6 +570,7 @@ export type GroupPlatform =
   | 'zhipu'
   | 'deepseek'
   | 'minimax'
+  | 'opencode_go'
 export type GroupSchedulerType = 'basic' | 'advanced'
 export type VideoModelPrices = Record<string, Record<string, number>>
 
@@ -597,7 +599,7 @@ export type GroupClientProtocol =
   | 'openai_responses'
   | 'openai_chat_completions'
   | 'gemini_generate_content'
-export type MarketplacePricingMode = 'token' | 'image' | 'unknown'
+export type MarketplacePricingMode = 'token' | 'image' | 'video' | 'unknown'
 export type MarketplacePriceStatus = 'priced' | 'unpriced'
 
 export interface MarketplacePricingInterval {
@@ -640,6 +642,14 @@ export interface MarketplaceModelPricing {
   image_price_1k?: number
   image_price_2k?: number
   image_price_4k?: number
+  video_prices?: MarketplaceVideoPrice[]
+}
+
+// 视频价卡使用显式单位，避免把历史按次渠道价格误标成每秒价格。
+export interface MarketplaceVideoPrice {
+  resolution: string
+  price: number
+  unit: 'second' | 'request'
 }
 
 // 模型能力模态：模型广场接口从定价元数据下发，缺省时前端按模型 ID 规则兜底。
@@ -1101,6 +1111,7 @@ export type AccountPlatform =
   | 'zhipu'
   | 'deepseek'
   | 'minimax'
+  | 'opencode_go'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account' | 'cosy'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -1594,6 +1605,7 @@ export type UpstreamUsageAdapter =
   | 'zhipu_coding'
   | 'deepseek_balance'
   | 'minimax_coding'
+  | 'opencode_go'
 
 export interface UpstreamUsageQueryConfig {
   enabled: boolean
@@ -2418,6 +2430,12 @@ export interface UserErrorRequest {
   model: string
   inbound_endpoint: string
   status_code: number
+  // 保留失败状态码，同时独立展示最终恢复结果及成功分组快照。
+  client_status_code?: number
+  recovered_upstream?: boolean
+  recovered_group_id?: number | null
+  recovered_group_name?: string
+  recovered_platform?: string
   category: string
   platform: string
   message: string
@@ -2445,6 +2463,8 @@ export interface UserErrorListParams {
   status_code?: number
   category?: string
   api_key_id?: number
+  // 使用记录错误页主动包含已恢复上游错误，其它调用方保持最终失败口径。
+  include_recovered_upstream?: boolean
   // 服务端排序,列白名单见后端 opsErrorLogsOrderBy(created_at/model/status_code)
   sort_by?: string
   sort_order?: 'asc' | 'desc'

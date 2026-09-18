@@ -86,6 +86,10 @@ func TestShouldKeepOpenAIResponsesToolCallNamespaces(t *testing.T) {
 		// API Key 默认按标准 Responses API 清理；请求显式声明 namespace 工具时，
 		// 自定义上游需要原样接收对应的历史调用。
 		{name: "apikey_without_namespace_tool_strips", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
+		{name: "Lite声明保留", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"input":[{"type":"additional_tools","tools":[{"type":"namespace","name":"collaboration"}]}]}`), want: true},
+		{name: "Lite普通工具不保留", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"input":[{"type":"additional_tools","tools":[{"type":"function","name":"exec"}]}]}`), want: false},
+		{name: "正文工具字段不算声明", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"input":[{"type":"message","tools":[{"type":"namespace","name":"collaboration"}]}]}`), want: false},
+		{name: "Lite压缩仍清理", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, compactPath: true, body: []byte(`{"input":[{"type":"additional_tools","tools":[{"type":"namespace","name":"collaboration"}]}]}`), want: false},
 		{name: "apikey_with_namespace_tool_keeps", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"tools":[{"type":"namespace","name":"mcp__codex_app","tools":[]}]}`), want: true},
 		{name: "apikey_with_mixed_case_namespace_tool_keeps", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"tools":[{"type":" Namespace ","name":"mcp__codex_app","tools":[]}]}`), want: true},
 		{name: "apikey_function_tool_with_namespace_field_strips", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, body: []byte(`{"tools":[{"type":"function","name":"automation_update","namespace":"mcp__codex_app"}]}`), want: false},

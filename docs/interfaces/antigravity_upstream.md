@@ -22,6 +22,10 @@ Antigravity 账号的 `platform` 为 `antigravity`。管理端通过 `/api/v1/ad
 
 账号导入、凭据刷新和批量导入后会检查/设置适用的隐私状态。凭据、refresh token、project ID 和上游响应中的内部标识不得出现在客户端错误或模型列表中。
 
+通用账号刷新接口可能已成功更新 token，但后续账号元数据补全失败。此时仍返回刷新后的账号，并附带可选 `warning`；后台显示警告并照常失效上游用量缓存，不能把部分成功显示为完全成功或撤销已保存凭据。
+
+访问 token 的缓存键和刷新锁统一使用 `ag:account:<账号ID>`，同 project 的不同账号不能共用 token。失效操作同时清理当前账号键和历史 `ag:<project>` 键；project 不再作为凭据身份。多实例须全部升级才能完成隔离，旧实例仍可能按 project 写旧缓存；不需要清空整个 Redis。
+
 ## 专用端点
 
 专用路由在 API Key 鉴权前写入 `ForcePlatform=antigravity`，因此只选择 Antigravity 账号，不受混合调度开关影响：
@@ -57,6 +61,8 @@ Chat Completions / Responses
 
 每次 failover attempt 都必须从原始请求重新转换，并刷新工具名回程映射。流开始后遵守共同不可切换边界。Gemini v1beta 专用入口保持 Google 错误/流形状，不经过 OpenAI envelope。
 
+Gemini 原生 SSE 转发会拆开上游包装并重新写出 data 帧分隔，因此不再重复转发上游空分隔行；LF 和 CRLF 输入都只生成一次帧分隔，其他事件与注释行继续保留。
+
 兼容层把 Chat 请求中的正数 `max_completion_tokens`（缺省时使用 `max_tokens`）在转换为 Anthropic 请求前封顶为 64000；零、负数或缺省值不会覆盖转换器已有的默认上限，避免超大客户端参数被上游拒绝。
 
 ## 混合调度
@@ -72,9 +78,11 @@ Antigravity 账号 `extra.mixed_scheduling` 为布尔 `true` 时，可以作为 
 
 账号的混合调度状态或分组关系变化后要重建原生平台和 Antigravity 相关调度快照，清理旧粘性状态。Anthropic 与 Antigravity Claude 不能在同一显式会话里无约束切换；会话隔离、粘性和缓存计费规则用于防止上下文跨账号语义漂移。
 
+客户端函数工具与内置搜索/执行工具混合时，只保留客户端函数，移除不兼容的内置工具；纯搜索请求仍保留搜索能力。兼容入口不因已经移除的搜索工具再切换搜索 fallback 模型。本次工具清理步骤保留收到的未知字段和数字精度；没有混合冲突时该步骤原样返回。这不是整条原生转换链均不重新编码的承诺。
+
 ## 模型与额度
 
-Antigravity 同时提供 Claude 与 Gemini 模型族。Gemini 3.6 Flash 的基础、high、low、medium 与 tiered 五种模型 ID 均进入默认模型目录和身份映射；账号存在自定义映射时，只要没有覆盖它们的通配符，这些精确直通映射仍会自动保留。可见模型来自默认映射、分组/渠道限制、账号资格和当前可请求解析；API Key 精确别名可投影到列表，目标不可请求时不展示。模型能力不能只由名称前缀推断，thinking/image 等能力由适配器与账号详情共同约束。
+Antigravity 同时提供 Claude 与 Gemini 模型族。Gemini 3.6、3.7、3.8 Flash 的基础、high、low、medium 与 tiered 五种模型 ID 均进入默认模型目录和身份映射；账号存在自定义映射时，只要没有覆盖它们的通配符，这些精确直通映射仍会自动保留。可见模型来自默认映射、分组/渠道限制、账号资格和当前可请求解析；API Key 精确别名可投影到列表，目标不可请求时不展示。模型能力不能只由名称前缀推断，thinking/image 等能力由适配器与账号详情共同约束。
 
 额度查询按账号和模型 scope 保存上游 reset/remaining 状态，并可包含 AI Credits。429/503 分类区分模型限流、credits 耗尽和共享容量不足；请求结算的 `QuotaPlatform` 必须保留 Antigravity，即使客户端从 Anthropic/OpenAI 兼容入口进入。账号成本和用户扣费仍遵守渠道计价与分组倍率边界。
 

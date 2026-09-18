@@ -68,6 +68,7 @@ func emptyRequestDetailRows() *sqlmock.Rows {
 		"platform",
 		"model",
 		"duration_ms",
+		"first_token_ms",
 		"status_code",
 		"error_id",
 		"phase",

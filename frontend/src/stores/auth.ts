@@ -6,6 +6,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, readonly } from 'vue'
 import { authAPI, isTotp2FARequired, passkeyAPI, type LoginResponse } from '@/api'
+import { isTemporaryAuthFailure } from '@/api/authFailure'
 import type {
   User,
   LoginRequest,
@@ -390,7 +391,15 @@ export const useAuthStore = defineStore('auth', () => {
       clearPendingAuthSession()
       return userData
     } catch (error) {
-      clearAuth({ preservePendingAuthSession: pendingAuthSession.value !== null })
+      // 新签发的凭据不能因首次资料读取的临时故障被删除。
+      if (
+        !isTemporaryAuthFailure(error) &&
+        (error as { code?: string }).code !== 'AUTH_SESSION_CHANGED' &&
+        token.value === newToken &&
+        (localStorage.getItem(AUTH_TOKEN_KEY) === newToken || localStorage.getItem(AUTH_TOKEN_KEY) === null)
+      ) {
+        clearAuth({ preservePendingAuthSession: pendingAuthSession.value !== null })
+      }
       throw error
     }
   }
@@ -438,8 +447,19 @@ export const useAuthStore = defineStore('auth', () => {
       throw new Error('Not authenticated')
     }
 
+    // 资料请求跨越换号或登出时，旧结果不能覆盖或清理新会话。
+    const requestToken = token.value
+    const requestUser = localStorage.getItem(AUTH_USER_KEY)
+    const requestUserState = user.value
     try {
       const response = await authAPI.getCurrentUser()
+      // 同一用户正常轮换 access token 不改变用户状态，不应误判为换号。
+      const userStateChanged = requestUserState
+        ? user.value !== requestUserState
+        : token.value !== requestToken
+      if (userStateChanged || localStorage.getItem(AUTH_USER_KEY) !== requestUser) {
+        throw { status: 409, code: 'AUTH_SESSION_CHANGED', message: 'Authentication session changed.' }
+      }
       if (response.data.run_mode) {
         runMode.value = response.data.run_mode
       }
@@ -451,8 +471,14 @@ export const useAuthStore = defineStore('auth', () => {
 
       return userData
     } catch (error) {
-      // If refresh fails with 401, clear auth state
-      if ((error as { status?: number }).status === 401) {
+      // 仅同一会话的明确认证失败清理；跨标签页刷新或换号不清理新状态。
+      if (
+        (error as { status?: number; code?: string }).status === 401 &&
+        (error as { code?: string }).code !== 'AUTH_SESSION_CHANGED' &&
+        token.value === requestToken &&
+        (localStorage.getItem(AUTH_TOKEN_KEY) === requestToken || localStorage.getItem(AUTH_TOKEN_KEY) === null) &&
+        (localStorage.getItem(AUTH_USER_KEY) === requestUser || localStorage.getItem(AUTH_USER_KEY) === null)
+      ) {
         clearAuth({ preservePendingAuthSession: pendingAuthSession.value !== null })
       }
       throw error

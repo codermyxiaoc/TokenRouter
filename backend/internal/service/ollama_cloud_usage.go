@@ -364,7 +364,7 @@ func scheduleOllamaCloudUsageActivity(deferred *DeferredService, account *Accoun
 	deferred.ScheduleLastUsedUpdate(account.ID)
 }
 
-// OllamaCloudUsageService 刷新官方设置页 HTML，不影响账号调度状态。
+// OllamaCloudUsageService 刷新官方设置页；手动查询只展示用量，模型 429 的异步回调才参与限流恢复。
 type OllamaCloudUsageService struct {
 	accountRepo             AccountRepository
 	httpUpstream            HTTPUpstream
@@ -385,6 +385,12 @@ type OllamaCloudUsageService struct {
 	lockCache    LeaderLockCache
 	db           *sql.DB
 	instanceID   string
+
+	// 有界队列和单协调循环负责 429 探测，生命周期与常规刷新共同停止。
+	probeMu     sync.Mutex
+	probeQueue  []ollamaCloudUsageProbeRequest
+	probeWake   chan struct{}
+	probeGroups map[string]ollamaCloudUsageProbeGroupEntry
 }
 
 func NewOllamaCloudUsageService(
@@ -406,6 +412,8 @@ func NewOllamaCloudUsageService(
 		refreshSlots:            make(chan struct{}, ollamaCloudUsageConcurrency),
 		now:                     time.Now,
 		instanceID:              uuid.NewString(),
+		probeWake:               make(chan struct{}, 1),
+		probeGroups:             make(map[string]ollamaCloudUsageProbeGroupEntry),
 	}
 }
 
@@ -436,9 +444,10 @@ func (s *OllamaCloudUsageService) Start() {
 		return
 	}
 	s.started = true
-	s.wg.Add(1)
+	s.wg.Add(2)
 	s.mu.Unlock()
 	go s.runLoop()
+	go s.probeLoop()
 }
 
 func (s *OllamaCloudUsageService) Stop() {
@@ -759,6 +768,11 @@ func (s *OllamaCloudUsageService) RunDue(ctx context.Context) error {
 }
 
 func (s *OllamaCloudUsageService) refreshAccount(ctx context.Context, accountID int64, settings *OllamaCloudUsageSettings, requireEnabled bool) (*OllamaCloudUsageSnapshot, error) {
+	return s.refreshAccountWithCancelableWait(ctx, accountID, settings, requireEnabled, false)
+}
+
+// 仅异步探测允许独立取消 singleflight 等待；管理员手动查询保留原有语义。
+func (s *OllamaCloudUsageService) refreshAccountWithCancelableWait(ctx context.Context, accountID int64, settings *OllamaCloudUsageSettings, requireEnabled, cancelableWait bool) (*OllamaCloudUsageSnapshot, error) {
 	if s == nil || s.accountRepo == nil {
 		return nil, ErrOllamaCloudUsageUnavailable
 	}
@@ -775,7 +789,7 @@ func (s *OllamaCloudUsageService) refreshAccount(ctx context.Context, accountID 
 	if !valid {
 		return nil, ErrOllamaCloudUsageAccountInvalid
 	}
-	value, err, _ := s.refreshGroup.Do(key, func() (any, error) {
+	refresh := func() (any, error) {
 		select {
 		case s.refreshSlots <- struct{}{}:
 			defer func() { <-s.refreshSlots }()
@@ -832,7 +846,19 @@ func (s *OllamaCloudUsageService) refreshAccount(ctx context.Context, accountID 
 			}
 		}
 		return s.refreshLoadedAccount(ctx, account, intervalMinutes)
-	})
+	}
+	var value any
+	if cancelableWait {
+		result := s.refreshGroup.DoChan(key, refresh)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case outcome := <-result:
+			value, err = outcome.Val, outcome.Err
+		}
+	} else {
+		value, err, _ = s.refreshGroup.Do(key, refresh)
+	}
 	if err != nil || value == nil {
 		return nil, err
 	}

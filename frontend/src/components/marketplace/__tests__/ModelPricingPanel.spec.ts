@@ -96,6 +96,28 @@ const unpricedPricing: MarketplaceModelPricing = {
 }
 
 describe('ModelPricingPanel', () => {
+  it('视频定价展示分辨率和真实计费单位，零价不消失', async () => {
+    const wrapper = mountPanel(marketplaceModel('grok-imagine-video-1.5', {
+      pricing_mode: 'video',
+      price_status: 'priced',
+      video_prices: [
+        { resolution: '480p', price: 0, unit: 'second' },
+        { resolution: '720p', price: 0.14, unit: 'second' },
+        { resolution: '1080p', price: 1.5, unit: 'request' },
+      ],
+    }))
+
+    await wrapper.get('[data-testid="model-pricing-toggle"]').trigger('click')
+    const rows = wrapper.get('[data-testid="pricing-rows"]')
+    expect(rows.text()).toContain('480p')
+    expect(rows.text()).toContain('0.0000 点 marketplace.perSecond')
+    expect(rows.text()).toContain('0.1400 点 marketplace.perSecond')
+    expect(rows.text()).toContain('1.50 点 marketplace.perRequest')
+    expect(wrapper.find('[data-testid="pricing-fast-switch"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pricing-interval-switch"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('marketplace.pricingUnavailable')
+  })
+
   it('无定价模型不渲染展开入口', () => {
     const wrapper = mountPanel(marketplaceModel('m1', unpricedPricing))
 

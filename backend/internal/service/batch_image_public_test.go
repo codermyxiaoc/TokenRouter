@@ -17,6 +17,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// 排序遵守全局优先级，并继续过滤无法调度的候选账号。
+func TestBatchImagePublicService_SelectAccountPriority(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		priorities [2]int
+		blocked    bool
+		want       int64
+	}{
+		{"较小数字优先", [2]int{1, 9}, false, 202},
+		{"不依赖仓储顺序", [2]int{9, 1}, false, 101},
+		{"同级按ID", [2]int{5, 5}, false, 101},
+		{"跳过不可调度账号", [2]int{1, 9}, true, 101},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, _, _, _ := newTestBatchImagePublicService(true)
+			accounts := []Account{testBatchImageAccount(202, AccountTypeAPIKey), testBatchImageAccount(101, AccountTypeAPIKey)}
+			accounts[0].Priority, accounts[1].Priority = tc.priorities[0], tc.priorities[1]
+			accounts[0].Schedulable = !tc.blocked
+			svc.AccountRepo = &publicBatchImageAccountRepo{accounts: accounts}
+			_, account, _, err := svc.selectProviderAndAccount(context.Background(), testBatchImageOwner(), BatchImageProviderGeminiAPI, "gemini-2.5-flash-image", ChannelMappingResult{})
+			require.NoError(t, err)
+			require.NotNil(t, account)
+			require.Equal(t, tc.want, account.ID)
+		})
+	}
+}
+
 func TestBatchImagePublicService_Submit(t *testing.T) {
 	ctx := context.Background()
 
@@ -55,7 +82,7 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.Equal(t, "files/gemini_api/input", batchImageDerefString(job.ProviderInputRef))
 		require.Equal(t, "files/gemini_api/output", batchImageDerefString(job.ProviderOutputRef))
 		require.NotNil(t, job.AccountID)
-		require.Equal(t, int64(202), *job.AccountID)
+		require.Equal(t, int64(101), *job.AccountID)
 		require.Equal(t, 3, job.PricingSnapshotVersion)
 		require.InDelta(t, 0.25, job.BaseUnitPrice, 1e-12)
 		require.InDelta(t, 1.0, job.GroupRateMultiplier, 1e-12)
@@ -181,7 +208,7 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		groupID := int64(7)
 		accountMultiplier := 1.25
 		accountRepo := svc.AccountRepo.(*publicBatchImageAccountRepo)
-		accountRepo.accounts[1].RateMultiplier = &accountMultiplier
+		accountRepo.accounts[0].RateMultiplier = &accountMultiplier
 		svc.GroupRepo = &publicBatchImageGroupRepo{groups: map[int64]*Group{
 			groupID: {
 				ID:                           groupID,

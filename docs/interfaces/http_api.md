@@ -78,6 +78,8 @@ RequestLogger
 
 用户余额购买及续费订阅复用 `POST /api/v1/payment/orders`，以 `payment_type=balance`、`order_type=subscription` 和 `plan_id` 区分，必须携带 `Idempotency-Key`。成功响应直接为 `COMPLETED` 并返回订单标识，不提供二维码或外部支付链接；余额不足及开关关闭分别返回 `INSUFFICIENT_BALANCE` 与 `WALLET_PAYMENT_DISABLED`。重试与资金原子性见[站内余额购买订阅](../domains/payments_and_entitlements.md#wallet_subscription_payment)。
 
+管理员订阅批量操作提供 `POST /api/v1/admin/subscriptions/bulk-extend` 和 `/bulk-reset-quota`，均要求 `Idempotency-Key` 和 1 至 100 个正数 `subscription_ids`。前者的 `days` 是追加天数，后者显式选择 `daily`、`weekly`、`monthly` 中至少一项。成功返回 `{subscription_ids, updated_count}`，任一项失败整批回滚，业务错误通过 `metadata.subscription_id` 定位。批量延长拒绝有同套餐后继记录的已过期历史订阅，不能隐式恢复历史权益；单条调整接口语义不变。详细事务、幂等及窗口规则见[管理员批量操作](../domains/payments_and_entitlements.md#subscription_admin_bulk)。
+
 <a id="payment_admin_recovery"></a>
 ## 支付管理恢复
 

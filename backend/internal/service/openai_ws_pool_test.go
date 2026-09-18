@@ -1095,7 +1095,9 @@ func TestOpenAIWSConnPool_EffectiveMaxConnsByAccount_ModeRouterV2RespectsHardCap
 	pool := newOpenAIWSConnPool(cfg)
 
 	high := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 20}
-	require.Equal(t, 8, pool.effectiveMaxConnsByAccount(high), "v2 路径也必须受连接池硬上限约束")
+	require.Equal(t, 6, pool.effectiveMaxConnsByAccount(high), "v2 路径应使用已配置的账号连接系数")
+	high.Concurrency = 100
+	require.Equal(t, 8, pool.effectiveMaxConnsByAccount(high), "缩放后仍必须受连接池硬上限约束")
 
 	nonPositive := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 0}
 	require.Equal(t, 0, pool.effectiveMaxConnsByAccount(nonPositive), "并发数<=0 时应不可调度")

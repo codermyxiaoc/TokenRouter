@@ -17,6 +17,35 @@ type CNQuotaTier struct {
 	ResetAt     string  `json:"reset_at,omitempty"`
 }
 
+// parseOpenCodeGoUsageTiers 将 rolling/weekly/monthly 归一化为 5h/weekly/monthly。
+// 缺失窗口可省略，已经返回的窗口若数值无效则整次查询失败，防止覆盖最近成功快照。
+func parseOpenCodeGoUsageTiers(body []byte) []CNQuotaTier {
+	if !gjson.ValidBytes(body) {
+		return nil
+	}
+	usage := gjson.GetBytes(body, "usage")
+	if !usage.IsObject() {
+		return nil
+	}
+	var tiers []CNQuotaTier
+	for _, item := range []struct{ key, window string }{
+		{"rolling", "5h"}, {"weekly", "weekly"}, {"monthly", "monthly"},
+	} {
+		node := usage.Get(item.key)
+		if !node.Exists() {
+			continue
+		}
+		used, ok := cnParseF64(node.Get("percent").Value())
+		if !node.IsObject() || !ok || !validNonNegativeNumber(used) {
+			return nil
+		}
+		// 未给出恢复时间的窗口可以展示，但不能据此推断账号恢复时间。
+		reset := cnNormalizeResetTime(node.Get("resetsAt").Value())
+		tiers = append(tiers, CNQuotaTier{Window: item.window, UsedPercent: used, ResetAt: reset})
+	}
+	return tiers
+}
+
 // parseKimiUsageTiers 解析 Kimi For Coding 的 /usages 响应。
 //
 //   - limits[].detail.{limit,remaining,resetTime} → 5h 窗口（取首个 detail）

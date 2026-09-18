@@ -75,6 +75,31 @@ func isOpenAIOAuthServableModel(requestedModel string) bool {
 	return true
 }
 
+// deepseekServableModels 使用同步自上游 v0.2.5 的默认模型快照；管理员显式映射/白名单可扩展。
+var deepseekServableModels = []string{
+	"deepseek-flash",
+	"deepseek-v4-pro",
+	"deepseek-v4-flash",
+	"deepseek-v4-flash-vision-exp",
+	"deepseek-v4-pro-0813",
+}
+
+// isDeepseekServableModel 仅为无显式模型配置的账号校验目录，先移除客户端上下文后缀。
+func isDeepseekServableModel(requestedModel string) bool {
+	// 官方 Claude Code 接入文档要求 ANTHROPIC_MODEL=deepseek-flash[1m]：
+	// [1m] 是客户端上下文选择器，先按同一规则归一化再比对白名单。
+	model := strings.ToLower(normalizeClaudeCodeLongContextModel(strings.TrimSpace(requestedModel)))
+	if model == "" {
+		return true // 空模型交由上层必填校验处理
+	}
+	for _, servable := range deepseekServableModels {
+		if model == servable {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveOpenAICompactForwardModel determines the compact-only upstream model
 // for /responses/compact requests. It never affects normal /responses traffic.
 // When no compact-specific mapping matches, the input model is returned as-is.

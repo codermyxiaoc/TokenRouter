@@ -293,7 +293,7 @@ func smartRoutingGroupEndpointEligible(platform, endpoint string) bool {
 	case strings.HasSuffix(endpoint, "/embeddings"), strings.HasSuffix(endpoint, "/alpha/search"):
 		return platform == PlatformOpenAI
 	case strings.HasSuffix(endpoint, "/responses/input_tokens"):
-		return platform == PlatformOpenAI || platform == PlatformGrok || platform == PlatformKimi || platform == PlatformZhipu || platform == PlatformDeepseek || platform == PlatformMiniMax
+		return platform == PlatformOpenAI || platform == PlatformGrok || platform == PlatformKimi || platform == PlatformZhipu || platform == PlatformDeepseek || platform == PlatformMiniMax || platform == PlatformOpenCodeGo
 	case strings.HasSuffix(endpoint, "/messages/count_tokens"):
 		return platform != PlatformAntigravity && platform != PlatformQoder
 	case strings.Contains(endpoint, "/responses/"):

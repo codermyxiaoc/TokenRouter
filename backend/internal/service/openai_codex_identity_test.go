@@ -8,6 +8,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// 配置来源与请求 override 都必须经过原始头值校验，不允许借裁剪绕过。
+func TestCodexOutboundIdentityRejectsControlBytes(t *testing.T) {
+	SetCodexCanonicalUserAgentResolver(func() string { return "codex-tui/9.9.9\r\n" })
+	t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
+	identity := resolveCodexOutboundIdentity("\ncodex-tui/8.8.8")
+	require.Equal(t, codexCLIUserAgent, identity.userAgent)
+	require.Equal(t, codexCLIVersion, identity.version)
+
+	h := http.Header{"Originator": {"codex-tui"}, "User-Agent": {"codex-tui/7.7.7"}}
+	enforceCodexIdentityHeadersWithUA(h, "\ncodex-tui/8.8.8")
+	require.Equal(t, codexCLIUserAgent, h.Get("User-Agent"))
+}
+
 func TestEnsureCodexIdentityHeaders(t *testing.T) {
 	t.Run("补齐缺失身份头", func(t *testing.T) {
 		h := make(http.Header)

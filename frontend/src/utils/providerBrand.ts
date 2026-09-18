@@ -22,6 +22,7 @@ export type ProviderBrandKey =
   | 'doubao'
   | 'xiaomi'
   | 'minimax'
+  | 'opencode'
   | 'suno'
   | 'dify'
   | 'coze'
@@ -223,6 +224,15 @@ const providerBrands: Record<ProviderBrandKey, ProviderBrand> = {
     badgeClass: 'bg-orange-100 text-orange-900 ring-orange-200 dark:bg-orange-500/20 dark:text-orange-50 dark:ring-orange-400/30',
     iconWrapClass: 'bg-orange-50 text-orange-700 ring-orange-200 dark:bg-orange-500/15 dark:text-orange-200 dark:ring-orange-400/30',
   },
+  // OpenCode 使用单色标识，统一平台与模型品牌的展示。
+  opencode: {
+    key: 'opencode',
+    label: 'OpenCode',
+    iconKey: 'opencode',
+    iconColor: 'currentColor',
+    badgeClass: 'bg-amber-100 text-amber-900 ring-amber-200 dark:bg-amber-500/20 dark:text-amber-50 dark:ring-amber-400/30',
+    iconWrapClass: 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-400/30',
+  },
   minimax: {
     key: 'minimax',
     label: 'MiniMax',
@@ -305,6 +315,7 @@ const defaultProviderBrandKeys: ProviderBrandKey[] = [
   'doubao',
   'xiaomi',
   'minimax',
+  'opencode',
   'suno',
   'dify',
   'coze',
@@ -337,6 +348,7 @@ const providerBrandAliases: Record<ProviderBrandKey, string[]> = {
   doubao: ['豆包', 'doubao', '字节', 'bytedance', 'volcengine', '火山引擎', 'seedream', 'seedance'],
   xiaomi: ['小米', 'xiaomi', 'mi', 'mimo', 'mi mo', 'xiaomimimo'],
   minimax: ['minimax', 'abab'],
+  opencode: ['opencode', 'opencode_go', 'opencode zen', 'opencode go'],
   suno: ['suno'],
   dify: ['dify'],
   coze: ['coze', '扣子'],

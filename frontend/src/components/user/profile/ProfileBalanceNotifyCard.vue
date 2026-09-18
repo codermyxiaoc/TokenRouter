@@ -307,7 +307,8 @@ async function verifyPending(idx: number) {
   try {
     await userAPI.verifyNotifyEmail(pe.email, pe.code)
     if (pe.timer) clearInterval(pe.timer)
-    pendingEmails.value.splice(idx, 1)
+    // 等待验证期间列表可能变化，按对象移除避免误删其它待验证邮箱。
+    pendingEmails.value = pendingEmails.value.filter(entry => entry !== pe)
     appStore.showSuccess(t('profile.balanceNotify.verifySuccess'))
     const updated = await userAPI.getProfile()
     authStore.user = updated

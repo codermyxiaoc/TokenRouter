@@ -777,10 +777,13 @@ func TestAccountGetModelMapping_AntigravityEnsuresGeminiDefaultPassthroughs(t *t
 	if mapping["gemini-3.1-pro-low"] != "gemini-3.1-pro-low" {
 		t.Fatalf("expected gemini-3.1-pro-low passthrough to be auto-filled, got: %q", mapping["gemini-3.1-pro-low"])
 	}
-	// 自定义映射不能屏蔽新发布的 Gemini 3.6 Flash 直通模型。
-	for _, model := range []string{"gemini-3.6-flash", "gemini-3.6-flash-high", "gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-tiered"} {
-		if mapping[model] != model {
-			t.Fatalf("expected %s passthrough to be auto-filled, got: %q", model, mapping[model])
+	// 无关自定义映射不能屏蔽新增 Flash 模型的默认透传。
+	for _, base := range []string{"gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"} {
+		for _, suffix := range []string{"", "-high", "-low", "-medium", "-tiered"} {
+			model := base + suffix
+			if mapping[model] != model {
+				t.Fatalf("expected %s passthrough to be auto-filled, got: %q", model, mapping[model])
+			}
 		}
 	}
 }
@@ -853,6 +856,12 @@ func TestAccountGetModelMapping_AntigravityRespectsWildcardOverride(t *testing.T
 	}
 	if mapped := account.GetMappedModel("gemini-3-flash"); mapped != "gemini-3.1-pro-high" {
 		t.Fatalf("expected wildcard mapping to stay effective, got: %q", mapped)
+	}
+	// 新模型补全必须继续尊重用户配置的通配符。
+	for _, model := range []string{"gemini-3.7-flash-high", "gemini-3.8-flash-tiered"} {
+		if mapped := account.GetMappedModel(model); mapped != "gemini-3.1-pro-high" {
+			t.Fatalf("expected wildcard mapping for %s to stay effective, got: %q", model, mapped)
+		}
 	}
 }
 

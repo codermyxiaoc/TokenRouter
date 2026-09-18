@@ -31,8 +31,9 @@ func TestWriteOpenAICompactSSEFailureMessage_CarriesCreatedAt(t *testing.T) {
 	require.True(t, found, "SSE 帧必须带 data 行: %q", body)
 
 	var event struct {
-		Type     string `json:"type"`
-		Response struct {
+		Type           string `json:"type"`
+		SequenceNumber *int   `json:"sequence_number"`
+		Response       struct {
 			ID        string `json:"id"`
 			Object    string `json:"object"`
 			CreatedAt int64  `json:"created_at"`
@@ -41,6 +42,8 @@ func TestWriteOpenAICompactSSEFailureMessage_CarriesCreatedAt(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(payload)), &event))
 
+	require.NotNil(t, event.SequenceNumber)
+	require.Zero(t, *event.SequenceNumber)
 	require.Equal(t, "response.failed", event.Type)
 	require.Equal(t, "response", event.Response.Object)
 	require.Equal(t, "failed", event.Response.Status)

@@ -416,6 +416,9 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		(account.Platform != PlatformAntigravity || account.Type != AccountTypeAPIKey) {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Image tests are not supported for platform %s", account.Platform))
 	}
+	if account.IsOpenCodeGo() {
+		return s.testCNProviderAccountConnection(c, account, modelID, prompt)
+	}
 	if account.IsCNProvider() {
 		// MiniMax 的原生 Responses 探针也应使用供应商模型，避免空值回退到 GPT。
 		if account.Platform == PlatformMiniMax && strings.TrimSpace(modelID) == "" {
@@ -463,6 +466,8 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 
 func defaultCNProviderTestModel(platform string) string {
 	switch platform {
+	case PlatformOpenCodeGo:
+		return DefaultOpenCodeGoTestModel
 	case PlatformKimi:
 		return "kimi-k2.5"
 	case PlatformZhipu:
@@ -503,6 +508,9 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 
 	ctx := c.Request.Context()
 	protocol := account.GetAPIProtocol()
+	if account.IsOpenCodeGo() {
+		protocol = openCodeGoNativeProtocol(account, testModelID)
+	}
 	var (
 		apiURL  string
 		payload any
@@ -513,16 +521,23 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 		if err != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
 		}
-		if hint := cnAnthropicBaseURLMisconfigHint(baseURL); hint != "" {
+		if hint := cnAnthropicBaseURLMisconfigHint(baseURL); hint != "" && !account.IsOpenCodeGo() {
 			return s.sendErrorAndEnd(c, hint)
 		}
 		apiURL = strings.TrimRight(baseURL, "/") + "/v1/messages"
+		if account.IsOpenCodeGo() {
+			apiURL = buildOpenAIEndpointURL(baseURL, "/v1/messages")
+		}
 		payload, err = createTestPayloadWithPrompt(testModelID, prompt)
 		if err != nil {
 			return s.sendErrorAndEnd(c, "Failed to create test payload")
 		}
 	case APIProtocolResponses:
-		baseURL, err := s.validateUpstreamBaseURL(account.GetOpenAIBaseURL())
+		base := account.GetOpenAIBaseURL()
+		if account.IsOpenCodeGo() {
+			base = account.GetCNProtocolBaseURL(APIProtocolResponses)
+		}
+		baseURL, err := s.validateUpstreamBaseURL(base)
 		if err != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
 		}
@@ -564,6 +579,7 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	account.ApplyHeaderOverrides(req.Header)
+	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -2704,7 +2720,7 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 	return nil
 }
 
-// testOpenAIImageOAuth tests OpenAI image generation using an OAuth account via Codex /responses API.
+// testOpenAIImageOAuth 与正式转发共用原生 Codex Images 白名单和请求字段，保留测试专用 SSE 展示。
 func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Context, account *Account, modelID, prompt string) error {
 	credentialAccount := account
 	if account.IsShadow() {
@@ -2729,8 +2745,9 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
-	s.sendEvent(c, TestEvent{Type: "test_start", Model: modelID})
-	s.sendEvent(c, TestEvent{Type: "content", Text: "Calling Codex /responses image tool...\n"})
+	if !isOpenAIImagesForceResponses(ctx) {
+		s.sendEvent(c, TestEvent{Type: "test_start", Model: modelID})
+	}
 
 	parsed := &OpenAIImagesRequest{
 		Endpoint: openAIImagesGenerationsEndpoint,
@@ -2739,12 +2756,27 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	}
 	applyOpenAIImagesDefaults(parsed)
 
-	responsesBody, err := buildOpenAIImagesResponsesRequest(parsed, parsed.Model)
+	upstreamModel := resolveOpenAIAccountUpstreamModelForRequest(account, parsed.Model, false, false)
+	direct := usesCodexDirectImages(upstreamModel) && !isOpenAIImagesForceResponses(ctx)
+	var responsesBody []byte
+	var targetURL string
+	var err error
+	if direct {
+		responsesBody, targetURL, err = buildOpenAIImagesOAuthPayload(parsed, upstreamModel)
+	} else {
+		responsesBody, err = buildOpenAIImagesResponsesRequest(parsed, upstreamModel)
+		targetURL = chatgptCodexURL
+	}
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to build image request: %s", err.Error()))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatgptCodexAPIURL, bytes.NewReader(responsesBody))
+	if direct {
+		s.sendEvent(c, TestEvent{Type: "content", Text: "Calling Codex /images/generations...\n"})
+	} else {
+		s.sendEvent(c, TestEvent{Type: "content", Text: "Calling Codex /responses image tool...\n"})
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(responsesBody))
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create request")
 	}
@@ -2766,6 +2798,10 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
+	if direct {
+		req.Header.Del("OpenAI-Beta")
+		req.Header.Set("Accept", "application/json")
+	}
 	req.Header.Set("originator", resolveCodexOutboundIdentity("").originator)
 	if customUA := strings.TrimSpace(credentialAccount.GetOpenAIUserAgent()); customUA != "" {
 		req.Header.Set("User-Agent", customUA)
@@ -2783,7 +2819,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	}
 	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolveOpenAIAccountTestTLSProfile(c, account))
 	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Responses API request failed: %s", err.Error()))
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Image upstream request failed: %s", err.Error()))
 	}
 	defer func() {
 		if resp != nil && resp.Body != nil {
@@ -2793,9 +2829,13 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		body = redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, credentialAccount, body)
+		if direct && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) {
+			_ = resp.Body.Close()
+			return s.testOpenAIImageOAuth(c, withOpenAIImagesForceResponses(ctx), account, modelID, prompt)
+		}
 		message := strings.TrimSpace(extractUpstreamErrorMessage(body))
 		if message == "" {
-			message = fmt.Sprintf("Responses API returned %d", resp.StatusCode)
+			message = fmt.Sprintf("Image upstream returned %d", resp.StatusCode)
 		}
 		return s.sendErrorAndEnd(c, message)
 	}
@@ -2806,7 +2846,15 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	}
 	body = redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, credentialAccount, body)
 
-	results, _, _, _, _, err := collectOpenAIImagesFromResponsesBody(body)
+	var results []openAIResponsesImageResult
+	if direct {
+		results, err = parseCodexDirectImagesResponse(body)
+	} else {
+		if upstreamErr := extractOpenAIImagesUpstreamError(body); upstreamErr != nil {
+			return s.sendErrorAndEnd(c, upstreamErr.clientMessage())
+		}
+		results, _, _, _, _, err = collectOpenAIImagesFromResponsesBody(body)
+	}
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to parse image response: %s", err.Error()))
 	}

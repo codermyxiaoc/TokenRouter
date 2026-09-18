@@ -565,6 +565,13 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 		out.Platform = truncateString(strings.TrimSpace(out.Platform), 32)
 		out.AccountName = truncateString(strings.TrimSpace(out.AccountName), 128)
 		out.GroupName = truncateString(strings.TrimSpace(out.GroupName), 128)
+		out.RecoveredGroupName = truncateString(strings.TrimSpace(out.RecoveredGroupName), 128)
+		out.RecoveredPlatform = truncateString(strings.TrimSpace(out.RecoveredPlatform), 32)
+		if out.RecoveredGroupID <= 0 {
+			out.RecoveredGroupID = 0
+			out.RecoveredGroupName = ""
+			out.RecoveredPlatform = ""
+		}
 		out.UpstreamEndpoint = truncateString(opsUpstreamEndpointPath(out.UpstreamEndpoint), 256)
 		out.UpstreamModel = truncateString(strings.TrimSpace(out.UpstreamModel), 128)
 		out.UpstreamRequestID = truncateString(strings.TrimSpace(out.UpstreamRequestID), 128)
@@ -665,12 +672,9 @@ func (s *OpsService) ListUserErrorRequests(ctx context.Context, userID int64, fi
 	filter.UserQuery = ""
 	filter.Owner = ""
 	filter.Source = ""
-	// 清空 Phase 是防御:用户端一律改走 category→ErrorPhasesAny/ErrorTypesAny
-	//（纯 ANY 过滤,不影响 status>=400 子句）。守卫豁免现在还需要
-	// IncludeRecoveredUpstream(用户端永不设置),recovered upstream
-	//（error_phase='upstream' 但 status<400,最终成功返回）记录对用户不可见——符合预期。
+	// 用户端按分类过滤；显式恢复开关只扩大本人提供方记录的可见性，不改变归属约束。
 	filter.Phase = ""
-	filter.IncludeRecoveredUpstream = false
+	filter.RequireConfirmedRecovery = true
 
 	list, err := s.opsRepo.ListErrorLogs(ctx, filter)
 	if err != nil {

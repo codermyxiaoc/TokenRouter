@@ -46,9 +46,10 @@ func parseResponsesFailedSSE(t *testing.T, body string) (map[string]any, map[str
 	require.NoError(t, json.Unmarshal([]byte(jsonStr), &parsed), "data must be valid JSON: %s", jsonStr)
 
 	assert.Equal(t, "response.failed", parsed["type"])
-	// 故意不发 sequence_number，避免与后续真实事件的序号冲突。
-	_, hasSeq := parsed["sequence_number"]
-	assert.False(t, hasSeq, "synthetic event must not emit sequence_number")
+	// 即使不知道上游序号，也必须带整数序号供严格客户端解析。
+	seq, hasSeq := parsed["sequence_number"]
+	assert.True(t, hasSeq)
+	assert.EqualValues(t, 0, seq)
 
 	resp, ok := parsed["response"].(map[string]any)
 	require.True(t, ok, "response object missing")

@@ -150,6 +150,8 @@ output_deleted             -> output_deleted
 
 手工删除输出或 TTL 清理后，状态从 `completed` 变为 `output_deleted`。
 
+提交时在提供商的合格候选内遵守账号全局优先级：数值越小越优先，同级按账号 ID 排序；不可调度、模型不匹配或不支持该提供商的账号仍会被过滤。该排序不改变渠道模型映射、资金预留及定价快照流程。
+
 任务提交时必须同时快照三种模型身份：`requested_model` 保存客户端提交值（复合 Key 场景包含自定义分组前缀），`internal_model` 保存复合 Key 选组和 API Key 模型重定向完成后、渠道与账号映射前的内部模型，`model` 保存最终提交给提供商的上游模型。异步结算写使用记录时以 `internal_model` 作为 `usage_logs.model`，并把 `model` 写入 `upstream_model`；迁移前任务没有内部模型快照时，才兼容回退到上游模型。
 
 ## Redis

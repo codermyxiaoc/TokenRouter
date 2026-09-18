@@ -862,7 +862,7 @@ func (c *schedulerCache) mgetChunked(ctx context.Context, keys []string) ([]any,
 }
 
 func buildSchedulerMetadataAccount(account service.Account) service.Account {
-	return service.Account{
+	metadata := service.Account{
 		ID:                      account.ID,
 		Name:                    account.Name,
 		Platform:                account.Platform,
@@ -891,6 +891,25 @@ func buildSchedulerMetadataAccount(account service.Account) service.Account {
 		Credentials:             filterSchedulerCredentials(account.Credentials),
 		Extra:                   filterSchedulerExtra(account.Extra),
 	}
+	// GO 窗口阈值需要复核完整查询身份，投影不能把已验证快照变成失配快照。
+	// 仅为新平台保留此信息，其他平台继续使用原有精简候选。
+	if account.IsOpenCodeGo() {
+		metadata.Credentials = make(map[string]any, len(account.Credentials))
+		for key, value := range account.Credentials {
+			metadata.Credentials[key] = value
+		}
+		metadata.ProxyID, metadata.Proxy = account.ProxyID, account.Proxy
+		if metadata.Extra == nil {
+			metadata.Extra = make(map[string]any)
+		}
+		for _, key := range []string{"cn_usage_monitor_snapshot", "upstream_usage_query", "enable_tls_fingerprint", "tls_fingerprint_profile_id", "tls_fingerprint_router_id"} {
+			if value, exists := account.Extra[key]; exists {
+				metadata.Extra[key] = value
+			}
+		}
+	}
+	return metadata
+
 }
 
 func filterSchedulerAccountGroups(accountGroups []service.AccountGroup) []service.AccountGroup {
@@ -952,7 +971,8 @@ func filterSchedulerCredentials(credentials map[string]any) map[string]any {
 	if len(credentials) == 0 {
 		return nil
 	}
-	keys := []string{"model_mapping", "compact_model_mapping", "model_whitelist", "openai_workload_capabilities", "api_key", "project_id", "oauth_type", "plan_type"}
+	// 精简候选也执行账号阈值校验，不能丢失账号对全局阈值的覆盖。
+	keys := []string{"model_mapping", "compact_model_mapping", "model_whitelist", "openai_workload_capabilities", "api_key", "project_id", "oauth_type", "plan_type", "account_scheduling_threshold"}
 	filtered := make(map[string]any)
 	for _, key := range keys {
 		if value, ok := credentials[key]; ok && value != nil {
@@ -970,6 +990,12 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		return nil
 	}
 	keys := []string{
+		// Anthropic 阈值依赖窗口用量与重置时间，投影必须与完整账号一致。
+		"session_window_utilization",
+		"passive_usage_7d_utilization",
+		"passive_usage_7d_reset",
+		"passive_usage_7d_oi_utilization",
+		"passive_usage_7d_oi_reset",
 		"quota_limit",
 		"quota_used",
 		"quota_daily_limit",

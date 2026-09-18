@@ -46,8 +46,13 @@ export const isOpenAIWSModeEnabled = (mode: OpenAIWSMode): boolean => {
 
 export const resolveOpenAIWSModeConcurrencyHintKey = (
   mode: OpenAIWSMode
-): 'admin.accounts.openai.wsModeConcurrencyHint' | 'admin.accounts.openai.wsModePassthroughHint' => {
-  if (mode === OPENAI_WS_MODE_PASSTHROUGH || mode === OPENAI_WS_MODE_HTTP_BRIDGE) {
+): '' | 'admin.accounts.openai.wsModeConcurrencyHint' | 'admin.accounts.openai.wsModePassthroughHint' | 'admin.accounts.openai.wsModeHttpBridgeHint' => {
+  // 关闭时不展示运行链路说明；HTTP 桥接需要与 WS 透传分别说明。
+  if (mode === OPENAI_WS_MODE_OFF) return ''
+  if (mode === OPENAI_WS_MODE_HTTP_BRIDGE) {
+    return 'admin.accounts.openai.wsModeHttpBridgeHint'
+  }
+  if (mode === OPENAI_WS_MODE_PASSTHROUGH) {
     return 'admin.accounts.openai.wsModePassthroughHint'
   }
   return 'admin.accounts.openai.wsModeConcurrencyHint'

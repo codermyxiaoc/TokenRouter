@@ -21,7 +21,7 @@ func (s *openAI403CounterResetStub) ResetOpenAI403Count(_ context.Context, accou
 }
 
 func TestOpenAIGatewayServiceRecordUsageResets403CounterForZeroUsage(t *testing.T) {
-	for _, platform := range []string{PlatformOpenAI, PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+	for _, platform := range []string{PlatformOpenAI, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformOpenCodeGo} {
 		t.Run(platform, func(t *testing.T) {
 			counter := &openAI403CounterResetStub{}
 			rateLimitSvc := NewRateLimitService(nil, nil, nil, nil, nil)

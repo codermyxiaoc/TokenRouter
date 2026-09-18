@@ -437,15 +437,8 @@ func TestAccountTestService_AutomaticOpenAIProbeRoutesChatCompletionsAndImages(t
 				UpstreamOriginator:      "codex-tui",
 			}},
 		}
-		upstream := &httpUpstreamRecorder{resp: &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-			Body: io.NopCloser(strings.NewReader(
-				"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"ig_1\",\"type\":\"image_generation_call\",\"result\":\"aGVsbG8=\",\"output_format\":\"png\"}}\n\n" +
-					"data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n" +
-					"data: [DONE]\n\n",
-			)),
-		}}
+		// 原生 Codex Images 的非流式探针读取标准 Images JSON，同时保留原 TLS/身份断言。
+		upstream := &httpUpstreamRecorder{resp: openAIImagesJSONResponse()}
 		svc := newOpenAIAutomaticProbeTestService(
 			[]Account{account},
 			upstream,
@@ -461,6 +454,7 @@ func TestAccountTestService_AutomaticOpenAIProbeRoutesChatCompletionsAndImages(t
 		require.Equal(t, "image-route", upstream.lastTLSProfile.Name)
 		require.Equal(t, "codex-tui/0.144.1 image-terminal", upstream.lastReq.Header.Get("User-Agent"))
 		require.Equal(t, "codex-tui", upstream.lastReq.Header.Get("Originator"))
+		require.Equal(t, "/backend-api/codex/images/generations", upstream.lastReq.URL.Path)
 	})
 }
 

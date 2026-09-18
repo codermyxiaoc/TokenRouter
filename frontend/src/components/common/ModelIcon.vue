@@ -85,6 +85,7 @@ const iconKey = computed(() => {
   if (modelLower.includes('doubao')) return 'doubao'
 
   // MiniMax 模型
+  if (modelLower.includes('opencode')) return 'opencode'
   if (modelLower.includes('abab') || modelLower.includes('minimax')) return 'minimax'
 
   // 百度文心模型

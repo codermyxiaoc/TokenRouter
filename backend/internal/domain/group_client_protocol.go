@@ -23,7 +23,7 @@ var canonicalGroupClientProtocols = []GroupClientProtocol{
 // @project-doc docs/interfaces/upstream_account_matrix.md#public_gateway_protocols
 func SupportedGroupClientProtocols(platform string) []GroupClientProtocol {
 	switch platform {
-	case PlatformAnthropic, PlatformOpenAI, PlatformQoder, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
+	case PlatformAnthropic, PlatformOpenAI, PlatformQoder, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
 		return []GroupClientProtocol{
 			GroupClientProtocolAnthropicMessages,
 			GroupClientProtocolOpenAIResponses,
@@ -47,7 +47,7 @@ func DefaultGroupClientProtocols(platform string) []GroupClientProtocol {
 			GroupClientProtocolOpenAIResponses,
 			GroupClientProtocolOpenAIChatCompletions,
 		}
-	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
 		return []GroupClientProtocol{
 			GroupClientProtocolAnthropicMessages,
 			GroupClientProtocolOpenAIResponses,

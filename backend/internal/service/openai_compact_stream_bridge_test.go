@@ -69,6 +69,11 @@ func TestBuildOpenAICompactSSEPayload_EmitsItemsAndCompleted(t *testing.T) {
 
 	events := parseCompactBridgeSSE(t, string(payload))
 	require.Len(t, events, 3)
+	// 整段流由网关生成，序号应从 0 开始逐帧递增。
+	for index, event := range events {
+		require.True(t, gjson.Get(event[1], "sequence_number").Exists())
+		require.EqualValues(t, index, gjson.Get(event[1], "sequence_number").Int())
+	}
 
 	require.Equal(t, "response.output_item.done", events[0][0])
 	first := events[0][1]

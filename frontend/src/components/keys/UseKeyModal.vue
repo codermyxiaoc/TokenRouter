@@ -305,6 +305,7 @@ import GroupBadge from '@/components/common/GroupBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { OPENAI_CODEX_DEFAULT_MODEL } from '@/constants/openai'
+import { OPENCODE_DEFAULT_MODEL, OPENCODE_MODELS } from '@/constants/opencode'
 import { MINIMAX_DEFAULT_MODEL, MINIMAX_MODELS } from '@/constants/minimax'
 import type { ApiKeyCompositeGroup, Group, GroupClientProtocol, GroupPlatform } from '@/types'
 import {
@@ -399,7 +400,8 @@ const openCodeProtocolPriority: Record<GroupPlatform, readonly GroupClientProtoc
   kimi: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
   zhipu: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
   deepseek: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
-  minimax: ['anthropic_messages', 'openai_responses', 'openai_chat_completions']
+  minimax: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
+  opencode_go: ['openai_chat_completions', 'openai_responses', 'anthropic_messages']
 }
 
 function preferredOpenCodeProtocol(
@@ -831,6 +833,9 @@ const currentFiles = computed((): FileConfig[] => {
     if (props.platform === 'grok') {
       return generateModelBoundClaudeFiles(baseRoot, apiKey, 'grok-4.5')
     }
+    if (props.platform === 'opencode_go') {
+      return generateModelBoundClaudeFiles(baseRoot, apiKey, OPENCODE_DEFAULT_MODEL)
+    }
     if (props.platform === 'minimax') {
       return generateModelBoundClaudeFiles(baseRoot, apiKey, MINIMAX_DEFAULT_MODEL)
     }
@@ -1120,6 +1125,12 @@ function generateCompatibleCodexFiles(
       name: 'TokenRouter Zhipu',
       model: 'glm-4.7',
       contextWindow: 202752
+    },
+    opencode_go: {
+      provider: 'tokenrouter_opencode',
+      name: 'TokenRouter OpenCode',
+      model: OPENCODE_DEFAULT_MODEL,
+      contextWindow: 400000
     },
     minimax: {
       provider: 'tokenrouter_minimax',
@@ -1930,6 +1941,11 @@ function generateOpenCodeConfig(
     provider[profile].models = withOpenCodeToolCalling(antigravityGeminiModels)
   } else if (profile === 'openai') {
     provider[profile].models = withOpenCodeToolCalling(openaiModels)
+  } else if (profile === 'opencode_go') {
+    provider[profile].name = 'OpenCode'
+    provider[profile].models = withOpenCodeToolCalling(Object.fromEntries(
+      OPENCODE_MODELS.map(model => [model, { name: model }])
+    ))
   } else if (profile === 'minimax') {
     provider[profile].name = 'MiniMax'
     provider[profile].models = withOpenCodeToolCalling(Object.fromEntries(
@@ -1960,6 +1976,7 @@ function generateOpenCodeConfig(
     {
       provider,
       ...(agent ? { agent } : {}),
+      ...(profile === 'opencode_go' ? { model: `opencode_go/${OPENCODE_DEFAULT_MODEL}` } : {}),
       ...(profile === 'minimax' ? { model: `minimax/${MINIMAX_DEFAULT_MODEL}` } : {}),
       $schema: 'https://opencode.ai/config.json'
     },

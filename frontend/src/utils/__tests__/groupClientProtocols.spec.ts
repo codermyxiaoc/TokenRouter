@@ -24,6 +24,11 @@ describe('groupClientProtocols', () => {
     expect(defaultGroupClientProtocols(platform)).toEqual(defaults)
   })
 
+  it('OpenCode 默认允许三种文本协议，并过滤 Gemini 协议', () => {
+    expect(defaultGroupClientProtocols('opencode_go')).toEqual(['anthropic_messages', 'openai_responses', 'openai_chat_completions'])
+    expect(effectiveGroupClientProtocols('opencode_go', ['gemini_generate_content', 'openai_responses'])).toEqual(['openai_responses'])
+  })
+
   it('treats missing and explicit empty collections as no enabled protocols', () => {
     expect(effectiveGroupClientProtocols('openai', undefined)).toEqual([])
     expect(effectiveGroupClientProtocols('qoder', [])).toEqual([])

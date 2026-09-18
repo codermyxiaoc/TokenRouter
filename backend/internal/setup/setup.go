@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -17,7 +18,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/repository"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
@@ -186,35 +187,59 @@ func buildPostgresDSN(cfg *DatabaseConfig, dbName string) string {
 	)
 }
 
-func buildDatabaseConnectionDSNs(cfg *DatabaseConfig) (bootstrapDSN, targetDSN string) {
-	return buildPostgresDSN(cfg, "postgres"), buildPostgresDSN(cfg, cfg.DBName)
+// 仅 PostgreSQL 的 invalid_catalog_name 表示目标库不存在；认证或网络错误不能触发建库。
+func isDatabaseNotFoundError(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "3D000"
 }
 
-// 测试数据库连接，并在目标数据库不存在时创建它。
-func TestDatabaseConnection(cfg *DatabaseConfig) error {
-	// 先连接维护数据库，否则目标数据库尚未创建时会直接连接失败。
-	defaultDSN, targetDSN := buildDatabaseConnectionDSNs(cfg)
-
-	db, err := sql.Open("postgres", defaultDSN)
+func openAndPingPostgresDatabase(cfg *DatabaseConfig, dbName string) (*sql.DB, error) {
+	db, err := sql.Open("postgres", buildPostgresDSN(cfg, dbName))
 	if err != nil {
-		return fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		if closeErr := db.Close(); closeErr != nil {
+			logger.LegacyPrintf("setup", "failed to close postgres connection: %v", closeErr)
+		}
+		return nil, err
+	}
+	return db, nil
+}
+
+type postgresDatabaseOpener func(*DatabaseConfig, string) (*sql.DB, error)
+
+// 测试优先使用已配置的目标库，兼容无维护库访问权限的托管 PostgreSQL。
+func TestDatabaseConnection(cfg *DatabaseConfig) error {
+	return testDatabaseConnection(cfg, openAndPingPostgresDatabase)
+}
+
+func testDatabaseConnection(cfg *DatabaseConfig, openDatabase postgresDatabaseOpener) error {
+	targetDB, err := openDatabase(cfg, cfg.DBName)
+	if err == nil {
+		if closeErr := targetDB.Close(); closeErr != nil {
+			logger.LegacyPrintf("setup", "failed to close postgres connection: %v", closeErr)
+		}
+		return nil
+	}
+	if !isDatabaseNotFoundError(err) {
+		return fmt.Errorf("ping target database failed: %w", err)
 	}
 
+	// 仅目标库确实不存在时，沿用维护库检查和创建流程。
+	db, err := openDatabase(cfg, "postgres")
+	if err != nil {
+		return fmt.Errorf("target database '%s' does not exist; failed to connect to bootstrap database 'postgres': %w", cfg.DBName, err)
+	}
 	defer func() {
-		if db == nil {
-			return
-		}
 		if err := db.Close(); err != nil {
 			logger.LegacyPrintf("setup", "failed to close postgres connection: %v", err)
 		}
 	}()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	if err := db.PingContext(ctx); err != nil {
-		return fmt.Errorf("ping failed: %w", err)
-	}
 
 	// Check if target database exists
 	var exists bool
@@ -234,12 +259,7 @@ func TestDatabaseConnection(cfg *DatabaseConfig) error {
 	}
 
 	// 再连接目标数据库，验证创建后的真实可用性。
-	if err := db.Close(); err != nil {
-		logger.LegacyPrintf("setup", "failed to close postgres connection: %v", err)
-	}
-	db = nil
-
-	targetDB, err := sql.Open("postgres", targetDSN)
+	targetDB, err = openDatabase(cfg, cfg.DBName)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database '%s': %w", cfg.DBName, err)
 	}
@@ -249,13 +269,6 @@ func TestDatabaseConnection(cfg *DatabaseConfig) error {
 			logger.LegacyPrintf("setup", "failed to close postgres connection: %v", err)
 		}
 	}()
-
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel2()
-
-	if err := targetDB.PingContext(ctx2); err != nil {
-		return fmt.Errorf("ping target database failed: %w", err)
-	}
 
 	return nil
 }

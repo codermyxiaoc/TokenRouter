@@ -17,6 +17,11 @@ const allNullQuotas: DefaultPlatformQuotasMap = Object.fromEntries(
 
 describe("admin settings auth source defaults helpers", () => {
   // 全局和登录来源额度保存时不能被旧平台白名单过滤掉。
+  it('preserves OpenCode platform quota settings through normalization', () => {
+    const quotas = { opencode_go: { daily: 2, weekly: 12, monthly: 40 } }
+    expect(sanitizePlatformQuotasMap(normalizePlatformQuotasMap(quotas)).opencode_go).toEqual(quotas.opencode_go)
+  })
+
   it("preserves MiniMax platform quotas through normalization and serialization", () => {
     const quotas = { minimax: { daily: 1, weekly: 5, monthly: 20 } };
     expect(sanitizePlatformQuotasMap(normalizePlatformQuotasMap(quotas)).minimax).toEqual(quotas.minimax);

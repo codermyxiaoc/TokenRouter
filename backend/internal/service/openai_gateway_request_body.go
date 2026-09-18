@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
 	"github.com/TokenFlux/TokenRouter/internal/util/urlvalidator"
@@ -472,7 +473,7 @@ func openAIRequestBodyHasTools(body []byte) bool {
 // 保留 reasoning 项及其可移植字段（summary、encrypted_content、id 和不透明扩展字段）。
 // 调用方仅对 OpenAI 目标启用此归一化，兼容供应商仍可消费自身的 content。
 func normalizeOpenAIResponsesReasoningContentReplay(body []byte) ([]byte, bool, error) {
-	input := gjson.GetBytes(body, "input")
+	input := parseRawJSONView(body).Get("input")
 	if !input.IsArray() {
 		return body, false, nil
 	}
@@ -525,6 +526,84 @@ func normalizeOpenAIResponsesReasoningContentReplay(body []byte) ([]byte, bool, 
 }
 
 func normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body []byte, knownStoreFalse bool) ([]byte, bool, error) {
+	if !knownStoreFalse && gjson.GetBytes(body, "store").Type != gjson.False {
+		return body, false, nil
+	}
+	root := parseRawJSONView(body)
+	input := root.Get("input")
+	if !input.IsArray() {
+		return body, false, nil
+	}
+	if !root.IsObject() || !gjson.ValidBytes(body) || !utf8.Valid(body) || hasDuplicateJSONObjectKeys(root) {
+		return normalizeOpenAIAPIKeyStoreFalseReasoningReplayDecoded(body, knownStoreFalse)
+	}
+
+	// 只解码需要修改的推理元数据；图片、工具结果和未知扩展保留原始 JSON 片段。
+	items := make([]string, 0)
+	changed := false
+	fallback := false
+	var itemErr error
+	input.ForEach(func(_, item gjson.Result) bool {
+		if !item.IsObject() {
+			items = append(items, item.Raw)
+			return true
+		}
+		if hasDuplicateJSONObjectKeys(item) {
+			fallback = true
+			return false
+		}
+		typ := strings.TrimSpace(item.Get("type").String())
+		id := strings.TrimSpace(item.Get("id").String())
+		encrypted := item.Get("encrypted_content")
+		if (typ == "reasoning" && (encrypted.Type != gjson.String || strings.TrimSpace(encrypted.Str) == "")) ||
+			(typ == "item_reference" && strings.HasPrefix(id, "rs_")) {
+			changed = true
+			return true
+		}
+		stripID := typ == "reasoning" && strings.HasPrefix(id, "rs_")
+		addSummary := typ == "reasoning" && item.Get("summary").Type == gjson.Null
+		stripCallID := shouldStripOpenAIResponsesNonPairCallID(typ) && item.Get("call_id").Exists()
+		if !stripID && !addSummary && !stripCallID {
+			items = append(items, item.Raw)
+			return true
+		}
+		var decoded map[string]any
+		if err := decodeOpenAIJSONUseNumber([]byte(item.Raw), &decoded); err != nil {
+			itemErr = err
+			return false
+		}
+		if stripID {
+			delete(decoded, "id")
+		}
+		if addSummary {
+			decoded["summary"] = []any{}
+		}
+		if stripCallID {
+			delete(decoded, "call_id")
+		}
+		encoded, err := marshalOpenAIUpstreamJSON(decoded)
+		if err != nil {
+			itemErr = err
+			return false
+		}
+		items = append(items, string(encoded))
+		changed = true
+		return true
+	})
+	if fallback {
+		return normalizeOpenAIAPIKeyStoreFalseReasoningReplayDecoded(body, knownStoreFalse)
+	}
+	if itemErr != nil {
+		return body, false, fmt.Errorf("normalize API-key store=false reasoning replay: %w", itemErr)
+	}
+	if !changed {
+		return body, false, nil
+	}
+	return replaceOpenAIRawInput(body, input, items), true, nil
+}
+
+// normalizeOpenAIAPIKeyStoreFalseReasoningReplayDecoded 保留重复键和异常输入的既有解码语义。
+func normalizeOpenAIAPIKeyStoreFalseReasoningReplayDecoded(body []byte, knownStoreFalse bool) ([]byte, bool, error) {
 	if !knownStoreFalse && gjson.GetBytes(body, "store").Type != gjson.False {
 		return body, false, nil
 	}
@@ -1518,7 +1597,7 @@ func (e *OpenAIFastBlockedError) Error() string { return e.Message }
 // 匹配规则：
 //   - Scope 按账号类型过滤（all / oauth / apikey / bedrock）
 //   - UserIDs 非空时按 API Key 所属的可信用户 ID 过滤
-//   - ServiceTier 必须为空、all 或等于归一化后的 tier
+//   - ServiceTier 必须为空、all 或等于归一化后的 tier；missing 只匹配专用规则
 //   - ModelWhitelist 将规则限制到指定模型，FallbackAction 处理未匹配模型
 //   - 用户专属规则优先于全局规则，两组内部均保持配置顺序并首条命中
 //
@@ -1569,7 +1648,12 @@ func evaluateOpenAIFastPolicyWithSettings(settings *OpenAIFastPolicySettings, us
 				continue
 			}
 			ruleTier := strings.ToLower(strings.TrimSpace(rule.ServiceTier))
-			if ruleTier != "" && ruleTier != OpenAIFastTierAny && ruleTier != tier {
+			if tier == OpenAIFastTierMissing {
+				// 旧 all 规则只处理显式档位，不能在升级后悄悄扩大到缺省请求。
+				if ruleTier != OpenAIFastTierMissing {
+					continue
+				}
+			} else if ruleTier != "" && ruleTier != OpenAIFastTierAny && ruleTier != tier {
 				continue
 			}
 			eff := BetaPolicyRule{
@@ -1583,6 +1667,15 @@ func evaluateOpenAIFastPolicyWithSettings(settings *OpenAIFastPolicySettings, us
 		}
 	}
 	return BetaPolicyActionPass, ""
+}
+
+// shouldForceOpenAIFastPriorityForMissingTier 仅接受管理员显式配置的缺省档位强制规则。
+func (s *OpenAIGatewayService) shouldForceOpenAIFastPriorityForMissingTier(ctx context.Context, account *Account, model string) bool {
+	if account == nil || !account.IsOpenAI() {
+		return false
+	}
+	action, _ := s.evaluateOpenAIFastPolicy(ctx, account, model, OpenAIFastTierMissing)
+	return action == OpenAIFastPolicyActionForcePriority
 }
 
 // openAIFastPolicyUserID 从可信请求上下文读取 API Key 所属用户 ID。
@@ -1659,6 +1752,7 @@ func openAIGroupForcesFast(ctx context.Context, account *Account) bool {
 
 // resolveOpenAIFastModeDecision 统一解析系统策略与单 Key 策略。
 // 系统先裁决原始 tier；Key 改写后再裁决一次，避免 force_on 绕过系统 filter/block。
+// @project-doc docs/interfaces/openai_upstream.md#openai_missing_tier_policy
 func (s *OpenAIGatewayService) resolveOpenAIFastModeDecision(
 	ctx context.Context,
 	account *Account,
@@ -1667,6 +1761,12 @@ func (s *OpenAIGatewayService) resolveOpenAIFastModeDecision(
 	hasField bool,
 ) openAIFastModeDecision {
 	normTier := normalizedOpenAIServiceTierValue(rawTier)
+	if strings.TrimSpace(rawTier) == "" && s.shouldForceOpenAIFastPriorityForMissingTier(ctx, account, model) {
+		// 缺省规则只形成候选档位，继续经过本地系统 filter/block 和 Key force_off。
+		// 不把其他无效档位误当缺省；原有请求字段校验仍负责拒绝非法输入。
+		normTier = OpenAIFastTierPriority
+		hasField = true
+	}
 	if openAIGroupForcesFast(ctx, account) {
 		// 组级强制先形成 priority，再交给全局策略裁决；这样没有显式
 		// service_tier 的请求也能覆盖，同时 ForceOff 仍可删除该字段。

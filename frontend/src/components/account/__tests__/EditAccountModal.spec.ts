@@ -358,6 +358,38 @@ describe('EditAccountModal', () => {
     listTLSProfilesMock.mockResolvedValue([])
   })
 
+  // 模拟脱敏后的已存凭据，验证回填期间不会把自定义配置覆盖为预设。
+  it('preserves OpenCode Zen custom endpoints and rules on edit without a new API key', async () => {
+    const account = { ...buildAccount(), platform: 'opencode_go', credentials_status: { has_api_key: true },
+      credentials: { account_mode: 'zen', api_protocol: 'adaptive',
+        base_url: 'https://custom.example.test/v1',
+        api_base_urls: { chat_completions: 'https://custom.example.test/v1', responses: 'https://custom.example.test/responses', anthropic: 'https://custom.example.test/messages' },
+        protocol_rules: [{ pattern: 'private-*', protocol: 'responses' }] } }
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    await flushPromises()
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials).toMatchObject(account.credentials)
+    expect(credentials).not.toHaveProperty('api_key')
+  })
+
+  it('treats legacy OpenCode accounts as GO and writes an explicitly empty rule list', async () => {
+    const account = { ...buildAccount(), platform: 'opencode_go', credentials: { api_key: 'test-api-key' } }
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    await flushPromises()
+    for (const button of wrapper.findAll('[aria-label="admin.accounts.opencodeGo.protocolRules.remove"]')) {
+      await button.trigger('click')
+    }
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      account_mode: 'go', api_protocol: 'adaptive', base_url: 'https://opencode.ai/zen/go/v1', protocol_rules: []
+    })
+  })
+
   it('renders the shared account model rule copy', async () => {
     const account = buildAccount()
     account.credentials.model_whitelist = []

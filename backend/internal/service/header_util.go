@@ -14,6 +14,8 @@ var headerWireCasing = map[string]string{
 	// Title case
 	"accept":     "Accept",
 	"user-agent": "User-Agent",
+	// net/http 按规范键检测压缩协商头，使用小写键会额外补写 gzip。
+	"accept-encoding": "Accept-Encoding",
 
 	// X-Stainless-* 保持 SDK 原始大小写
 	"x-stainless-retry-count":     "X-Stainless-Retry-Count",
@@ -34,7 +36,6 @@ var headerWireCasing = map[string]string{
 	"content-type":                              "content-type",
 	"accept-language":                           "accept-language",
 	"sec-fetch-mode":                            "sec-fetch-mode",
-	"accept-encoding":                           "accept-encoding",
 	"authorization":                             "authorization",
 
 	// Claude Code 2.1.87+ 新增 header

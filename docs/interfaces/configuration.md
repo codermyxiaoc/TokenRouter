@@ -45,9 +45,11 @@ Compose 的 `.env` 还包含只供部署工具插值的变量：`SUB2API_IMAGE` 
 
 环境变量把点分键转成大写下划线，例如 `database.host` 对应 `DATABASE_HOST`，`gateway.max_body_size` 对应 `GATEWAY_MAX_BODY_SIZE`。`setDefaults` 还负责把所有 struct 键注册进 Viper，使纯环境变量部署能被 `Unmarshal` 看到；新增字段不能只加 `mapstructure` tag 而不注册默认/可达键。定价进程配置中的 `pricing.override_file` 是可选本地 JSON 补丁，按字段浅合并覆盖远程目录和回退文件，修改后在重启或下一次目录下载时生效；文件缺失/非法只记录告警并保留原目录。少量变量有显式绑定或专用解析：`ENABLE_SERVER_TIMING`，逗号分隔的 `SERVER_TRUSTED_PROXIES` 和 `SECURITY_FORWARDED_CLIENT_IP_HEADERS`，以及受兼容条件约束的旧 WeChat 变量。
 
-国产供应商周期用量监控属于启动时进程配置 `gateway.cn_providers`。`monitor_enabled` 默认关闭；开启后默认每 10 分钟运行一次、并发 4、单账号探测超时 20 秒、整轮预算 300 秒，余额临时停调阈值 `balance_threshold` 默认 `0.5`。对应键为 `interval_minutes`、`concurrency`、`probe_timeout_seconds` 和 `round_timeout_seconds`，修改后需要重启。管理员手动查询不受监控开关影响；自定义中继的自动监控还要求启用并命中 `security.url_allowlist.upstream_hosts`。
+国产供应商周期用量监控属于启动时进程配置 `gateway.cn_providers`。`monitor_enabled` 默认关闭；开启后默认每 10 分钟运行一次、并发 4、单账号探测超时 20 秒、整轮预算 300 秒，余额临时停调阈值 `balance_threshold` 默认 `0.5`。对应键为 `interval_minutes`、`concurrency`、`probe_timeout_seconds` 和 `round_timeout_seconds`，修改后需要重启。该监控也覆盖 OpenCode GO 三窗口，Zen 不执行未接入的余额查询。管理员手动查询不受监控开关影响；自定义中继的自动监控还要求启用并命中 `security.url_allowlist.upstream_hosts`。
 
 时区的优先级是标准 `TZ`、兼容 `TIMEZONE`、配置文件、默认 `Asia/Shanghai`。`TZ` 非空时必须显式覆盖 `TIMEZONE`，使容器运行时、应用本地日统计和 PostgreSQL 连接时区使用同一部署者选择；无效 IANA 名称仍在启动校验中失败。
+
+OpenAI WS 的 `oauth_max_conns_factor` 与 `apikey_max_conns_factor` 缺省为 5.0，属于启动时进程配置；已有 YAML 的显式 1.0 或环境变量继续优先，不因升级被回写。动态连接容量受每账号 `max_conns_per_account` 硬上限约束，扩大容量不扩大用户/账号请求并发。实际连接按需求与预热策略建立，配置变化需要重启；长期会话增多时应同时评估进程内存、文件描述符和代理容量。详见 [WS 连接池生命周期](openai_upstream.md#openai_ws_pool_lifecycle)。
 
 创作台（Creative Studio）属于启动时进程配置 `creative`：功能与队列开关、临时数据 TTL（`transient_ttl_seconds`，默认 1800 秒）、上传与 prompt 限制（`max_asset_bytes` 默认 32 MiB、`max_total_input_bytes` 默认 64 MiB 且不得小于单文件上限、`max_prompt_chars` 默认 8000）、上游执行参数（`execute_timeout_seconds`、`max_execute_attempts`）和 `creative:queue:*` 队列键/TTL 都在启动校验，修改后需要重启。创作台每次任务固定生成一张图片，预占价格按所选尺寸单价计算。与 `batch_image` 不同，`enabled` 与 `queue_enabled` 默认开启，但临时存储与队列依赖 Redis，Redis 不可用时任务创建 fail-close。完整键清单见 `deploy/config.example.yaml` 和[创作台](../domains/creative_studio.md)。
 
@@ -63,6 +65,8 @@ setup 使用 `DATA_DIR > 可写 /app/data > 当前目录` 选择 `config.yaml` �
 
 交互或 `AUTO_SETUP` 流程测试 PostgreSQL/Redis、执行迁移、只在空数据库中创建初始管理员、以 `0600` 写入配置并创建安装锁。已有管理员或已有普通用户时不会覆盖密码。自动 setup 的 `DATABASE_*`、`REDIS_*`、`ADMIN_*`、`SERVER_*`、`JWT_*` 和时区变量是生成初始文件的输入；生成后常规启动仍走统一 config loader。
 
+安装向导测试 PostgreSQL 时先连接配置的目标库，已存在的数据库不要求访问 `postgres` 维护库。只有目标连接返回 SQLSTATE `3D000`（数据库不存在）才进入原有维护库检查与建库流程；认证、网络或其他连接错误直接返回，不能通过建库掩盖。
+
 主服务使用 `LoadForBootstrap`，只在引导阶段允许 `jwt.secret` 暂时为空。数据库 repository 初始化会从 `security_secrets` 读取既有 JWT secret，或原子生成并持久化一个新 secret，然后重新执行完整配置校验。多个实例不能各自使用临时随机 JWT key；显式配置与数据库已有 secret 不一致时，以已持久化的安全边界处理，避免滚动部署让会话随机失效。
 
 ## 数据库运行时设置
@@ -70,6 +74,8 @@ setup 使用 `DATA_DIR > 可写 /app/data > 当前目录` 选择 `config.yaml` �
 工单设置通过 `GET/PUT /api/v1/admin/tickets/settings` 单独维护，`ticket_*` 六个键保存到 `settings`，由 `TicketConfigService` 在所有业务操作及后台任务中读取，保存后无需重启。`ticket_enabled` 是整个模块的总开关，公开设置和 HTML 注入均暴露该值；关闭时隐藏用户与后台入口、阻止业务访问，保留设置读写和历史数据。独立设置保存成功后刷新已有页面注入缓存。其他设置包含每用户未关闭数量、每次附件数量及大小、客服操作邮件通知和用户未回复过期时间。客服操作邮件通知继续使用 `notify_on_staff_reply` 接口字段和 `ticket_notify_on_staff_reply` 存储键，开启后覆盖每条客服新回复、客服完成及撤销，不包含用户自助结单或自动过期；已退订用户仍尊重退订偏好。默认值和范围见[工单配置](../domains/support_tickets.md#ticket_configuration)。
 
 `settings` 是 `key/value/updated_at` 表，删除键表示恢复该 getter 的默认语义。`SettingService` 负责类型解析、范围/组合校验、敏感值保留、批量原子写入和更新后的缓存通知；handler 只负责 HTTP binding、权限、审计和响应。
+
+自定义菜单项的可选 `hide_open_button` 控制嵌入页面顶部的外部打开按钮，缺失或 `false` 时保留显示。该字段沿既有自定义菜单 JSON、管理设置、公开设置和前端类型传递，无需迁移；它只改变展示，不改变页面 URL、访问可见性或权限。
 
 `wallet_payment_enabled` 控制站内余额购买和续费订阅，默认关闭；它通过系统设置接口的 `payment_wallet_payment_enabled` 字段维护，通过专用支付配置及 `checkout-info` 的 `wallet_payment_enabled` 字段读取。更新省略时保留旧值，显式 `false` 关闭；保存后无需重启或数据库迁移。支付总开关仍须开启，现有余额充值入口开关保持独立。扣款、幂等及统计边界见[站内余额购买订阅](../domains/payments_and_entitlements.md#wallet_subscription_payment)。
 

@@ -141,9 +141,9 @@ export default {
     selectGroup: '选择分组',
     smartRouting: {
       label: '智能路由',
-      hint: '最多选择 10 个分组并调整候选顺序，可跨平台。先跳过账号模型目录不匹配、冷却中或无可调度账号的分组。文本、计数和 Embeddings 请求先完成组内重试，最终上游仍返回 429/5xx 且尚无业务输出时，才尝试下一候选。图片、视频任务和已输出的流不进行此类跨组重试；客户端探针和空模型仍不会打到不匹配的分组。',
+      hint: '最多选择 10 个分组并调整候选顺序，可跨平台。先跳过账号模型目录不匹配、冷却中或无可调度账号的分组。文本、计数和 Embeddings 请求先完成组内重试，仍发生上游错误且尚无业务输出、未安排用量结算、请求未取消时，才尝试下一候选。本地校验、消费限制和明确内容策略拒绝不换组；图片、视频任务及依赖远端状态的请求不进行此类跨组重试。',
       cooldownLabel: '失败分组冷却时长（秒）',
-      cooldownHint: '默认 60 秒，可填 0–3600 的整数。上游 429/5xx 触发跨组故障转移时，失败分组在当前密钥下暂时跳过，不影响其他密钥。0 仅关闭冷却，不关闭跨组故障转移；全部匹配候选均在冷却时返回 503。',
+      cooldownHint: '默认 60 秒，可填 0–3600 的整数。确认上游错误后，失败分组在当前密钥下暂时跳过，不影响其他密钥。能否重放仍取决于业务输出、结算和请求状态。0 仅关闭冷却，不关闭跨组故障转移；全部匹配候选均在冷却时返回 503。',
       cooldownInvalid: '请输入 0 到 3600 的整数秒数',
       route: '路由 {index}',
       addGroup: '添加分组',
@@ -153,7 +153,7 @@ export default {
       unavailableGroup: '分组 #{id}（当前不可用）',
       moveUp: '上移候选分组',
       moveDown: '下移候选分组',
-      useDescription: '直接使用模型 ID，无需分组前缀。按候选顺序选择包含模型且可调度的分组；文本、计数和 Embeddings 请求在组内重试最终返回上游 429/5xx、且尚无业务输出时才继续下一组。失败组仅对当前密钥冷却；全部匹配候选均在冷却时返回 503。图片、视频任务和已输出的流不进行此类跨组重试。'
+      useDescription: '直接使用模型 ID，无需分组前缀。按候选顺序选择包含模型且可调度的分组；文本、计数和 Embeddings 请求在组内重试后仍发生上游错误、且尚无业务输出、未安排用量结算、请求未取消时才继续下一组。本地校验、消费限制和明确内容策略拒绝不换组。失败组仅对当前密钥冷却；图片、视频任务及依赖远端状态的请求不进行此类跨组重试。'
     },
     composite: {
       label: '复合 Key',
@@ -552,6 +552,7 @@ export default {
       modelPlaceholder: '搜索模型', allCategories: '全部分类', allStatuses: '全部状态码',
       empty: '暂无错误请求', failedToLoad: '加载错误请求失败',
       recovered: '已恢复', finalStatus: '最终 HTTP',
+      recoveredTo: '恢复至：', finalFailed: '最终失败',
       recoveredHint: '已通过后台重试或换组恢复，上游异常仍保留用于排查。',
       categories: {
         auth: '认证失败', rate_limit: '限流', quota: '余额/订阅',
@@ -602,6 +603,7 @@ export default {
     codeMaxUsed: '该兑换码已达到兑换上限',
     codeAlreadyUsed: '您已经兑换过该兑换码',
     failedToRedeem: '兑换失败，请检查兑换码后重试。',
+    userRefreshFailed: '兑换成功，但账户信息刷新失败。',
     subscriptionRefreshFailed: '兑换成功，但订阅状态刷新失败。',
     pleaseEnterCode: '请输入兑换码'
   },

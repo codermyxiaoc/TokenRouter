@@ -102,6 +102,12 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 		scheduleOllamaCloudUsageActivity(s.deferredService, account)
 	}
 
+	// 插件已发送请求时禁止自动重放，避免重复工具执行或扣费。
+	var pluginErr *PluginTransportError
+	if errors.As(err, &pluginErr) && pluginErr.RequestSent {
+		return err
+	}
+
 	if classifyOpenAITransportError(err).Persistent {
 		s.tempUnscheduleOpenAITransportError(ctx, account, safeErr)
 	}

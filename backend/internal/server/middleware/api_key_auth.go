@@ -204,6 +204,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		applyAPIKeyModelRedirect(c, apiKey)
 		// 批任务管理只读取已有数据或释放冻结；即使任务耗尽额度，结果仍应可取回或取消。
 		skipBilling := isAPIKeyUsageRequest(c.Request.Method, c.Request.URL.Path) ||
+			isSeedanceTaskManagementRequest(c.Request.Method, c.Request.URL.Path) ||
 			isBatchImageBillingBypassRequest(c.Request.Method, c.Request.URL.Path) ||
 			((apiKey.IsComposite || apiKey.SmartRouting) && isGrokVideoTaskRead(c.Request.Method, c.Request.URL.Path))
 
@@ -399,6 +400,9 @@ func isBatchImageBillingBypassRequest(method, path string) bool {
 // 未知路径默认视为会产生消费，避免新增路由自动绕过团队限额。
 func isAPIKeyNonConsumingRequest(method, path string) bool {
 	path = strings.TrimRight(path, "/")
+	if isSeedanceTaskManagementRequest(method, path) {
+		return true
+	}
 	if isAPIKeyUsageRequest(method, path) {
 		return true
 	}

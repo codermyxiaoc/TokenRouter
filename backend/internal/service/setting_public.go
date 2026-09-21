@@ -205,6 +205,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyUsageRankingShowTotalTokens,
 		SettingKeyUsageRankingShowRequests,
 		SettingKeyUsageRankingShowActualCost,
+		SettingKeyPluginManagementEnabled,
 		SettingKeyCustomMenuItems,
 		SettingKeyCustomEndpoints,
 		SettingKeyFooterLinks,
@@ -383,6 +384,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		UsageRankingShowTotalTokens:         usageRanking.ShowTotalTokens,
 		UsageRankingShowRequests:            usageRanking.ShowRequests,
 		UsageRankingShowActualCost:          usageRanking.ShowActualCost,
+		PluginManagementEnabled:             settings[SettingKeyPluginManagementEnabled] == "true",
 		CustomMenuItems:                     settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                     settings[SettingKeyCustomEndpoints],
 		FooterLinks:                         settings[SettingKeyFooterLinks],
@@ -484,6 +486,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		UsageRankingShowTotalTokens         bool                     `json:"usage_ranking_show_total_tokens"`
 		UsageRankingShowRequests            bool                     `json:"usage_ranking_show_requests"`
 		UsageRankingShowActualCost          bool                     `json:"usage_ranking_show_actual_cost"`
+		PluginManagementEnabled             bool                     `json:"plugin_management_enabled"`
 		CustomMenuItems                     json.RawMessage          `json:"custom_menu_items"`
 		CustomEndpoints                     json.RawMessage          `json:"custom_endpoints"`
 		FooterLinks                         json.RawMessage          `json:"footer_links"`
@@ -571,6 +574,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		UsageRankingShowTotalTokens:         settings.UsageRankingShowTotalTokens,
 		UsageRankingShowRequests:            settings.UsageRankingShowRequests,
 		UsageRankingShowActualCost:          settings.UsageRankingShowActualCost,
+		PluginManagementEnabled:             settings.PluginManagementEnabled,
 		CustomMenuItems:                     filterUserVisibleMenuItems(settings.CustomMenuItems),
 		CustomEndpoints:                     safeRawJSONArray(settings.CustomEndpoints),
 		FooterLinks:                         safeRawJSONArray(settings.FooterLinks),

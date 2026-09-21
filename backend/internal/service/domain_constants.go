@@ -72,6 +72,7 @@ const (
 	APIProtocolChatCompletions = domain.APIProtocolChatCompletions
 	APIProtocolAnthropic       = domain.APIProtocolAnthropic
 	APIProtocolResponses       = domain.APIProtocolResponses
+	APIProtocolSystemOne       = domain.APIProtocolSystemOne
 	APIProtocolAdaptive        = domain.APIProtocolAdaptive
 )
 
@@ -397,11 +398,13 @@ const (
 	SettingKeyPurchaseSubscriptionURL     = "purchase_subscription_url"     // "购买订阅"页面 URL（作为 iframe src）
 	SettingKeyTableDefaultPageSize        = "table_default_page_size"       // 表格默认每页条数
 	SettingKeyTablePageSizeOptions        = "table_page_size_options"       // 表格可选每页条数（JSON 数组）
-	SettingKeyCustomMenuItems             = "custom_menu_items"             // 自定义菜单项（JSON 数组）
-	SettingKeyCustomEndpoints             = "custom_endpoints"              // 自定义端点列表（JSON 数组）
-	SettingKeyFooterLinks                 = "footer_links"                  // 首页底栏链接分组（JSON 数组）
-	SettingKeyFooterText                  = "footer_text"                   // 首页底栏附加文本（备案号等，支持多行）
-	SettingKeyHomeFeaturedModels          = "home_featured_models"          // 首页展示的模型 ID 列表（JSON 数组，按顺序展示）
+	// 插件管理开关仅控制菜单显示，不停用已明确启用的插件。
+	SettingKeyPluginManagementEnabled = "plugin_management_enabled"
+	SettingKeyCustomMenuItems         = "custom_menu_items"    // 自定义菜单项（JSON 数组）
+	SettingKeyCustomEndpoints         = "custom_endpoints"     // 自定义端点列表（JSON 数组）
+	SettingKeyFooterLinks             = "footer_links"         // 首页底栏链接分组（JSON 数组）
+	SettingKeyFooterText              = "footer_text"          // 首页底栏附加文本（备案号等，支持多行）
+	SettingKeyHomeFeaturedModels      = "home_featured_models" // 首页展示的模型 ID 列表（JSON 数组，按顺序展示）
 )
 
 const (

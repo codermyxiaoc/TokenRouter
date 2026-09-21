@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
 
 // 国产供应商（kimi/zhipu/deepseek）的响应式冷却辅助。
@@ -24,11 +26,80 @@ const kimiConcurrentRequestLimitMessage = "You've reached your concurrent reques
 // 供恢复任务与其它账号状态来源区分。
 const cnConcurrencyLimitReasonPrefix = "cn_concurrency_limit"
 
+// cnQuotaExhausted403ErrorType 是 Coding Plan 配额窗口耗尽时上游返回的结构化错误类型。
+// 这类错误会在窗口重置后自动恢复，不能按普通权限错误永久禁用账号。
+const cnQuotaExhausted403ErrorType = "access_terminated_error"
+
+// cnQuotaExhaustedReasonPrefix 是配额耗尽临时停调 reason 的稳定前缀，便于
+// 运维日志和后台恢复任务区分它与并发限制、余额不足等其它状态。
+const cnQuotaExhaustedReasonPrefix = "cn_quota_exhausted"
+
 // isCNProviderConcurrencyLimit403 只识别 Kimi 返回的精确并发限制文案，
 // 避免把其它权限错误或其它国产平台的相似文案误判为可恢复状态。
 func isCNProviderConcurrencyLimit403(account *Account, upstreamMsg string) bool {
 	return account != nil && account.Platform == PlatformKimi &&
 		strings.TrimSpace(upstreamMsg) == kimiConcurrentRequestLimitMessage
+}
+
+// isCNProviderQuotaExhausted403 识别国产供应商 Coding Plan 的窗口配额耗尽 403。
+// 上游可能只提供 usage limit/quota will reset 文案，也可能在 error.type 中返回
+// access_terminated_error；两者均只在 Coding Plan 账号上生效，避免把普通 API Key
+// 的权限错误误判成可恢复限流。并发限制文案由独立分支处理，保持两类信号互斥。
+func isCNProviderQuotaExhausted403(account *Account, responseBody []byte, upstreamMsg string) bool {
+	if account == nil || !account.IsCNProvider() || !account.IsCodingPlan() {
+		return false
+	}
+
+	message := strings.ToLower(strings.TrimSpace(upstreamMsg))
+	if strings.Contains(message, "usage limit") || strings.Contains(message, "quota will reset") {
+		return true
+	}
+
+	return strings.EqualFold(
+		strings.TrimSpace(gjson.GetBytes(responseBody, "error.type").String()),
+		cnQuotaExhausted403ErrorType,
+	)
+}
+
+// handleCNProviderQuotaExhausted403 将窗口配额耗尽按可恢复限流处理。
+// 有效监控快照存在时使用真实窗口重置时间；快照尚未刷新时只设置短期临时停调，
+// 这样既能等待配额恢复，也不会因为缺少快照而永久禁用账号。
+func (s *RateLimitService) handleCNProviderQuotaExhausted403(
+	ctx context.Context,
+	account *Account,
+	upstreamMsg string,
+) {
+	now := time.Now()
+	if until := cnProviderQuotaSnapshotReset(account, now); until != nil {
+		s.notifyAccountSchedulingBlocked(account, *until, cnQuotaExhaustedReasonPrefix)
+		if err := s.accountRepo.SetRateLimited(ctx, account.ID, *until); err == nil {
+			slog.Info("cn_quota_exhausted_rate_limited",
+				"account_id", account.ID,
+				"platform", account.Platform,
+				"reset_at", until.UTC(),
+			)
+			return
+		} else {
+			// 快照写入失败时继续写临时停调，避免账号在当前请求后立即再次被选中。
+			slog.Warn("cn_quota_exhausted_rate_limit_set_failed", "account_id", account.ID, "error", err)
+		}
+	}
+
+	reason := cnQuotaExhaustedReasonPrefix
+	if message := strings.TrimSpace(upstreamMsg); message != "" {
+		reason += ": " + message
+	}
+	until := now.Add(time.Duration(openAI403CooldownMinutesDefault) * time.Minute)
+	s.notifyAccountSchedulingBlocked(account, until, cnQuotaExhaustedReasonPrefix)
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+		slog.Warn("cn_quota_exhausted_set_temp_unschedulable_failed", "account_id", account.ID, "error", err)
+		return
+	}
+	slog.Info("cn_quota_exhausted_temp_unschedulable",
+		"account_id", account.ID,
+		"platform", account.Platform,
+		"until", until.UTC(),
+	)
 }
 
 // handleCNProviderConcurrencyLimit403 将 Kimi 并发限制写为短期临时不可调度，

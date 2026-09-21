@@ -53,6 +53,11 @@
             <span v-else class="text-gray-400">-</span>
           </div>
         </div>
+        <!-- 套餐来自请求实际结算；恢复记录仍单独保留原失败分组。 -->
+        <div>
+          <span class="font-medium text-gray-500 dark:text-dark-400">{{ t('admin.usage.billingSubscriptions') }}</span>
+          <div class="mt-0.5"><BillingSubscriptionSummary :row="detail" show-empty /></div>
+        </div>
         <!-- 分类 -->
         <div>
           <span class="font-medium text-gray-500 dark:text-dark-400">{{ t('usage.errors.category') }}</span>
@@ -90,6 +95,7 @@ import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ErrorRecoveryStatus from '@/components/common/ErrorRecoveryStatus.vue'
+import BillingSubscriptionSummary from '@/components/common/BillingSubscriptionSummary.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import { getMyErrorDetail } from '@/api/usage'
 import { formatDateTime } from '@/utils/format'

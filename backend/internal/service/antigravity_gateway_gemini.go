@@ -86,7 +86,14 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		return nil, s.writeGoogleError(c, http.StatusNotFound, "Unsupported action: "+action)
 	}
 
-	mappedModel := s.getMappedModel(account, originalModel)
+	// 原生 Gemini 客户端常用裸模型名配合 thinkingConfig；Antigravity
+	// 目录使用带思考档位后缀的模型。显式裸名映射仍由常规逻辑优先处理。
+	mappedModel, variantResolved := resolveGeminiThinkingVariant(account, originalModel, body)
+	if !variantResolved {
+		mappedModel = s.getMappedModel(account, originalModel)
+	} else {
+		logger.LegacyPrintf("service.antigravity_gateway", "%s resolved bare Gemini model %s to thinking variant %s", prefix, originalModel, mappedModel)
+	}
 	if mappedModel == "" {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 		return nil, s.writeGoogleError(c, http.StatusForbidden, fmt.Sprintf("model %s not in whitelist", originalModel))

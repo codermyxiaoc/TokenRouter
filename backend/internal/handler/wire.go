@@ -34,6 +34,7 @@ func ProvideAdminHandlers(
 	userAttributeHandler *admin.UserAttributeHandler,
 	errorPassthroughHandler *admin.ErrorPassthroughHandler,
 	tlsFingerprintProfileHandler *admin.TLSFingerprintProfileHandler,
+	pluginHandler *admin.PluginHandler,
 	tlsFingerprintRouterHandler *admin.TLSFingerprintRouterHandler,
 	apiKeyHandler *admin.AdminAPIKeyHandler,
 	scheduledTestHandler *admin.ScheduledTestHandler,
@@ -72,6 +73,7 @@ func ProvideAdminHandlers(
 		UserAttribute:         userAttributeHandler,
 		ErrorPassthrough:      errorPassthroughHandler,
 		TLSFingerprintProfile: tlsFingerprintProfileHandler,
+		Plugin:                pluginHandler,
 		TLSFingerprintRouter:  tlsFingerprintRouterHandler,
 		APIKey:                apiKeyHandler,
 		ScheduledTest:         scheduledTestHandler,
@@ -88,6 +90,7 @@ func ProvideAdminHandlers(
 // ProvideOpenAIGatewayHandler 创建并注入 Grok 媒体资格探测器。
 func ProvideOpenAIGatewayHandler(
 	gatewayService *service.OpenAIGatewayService,
+	pluginManager *service.PluginManager,
 	concurrencyService *service.ConcurrencyService,
 	billingCacheService *service.BillingCacheService,
 	apiKeyService *service.APIKeyService,
@@ -98,6 +101,8 @@ func ProvideOpenAIGatewayHandler(
 	grokQuotaService *service.GrokQuotaService,
 	cfg *config.Config,
 ) *OpenAIGatewayHandler {
+	gatewayService.SetPluginManager(pluginManager)
+	pluginManager.SetAccountDirectory(gatewayService)
 	h := NewOpenAIGatewayHandler(gatewayService, concurrencyService, billingCacheService, apiKeyService,
 		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)
 	h.grokMediaEligibilityProber = grokQuotaService
@@ -239,6 +244,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewUserAttributeHandler,
 	admin.NewErrorPassthroughHandler,
 	ProvideTLSFingerprintProfileHandler,
+	admin.NewPluginHandler,
 	admin.NewTLSFingerprintRouterHandler,
 	admin.NewAdminAPIKeyHandler,
 	admin.NewScheduledTestHandler,

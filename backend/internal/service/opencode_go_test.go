@@ -47,7 +47,13 @@ func TestResolveOpenCodeGoUpstreamProtocol(t *testing.T) {
 	require.Equal(t, AccountModeGo, empty.GetOpenCodeAccountMode())
 	require.True(t, empty.IsOpenCodeGoPlan())
 
-	zen := &Account{Platform: PlatformOpenCodeGo, Credentials: map[string]any{"account_mode": AccountModeZen, "api_protocol": APIProtocolAdaptive}}
+	zen := &Account{Platform: PlatformOpenCodeGo, Type: AccountTypeAPIKey, Credentials: map[string]any{"account_mode": AccountModeZen, "api_protocol": APIProtocolAdaptive}}
+	goAccount := &Account{Platform: PlatformOpenCodeGo, Credentials: map[string]any{"account_mode": AccountModeGo, "api_protocol": APIProtocolAdaptive}}
+	require.False(t, goAccount.IsModelSupported("jev-1.13"))
+	require.False(t, goAccount.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilitySystemOne))
+	require.True(t, zen.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilitySystemOne))
+	require.Equal(t, APIProtocolSystemOne, zen.ResolveOpenCodeGoUpstreamProtocol("jev-1.13"))
+	require.Equal(t, APIProtocolSystemOne, zen.ResolveOpenCodeGoUpstreamProtocol("jev-1.13-free"))
 	require.Equal(t, APIProtocolChatCompletions, zen.ResolveOpenCodeGoUpstreamProtocol("minimax-m3"))
 	require.Equal(t, APIProtocolAnthropic, zen.ResolveOpenCodeGoUpstreamProtocol("claude-opus-4-6"))
 	require.Equal(t, DefaultOpenCodeZenBaseURL, zen.GetOpenAIBaseURL())
@@ -214,6 +220,9 @@ func TestDefaultOpenCodeGoModelIDsCoverDocumentedCatalog(t *testing.T) {
 	t.Parallel()
 	ids := DefaultOpenCodeGoModelIDs()
 	require.Contains(t, ids, "grok-4.6")
+	// Jev 仅由 Zen System One 端点处理，但仍需进入 OpenCode 目录供能力过滤使用。
+	require.Contains(t, ids, "jev-1.13")
+	require.Contains(t, ids, "jev-1.13-free")
 	require.Contains(t, ids, "minimax-m3")
 	require.Contains(t, ids, "glm-5.3")
 	require.NotEmpty(t, ids)

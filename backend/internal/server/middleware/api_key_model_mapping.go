@@ -54,6 +54,9 @@ func rewriteAPIKeyAdditionalModels(request *http.Request, apiKey *service.APIKey
 	if request == nil || apiKey == nil {
 		return nil
 	}
+	if isSeedanceTaskAPIPath(request.URL.Path) {
+		return nil
+	}
 	mediaType, _, _ := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if strings.HasPrefix(mediaType, "multipart/") {
 		return nil
@@ -85,6 +88,10 @@ func setAPIKeyModelRedirectContext(c *gin.Context, sourceModel, targetModel stri
 		ctx = context.WithValue(ctx, ctxkey.ClientModel, clientModel)
 	}
 	c.Request = c.Request.WithContext(ctx)
+	// Seedance 只改写出站模型，返回的 task id/model 等原生字段不能被别名替换。
+	if isSeedanceTaskAPIPath(c.Request.URL.Path) {
+		return
+	}
 	c.Writer = &apiKeyModelResponseWriter{
 		ResponseWriter: c.Writer,
 		trace:          trace,

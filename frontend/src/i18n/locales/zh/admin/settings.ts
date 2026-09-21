@@ -90,6 +90,11 @@ export default {
         bucketLimitHint: '如果窗口和粒度会产生超过 720 根柱子，后端会自动放大单柱时间窗口。'
       },
       features: {
+        pluginManagement: {
+          title: '插件管理',
+          enabled: '显示插件管理菜单',
+          enabledHint: '仅控制管理员侧边栏入口，不会停止已加载或正在运行的插件。停用插件请进入插件管理页。'
+        },
         team: {
           title: '团队功能',
           description: '控制用户团队页和管理员团队管理页是否开放。',

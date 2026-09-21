@@ -41,12 +41,12 @@ func (e GrokMediaEndpoint) RequiresRequestBody() bool {
 }
 
 func (e GrokMediaEndpoint) IsVideoLookupRequest() bool {
-	return e == GrokMediaEndpointVideoStatus || e == GrokMediaEndpointVideoContent
+	return e == GrokMediaEndpointVideoStatus || e == GrokMediaEndpointVideoContent || e == SeedanceEndpointStatus || e == SeedanceEndpointDelete
 }
 
 func (e GrokMediaEndpoint) IsGenerationRequest() bool {
 	switch e {
-	case GrokMediaEndpointImagesGenerations, GrokMediaEndpointImagesEdits, GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions:
+	case SeedanceEndpointCreate, GrokMediaEndpointImagesGenerations, GrokMediaEndpointImagesEdits, GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions:
 		return true
 	default:
 		return false
@@ -381,6 +381,13 @@ func (s *OpenAIGatewayService) ResolveGrokMediaVideoRequestAccount(
 // @project-doc docs/interfaces/grok_upstream.md#grok_video_ownership
 func (s *OpenAIGatewayService) SelectGrokMediaVideoRequestAccount(
 	ctx context.Context, groupID *int64, sessionHash string, accountID int64, requestedModel string,
+) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	return s.SelectMediaVideoRequestAccount(ctx, groupID, sessionHash, accountID, requestedModel, PlatformGrok)
+}
+
+// SelectMediaVideoRequestAccount 仅允许回到创建任务时的原平台、原账号，不重新分配任务。
+func (s *OpenAIGatewayService) SelectMediaVideoRequestAccount(
+	ctx context.Context, groupID *int64, sessionHash string, accountID int64, requestedModel, platform string,
 ) (selection *AccountSelectionResult, decision OpenAIAccountScheduleDecision, err error) {
 	started := time.Now()
 	decision.Layer = openAIAccountScheduleLayerSessionSticky
@@ -391,7 +398,7 @@ func (s *OpenAIGatewayService) SelectGrokMediaVideoRequestAccount(
 	ctx = s.withOpenAIGroupPrivacyRequirement(ctx, groupID)
 	scheduler := &defaultOpenAIAccountScheduler{service: s}
 	selection, _, err = scheduler.selectBySessionHash(ctx, OpenAIAccountScheduleRequest{
-		GroupID: groupID, Platform: PlatformGrok, SessionHash: sessionHash,
+		GroupID: groupID, Platform: platform, SessionHash: sessionHash,
 		StickyAccountID: accountID, PreserveStickyBinding: true, DisableStickyEscape: true,
 		RequestedModel: requestedModel, RequiredTransport: OpenAIUpstreamTransportHTTPSSE,
 		RequirePrivacySet: s.openAIGroupRequiresPrivacySet(ctx, groupID),
@@ -411,12 +418,14 @@ func (s *OpenAIGatewayService) SelectGrokMediaVideoRequestAccount(
 // GrokVideoPendingBilling 是创建任务时保存的快照，用于状态轮询首次发现已完成视频地址时计费。
 // 状态响应可能省略模型或时长，此时先回退到该快照，再回退到默认值。
 type GrokVideoPendingBilling struct {
-	Model                string `json:"model"`
-	BillingModel         string `json:"billing_model,omitempty"`
-	UpstreamModel        string `json:"upstream_model,omitempty"`
-	VideoResolution      string `json:"video_resolution,omitempty"`
-	VideoDurationSeconds int    `json:"video_duration_seconds,omitempty"`
-	OriginalModel        string `json:"original_model,omitempty"`
+	// SeedanceBilling 仅用于方舟异步任务，避免轮询时 Key 配置变化改变创建时资金来源。
+	SeedanceBilling      *SeedanceBillingSnapshot `json:"seedance_billing,omitempty"`
+	Model                string                   `json:"model"`
+	BillingModel         string                   `json:"billing_model,omitempty"`
+	UpstreamModel        string                   `json:"upstream_model,omitempty"`
+	VideoResolution      string                   `json:"video_resolution,omitempty"`
+	VideoDurationSeconds int                      `json:"video_duration_seconds,omitempty"`
+	OriginalModel        string                   `json:"original_model,omitempty"`
 	// CreatedAt 是网关接受异步创建请求的时间，采用 RFC3339Nano UTC 格式。
 	// 延迟计费的 duration_ms 从该时刻计算到首次观测到官方 done 和 video.url，
 	// 观测来源可以是状态轮询或内容下载，而不是仅计算单次发现请求的耗时。

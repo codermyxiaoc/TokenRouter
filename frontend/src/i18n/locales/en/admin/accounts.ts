@@ -797,9 +797,10 @@ export default {
           'Automatic passthrough is currently enabled: it only affects HTTP passthrough and does not disable WS mode.',
         workloadCapabilities: 'Workload capabilities',
         workloadCapabilitiesDesc:
-          'Controls whether this account can be scheduled for text generation and embeddings workloads.',
+          'Controls text generation, embeddings, and Seedance video workloads. Video tasks must be enabled explicitly.',
         workloadTextGeneration: 'Text generation',
         workloadEmbeddings: 'Embeddings',
+        workloadSeedance: 'Seedance (Ark Video)',
         textRouteMode: 'Text protocol routing',
         textRouteModeDesc:
           'Selects the upstream protocol for ordinary text requests. Explicit force modes override probe observations.',

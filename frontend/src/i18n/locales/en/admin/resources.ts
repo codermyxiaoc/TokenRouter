@@ -556,6 +556,8 @@ export default {
       billingTypeMixed: 'Subscription + Balance',
       billingTypeNone: 'No charge',
       billingTypeUnknown: 'Not recorded',
+      billingSubscriptions: 'Billed plans',
+      billingSubscription: 'Subscription',
       billingMode: 'Billing Mode',
       billingModeToken: 'Token',
       billingModePerRequest: 'Per Request',

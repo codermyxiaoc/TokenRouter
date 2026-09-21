@@ -38,7 +38,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v1.5`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v1.8`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -96,6 +96,10 @@
 - `schema_migrations` 文件名与预期一致，未修改既有文件 checksum。
 
 ## 升级与恢复
+
+本地插件框架新增 `280_plugins.sql` 与 `281_plugin_artifacts.sql`，只扩展插件安装/绑定表和包原件字段，不迁移账号、余额或订阅。插件默认停用且菜单默认隐藏，升级无需先安装插件。启用时需确保插件数据目录可写、可执行并上传匹配服务端系统/架构的包；宿主使用 fork 真实版本参与兼容检查。插件配置、包和 Redis KV 的恢复边界见[本地插件](../interfaces/local_plugins.md)。
+
+Seedance 不新增数据库迁移，默认旧账号不开放视频任务；显式开通前配置账号能力、分组媒体权限及输出 token 定价。任务归属和计费快照依赖 Redis，升级或重启需保留 Redis 数据；客户端仍需查询成功结果触发扣费，见[视频任务计费](../interfaces/seedance_upstream.md#seedance_billing)。
 
 升级前先创建并实际验证 PostgreSQL 备份，同时保存 Redis/对象存储中业务要求恢复的数据。后台备份服务可把数据库 dump 流式写入本地或 S3 兼容存储，并用维护锁串行化备份/恢复；敏感存储配置需要稳定的安全密钥。备份内容策略可能排除大体量历史表，恢复目标必须先核对备份范围。
 

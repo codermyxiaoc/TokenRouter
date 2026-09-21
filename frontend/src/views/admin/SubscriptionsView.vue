@@ -195,54 +195,50 @@
             </button>
           </div>
         </div>
+        <div v-if="bulkRequest && bulkAction === null" class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20">
+          <button type="button" class="btn btn-secondary btn-sm" data-test="resume-bulk-operation" @click="bulkAction = bulkRequest.action">
+            {{ t('admin.subscriptions.bulkResume') }}
+          </button>
+          <p class="mt-2 text-xs text-amber-800 dark:text-amber-200">{{ t('admin.subscriptions.bulkRetryHint') }}</p>
+        </div>
+        <!-- 批量栏沿用上游布局，操作范围与当前套餐规则保持一致。 -->
+        <div
+          v-if="selectedSubscriptionIDs.length"
+          class="mt-3 space-y-2 rounded-xl border border-primary-200 bg-primary-50 p-3 dark:border-primary-800 dark:bg-primary-900/20"
+          data-test="subscription-bulk-actions"
+        >
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="mr-2 text-sm font-medium text-primary-800 dark:text-primary-200">
+              {{ t('admin.subscriptions.bulkSelected', { count: selectedSubscriptionIDs.length }) }}
+            </span>
+            <button
+              v-for="action in bulkActions"
+              :key="action"
+              type="button"
+              :class="action === 'revoke' ? 'btn btn-danger btn-sm' : 'btn btn-secondary btn-sm'"
+              :data-test="`bulk-${action}`"
+              :disabled="loading || bulkSubmitting || bulkTargets[action].length === 0"
+              @click="openBulkDialog(action)"
+            >
+              {{ t(bulkActionLabels[action]) }} ({{ bulkTargets[action].length }})
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" :disabled="bulkSubmitting" @click="selectedSubscriptionIDs = []">
+              {{ t('common.clearSelection') }}
+            </button>
+          </div>
+          <p class="text-xs text-gray-600 dark:text-gray-400">{{ t('admin.subscriptions.bulkSelectionHint') }}</p>
+        </div>
       </template>
 
       <!-- Subscriptions Table -->
       <template #table>
-        <!-- 沿用账号管理的表格顶部批量栏，选择范围仍仅限当前页。 -->
-        <div
-          v-if="selectedSubscriptionIDs.length"
-          class="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-lg bg-primary-50 p-3 dark:bg-primary-900/20 lg:mb-0"
-        >
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="text-sm font-medium text-primary-900 dark:text-primary-100">
-              {{ t('admin.subscriptions.bulkSelected', { count: selectedSubscriptionIDs.length }) }}
-            </span>
-            <span aria-hidden="true" class="text-gray-300 dark:text-primary-800">•</span>
-            <button
-              type="button"
-              class="text-xs font-medium text-primary-700 hover:text-primary-800 disabled:cursor-not-allowed disabled:opacity-60 dark:text-primary-300 dark:hover:text-primary-200"
-              :disabled="bulkSubmitting"
-              @click="selectedSubscriptionIDs = []"
-            >
-              {{ t('common.clearSelection') }}
-            </button>
-          </div>
-          <div class="flex flex-wrap justify-end gap-2">
-            <button
-              type="button"
-              class="btn btn-secondary btn-sm"
-              :disabled="loading || bulkSubmitting"
-              @click="openBulkDialog('reset')"
-            >
-              {{ t('admin.subscriptions.bulkReset') }}
-            </button>
-            <button
-              type="button"
-              class="btn btn-primary btn-sm"
-              :disabled="loading || bulkSubmitting"
-              @click="openBulkDialog('extend')"
-            >
-              {{ t('admin.subscriptions.bulkExtend') }}
-            </button>
-          </div>
-        </div>
         <DataTable
           :columns="columns"
           :data="subscriptions"
           :loading="loading"
           :selectable="!bulkSubmitting"
           :selected-keys="selectedSubscriptionIDs"
+          :selection-label="t('admin.subscriptions.title')"
           row-key="id"
           :server-side-sort="true"
           default-sort-key="created_at"
@@ -514,118 +510,13 @@
       </template>
     </TablePageLayout>
 
-    <!-- Assign Subscription Modal -->
-    <BaseDialog
+    <!-- 保持组件挂载，关闭后再次打开仍能确认上次未完成的分配请求。 -->
+    <AssignSubscriptionDialog
       :show="showAssignModal"
-      :title="t('admin.subscriptions.assignSubscription')"
-      width="normal"
-      @close="closeAssignModal"
-    >
-      <form
-        id="assign-subscription-form"
-        @submit.prevent="handleAssignSubscription"
-        class="space-y-5"
-      >
-        <div>
-          <label class="input-label">{{ t('admin.subscriptions.form.user') }}</label>
-          <div class="relative" data-assign-user-search>
-            <input
-              v-model="userSearchKeyword"
-              type="text"
-              class="input pr-8"
-              :placeholder="t('admin.usage.searchUserPlaceholder')"
-              @input="debounceSearchUsers"
-              @focus="showUserDropdown = true"
-            />
-            <button
-              v-if="selectedUser"
-              @click="clearUserSelection"
-              type="button"
-              class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-            >
-              <Icon name="x" size="sm" :stroke-width="2" />
-            </button>
-            <!-- User Dropdown -->
-            <div
-              v-if="showUserDropdown && (userSearchResults.length > 0 || userSearchKeyword)"
-              class="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800"
-            >
-              <div
-                v-if="userSearchLoading"
-                class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400"
-              >
-                {{ t('common.loading') }}
-              </div>
-              <div
-                v-else-if="userSearchResults.length === 0 && userSearchKeyword"
-                class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400"
-              >
-                {{ t('common.noOptionsFound') }}
-              </div>
-              <button
-                v-for="user in userSearchResults"
-                :key="user.id"
-                type="button"
-                @click="selectUser(user)"
-                class="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
-              >
-                <span class="font-medium text-gray-900 dark:text-white">{{ user.email }}</span>
-                <span class="ml-2 text-gray-500 dark:text-gray-400">#{{ user.id }}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-        <div>
-          <label class="input-label">{{ t('payment.admin.planName') }}</label>
-          <Select
-            v-model="assignForm.plan_id"
-            :options="subscriptionPlanOptions"
-            :placeholder="t('admin.announcements.form.selectPackages')"
-          />
-          <p class="input-hint">{{ t('admin.announcements.form.selectPackages') }}</p>
-        </div>
-        <div>
-          <label class="input-label">{{ t('admin.subscriptions.form.validityDays') }}</label>
-          <input v-model.number="assignForm.validity_days" type="number" min="1" class="input" />
-          <p class="input-hint">{{ t('admin.subscriptions.validityHint') }}</p>
-        </div>
-      </form>
-      <template #footer>
-        <div class="flex justify-end gap-3">
-          <button @click="closeAssignModal" type="button" class="btn btn-secondary">
-            {{ t('common.cancel') }}
-          </button>
-          <button
-            type="submit"
-            form="assign-subscription-form"
-            :disabled="submitting"
-            class="btn btn-primary"
-          >
-            <svg
-              v-if="submitting"
-              class="-ml-1 mr-2 h-4 w-4 animate-spin"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle
-                class="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                stroke-width="4"
-              ></circle>
-              <path
-                class="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-              ></path>
-            </svg>
-            {{ submitting ? t('admin.subscriptions.assigning') : t('admin.subscriptions.assign') }}
-          </button>
-        </div>
-      </template>
-    </BaseDialog>
+      :plans="plans"
+      @close="showAssignModal = false"
+      @assigned="loadSubscriptions"
+    />
 
     <!-- Adjust Subscription Modal -->
     <BaseDialog
@@ -729,29 +620,43 @@
       @confirm="confirmResetQuota"
       @cancel="showResetQuotaConfirm = false"
     />
-    <!-- 批量操作确认保留本次请求快照，网络失败后沿用同一幂等键重试。 -->
-    <BaseDialog :show="bulkAction !== null" :title="t(bulkAction === 'extend' ? 'admin.subscriptions.bulkExtend' : 'admin.subscriptions.bulkReset')" width="narrow" :close-on-escape="!bulkSubmitting" @close="closeBulkDialog">
+    <!-- 确认清单保留本次请求快照，网络失败后沿用同一幂等键重试。 -->
+    <BaseDialog :show="bulkAction !== null" :title="bulkAction ? t(bulkActionLabels[bulkAction]) : ''" width="normal" :close-on-escape="!bulkSubmitting" @close="closeBulkDialog">
       <form id="bulk-subscription-form" class="space-y-4" @submit.prevent="submitBulkAction">
-        <p class="text-sm text-gray-600 dark:text-gray-300">{{ t('admin.subscriptions.bulkSelected', { count: bulkSubscriptionIDs.length }) }}</p>
+        <p class="text-sm text-gray-600 dark:text-gray-300">{{ t('admin.subscriptions.bulkConfirmTargets', { count: bulkSubscriptionIDs.length }) }}</p>
+        <ul class="max-h-48 divide-y divide-gray-100 overflow-y-auto rounded-lg border border-gray-200 dark:divide-dark-700 dark:border-dark-600" data-test="bulk-targets">
+          <li v-for="subscription in bulkTargetSnapshot" :key="subscription.id" class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-2 text-sm">
+            <span class="min-w-0 break-all font-medium text-gray-900 dark:text-gray-100">{{ subscription.user?.email || `#${subscription.user_id}` }}</span>
+            <span class="text-xs text-gray-500 dark:text-gray-400">{{ subscription.plan?.name || '-' }} · #{{ subscription.id }}</span>
+          </li>
+        </ul>
         <div v-if="bulkAction === 'extend'">
           <label for="bulk-subscription-days" class="input-label">{{ t('admin.subscriptions.bulkExtendDays') }}</label>
           <input id="bulk-subscription-days" v-model.number="bulkDays" type="number" min="1" max="36500" step="1" required class="input" :disabled="bulkSubmitting || bulkRequest !== null" />
           <p class="input-hint">{{ t('admin.subscriptions.bulkExtendHint') }}</p>
         </div>
-        <fieldset v-else class="space-y-2" :disabled="bulkSubmitting || bulkRequest !== null">
+        <fieldset v-else-if="bulkAction === 'reset'" class="space-y-2" :disabled="bulkSubmitting || bulkRequest !== null">
           <legend class="input-label">{{ t('admin.subscriptions.bulkResetWindows') }}</legend>
-          <label v-for="period in (['daily', 'weekly', 'monthly'] as const)" :key="period" class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input v-model="bulkResetWindows[period]" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-600" :data-bulk-window="period" />
-            {{ t(`admin.subscriptions.${period}`) }}
-          </label>
+          <div class="flex flex-wrap gap-5">
+            <label v-for="period in (['daily', 'weekly', 'monthly'] as const)" :key="period" class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input v-model="bulkResetWindows[period]" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-600" :data-bulk-window="period" />
+              {{ t(`admin.subscriptions.${period}`) }}
+            </label>
+          </div>
           <p class="input-hint">{{ t('admin.subscriptions.bulkResetHint') }}</p>
         </fieldset>
-        <p v-if="bulkError" role="alert" class="text-sm text-red-600 dark:text-red-400">{{ bulkError }}</p>
+        <p v-else class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+          {{ t(bulkAction === 'revoke' ? 'admin.subscriptions.bulkRevokeHint' : 'admin.subscriptions.bulkRestoreHint') }}
+        </p>
+        <div v-if="bulkError" class="rounded-lg bg-red-50 p-3 dark:bg-red-900/20">
+          <p role="alert" class="text-sm text-red-600 dark:text-red-400">{{ bulkError }}</p>
+          <p v-if="bulkRequest" class="mt-1 text-xs text-gray-600 dark:text-gray-400">{{ t('admin.subscriptions.bulkRetryHint') }}</p>
+        </div>
       </form>
       <template #footer>
         <div class="flex justify-end gap-3">
           <button type="button" class="btn btn-secondary" :disabled="bulkSubmitting" @click="closeBulkDialog">{{ t('common.cancel') }}</button>
-          <button type="submit" form="bulk-subscription-form" class="btn btn-primary" :disabled="bulkSubmitting">
+          <button type="submit" form="bulk-subscription-form" :class="bulkAction === 'revoke' ? 'btn btn-danger' : 'btn btn-primary'" :disabled="bulkSubmitting">
             {{ bulkSubmitting ? t('common.processing') : t('common.confirm') }}
           </button>
         </div>
@@ -840,12 +745,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
-import type { AdminUser, UserSubscription } from '@/types'
+import type { UserSubscription } from '@/types'
 import type { SubscriptionPlan } from '@/types/payment'
 import type { SimpleUser } from '@/api/admin/usage'
 import type { Column } from '@/components/common/types'
@@ -856,6 +761,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import AssignSubscriptionDialog from '@/components/admin/subscription/AssignSubscriptionDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import UserAvatar from '@/components/common/UserAvatar.vue'
@@ -863,23 +769,18 @@ import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { GROUP_PLATFORM_OPTIONS } from '@/constants/platforms'
 import { getFloatingPanelPosition } from '@/utils/floatingPanel'
+import { readPendingSubscriptionOperation, writePendingSubscriptionOperation } from '@/utils/subscriptionOperationStorage'
 import {
   getRemainingDurationParts,
   getRemainingExpiryDuration,
   isOneTimeDailyQuota,
+  isQuotaWindowEndingAtSubscriptionExpiry,
   type RemainingDurationParts
 } from '@/utils/subscriptionQuota'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 const { formatBalanceAmount } = useBalanceDisplay()
-
-interface PlanOption {
-  value: number
-  label: string
-  description: string | null
-  [key: string]: unknown
-}
 
 // Guide modal state
 const showGuideModal = ref(false)
@@ -1080,13 +981,57 @@ const statusOptions = computed(() => [
 
 const subscriptions = ref<UserSubscription[]>([])
 const selectedSubscriptionIDs = ref<number[]>([])
-const bulkAction = ref<'extend' | 'reset' | null>(null)
+type BulkAction = 'extend' | 'reset' | 'revoke' | 'restore'
+const bulkActions: BulkAction[] = ['extend', 'reset', 'revoke', 'restore']
+const bulkActionLabels: Record<BulkAction, string> = {
+  extend: 'admin.subscriptions.bulkExtend', reset: 'admin.subscriptions.bulkReset',
+  revoke: 'admin.subscriptions.bulkRevoke', restore: 'admin.subscriptions.bulkRestore'
+}
+const bulkAction = ref<BulkAction | null>(null)
+const bulkTargetSnapshot = ref<UserSubscription[]>([])
+const bulkTargets = computed(() => {
+  const selected = subscriptions.value.filter(sub => selectedSubscriptionIDs.value.includes(sub.id))
+  return {
+    // 延期、重置仍校验完整选择；撤销与恢复分别列出其可操作记录。
+    extend: selected, reset: selected,
+    revoke: selected.filter(sub => sub.status !== 'revoked'),
+    restore: selected.filter(sub => sub.status === 'revoked')
+  }
+})
 const bulkSubscriptionIDs = ref<number[]>([])
 const bulkDays = ref(1)
 const bulkResetWindows = reactive({ daily: true, weekly: true, monthly: true })
 const bulkSubmitting = ref(false)
 const bulkError = ref('')
-const bulkRequest = ref<{ key: string; days: number; windows: { daily: boolean; weekly: boolean; monthly: boolean } } | null>(null)
+interface BulkRequest {
+  key: string
+  action: BulkAction
+  days: number
+  windows: { daily: boolean; weekly: boolean; monthly: boolean }
+  unknownResult: boolean
+}
+const bulkRequest = ref<BulkRequest | null>(null)
+// 只保存未确认操作，按管理员隔离；刷新或离开页面后仍沿用原参数与幂等键。
+const savedBulk = readPendingSubscriptionOperation<{ request: BulkRequest; targets: UserSubscription[] }>('lifecycle')
+if (savedBulk?.request && bulkActions.includes(savedBulk.request.action)
+  && typeof savedBulk.request.key === 'string' && savedBulk.request.key.startsWith('subscription-bulk-')
+  && Number.isInteger(savedBulk.request.days) && savedBulk.request.days >= 1 && savedBulk.request.days <= 36500
+  && ['daily', 'weekly', 'monthly'].every(period => typeof savedBulk.request.windows?.[period as keyof BulkRequest['windows']] === 'boolean')
+  && Array.isArray(savedBulk.targets) && savedBulk.targets.length > 0 && savedBulk.targets.length <= 100
+  && savedBulk.targets.every(sub => Number.isSafeInteger(sub.id) && sub.id > 0)) {
+  bulkRequest.value = { ...savedBulk.request, unknownResult: true }
+  bulkTargetSnapshot.value = savedBulk.targets
+  bulkSubscriptionIDs.value = savedBulk.targets.map(sub => sub.id)
+  bulkDays.value = savedBulk.request.days
+  Object.assign(bulkResetWindows, savedBulk.request.windows)
+}
+watch(bulkRequest, request => {
+  writePendingSubscriptionOperation('lifecycle', request ? {
+    request,
+    // 持久化确认清单所需的最少信息，不保留用量、用户资料等完整对象。
+    targets: bulkTargetSnapshot.value.map(sub => ({ id: sub.id, user_id: sub.user_id, user: sub.user ? { email: sub.user.email } : undefined, plan: sub.plan ? { name: sub.plan.name } : undefined }))
+  } : null)
+}, { deep: true, flush: 'sync' })
 
 const updateSelectedSubscriptions = (keys: Array<string | number>) => {
   if (bulkSubmitting.value) return
@@ -1094,17 +1039,23 @@ const updateSelectedSubscriptions = (keys: Array<string | number>) => {
   selectedSubscriptionIDs.value = [...new Set(keys.map(Number).filter(id => visibleIDs.has(id)))]
 }
 
-const openBulkDialog = (action: 'extend' | 'reset') => {
-  if (!selectedSubscriptionIDs.value.length || selectedSubscriptionIDs.value.length > 100) {
+const openBulkDialog = (action: BulkAction) => {
+  // 未确认的请求优先恢复原确认清单，避免关闭后换键重复延长。
+  if (bulkRequest.value) {
+    bulkAction.value = bulkRequest.value.action
+    return
+  }
+  const selected = bulkTargets.value[action]
+  if (!selected.length || selected.length > 100) {
     appStore.showError(t('admin.subscriptions.bulkSelectionLimit'))
     return
   }
-  const selected = subscriptions.value.filter(sub => selectedSubscriptionIDs.value.includes(sub.id))
-  if (selected.some(sub => !['active', 'pending', 'expired'].includes(sub.status))) {
+  if ((action === 'extend' || action === 'reset') && selected.some(sub => !['active', 'pending', 'expired'].includes(sub.status))) {
     appStore.showError(t('admin.subscriptions.bulkInvalidStatus'))
     return
   }
-  bulkSubscriptionIDs.value = [...selectedSubscriptionIDs.value]
+  bulkSubscriptionIDs.value = selected.map(sub => sub.id)
+  bulkTargetSnapshot.value = [...selected]
   bulkAction.value = action
   bulkDays.value = 1
   Object.assign(bulkResetWindows, { daily: true, weekly: true, monthly: true })
@@ -1115,8 +1066,7 @@ const openBulkDialog = (action: 'extend' | 'reset') => {
 const closeBulkDialog = () => {
   if (bulkSubmitting.value) return
   bulkAction.value = null
-  bulkRequest.value = null
-  bulkError.value = ''
+  if (!bulkRequest.value) bulkError.value = ''
 }
 
 const submitBulkAction = async () => {
@@ -1131,6 +1081,8 @@ const submitBulkAction = async () => {
   }
   // 固定确认时的参数，失败后点击确认只重试同一批次。
   bulkRequest.value ??= {
+    action: bulkAction.value,
+    unknownResult: false,
     key: `subscription-bulk-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`,
     days: bulkDays.value,
     windows: { ...bulkResetWindows }
@@ -1141,14 +1093,24 @@ const submitBulkAction = async () => {
     const request = bulkRequest.value
     const result = bulkAction.value === 'extend'
       ? await adminAPI.subscriptions.bulkExtend(bulkSubscriptionIDs.value, request.days, request.key)
-      : await adminAPI.subscriptions.bulkResetQuota(bulkSubscriptionIDs.value, request.windows, request.key)
+      : bulkAction.value === 'reset'
+        ? await adminAPI.subscriptions.bulkResetQuota(bulkSubscriptionIDs.value, request.windows, request.key)
+        : bulkAction.value === 'revoke'
+          ? await adminAPI.subscriptions.bulkRevoke(bulkSubscriptionIDs.value, request.key)
+          : await adminAPI.subscriptions.bulkRestore(bulkSubscriptionIDs.value, request.key)
     appStore.showSuccess(t('admin.subscriptions.bulkSuccess', { count: result.updated_count }))
     selectedSubscriptionIDs.value = []
     bulkAction.value = null
     bulkRequest.value = null
     await loadSubscriptions()
   } catch (error: any) {
-    const failure = error.response?.data
+    // apiClient 返回顶层结构，兼容测试与旧调用方的 Axios 原始错误。
+    const failure = error.response?.data ?? error
+    const status = error.response?.status ?? error.status
+    const rejectedBeforeCommit = [400, 404, 409].includes(status)
+      && (failure?.reason?.startsWith('SUBSCRIPTION_') || failure?.reason === 'INVALID_INPUT')
+    if (rejectedBeforeCommit && !bulkRequest.value?.unknownResult) bulkRequest.value = null
+    else if (bulkRequest.value) bulkRequest.value.unknownResult = true
     bulkError.value = failure?.reason === 'SUBSCRIPTION_BULK_EXPIRED_HAS_SUCCESSOR'
       ? t('admin.subscriptions.bulkExpiredHasSuccessor', { id: failure.metadata?.subscription_id ?? '-' })
       : failure?.message || t('admin.subscriptions.bulkFailed')
@@ -1167,14 +1129,6 @@ const filterUserLoading = ref(false)
 const showFilterUserDropdown = ref(false)
 const selectedFilterUser = ref<SimpleUser | null>(null)
 let filterUserSearchTimeout: ReturnType<typeof setTimeout> | null = null
-
-// User search state
-const userSearchKeyword = ref('')
-const userSearchResults = ref<AdminUser[]>([])
-const userSearchLoading = ref(false)
-const showUserDropdown = ref(false)
-const selectedUser = ref<AdminUser | null>(null)
-let userSearchTimeout: ReturnType<typeof setTimeout> | null = null
 
 const filters = reactive({
   status: 'active',
@@ -1217,12 +1171,6 @@ const extendingSubscription = ref<UserSubscription | null>(null)
 const revokingSubscription = ref<UserSubscription | null>(null)
 const restoringSubscription = ref<UserSubscription | null>(null)
 
-const assignForm = reactive({
-  user_id: null as number | null,
-  plan_id: null as number | null,
-  validity_days: 30
-})
-
 const extendForm = reactive({
   days: 30
 })
@@ -1236,14 +1184,6 @@ const platformFilterOptions = computed(() => [
   { value: '', label: t('admin.subscriptions.allPlatforms') },
   ...GROUP_PLATFORM_OPTIONS
 ])
-
-const subscriptionPlanOptions = computed<PlanOption[]>(() =>
-  plans.value.map((plan) => ({
-    value: plan.id,
-    label: plan.name,
-    description: plan.description
-  }))
-)
 
 const applyFilters = () => {
   selectedSubscriptionIDs.value = []
@@ -1355,56 +1295,6 @@ const clearFilterUser = () => {
   applyFilters()
 }
 
-// User search with debounce
-const debounceSearchUsers = () => {
-  // 输入发生变化时立即清除发放目标，不能等防抖查询完成。
-  if (selectedUser.value && userSearchKeyword.value.trim() !== selectedUser.value.email) {
-    selectedUser.value = null
-    assignForm.user_id = null
-  }
-  if (userSearchTimeout) {
-    clearTimeout(userSearchTimeout)
-  }
-  userSearchTimeout = setTimeout(searchUsers, 300)
-}
-
-const searchUsers = async () => {
-  const keyword = userSearchKeyword.value.trim()
-
-  if (!keyword) {
-    userSearchResults.value = []
-    return
-  }
-
-  userSearchLoading.value = true
-  try {
-    // 发放订阅只查询现存用户；历史用量筛选仍使用原有查询。
-    const result = await adminAPI.users.list(1, 30, {
-      search: keyword, sort_by: 'email', sort_order: 'asc'
-    })
-    userSearchResults.value = result.items
-  } catch (error) {
-    console.error('Failed to search users:', error)
-    userSearchResults.value = []
-  } finally {
-    userSearchLoading.value = false
-  }
-}
-
-const selectUser = (user: AdminUser) => {
-  selectedUser.value = user
-  userSearchKeyword.value = user.email
-  showUserDropdown.value = false
-  assignForm.user_id = user.id
-}
-
-const clearUserSelection = () => {
-  selectedUser.value = null
-  userSearchKeyword.value = ''
-  userSearchResults.value = []
-  assignForm.user_id = null
-}
-
 const handlePageChange = (page: number) => {
   selectedSubscriptionIDs.value = []
   pagination.page = page
@@ -1424,50 +1314,6 @@ const handleSort = (key: string, order: 'asc' | 'desc') => {
   sortState.sort_order = order
   pagination.page = 1
   loadSubscriptions()
-}
-
-const closeAssignModal = () => {
-  showAssignModal.value = false
-  assignForm.user_id = null
-  assignForm.plan_id = null
-  assignForm.validity_days = 30
-  // Clear user search state
-  selectedUser.value = null
-  userSearchKeyword.value = ''
-  userSearchResults.value = []
-  showUserDropdown.value = false
-}
-
-const handleAssignSubscription = async () => {
-  if (!assignForm.user_id) {
-    appStore.showError(t('admin.subscriptions.pleaseSelectUser'))
-    return
-  }
-  if (!assignForm.plan_id) {
-    appStore.showError(t('admin.announcements.form.selectPackages'))
-    return
-  }
-  if (!assignForm.validity_days || assignForm.validity_days < 1) {
-    appStore.showError(t('admin.subscriptions.validityDaysRequired'))
-    return
-  }
-
-  submitting.value = true
-  try {
-    await adminAPI.subscriptions.assign({
-      user_id: assignForm.user_id,
-      plan_id: assignForm.plan_id,
-      validity_days: assignForm.validity_days
-    })
-    appStore.showSuccess(t('admin.subscriptions.subscriptionAssigned'))
-    closeAssignModal()
-    loadSubscriptions()
-  } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.subscriptions.failedToAssign'))
-    console.error('Error assigning subscription:', error)
-  } finally {
-    submitting.value = false
-  }
 }
 
 const handleExtend = (subscription: UserSubscription) => {
@@ -1696,30 +1542,9 @@ const formatResetTime = (
   return parts ? formatResetDuration(parts) : t('admin.subscriptions.windowNotActive')
 }
 
-const isQuotaWindowEndingAtSubscriptionExpiry = (
-  subscription: UserSubscription,
-  windowStart: string | null,
-  period: 'daily' | 'weekly' | 'monthly'
-): boolean => {
-  if (!windowStart) return false
-  const start = new Date(windowStart).getTime()
-  const expiresAt = new Date(subscription.expires_at).getTime()
-  if (!Number.isFinite(start) || !Number.isFinite(expiresAt)) return false
-
-  const windowMsByPeriod = {
-    daily: 24 * 60 * 60 * 1000,
-    weekly: 7 * 24 * 60 * 60 * 1000,
-    monthly: 30 * 24 * 60 * 60 * 1000
-  }
-  const windowMs = windowMsByPeriod[period]
-  const nextWindowStart = start + windowMs
-  return nextWindowStart + windowMs > expiresAt
-}
-
 // Handle click outside to close dropdowns
 const handleClickOutside = (event: MouseEvent) => {
   const target = event.target as HTMLElement
-  if (!target.closest('[data-assign-user-search]')) showUserDropdown.value = false
   if (!target.closest('[data-filter-user-search]')) showFilterUserDropdown.value = false
   if (columnDropdownRef.value && !columnDropdownRef.value.contains(target)) {
     showColumnDropdown.value = false
@@ -1745,9 +1570,6 @@ onUnmounted(() => {
   window.removeEventListener('scroll', updateFilterDropdownPosition, true)
   if (filterUserSearchTimeout) {
     clearTimeout(filterUserSearchTimeout)
-  }
-  if (userSearchTimeout) {
-    clearTimeout(userSearchTimeout)
   }
 })
 </script>

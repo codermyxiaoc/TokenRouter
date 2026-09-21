@@ -552,6 +552,8 @@ export default {
       billingTypeMixed: '订阅＋余额',
       billingTypeNone: '未扣费',
       billingTypeUnknown: '未记录',
+      billingSubscriptions: '扣费套餐',
+      billingSubscription: '订阅',
       billingMode: '计费模式',
       billingModeToken: '按量',
       billingModePerRequest: '按次',

@@ -1713,7 +1713,7 @@ export type OpenAITextRouteMode =
   | 'force_responses'
   | 'force_chat_completions'
 export type OpenAIResponsesProbeStatus = 'supported' | 'unsupported' | 'unknown'
-export type OpenAIWorkloadCapability = 'text_generation' | 'embeddings'
+export type OpenAIWorkloadCapability = 'text_generation' | 'embeddings' | 'seedance'
 
 export interface OpenAICompactState {
   openai_compact_mode?: OpenAICompactMode
@@ -1950,6 +1950,14 @@ export type UsageRequestType = 'unknown' | 'sync' | 'stream' | 'ws_v2' | 'cyber'
 export type ImageSizeSource = 'output' | 'input' | 'default' | 'legacy'
 export type ImageSizeBreakdown = Record<string, number>
 
+// 按本次结算分配返回的套餐摘要；不得使用密钥当前绑定补全历史扣费。
+export interface BillingSubscription {
+  subscription_id: number
+  plan_id?: number
+  plan_name?: string
+  amount_usd: number
+}
+
 export interface UsageLog {
   id: number
   user_id: number
@@ -1983,6 +1991,7 @@ export interface UsageLog {
   // 本次实际结算的资金分配；旧服务返回的数据可能没有这些字段。
   subscription_amount_usd?: number
   balance_amount_usd?: number
+  billing_subscriptions?: BillingSubscription[]
   rate_multiplier: number
   long_context_billing_applied: boolean
   billing_type: number
@@ -2426,6 +2435,8 @@ export interface ExtendSubscriptionRequest {
 
 export interface UserErrorRequest {
   id: number
+  // 仅关联本次请求实际结算的套餐；缺失不代表请求一定未扣费。
+  billing_subscriptions?: BillingSubscription[]
   created_at: string
   model: string
   inbound_endpoint: string

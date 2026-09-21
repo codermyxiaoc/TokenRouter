@@ -27,9 +27,15 @@ func executeAdminIdempotent(
 	payload any,
 	ttl time.Duration,
 	execute func(context.Context) (any, error),
+	preventReexecution ...bool,
 ) (*service.IdempotencyExecuteResult, error) {
+	prevent := len(preventReexecution) > 0 && preventReexecution[0]
 	coordinator := service.DefaultIdempotencyCoordinator()
 	if coordinator == nil {
+		// 不可安全重发的权益操作必须有协调器，缺少存储时不能降级为直接执行。
+		if prevent {
+			return nil, service.ErrIdempotencyStoreUnavail
+		}
 		data, err := execute(c.Request.Context())
 		if err != nil {
 			return nil, err
@@ -38,14 +44,15 @@ func executeAdminIdempotent(
 	}
 
 	return coordinator.Execute(c.Request.Context(), service.IdempotencyExecuteOptions{
-		Scope:          scope,
-		ActorScope:     adminActorScope(c),
-		Method:         c.Request.Method,
-		Route:          c.FullPath(),
-		IdempotencyKey: c.GetHeader("Idempotency-Key"),
-		Payload:        payload,
-		RequireKey:     true,
-		TTL:            ttl,
+		Scope:              scope,
+		ActorScope:         adminActorScope(c),
+		Method:             c.Request.Method,
+		Route:              c.FullPath(),
+		IdempotencyKey:     c.GetHeader("Idempotency-Key"),
+		Payload:            payload,
+		RequireKey:         true,
+		TTL:                ttl,
+		PreventReexecution: prevent,
 	}, execute)
 }
 
@@ -84,8 +91,9 @@ func executeAdminIdempotentJSONWithMode(
 	ttl time.Duration,
 	mode idempotencyStoreUnavailableMode,
 	execute func(context.Context) (any, error),
+	preventReexecution ...bool,
 ) {
-	result, err := executeAdminIdempotent(c, scope, payload, ttl, execute)
+	result, err := executeAdminIdempotent(c, scope, payload, ttl, execute, preventReexecution...)
 	if err != nil {
 		if infraerrors.Code(err) == infraerrors.Code(service.ErrIdempotencyStoreUnavail) {
 			strategy := "fail_close"

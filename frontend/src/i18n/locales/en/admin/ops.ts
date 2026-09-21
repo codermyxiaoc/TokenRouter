@@ -398,6 +398,17 @@ export default {
           status: 'Status',
           requestId: 'Request ID',
           actions: 'Actions'
+        },
+        payload: {
+          title: 'Request Endpoint Detail',
+          endpoint: 'Endpoint',
+          requestHeaders: 'Request Headers',
+          requestBody: 'Request Body',
+          responseHeaders: 'Response Headers',
+          responseBody: 'Response Body',
+          empty: 'No request detail was saved',
+          truncated: 'Content truncated',
+          failed: 'Failed to load request detail'
         }
       },
       alertEvents: {

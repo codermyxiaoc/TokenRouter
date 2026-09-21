@@ -398,6 +398,17 @@ export default {
           status: '状态码',
           requestId: '请求ID',
           actions: '操作'
+        },
+        payload: {
+          title: '请求端点详情',
+          endpoint: '端点',
+          requestHeaders: '请求头',
+          requestBody: '请求体',
+          responseHeaders: '响应头',
+          responseBody: '响应体',
+          empty: '暂无已保存的请求详情',
+          truncated: '内容已截断',
+          failed: '加载请求详情失败'
         }
       },
       alertEvents: {

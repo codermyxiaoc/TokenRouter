@@ -322,6 +322,29 @@ func TestDefaultPricingIncludesOfficialGPT6AstraRates(t *testing.T) {
 	require.Equal(t, []string{"text"}, outputModalities)
 }
 
+func TestDefaultPricingIncludesJevSystemOneRates(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "resources", "model-pricing", "model_prices_and_context_window.json"))
+	require.NoError(t, err)
+
+	pricingSvc := &PricingService{}
+	pricingData, err := pricingSvc.parsePricingData(data)
+	require.NoError(t, err)
+	pricingSvc.pricingData = pricingData
+	billingSvc := NewBillingService(&config.Config{}, pricingSvc)
+
+	jev, err := billingSvc.GetModelPricing("jev-1.13")
+	require.NoError(t, err)
+	require.NotNil(t, jev)
+	require.InDelta(t, 0.042/1_000_000, jev.InputPricePerToken, 1e-15)
+	require.Zero(t, jev.OutputPricePerToken)
+
+	free, err := billingSvc.GetModelPricing("jev-1.13-free")
+	require.NoError(t, err)
+	require.NotNil(t, free)
+	require.Zero(t, free.InputPricePerToken)
+	require.Zero(t, free.OutputPricePerToken)
+}
+
 func TestGPT56DedicatedFallbacksUseOfficialRates(t *testing.T) {
 	tests := []struct {
 		model                             string

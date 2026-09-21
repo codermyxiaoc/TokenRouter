@@ -12,6 +12,7 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/DATA-DOG/go-sqlmock"
 	dbent "github.com/TokenFlux/TokenRouter/ent"
+	"github.com/TokenFlux/TokenRouter/ent/schema/mixins"
 	"github.com/TokenFlux/TokenRouter/ent/usersubscription"
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
@@ -32,8 +33,29 @@ func (r *bulkSubscriptionTestRepo) db(ctx context.Context) *dbent.Client {
 }
 
 func bulkSubscriptionFromEnt(sub *dbent.UserSubscription) *UserSubscription {
-	return &UserSubscription{ID: sub.ID, UserID: sub.UserID, PlanID: sub.PlanID, StartsAt: sub.StartsAt, ExpiresAt: sub.ExpiresAt, Status: sub.Status,
+	return &UserSubscription{ID: sub.ID, UserID: sub.UserID, PlanID: sub.PlanID, StartsAt: sub.StartsAt, ExpiresAt: sub.ExpiresAt, Status: sub.Status, DeletedAt: sub.DeletedAt,
 		DailyUsageUSD: sub.DailyUsageUsd, WeeklyUsageUSD: sub.WeeklyUsageUsd, MonthlyUsageUSD: sub.MonthlyUsageUsd}
+}
+
+func (r *bulkSubscriptionTestRepo) GetByIDIncludeDeleted(ctx context.Context, id int64) (*UserSubscription, error) {
+	return r.GetByID(mixins.SkipSoftDelete(ctx), id)
+}
+
+func (r *bulkSubscriptionTestRepo) Delete(ctx context.Context, id int64) error {
+	if id == r.failID {
+		return errors.New("private database detail")
+	}
+	return r.db(ctx).UserSubscription.UpdateOneID(id).SetDeletedAt(time.Now()).Exec(ctx)
+}
+
+func (r *bulkSubscriptionTestRepo) Restore(ctx context.Context, id int64, status string) (*UserSubscription, error) {
+	if id == r.failID {
+		return nil, errors.New("private database detail")
+	}
+	if err := r.db(ctx).UserSubscription.UpdateOneID(id).ClearDeletedAt().SetStatus(status).Exec(mixins.SkipSoftDelete(ctx)); err != nil {
+		return nil, err
+	}
+	return r.GetByID(ctx, id)
 }
 
 func (r *bulkSubscriptionTestRepo) GetByID(ctx context.Context, id int64) (*UserSubscription, error) {
@@ -236,6 +258,10 @@ func TestBulkSubscriptionsRejectInvalidSelectionBeforeMutation(t *testing.T) {
 	for _, ids := range [][]int64{nil, {0}, {-1}, make([]int64, 101)} {
 		_, err := svc.BulkExtendSubscriptions(context.Background(), ids, 1)
 		require.Error(t, err)
+		_, err = svc.BulkRevokeSubscriptions(context.Background(), ids)
+		require.Error(t, err)
+		_, err = svc.BulkRestoreSubscriptions(context.Background(), ids)
+		require.Error(t, err)
 	}
 	for _, days := range []int{0, -1, 36501} {
 		_, err := svc.BulkExtendSubscriptions(context.Background(), []int64{1}, days)
@@ -250,4 +276,78 @@ func TestBulkSubscriptionsRejectInvalidSelectionBeforeMutation(t *testing.T) {
 	require.ErrorIs(t, err, ErrSubscriptionNotActive)
 	first, _ := repo.GetByID(context.Background(), ids[0])
 	require.True(t, first.ExpiresAt.Equal(base))
+}
+
+// 撤销当前订阅必须沿用后继提前生效，恢复存在重叠时必须整批拒绝而非额外延期。
+func TestBulkSubscriptionsRevokePreservesChainAndRestoreRejectsOverlap(t *testing.T) {
+	svc, repo, ids, _ := newBulkSubscriptionFixture(t)
+	ctx := context.Background()
+	before, err := repo.GetByID(ctx, ids[1])
+	require.NoError(t, err)
+	result, err := svc.BulkRevokeSubscriptions(ctx, []int64{ids[0], ids[0]})
+	require.NoError(t, err)
+	require.Equal(t, []int64{ids[0]}, result.SubscriptionIDs)
+	require.Equal(t, 1, result.UpdatedCount)
+	first, err := repo.GetByIDIncludeDeleted(ctx, ids[0])
+	require.NoError(t, err)
+	require.NotNil(t, first.DeletedAt)
+	next, err := repo.GetByID(ctx, ids[1])
+	require.NoError(t, err)
+	require.WithinDuration(t, time.Now(), next.StartsAt, time.Second)
+	require.Equal(t, before.ExpiresAt.Sub(before.StartsAt), next.ExpiresAt.Sub(next.StartsAt))
+	_, err = svc.BulkRestoreSubscriptions(ctx, []int64{ids[0]})
+	require.ErrorIs(t, err, ErrSubscriptionRestoreConflict)
+	first, err = repo.GetByIDIncludeDeleted(ctx, ids[0])
+	require.NoError(t, err)
+	require.NotNil(t, first.DeletedAt)
+}
+
+// 恢复必须根据原窗口计算 active、pending、expired，暂停记录仍保留暂停且不清空消费。
+func TestBulkSubscriptionsRestorePreservesOriginalEntitlements(t *testing.T) {
+	for _, status := range []string{SubscriptionStatusActive, SubscriptionStatusPending, SubscriptionStatusExpired, SubscriptionStatusSuspended} {
+		t.Run(status, func(t *testing.T) {
+			svc, repo, ids, _ := newBulkSubscriptionFixture(t)
+			ctx := context.Background()
+			now := time.Now().UTC().Truncate(time.Second)
+			starts, expires := now.Add(-time.Hour), now.Add(time.Hour)
+			if status == SubscriptionStatusPending {
+				starts, expires = now.Add(time.Hour), now.Add(2*time.Hour)
+			}
+			if status == SubscriptionStatusExpired {
+				starts, expires = now.Add(-2*time.Hour), now.Add(-time.Hour)
+			}
+			require.NoError(t, repo.client.UserSubscription.UpdateOneID(ids[0]).SetStartsAt(starts).SetExpiresAt(expires).SetStatus(status).SetDeletedAt(now).Exec(ctx))
+			result, err := svc.BulkRestoreSubscriptions(ctx, []int64{ids[0], ids[0]})
+			require.NoError(t, err)
+			require.Equal(t, 1, result.UpdatedCount)
+			got, err := repo.GetByID(ctx, ids[0])
+			require.NoError(t, err)
+			require.Nil(t, got.DeletedAt)
+			require.Equal(t, status, got.Status)
+			require.True(t, starts.Equal(got.StartsAt))
+			require.True(t, expires.Equal(got.ExpiresAt))
+			require.Equal(t, 3.0, got.DailyUsageUSD)
+			require.Equal(t, 4.0, got.WeeklyUsageUSD)
+			require.Equal(t, 5.0, got.MonthlyUsageUSD)
+		})
+	}
+}
+
+// 状态资格在修改前整批复核，不能先撤销有效项再因第二项无效而留下部分成功。
+func TestBulkSubscriptionsStatusMutationRejectsMixedEligibility(t *testing.T) {
+	svc, repo, ids, _ := newBulkSubscriptionFixture(t)
+	ctx := context.Background()
+	require.NoError(t, repo.Delete(ctx, ids[1]))
+	_, err := svc.BulkRevokeSubscriptions(ctx, ids)
+	require.Error(t, err)
+	got, err := repo.GetByID(ctx, ids[0])
+	require.NoError(t, err)
+	require.Nil(t, got.DeletedAt)
+	require.NoError(t, repo.client.UserSubscription.UpdateOneID(ids[1]).ClearDeletedAt().Exec(mixins.SkipSoftDelete(ctx)))
+	require.NoError(t, repo.Delete(ctx, ids[0]))
+	_, err = svc.BulkRestoreSubscriptions(ctx, ids)
+	require.ErrorIs(t, err, ErrSubscriptionNotRevoked)
+	got, err = repo.GetByIDIncludeDeleted(ctx, ids[0])
+	require.NoError(t, err)
+	require.NotNil(t, got.DeletedAt)
 }

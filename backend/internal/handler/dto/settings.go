@@ -172,6 +172,7 @@ type SystemSettings struct {
 	UsageRankingShowTotalTokens bool                           `json:"usage_ranking_show_total_tokens"`
 	UsageRankingShowRequests    bool                           `json:"usage_ranking_show_requests"`
 	UsageRankingShowActualCost  bool                           `json:"usage_ranking_show_actual_cost"`
+	PluginManagementEnabled     bool                           `json:"plugin_management_enabled"`
 	CustomMenuItems             []CustomMenuItem               `json:"custom_menu_items"`
 	CustomEndpoints             []CustomEndpoint               `json:"custom_endpoints"`
 	FooterLinks                 []FooterLinkGroup              `json:"footer_links"`
@@ -402,6 +403,7 @@ type PublicSettings struct {
 	UsageRankingShowTotalTokens         bool                     `json:"usage_ranking_show_total_tokens"`
 	UsageRankingShowRequests            bool                     `json:"usage_ranking_show_requests"`
 	UsageRankingShowActualCost          bool                     `json:"usage_ranking_show_actual_cost"`
+	PluginManagementEnabled             bool                     `json:"plugin_management_enabled"`
 	CustomMenuItems                     []CustomMenuItem         `json:"custom_menu_items"`
 	CustomEndpoints                     []CustomEndpoint         `json:"custom_endpoints"`
 	FooterLinks                         []FooterLinkGroup        `json:"footer_links"`

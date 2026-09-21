@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/handler/dto"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/pagination"
@@ -48,8 +49,8 @@ type AssignSubscriptionRequest struct {
 
 // BulkAssignSubscriptionRequest 表示批量分配订阅请求。
 type BulkAssignSubscriptionRequest struct {
-	UserIDs      []int64 `json:"user_ids" binding:"required,min=1"`
-	PlanID       int64   `json:"plan_id" binding:"required"`
+	UserIDs      []int64 `json:"user_ids" binding:"required,min=1,max=100,dive,gt=0"`
+	PlanID       int64   `json:"plan_id" binding:"required,gt=0"`
 	ValidityDays int     `json:"validity_days" binding:"omitempty,max=36500"` // max 100 years
 	Notes        string  `json:"notes"`
 }
@@ -171,19 +172,44 @@ func (h *SubscriptionHandler) BulkAssign(c *gin.Context) {
 	// 从上下文获取管理员用户 ID。
 	adminID := getAdminIDFromContext(c)
 
-	result, err := h.subscriptionService.BulkAssignSubscription(c.Request.Context(), &service.BulkAssignSubscriptionInput{
-		UserIDs:      req.UserIDs,
-		PlanID:       req.PlanID,
-		ValidityDays: req.ValidityDays,
-		AssignedBy:   adminID,
-		Notes:        req.Notes,
-	})
+	assign := func(ctx context.Context) (any, error) {
+		result, err := h.subscriptionService.BulkAssignSubscription(ctx, &service.BulkAssignSubscriptionInput{
+			UserIDs:      req.UserIDs,
+			PlanID:       req.PlanID,
+			ValidityDays: req.ValidityDays,
+			AssignedBy:   adminID,
+			Notes:        req.Notes,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out := dto.BulkAssignResultFromService(result)
+		if strings.TrimSpace(c.GetHeader("Idempotency-Key")) != "" {
+			// 新批量页面仅使用计数和逐用户状态，避免完整记录超过幂等响应的 64 KiB 上限。
+			out.Subscriptions = []dto.AdminUserSubscription{}
+			if len(out.Errors) > service.MaxBulkSubscriptions {
+				out.Errors = out.Errors[:service.MaxBulkSubscriptions]
+			}
+			for i, message := range out.Errors {
+				if text := []rune(message); len(text) > 64 {
+					out.Errors[i] = string(text[:64]) + "…"
+				}
+			}
+		}
+		return out, nil
+	}
+	// 新页面固定幂等键重试，旧集成不带键时保留原有逐用户、允许部分成功的分配流程。
+	if strings.TrimSpace(c.GetHeader("Idempotency-Key")) != "" {
+		executeAdminIdempotentJSONWithMode(c, "admin.subscriptions.bulk_assign", req, service.DefaultWriteIdempotencyTTL(), idempotencyStoreUnavailableFailClose, assign, true)
+		return
+	}
+	result, err := assign(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 
-	response.Success(c, dto.BulkAssignResultFromService(result))
+	response.Success(c, result)
 }
 
 // Extend 将订阅调整为指定的目标有效期。

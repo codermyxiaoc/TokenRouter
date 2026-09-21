@@ -346,6 +346,7 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 		{effective.ErrorLogRetentionDays, "ops_alert_events", "fired_at", false, &out.alertEvents},
 		{effective.SystemLogRetentionDays, "ops_system_logs", "created_at", false, &out.systemLogs},
 		{effective.ErrorLogRetentionDays, "ops_system_log_cleanup_audits", "created_at", false, &out.logAudits},
+		{effective.ErrorLogRetentionDays, "ops_request_details", "created_at", false, &out.requestDetails},
 		{effective.MinuteMetricsRetentionDays, "ops_system_metrics", "created_at", false, &out.systemMetrics},
 		{effective.HourlyMetricsRetentionDays, "ops_metrics_hourly", "bucket_start", false, &out.hourlyPreagg},
 		{effective.HourlyMetricsRetentionDays, "ops_metrics_daily", "bucket_date", true, &out.dailyPreagg},

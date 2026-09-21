@@ -74,6 +74,10 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
+        <template #cell-billing_subscriptions="{ row }">
+          <BillingSubscriptionSummary :row="row" show-empty />
+        </template>
+
         <template #cell-type="{ row }">
           <span
             v-if="requestTypeBadge(row)"
@@ -135,6 +139,7 @@ import { useI18n } from 'vue-i18n'
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorRecoveryStatus from '@/components/common/ErrorRecoveryStatus.vue'
+import BillingSubscriptionSummary from '@/components/common/BillingSubscriptionSummary.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import UserErrorDetailModal from '@/components/user/UserErrorDetailModal.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
@@ -181,6 +186,7 @@ const allColumns = computed<Column[]>(() => [
   { key: 'endpoint', label: t('usage.errors.endpoint') },
   { key: 'client_ip', label: 'IP' },
   { key: 'group', label: t('admin.usage.group') },
+  { key: 'billing_subscriptions', label: t('admin.usage.billingSubscriptions') },
   { key: 'type', label: t('usage.type') },
   { key: 'platform', label: t('usage.errors.platform') },
   { key: 'category', label: t('usage.errors.category') },

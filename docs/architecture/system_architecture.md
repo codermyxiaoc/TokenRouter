@@ -48,7 +48,9 @@
 
 这不是由 Go import 强制的纯单向分层。`repository` 会实现 `service` 中定义的端口，handler 也会协调多个 service；判断所有权应看不变量落在哪里，而不是只看包名。禁止把 Wire 生成文件当作编辑源：新增 provider 或修改依赖时改各层 `wire.go`，再执行 `go generate ./cmd/server`。
 
-应用级 Wire provider set 依次包含配置、repository、service、payment、middleware、handler 和 server。`Application` 最终只暴露 `*http.Server` 与 `Cleanup`，其余服务通过依赖图被实例化并由关闭函数持有。
+应用级 Wire provider set 依次包含配置、repository、service、payment、middleware、handler 和 server。`Application` 暴露 `*http.Server`、`Cleanup` 和 `PluginManager`，其余服务通过依赖图被实例化并由关闭函数持有。
+
+本地插件在完整应用装配后启动协调循环；启动错误记录日志而不终止原站点 HTTP 服务，关闭仍由 `Cleanup` 在底层存储释放前停止插件。插件未显式启用绑定时原上游传输保持不变，详见[插件生命周期](../interfaces/local_plugins.md#plugin_lifecycle)。
 
 <a id="startup_and_shutdown"></a>
 ## 启动与关闭

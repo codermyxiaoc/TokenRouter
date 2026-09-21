@@ -4,6 +4,8 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,56 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/stretchr/testify/require"
 )
+
+// 经真实 Redis 快照选出的账号必须与数据库完整账号保持相同的视频端点资格。
+func TestSchedulerCacheSeedanceEligibilityAndLegacySnapshotRebuild(t *testing.T) {
+	ctx := context.Background()
+	rdb := testRedis(t)
+	cache := NewSchedulerCache(rdb)
+	bucket := service.SchedulerBucket{GroupID: 912, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	accounts := []service.Account{
+		{ID: 9121, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true,
+			Credentials: map[string]any{"base_url": "https://ark.example/api/v3", "openai_workload_capabilities": []string{"seedance"}}},
+		{ID: 9122, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true,
+			Credentials: map[string]any{"base_url": "https://relay.example/v1"}},
+		{ID: 9123, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true,
+			Credentials: map[string]any{"base_url": "https://ark.example/api/v3", "openai_workload_capabilities": []string{"seedance"}, "access_token": "private-token"}},
+		{ID: 9124, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true,
+			Credentials: map[string]any{"openai_workload_capabilities": []string{"seedance"}}},
+	}
+	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+	require.NoError(t, err)
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, token, accounts))
+	assertCandidates := func() {
+		snapshot, hit, err := cache.GetSnapshot(ctx, bucket)
+		require.NoError(t, err)
+		require.True(t, hit)
+		require.Len(t, snapshot, len(accounts))
+		for _, got := range snapshot {
+			require.Equal(t, got.ID == 9121, got.SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilitySeedance), "account %d", got.ID)
+			require.Empty(t, got.GetCredential("access_token"))
+		}
+	}
+	assertCandidates()
+
+	// 模拟升级前缺少地址的精简缓存；默认拒绝视频，不能以缓存缺字段为由放开资格。
+	legacy := buildSchedulerMetadataAccount(accounts[0])
+	delete(legacy.Credentials, "base_url")
+	legacyPayload, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	require.NoError(t, rdb.Set(ctx, schedulerAccountMetaKey(strconv.FormatInt(accounts[0].ID, 10)), legacyPayload, 0).Err())
+	snapshot, hit, err := cache.GetSnapshot(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, hit)
+	for _, got := range snapshot {
+		if got.ID == accounts[0].ID {
+			require.False(t, got.SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilitySeedance))
+		}
+	}
+	// 启动全量重建和账号 outbox 重建均通过 SetSnapshot 写入新的完整投影，无需删库或清 Redis。
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, token, accounts))
+	assertCandidates()
+}
 
 func TestSchedulerCacheSnapshotUsesSlimMetadataButKeepsFullAccount(t *testing.T) {
 	ctx := context.Background()

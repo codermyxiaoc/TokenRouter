@@ -1018,6 +1018,21 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(wrapper.text()).not.toContain("支付来源");
   });
 
+  it("插件管理菜单默认关闭且可以在功能开关中启用", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    const features = wrapper.findAll('button').find(node => node.text().includes('admin.settings.tabs.features'));
+    await features!.trigger('click');
+    const toggle = wrapper.get<HTMLInputElement>('[data-testid="plugin-management-enabled-toggle"]');
+    expect(toggle.element.checked).toBe(false);
+    await toggle.setValue(true);
+    await wrapper.get('form').trigger('submit.prevent');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ plugin_management_enabled: true }));
+    expect(adminSettingsFetch).toHaveBeenCalledWith(true);
+    wrapper.unmount();
+  });
+
   it("loads and saves the independent wallet payment switch", async () => {
     const wrapper = mountView();
     await flushPromises();

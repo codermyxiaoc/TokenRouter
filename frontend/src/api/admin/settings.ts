@@ -557,6 +557,7 @@ export interface SystemSettings {
   doc_url: string;
   home_content: string;
   hide_ccs_import_button: boolean;
+  plugin_management_enabled: boolean;
   table_default_page_size: number;
   table_page_size_options: number[];
   usage_ranking_limit: number;
@@ -903,6 +904,7 @@ export interface UpdateSettingsRequest {
   doc_url?: string;
   home_content?: string;
   hide_ccs_import_button?: boolean;
+  plugin_management_enabled?: boolean;
   table_default_page_size?: number;
   table_page_size_options?: number[];
   usage_ranking_limit?: number;

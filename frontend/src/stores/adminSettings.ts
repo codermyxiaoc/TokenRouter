@@ -30,6 +30,8 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
   const opsMonitoringEnabled = ref(readCachedBool('ops_monitoring_enabled_cached', true))
   const opsRealtimeMonitoringEnabled = ref(readCachedBool('ops_realtime_monitoring_enabled_cached', true))
   const paymentEnabled = ref(readCachedBool('payment_enabled_cached', false))
+  // 仅缓存后台菜单可见性；不作为插件运行权限或停用开关。
+  const pluginManagementEnabled = ref(readCachedBool('plugin_management_enabled_cached', false))
   const customMenuItems = ref<CustomMenuItem[]>([])
 
   async function fetch(force = false): Promise<void> {
@@ -49,6 +51,8 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
       writeCachedBool('ops_realtime_monitoring_enabled_cached', opsRealtimeMonitoringEnabled.value)
 
       customMenuItems.value = Array.isArray(settings.custom_menu_items) ? settings.custom_menu_items : []
+      pluginManagementEnabled.value = settings.plugin_management_enabled ?? false
+      writeCachedBool('plugin_management_enabled_cached', pluginManagementEnabled.value)
 
       paymentEnabled.value = paymentConfigResp.data?.enabled ?? false
       writeCachedBool('payment_enabled_cached', paymentEnabled.value)
@@ -111,6 +115,7 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
     opsMonitoringEnabled,
     opsRealtimeMonitoringEnabled,
     paymentEnabled,
+    pluginManagementEnabled,
     customMenuItems,
     fetch,
     setOpsMonitoringEnabledLocal,

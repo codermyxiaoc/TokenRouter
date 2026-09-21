@@ -29,6 +29,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 )
 
 // sseDataPrefix matches SSE data lines with optional whitespace after colon.
@@ -174,6 +175,7 @@ func isOpenAIImageModel(model string) bool {
 
 // AccountTestService handles account testing operations
 type AccountTestService struct {
+	pluginManager             *PluginManager
 	accountRepo               AccountRepository
 	geminiTokenProvider       *GeminiTokenProvider
 	claudeTokenProvider       *ClaudeTokenProvider
@@ -511,6 +513,9 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 	if account.IsOpenCodeGo() {
 		protocol = openCodeGoNativeProtocol(account, testModelID)
 	}
+	if protocol == APIProtocolSystemOne {
+		return s.testOpenCodeSystemOneConnection(c, account, testModelID, prompt, apiKey)
+	}
 	var (
 		apiURL  string
 		payload any
@@ -612,6 +617,60 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 	default:
 		return s.processOpenAIChatCompletionsStream(c, resp.Body)
 	}
+}
+
+// testOpenCodeSystemOneConnection 使用同步 JSON 请求验证 Jev 端点，不能复用文本
+// 协议的 SSE 测试器，否则会把合法的 answers JSON 误判为空流。
+func (s *AccountTestService) testOpenCodeSystemOneConnection(c *gin.Context, account *Account, modelID, prompt, apiKey string) error {
+	ctx := c.Request.Context()
+	baseURL, err := s.openAIGatewayService.validateUpstreamBaseURL(account.openCodeProtocolBaseURL(APIProtocolSystemOne))
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
+	}
+	payload := map[string]any{
+		"model": modelID,
+		"state": prompt,
+		"questions": map[string]any{
+			"test": map[string]any{"type": "noul", "instructions": "Is this a valid connection test?"},
+		},
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create System One test payload")
+	}
+	apiURL := buildOpenAIEndpointURL(baseURL, "/v1/systemone")
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: modelID})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create System One request")
+	}
+	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(apiKey))
+	account.ApplyHeaderOverrides(req.Header)
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolveTLSProfile(account))
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxOpenCodeSystemOneResponseBytes))
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to read System One response: %s", err.Error()))
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(respBody)))
+	}
+	if !gjson.ValidBytes(respBody) || !gjson.GetBytes(respBody, "answers").IsObject() {
+		return s.sendErrorAndEnd(c, "System One returned an invalid JSON response")
+	}
+	s.sendEvent(c, TestEvent{Type: "content", Text: "OpenCode Jev System One connection succeeded"})
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
 }
 
 // testCNProviderChatCompletionsConnection 保留上游自适应测试使用的 Chat 探测入口，
@@ -1089,7 +1148,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolveOpenAIAccountTestTLSProfile(c, account))
+	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, s.resolveOpenAIAccountTestTLSProfile(c, account))
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
@@ -1423,7 +1482,7 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolveOpenAIAccountTestTLSProfile(c, account))
+	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, s.resolveOpenAIAccountTestTLSProfile(c, account))
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Chat Completions API (/v1/chat/completions) request failed: %s", err.Error()))
 	}
@@ -1552,7 +1611,7 @@ func (s *AccountTestService) testOpenAINativeCompactionV2Connection(c *gin.Conte
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolveOpenAIAccountTestTLSProfile(c, account))
+	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, s.resolveOpenAIAccountTestTLSProfile(c, account))
 	if err != nil {
 		if s.accountRepo != nil {
 			updates := buildOpenAINativeCompactionV2ProbeExtraUpdates(nil, nil, err, false, time.Now())
@@ -1707,7 +1766,7 @@ func (s *AccountTestService) testOpenAILegacyCompactConnection(c *gin.Context, a
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolveOpenAIAccountTestTLSProfile(c, account))
+	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, s.resolveOpenAIAccountTestTLSProfile(c, account))
 	if err != nil {
 		if s.accountRepo != nil {
 			updates := buildOpenAICompactProbeExtraUpdates(nil, nil, err, time.Now())
@@ -2673,7 +2732,7 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolveOpenAIAccountTestTLSProfile(c, account))
+	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, s.resolveOpenAIAccountTestTLSProfile(c, account))
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
@@ -2817,7 +2876,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolveOpenAIAccountTestTLSProfile(c, account))
+	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, s.resolveOpenAIAccountTestTLSProfile(c, account))
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Image upstream request failed: %s", err.Error()))
 	}

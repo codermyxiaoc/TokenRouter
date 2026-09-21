@@ -279,6 +279,8 @@ func (s *SmartRoutingService) listSmartRoutingCatalogAccounts(ctx context.Contex
 // smartRoutingGroupEndpointEligible 对齐公开路由分派，防止探针或媒体请求选中无法承接端点的平台。
 func smartRoutingGroupEndpointEligible(platform, endpoint string) bool {
 	switch {
+	case strings.HasSuffix(strings.TrimSuffix(endpoint, "/"), "/contents/generations/tasks"):
+		return platform == PlatformOpenAI
 	case strings.Contains(endpoint, "/v1beta/models/"):
 		if strings.HasPrefix(endpoint, "/antigravity/") {
 			return platform == PlatformAntigravity
@@ -321,6 +323,10 @@ func smartRoutingAccountCatalogContains(account *Account, model string) bool {
 
 // smartRoutingAccountEndpointEligible 保留账号类型和端点能力边界；跨平台协议准入另由路由层检查。
 func smartRoutingAccountEndpointEligible(ctx context.Context, account *Account, model, endpoint string) bool {
+	// Seedance 能力必须由 OpenAI API Key 账号显式声明，不能被默认文本能力替代。
+	if strings.HasSuffix(strings.TrimSuffix(endpoint, "/"), "/contents/generations/tasks") {
+		return account.Platform == PlatformOpenAI && isOpenAICompatibleAccountEligibleForRequest(ctx, account, PlatformOpenAI, model, false, OpenAIEndpointCapabilitySeedance)
+	}
 	if strings.Contains(endpoint, "/images/batches") {
 		// 批量图片只由 Gemini API Key 或有效 Vertex 服务账号执行，OAuth 不能承接作业。
 		return (&GeminiAPIBatchImageProvider{}).SupportsAccount(account) || (&VertexBatchImageProvider{}).SupportsAccount(account)

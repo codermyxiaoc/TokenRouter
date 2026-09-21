@@ -7466,6 +7466,25 @@
 
         <!-- 分页：功能特性 -->
         <div v-show="activeTab === 'features'" class="space-y-6">
+          <!-- 此开关仅隐藏菜单，运行中的插件必须在插件管理页停用。 -->
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t('admin.settings.features.pluginManagement.title') }}
+              </h2>
+            </div>
+            <div class="flex items-center justify-between gap-4 p-6">
+              <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('admin.settings.features.pluginManagement.enabled') }}
+                </label>
+                <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.features.pluginManagement.enabledHint') }}
+                </p>
+              </div>
+              <Toggle v-model="form.plugin_management_enabled" data-testid="plugin-management-enabled-toggle" />
+            </div>
+          </div>
           <div class="card">
             <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
               <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
@@ -9801,6 +9820,7 @@ const form = reactive<SettingsForm>({
   home_content: "",
   backend_mode_enabled: false,
   hide_ccs_import_button: false,
+  plugin_management_enabled: false,
   payment_enabled: false,
   payment_min_amount: 1,
   payment_max_amount: 10000,
@@ -11983,6 +12003,7 @@ async function saveSettings() {
       home_content: form.home_content,
       backend_mode_enabled: form.backend_mode_enabled,
       hide_ccs_import_button: form.hide_ccs_import_button,
+      plugin_management_enabled: form.plugin_management_enabled,
       table_default_page_size: form.table_default_page_size,
       table_page_size_options: form.table_page_size_options,
       usage_ranking_limit: form.usage_ranking_limit,

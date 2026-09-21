@@ -92,7 +92,8 @@ Kimi、Zhipu、DeepSeek 的账号类型、模式与协议矩阵暂由本页和[A
 | Realtime、Live 与 Alpha Search | Live/sideband、Codex realtime 和 alpha search 仅 OpenAI 平台；是否可用还受分组和账号能力限制 | [OpenAI 上游](openai_upstream.md) |
 | 同步图片生成/编辑 | 仅 OpenAI 与 Grok；分组图片开关和账号能力继续收窄范围 | [OpenAI 上游](openai_upstream.md)、[Grok / xAI 上游](grok_upstream.md) |
 | 批量图片作业 | Gemini/Vertex 使用独立任务生命周期；供应商范围由批量图片领域契约定义 | [批量图片作业](../domains/batch_image_jobs.md) |
-| 视频生成、编辑、扩展、查询和下载 | 新任务仅 Grok；复合 Key 可凭持久任务绑定查询既有任务 | [Grok / xAI 上游](grok_upstream.md) |
+| Grok 视频生成、编辑、扩展、查询和下载 | Grok 原生视频入口；复合 Key 可凭持久任务绑定查询既有任务 | [Grok / xAI 上游](grok_upstream.md) |
+| Seedance 原生视频创建、查询、删除 | OpenAI API Key、自定义 Base URL、显式 `seedance` 能力；查询按创建归属固定账号 | [Seedance 上游](seedance_upstream.md) |
 | Gemini v1beta：`/v1beta/models/*` | Gemini/Antigravity 分组允许 Gemini 协议时承接生成、流式生成和 token 统计；模型列表 GET 不受开关影响 | [Gemini 上游](gemini_upstream.md)、[Antigravity 上游](antigravity_upstream.md) |
 | Antigravity 专用入口：`/antigravity/*` | 强制只选择 Antigravity 账号，不参与混合调度 | [Antigravity 上游](antigravity_upstream.md) |
 

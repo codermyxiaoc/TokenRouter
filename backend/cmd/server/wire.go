@@ -24,8 +24,9 @@ import (
 )
 
 type Application struct {
-	Server  *http.Server
-	Cleanup func()
+	PluginManager *service.PluginManager
+	Server        *http.Server
+	Cleanup       func()
 }
 
 // @project-doc docs/architecture/system_architecture.md#dependency_layers
@@ -51,12 +52,13 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 
 		// BuildInfo provider
 		provideServiceBuildInfo,
+		providePluginHostInfo,
 
 		// Cleanup function provider
 		provideCleanup,
 
 		// Application struct
-		wire.Struct(new(Application), "Server", "Cleanup"),
+		wire.Struct(new(Application), "Server", "PluginManager", "Cleanup"),
 	)
 	return nil, nil
 }
@@ -70,6 +72,11 @@ func provideServiceBuildInfo(buildInfo handler.BuildInfo) service.BuildInfo {
 		Version:   buildInfo.Version,
 		BuildType: buildInfo.BuildType,
 	}
+}
+
+// providePluginHostInfo 保留当前 fork 版本用于插件显式兼容性检查。
+func providePluginHostInfo(buildInfo handler.BuildInfo) service.PluginHostInfo {
+	return service.PluginHostInfo{Version: buildInfo.Version, BuildType: buildInfo.BuildType}
 }
 
 func provideCleanup(
@@ -120,6 +127,7 @@ func provideCleanup(
 	auditLog *service.AuditLogService,
 	cnUsageMonitor *service.CNProviderBalanceCheckService,
 	ticketRuntime *service.TicketRuntime,
+	pluginManager *service.PluginManager,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -132,6 +140,13 @@ func provideCleanup(
 
 		// 应用层清理步骤可并行执行；持久化刷写服务在基础设施关闭前按顺序停止。
 		parallelSteps := []cleanupStep{
+			{"PluginManager", func() error {
+				// 插件依赖尚未装配时仍允许执行统一清理，避免退出阶段空指针崩溃。
+				if pluginManager != nil {
+					pluginManager.Stop()
+				}
+				return nil
+			}},
 			{"TicketRuntime", func() error {
 				if ticketRuntime != nil {
 					ticketRuntime.Stop()

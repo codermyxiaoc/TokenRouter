@@ -156,6 +156,11 @@ func runMainServer() {
 	}
 	defer app.Cleanup()
 
+	// 插件启动失败仅停用对应插件，不阻断未绑定插件的既有服务。
+	if err := app.PluginManager.Start(context.Background()); err != nil {
+		log.Printf("Failed to start plugin manager: %v", err)
+	}
+
 	// 启动服务器
 	go func() {
 		if err := app.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

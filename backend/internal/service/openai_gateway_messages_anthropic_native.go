@@ -236,9 +236,9 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 // OpenCode 的原生 Anthropic 请求保留账号或路由指纹；既有 CN 路径仍使用原传输入口。
 func (s *OpenAIGatewayService) sendNativeAnthropicUpstreamRequest(req *http.Request, proxyURL string, account *Account, tlsRouterMatch ...TLSFingerprintRouterMatchResult) (*http.Response, error) {
 	if account.IsOpenCodeGo() {
-		return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
+		return s.doOpenAIUpstream(req, proxyURL, account, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
 	}
-	return s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	return s.doOpenAIUpstream(req, proxyURL, account)
 }
 
 // handleNativeAnthropicBufferedResponse 处理非流式原生 Anthropic 响应：

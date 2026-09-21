@@ -32,6 +32,8 @@ func TestOpsAdminRoutesRequireAdminAuthentication(t *testing.T) {
 		"/api/v1/admin/ops/ingress-rejections/health",
 		"/api/v1/admin/ops/dashboard/token-stats",
 		"/api/v1/admin/ops/dashboard/openai-token-stats",
+		// 完整请求快照只能通过管理员认证后的运维接口读取。
+		"/api/v1/admin/ops/requests/private-request-id/detail",
 	} {
 		for _, tc := range []struct {
 			name       string

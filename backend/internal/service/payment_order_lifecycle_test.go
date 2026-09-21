@@ -1438,7 +1438,7 @@ func newPaymentOrderLifecycleTestClient(t *testing.T) *dbent.Client {
 
 func createPaymentOrderLifecycleOrder(t *testing.T, ctx context.Context, client *dbent.Client, status string, expiresAt time.Time) *dbent.PaymentOrder {
 	t.Helper()
-	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	suffix := nextPaymentFixtureID()
 	user, err := client.User.Create().
 		SetEmail("payment-lifecycle-" + suffix + "@example.com").
 		SetPasswordHash("hash").

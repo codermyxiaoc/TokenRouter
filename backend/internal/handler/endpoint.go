@@ -30,7 +30,10 @@ const (
 	EndpointVideosEdits          = "/v1/videos/edits"
 	EndpointVideosExtensions     = "/v1/videos/extensions"
 	EndpointVideos               = "/v1/videos"
-	EndpointGeminiModels         = "/v1beta/models"
+	// EndpointSystemOne 是 OpenCode Zen Jev 的同步结构化决策端点。
+	EndpointSystemOne     = "/v1/systemone"
+	EndpointSeedanceTasks = "/api/v3/contents/generations/tasks"
+	EndpointGeminiModels  = "/v1beta/models"
 )
 
 // EndpointAntigravityGenerateContent 是 Antigravity 原生流式生成端点。
@@ -78,6 +81,10 @@ const (
 func NormalizeInboundEndpoint(path string) string {
 	path = strings.TrimSpace(path)
 	switch {
+	case strings.Contains(path, "/contents/generations/tasks"):
+		return EndpointSeedanceTasks
+	case strings.Contains(path, EndpointSystemOne) || isBareOrSubpathOf(strings.TrimRight(path, "/"), "/systemone"):
+		return EndpointSystemOne
 	case strings.Contains(path, EndpointEmbeddings):
 		return EndpointEmbeddings
 	case strings.Contains(path, EndpointAlphaSearch) || isBareOrSubpathOf(strings.TrimRight(path, "/"), "/alpha/search") || isBareOrSubpathOf(strings.TrimRight(path, "/"), "/backend-api/codex/alpha/search"):
@@ -172,6 +179,9 @@ func isBareOrSubpathOf(path, root string) bool {
 // /v1beta/models；Antigravity 根据入站端点区分 Claude 与 Gemini。
 func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 	inbound = strings.TrimSpace(inbound)
+	if inbound == EndpointSystemOne {
+		return EndpointSystemOne
+	}
 
 	switch platform {
 	case service.PlatformOpenAI, service.PlatformGrok:

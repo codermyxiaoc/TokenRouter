@@ -55,6 +55,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			return s.forwardAnthropicViaNativeAnthropicEndpoint(ctx, c, account, body, defaultMappedModel, tlsRouterMatch...)
 		case APIProtocolResponses:
 			SetActualOpenAIUpstreamEndpoint(c, "/v1/responses")
+		case APIProtocolSystemOne:
+			return nil, fmt.Errorf("Jev models must use the /v1/systemone endpoint")
 		default:
 			return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel, tlsRouterMatch...)
 		}
@@ -423,13 +425,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				return nil, fmt.Errorf("build grok retry request: %w", err)
 			}
 		}
-		resp, err = s.httpUpstream.DoWithTLS(
-			upstreamReq,
-			proxyURL,
-			account.ID,
-			account.Concurrency,
-			s.resolveOpenAITLSProfile(account, tlsRouterMatch...),
-		)
+		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
 		if err != nil {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		}

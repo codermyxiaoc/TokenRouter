@@ -22,16 +22,18 @@ type UserErrorRequest struct {
 	RecoveredGroupID   *int64 `json:"recovered_group_id,omitempty"`
 	RecoveredGroupName string `json:"recovered_group_name,omitempty"`
 	RecoveredPlatform  string `json:"recovered_platform,omitempty"`
-	Category           string `json:"category"`
-	Platform           string `json:"platform"`
-	Message            string `json:"message"`
-	KeyName            string `json:"key_name"`
-	KeyDeleted         bool   `json:"key_deleted"`
-	ClientIP           string `json:"client_ip,omitempty"`
-	GroupName          string `json:"group_name,omitempty"`
-	RequestType        *int16 `json:"request_type,omitempty"`
-	Stream             bool   `json:"stream"`
-	UserAgent          string `json:"user_agent,omitempty"`
+	// 本人请求的套餐扣费摘要与使用记录一致；没有可关联记录时保持为空。
+	BillingSubscriptions []BillingSubscription `json:"billing_subscriptions,omitempty"`
+	Category             string                `json:"category"`
+	Platform             string                `json:"platform"`
+	Message              string                `json:"message"`
+	KeyName              string                `json:"key_name"`
+	KeyDeleted           bool                  `json:"key_deleted"`
+	ClientIP             string                `json:"client_ip,omitempty"`
+	GroupName            string                `json:"group_name,omitempty"`
+	RequestType          *int16                `json:"request_type,omitempty"`
+	Stream               bool                  `json:"stream"`
+	UserAgent            string                `json:"user_agent,omitempty"`
 }
 
 // UserErrorRequestList 是用户错误请求分页结果。
@@ -114,26 +116,27 @@ func ToUserErrorRequest(e *OpsErrorLog) *UserErrorRequest {
 		message = "Request recovered after an upstream error"
 	}
 	return &UserErrorRequest{
-		ID:                 e.ID,
-		CreatedAt:          e.CreatedAt,
-		Model:              model,
-		InboundEndpoint:    e.InboundEndpoint,
-		StatusCode:         e.StatusCode,
-		ClientStatusCode:   e.ClientStatusCode,
-		RecoveredUpstream:  e.RecoveredUpstream,
-		RecoveredGroupID:   e.RecoveredGroupID,
-		RecoveredGroupName: e.RecoveredGroupName,
-		RecoveredPlatform:  e.RecoveredPlatform,
-		Category:           MapUserErrorCategory(e.Phase, e.Type),
-		Platform:           e.Platform,
-		Message:            message,
-		KeyName:            e.APIKeyName,
-		KeyDeleted:         e.APIKeyDeleted,
-		ClientIP:           clientIP,
-		GroupName:          e.GroupName,
-		RequestType:        e.RequestType,
-		Stream:             e.Stream,
-		UserAgent:          e.UserAgent,
+		ID:                   e.ID,
+		CreatedAt:            e.CreatedAt,
+		Model:                model,
+		InboundEndpoint:      e.InboundEndpoint,
+		StatusCode:           e.StatusCode,
+		ClientStatusCode:     e.ClientStatusCode,
+		RecoveredUpstream:    e.RecoveredUpstream,
+		RecoveredGroupID:     e.RecoveredGroupID,
+		RecoveredGroupName:   e.RecoveredGroupName,
+		RecoveredPlatform:    e.RecoveredPlatform,
+		BillingSubscriptions: e.BillingSubscriptions,
+		Category:             MapUserErrorCategory(e.Phase, e.Type),
+		Platform:             e.Platform,
+		Message:              message,
+		KeyName:              e.APIKeyName,
+		KeyDeleted:           e.APIKeyDeleted,
+		ClientIP:             clientIP,
+		GroupName:            e.GroupName,
+		RequestType:          e.RequestType,
+		Stream:               e.Stream,
+		UserAgent:            e.UserAgent,
 	}
 }
 

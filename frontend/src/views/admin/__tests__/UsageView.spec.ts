@@ -33,6 +33,8 @@ const messages: Record<string, string> = {
   'admin.usage.failedToLoadUser': 'Failed to load user',
   'admin.usage.requestId': 'Request ID',
   'admin.usage.billingType': 'Billing type',
+  'admin.usage.billingSubscriptions': 'Billed plans',
+  'admin.usage.billingSubscription': 'Subscription',
   'admin.usage.billingTypeBalance': '余额扣费',
   'admin.usage.billingTypeSubscription': '订阅扣费',
   'admin.usage.billingTypeMixed': '订阅 + 余额',
@@ -527,8 +529,8 @@ describe('admin UsageView column visibility and billing export', () => {
     exportList.mockResolvedValue({
       items: [
         { billing_type: 0, actual_cost: 0.3, total_cost: 0.3 },
-        { billing_type: 1, actual_cost: 0.3, total_cost: 0.3 },
-        { billing_type: 1, actual_cost: 0.3, total_cost: 0.3, subscription_amount_usd: 0.2, balance_amount_usd: 0.1 },
+        { billing_type: 1, actual_cost: 0.3, total_cost: 0.3, billing_subscriptions: [{ subscription_id: 9, plan_name: 'Pro', amount_usd: 0.3 }] },
+        { billing_type: 1, actual_cost: 0.3, total_cost: 0.3, subscription_amount_usd: 0.2, balance_amount_usd: 0.1, billing_subscriptions: [{ subscription_id: 10, amount_usd: 0.2 }] },
       ],
       total: 3,
       pages: 1,
@@ -542,6 +544,7 @@ describe('admin UsageView column visibility and billing export', () => {
     expect(billingIndex).toBeGreaterThan(-1)
     const rows = exportRows.mock.calls[0][1] as unknown[][]
     expect(rows.map((row) => row[billingIndex])).toEqual(['余额扣费', '订阅扣费', '订阅 + 余额'])
+    expect(rows.map((row) => row[headers.indexOf('Billed plans')])).toEqual(['', 'Pro (#9)', 'Subscription #10'])
     expect(rows.every((row) => row.length === headers.length)).toBe(true)
     expect(saveFile).toHaveBeenCalledOnce()
   })

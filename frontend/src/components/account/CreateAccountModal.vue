@@ -4958,7 +4958,8 @@ const openAITextRouteModeOptions = computed(() => [
 ])
 const openAIWorkloadCapabilityOptions = computed<{ value: OpenAIWorkloadCapability; label: string }[]>(() => [
   { value: 'text_generation', label: t('admin.accounts.openai.workloadTextGeneration') },
-  { value: 'embeddings', label: t('admin.accounts.openai.workloadEmbeddings') }
+  { value: 'embeddings', label: t('admin.accounts.openai.workloadEmbeddings') },
+  { value: 'seedance', label: t('admin.accounts.openai.workloadSeedance') }
 ])
 
 const normalizeOpenAIWorkloadCapabilities = (values: unknown[]) => {
@@ -4968,9 +4969,12 @@ const normalizeOpenAIWorkloadCapabilities = (values: unknown[]) => {
       selected.add('text_generation')
     } else if (value === 'embeddings') {
       selected.add('embeddings')
+    } else if (value === 'seedance') {
+      selected.add('seedance')
     }
   }
-  return (['text_generation', 'embeddings'] as OpenAIWorkloadCapability[]).filter((value) => selected.has(value))
+  // 视频任务需显式开启，保持既有账号的默认文本与向量能力。
+  return (['text_generation', 'embeddings', 'seedance'] as OpenAIWorkloadCapability[]).filter((value) => selected.has(value))
 }
 
 const toggleOpenAIWorkloadCapability = (capability: OpenAIWorkloadCapability) => {

@@ -138,3 +138,113 @@ func TestResponsesToAnthropic_DefaultToolNormalizesInputSchema(t *testing.T) {
 	assert.Equal(t, "shell", tools[0].Name)
 	assert.JSONEq(t, `{"type":"object","properties":{}}`, string(tools[0].InputSchema))
 }
+
+func TestResponsesToAnthropic_FlattensRootObjectUnionSchema(t *testing.T) {
+	parameters := json.RawMessage(`{
+		"oneOf": [
+			{"type":"object","properties":{"path":{"type":"string"},"mode":{"type":"string"}},"required":["path"]},
+			{"type":"object","properties":{"path":{"type":"string"},"line":{"type":"integer"}},"required":["path"]}
+		]
+	}`)
+	tools := convertResponsesToAnthropicTools([]ResponsesTool{
+		{Type: "function", Name: "read_file", Parameters: parameters},
+	})
+
+	require.Len(t, tools, 1)
+	schema := requireObjectInputSchema(t, tools[0].InputSchema)
+	var properties map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(schema["properties"], &properties))
+	assert.Contains(t, properties, "path")
+	assert.Contains(t, properties, "mode")
+	assert.Contains(t, properties, "line")
+	assert.JSONEq(t, `["path"]`, string(schema["required"]))
+}
+
+func TestResponsesToAnthropic_FlattensRootAllOfRequiredUnion(t *testing.T) {
+	parameters := json.RawMessage(`{
+		"allOf": [
+			{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]},
+			{"type":"object","properties":{"line":{"type":"integer"}},"required":["line"]}
+		]
+	}`)
+	tools := convertResponsesToAnthropicTools([]ResponsesTool{
+		{Type: "function", Name: "read_file", Parameters: parameters},
+	})
+
+	require.Len(t, tools, 1)
+	schema := requireObjectInputSchema(t, tools[0].InputSchema)
+	assert.JSONEq(t, `["path","line"]`, string(schema["required"]))
+}
+
+// 同名参数的上下界必须同时满足；不能把 allOf 转成任何一侧通过即可的 anyOf。
+func TestResponsesToAnthropic_AllOfPreservesPropertyConjunction(t *testing.T) {
+	parameters := json.RawMessage(`{
+		"allOf": [
+			{"type":"object","properties":{"line":{"type":"integer","minimum":1}},"required":["line"]},
+			{"type":"object","properties":{"line":{"maximum":10}}}
+		]
+	}`)
+	tools := convertResponsesToAnthropicTools([]ResponsesTool{
+		{Type: "function", Name: "read_line", Parameters: parameters},
+	})
+
+	require.Len(t, tools, 1)
+	schema := requireObjectInputSchema(t, tools[0].InputSchema)
+	assert.NotContains(t, schema, "allOf")
+	assert.JSONEq(t, `{"line":{"allOf":[{"type":"integer","minimum":1},{"maximum":10}]}}`, string(schema["properties"]))
+	assert.JSONEq(t, `["line"]`, string(schema["required"]))
+}
+
+// 根级参数约束对所有备选分支生效，但联合分支内部仍按或合并。
+func TestResponsesToAnthropic_RootPropertiesConjoinUnionAlternatives(t *testing.T) {
+	parameters := json.RawMessage(`{
+		"type":"object",
+		"properties":{"path":{"type":"string","minLength":1},"mode":{"type":"string"}},
+		"oneOf": [
+			{"type":"object","properties":{"path":{"pattern":"^src/"}},"required":["path"]},
+			{"type":"object","properties":{"path":{"pattern":"^tests/"}},"required":["path"]}
+		]
+	}`)
+	tools := convertResponsesToAnthropicTools([]ResponsesTool{
+		{Type: "function", Name: "read_file", Parameters: parameters},
+	})
+
+	require.Len(t, tools, 1)
+	schema := requireObjectInputSchema(t, tools[0].InputSchema)
+	assert.NotContains(t, schema, "oneOf")
+	assert.JSONEq(t, `{
+		"path":{"allOf":[{"type":"string","minLength":1},{"anyOf":[{"pattern":"^src/"},{"pattern":"^tests/"}]}]},
+		"mode":{"type":"string"}
+	}`, string(schema["properties"]))
+	assert.JSONEq(t, `["path"]`, string(schema["required"]))
+}
+
+// 不同根级关键字同时生效；各联合内部只保留共有必填项，再与其它约束取并集。
+func TestResponsesToAnthropic_MultipleRootUnionsPreserveRequiredConjunction(t *testing.T) {
+	parameters := json.RawMessage(`{
+		"type":"object","properties":{"id":{"type":"string"}},"required":["id"],
+		"oneOf": [
+			{"type":"object","properties":{"path":{"type":"string"},"line":{"type":"integer"}},"required":["path","line"]},
+			{"type":"object","properties":{"path":{"type":"string"},"range":{"type":"string"}},"required":["path","range"]}
+		],
+		"anyOf": [
+			{"type":"object","properties":{"mode":{"type":"string"},"offset":{"type":"integer"}},"required":["mode","offset"]},
+			{"type":"object","properties":{"mode":{"type":"string"},"limit":{"type":"integer"}},"required":["mode","limit"]}
+		],
+		"allOf": [
+			{"type":"object","properties":{"token":{"type":"string"}},"required":["id","token"]}
+		]
+	}`)
+	tools := convertResponsesToAnthropicTools([]ResponsesTool{
+		{Type: "function", Name: "read_file", Parameters: parameters},
+	})
+
+	require.Len(t, tools, 1)
+	schema := requireObjectInputSchema(t, tools[0].InputSchema)
+	for _, keyword := range []string{"oneOf", "anyOf", "allOf"} {
+		assert.NotContains(t, schema, keyword)
+	}
+	var required []string
+	require.NoError(t, json.Unmarshal(schema["required"], &required))
+	assert.ElementsMatch(t, []string{"id", "path", "mode", "token"}, required)
+}

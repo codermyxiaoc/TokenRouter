@@ -438,6 +438,35 @@ func TestTransformClaudeToGeminiWithOptions_PreservesBillingHeaderSystemBlock(t 
 	}
 }
 
+func TestStripClaudeAttribution(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "removes leading attribution line",
+			in:   "x-anthropic-billing-header: claude-code\nactual instructions",
+			want: "actual instructions",
+		},
+		{
+			name: "supports leading whitespace and CRLF",
+			in:   " \r\nx-anthropic-billing-header: claude-code\r\nactual instructions",
+			want: "actual instructions",
+		},
+		{
+			name: "keeps unrelated text",
+			in:   "x-anthropic-billing-header keep",
+			want: "x-anthropic-billing-header keep",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, stripClaudeAttribution(tt.in))
+		})
+	}
+}
+
 func TestTransformClaudeToGeminiWithOptions_MessageRoles(t *testing.T) {
 	transform := func(t *testing.T, claudeReq *ClaudeRequest) V1InternalRequest {
 		t.Helper()

@@ -94,6 +94,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		UsageRankingShowTotalTokens:         settings.UsageRankingShowTotalTokens,
 		UsageRankingShowRequests:            settings.UsageRankingShowRequests,
 		UsageRankingShowActualCost:          settings.UsageRankingShowActualCost,
+		PluginManagementEnabled:             settings.PluginManagementEnabled,
 		CustomMenuItems:                     dto.ParseUserVisibleMenuItems(settings.CustomMenuItems),
 		CustomEndpoints:                     dto.ParseCustomEndpoints(settings.CustomEndpoints),
 		FooterLinks:                         dto.ParseFooterLinks(settings.FooterLinks),

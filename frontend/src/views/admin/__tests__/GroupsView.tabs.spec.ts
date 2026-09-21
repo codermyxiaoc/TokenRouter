@@ -105,7 +105,8 @@ describe.each(['create', 'edit'] as const)('GroupsView %s tabs', mode => {
     expect(wrapper.get('[data-group-tab="general"]').isVisible()).toBe(true)
     expect(wrapper.get('[data-tour="group-form-multiplier"]').element.closest('[data-group-tab]')?.getAttribute('data-group-tab')).toBe('pricing')
     expect(wrapper.getComponent(GroupClientProtocolSelector).element.closest('[data-group-tab]')?.getAttribute('data-group-tab')).toBe('protocol')
-    expect(wrapper.find('[data-group-field="reasoning"]').exists()).toBe(platform === 'openai')
+    // Anthropic 已支持独立推理档位策略，创建与编辑均应展示；其他平台仍隐藏。
+    expect(wrapper.find('[data-group-field="reasoning"]').exists()).toBe(['openai', 'anthropic'].includes(platform))
     expect(wrapper.find('[data-group-field="image-capabilities"]').exists()).toBe(['openai', 'gemini', 'antigravity', 'grok'].includes(platform))
   })
 

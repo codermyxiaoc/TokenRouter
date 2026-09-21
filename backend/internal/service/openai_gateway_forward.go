@@ -193,6 +193,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, "", tlsRouterMatch)
 		case APIProtocolResponses:
 			SetActualOpenAIUpstreamEndpoint(c, "/v1/responses")
+		case APIProtocolSystemOne:
+			return nil, fmt.Errorf("Jev models must use the /v1/systemone endpoint")
 		default:
 			return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, tlsRouterMatch)
 		}
@@ -1039,7 +1041,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 
 		upstreamStart := time.Now()
-		resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.resolveOpenAITLSProfile(account, tlsRouterMatch))
+		resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account, s.resolveOpenAITLSProfile(account, tlsRouterMatch))
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if headerGuard != nil && headerGuard.stopHeaderWait() {
 			if resp != nil && resp.Body != nil {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -1083,6 +1084,15 @@ func (state *opsCaptureWriterState) shouldCapture() bool {
 	return !rejected
 }
 
+// shouldPersistRequestPayloadDetail 只保留最终失败请求的请求/响应快照。
+// 成功请求已经由 usage_logs 记录统计，不再额外写入大体积详情；流式响应即使
+// HTTP 状态仍为 200，只要捕获到终态 error/response.failed，也必须保留排障数据。
+func shouldPersistRequestPayloadDetail(status int, parsed parsedOpsError) bool {
+	// 部分上游会用 HTTP 2xx 携带 error 信封，不能只看状态码；解析出明确
+	// 的错误类型时也保留快照，避免这类失败没有排障数据。
+	return status >= http.StatusBadRequest || parsed.StreamFailure || strings.TrimSpace(parsed.ErrorType) != ""
+}
+
 // OpsErrorLoggerMiddleware records error responses (status >= 400) into ops_error_logs.
 //
 // Notes:
@@ -1090,8 +1100,15 @@ func (state *opsCaptureWriterState) shouldCapture() bool {
 // - Streaming errors after the response has started (SSE) may still need explicit logging.
 func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		startedAt := time.Now().UTC()
 		originalWriter := c.Writer
-		w := acquireOpsCaptureWriter(originalWriter)
+		var requestBodyReader *requestDetailBodyReader
+		if c.Request != nil && c.Request.Body != nil {
+			requestBodyReader = &requestDetailBodyReader{inner: c.Request.Body}
+			c.Request.Body = requestBodyReader
+		}
+		requestWriter := newRequestDetailCaptureWriter(originalWriter)
+		w := acquireOpsCaptureWriter(requestWriter)
 		w.setContext(c)
 		defer func() {
 			// Restore the original writer before returning so outer middlewares
@@ -1104,9 +1121,26 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		c.Writer = w
 		c.Next()
 		w.finalizeCapture()
+		if requestBodyReader == nil {
+			requestBodyReader = &requestDetailBodyReader{inner: io.NopCloser(strings.NewReader(""))}
+		}
+		status := c.Writer.Status()
+		body := w.capturedBytes()
+		parsed := parseOpsErrorResponse(body)
+		if !parsed.StreamFailure {
+			if terminal, ok := w.capturedTerminalError(); ok {
+				parsed = terminal
+			}
+		}
 
 		if _, rejected := middleware2.GetIngressRejectReason(c); rejected {
 			return
+		}
+		// 成功请求只保留 usage_logs 统计，失败请求才写入管理员排障详情。
+		// 错误日志仍按原有异步队列单独记录。入口拒绝在此之前直接返回，
+		// 遵守 hard skip 语义，不把认证失败正文写入详情表。
+		if shouldPersistRequestPayloadDetail(status, parsed) {
+			recordRequestPayloadDetail(c, ops, requestWriter, requestBodyReader, startedAt)
 		}
 
 		if ops == nil {
@@ -1119,14 +1153,6 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			return
 		}
 
-		status := c.Writer.Status()
-		body := w.capturedBytes()
-		parsed := parseOpsErrorResponse(body)
-		if !parsed.StreamFailure {
-			if terminal, ok := w.capturedTerminalError(); ok {
-				parsed = terminal
-			}
-		}
 		if status < 400 {
 			if parsed.StreamFailure {
 				// 显式请求级终态不继承此前尝试的上游归属或跳过规则；Responses

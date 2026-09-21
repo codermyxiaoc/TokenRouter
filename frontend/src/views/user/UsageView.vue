@@ -277,6 +277,7 @@ import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatReasoningEffortMapping } from '@/utils/format'
 import { getBillingModeLabel, getDisplayBillingMode as resolveDisplayBillingMode } from '@/utils/billingMode'
 import { getUsageBillingTypeLabel } from '@/utils/usageBillingType'
+import { getBillingSubscriptionsExport } from '@/utils/billingSubscriptions'
 import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
 import type {
   EndpointStat,
@@ -698,6 +699,7 @@ const exportToCSV = async () => {
       'Cache Creation Tokens',
       'Rate Multiplier',
       'Billing Type',
+      t('admin.usage.billingSubscriptions'),
       'Billed Cost',
       'Original Cost',
       'First Token (ms)',
@@ -718,6 +720,7 @@ const exportToCSV = async () => {
       log.cache_creation_tokens,
       log.rate_multiplier,
       getUsageBillingTypeLabel(log, t),
+      getBillingSubscriptionsExport(log, t('admin.usage.billingSubscription')),
       log.actual_cost.toFixed(8),
       log.total_cost.toFixed(8),
       log.first_token_ms ?? '',
@@ -798,6 +801,7 @@ const errAllColumns = computed<Column[]>(() => [
   { key: 'endpoint', label: t('usage.errors.endpoint') },
   { key: 'client_ip', label: 'IP' },
   { key: 'group', label: t('admin.usage.group') },
+  { key: 'billing_subscriptions', label: t('admin.usage.billingSubscriptions') },
   { key: 'type', label: t('usage.type') },
   { key: 'platform', label: t('usage.errors.platform') },
   { key: 'category', label: t('usage.errors.category') },

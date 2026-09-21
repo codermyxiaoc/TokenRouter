@@ -661,6 +661,31 @@ func (h *OpsHandler) ListRequestDetails(c *gin.Context) {
 	response.Paginated(c, out.Items, out.Total, out.Page, out.PageSize)
 }
 
+// GetRequestPayloadDetail 返回管理员排障用的请求头、请求体和响应体快照。
+// 路由位于 admin/ops 认证组内，普通用户没有对应接口。
+// GET /api/v1/admin/ops/requests/:request_id/detail
+func (h *OpsHandler) GetRequestPayloadDetail(c *gin.Context) {
+	if h.opsService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
+		return
+	}
+	requestID := strings.TrimSpace(c.Param("request_id"))
+	if requestID == "" || len(requestID) > 200 {
+		response.BadRequest(c, "Invalid request_id")
+		return
+	}
+	detail, err := h.opsService.GetRequestPayloadDetail(c.Request.Context(), requestID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if detail == nil {
+		response.Error(c, http.StatusNotFound, "Request detail not found")
+		return
+	}
+	response.Success(c, detail)
+}
+
 type opsResolveRequest struct {
 	Resolved bool `json:"resolved"`
 }

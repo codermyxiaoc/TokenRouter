@@ -79,10 +79,13 @@ func SetCompositeModelContext(c *gin.Context, clientModel, actualModel string) {
 	}
 	c.Set("composite_client_model", clientModel)
 	c.Set("composite_actual_model", actualModel)
-	c.Writer = &compositeModelResponseWriter{
-		ResponseWriter: c.Writer,
-		clientModel:    clientModel,
-		actualModel:    actualModel,
+	// Ark 响应保持供应商原生格式；模型映射只记入请求与计费上下文。
+	if c.Request == nil || !isSeedanceTaskAPIPath(c.Request.URL.Path) {
+		c.Writer = &compositeModelResponseWriter{
+			ResponseWriter: c.Writer,
+			clientModel:    clientModel,
+			actualModel:    actualModel,
+		}
 	}
 	if c.Request != nil {
 		ctx := context.WithValue(c.Request.Context(), ctxkey.ClientModel, clientModel)
@@ -128,7 +131,7 @@ func isCompositeKeyNoModelEndpoint(method, path string) bool {
 	if isCompositeKeyModelListEndpoint(method, path) || isAPIKeyUsageRequest(method, path) {
 		return true
 	}
-	return isBatchImageBillingBypassRequest(method, path) || isGrokVideoTaskRead(method, path)
+	return isBatchImageBillingBypassRequest(method, path) || isGrokVideoTaskRead(method, path) || isSeedanceTaskManagementRequest(method, path)
 }
 
 // isCompositeKeyModelListEndpoint 识别复合 Key 需要聚合映射的模型列表入口。
@@ -166,7 +169,7 @@ func isCompositeKeyBillingBypassEndpoint(method, path string) bool {
 	if isAPIKeyUsageRequest(method, path) {
 		return true
 	}
-	return isBatchImageBillingBypassRequest(method, path) || isGrokVideoTaskRead(method, path)
+	return isBatchImageBillingBypassRequest(method, path) || isGrokVideoTaskRead(method, path) || isSeedanceTaskManagementRequest(method, path)
 }
 
 // isGrokVideoTaskRead 识别不携带模型、仅通过任务归属查询的 Grok 视频入口。
@@ -274,6 +277,10 @@ func rewriteCompositeRequestModel(request *http.Request, actualModel string) err
 // rewriteCompositeAdditionalModels 处理 Responses 工具中的附加模型。
 // 同一分组的前缀会被剥离；跨分组模型会使一次请求需要多套路由，因此明确拒绝。
 func rewriteCompositeAdditionalModels(request *http.Request, apiKey *service.APIKey, selected *service.APIKeyCompositeGroup) error {
+	// Ark 的扩展字段不是 Responses 工具声明，不能套用其附加模型转换。
+	if isSeedanceTaskAPIPath(request.URL.Path) {
+		return nil
+	}
 	mediaType, _, _ := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if strings.HasPrefix(mediaType, "multipart/") || apiKey == nil || selected == nil {
 		return nil
@@ -438,7 +445,7 @@ func abortCompositeKeyError(c *gin.Context, err error) {
 }
 
 func isOpenAICompositeEndpoint(path string) bool {
-	return strings.Contains(path, "/chat/completions") || strings.Contains(path, "/responses") ||
+	return isSeedanceTaskAPIPath(path) || strings.Contains(path, "/chat/completions") || strings.Contains(path, "/responses") ||
 		strings.Contains(path, "/embeddings") || strings.Contains(path, "/images/") ||
 		strings.Contains(path, "/videos/") || strings.Contains(path, "/alpha/search") ||
 		strings.Contains(path, "/live") || strings.Contains(path, "/realtime/") ||

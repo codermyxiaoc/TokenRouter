@@ -122,6 +122,12 @@
           </div>
         </div>
 
+        <!-- 展示最终请求的实际扣费套餐，不使用失败账号或分组推断结算。 -->
+        <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-950">
+          <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.usage.billingSubscriptions') }}</div>
+          <div class="mt-1"><BillingSubscriptionSummary :row="detail" show-empty /></div>
+        </div>
+
         <div v-if="detail.api_key_prefix" class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
           <div class="text-xs font-bold uppercase tracking-wider text-gray-400">{{ t('admin.ops.errorDetail.apiKeyPrefix') }}</div>
           <div class="mt-1 font-mono text-sm font-medium text-gray-900 dark:text-white">
@@ -235,6 +241,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ErrorRecoveryStatus from '@/components/common/ErrorRecoveryStatus.vue'
+import BillingSubscriptionSummary from '@/components/common/BillingSubscriptionSummary.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores'
 import { opsAPI, type OpsErrorDetail } from '@/api/admin/ops'

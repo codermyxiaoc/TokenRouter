@@ -401,6 +401,13 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	// 释放本页查询连接后再批量补充套餐，兼容连接池上限为 1 的部署。
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := r.hydrateErrorBillingSubscriptions(ctx, out); err != nil {
+		return nil, err
+	}
 
 	return &service.OpsErrorLogList{
 		Errors:   out,
@@ -615,6 +622,9 @@ LIMIT 1`
 	}
 	if events, parseErr := service.ParseOpsUpstreamErrors(out.UpstreamErrors); parseErr == nil && len(events) > 0 {
 		out.ApplyUpstreamAttemptSnapshot(events[len(events)-1])
+	}
+	if err := r.hydrateErrorBillingSubscriptions(ctx, []*service.OpsErrorLog{&out.OpsErrorLog}); err != nil {
+		return nil, err
 	}
 
 	return &out, nil

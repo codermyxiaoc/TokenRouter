@@ -46,6 +46,20 @@ function mountTable(row: Partial<OpsErrorLog>) {
 }
 
 describe('OpsErrorLogTable user/api-key/account columns', () => {
+  it('展示关联请求实际扣费套餐，而非失败尝试的分组名称', () => {
+    const wrapper = mountTable({
+      group_name: '失败分组',
+      billing_subscriptions: [
+        { subscription_id: 9, plan_name: '最终结算套餐', amount_usd: 0.1 },
+        { subscription_id: 10, amount_usd: 0.2 },
+      ],
+    })
+    expect(wrapper.text()).toContain('admin.usage.billingSubscriptions')
+    expect(wrapper.get('[data-testid="billing-subscriptions"]').text()).toContain('最终结算套餐')
+    expect(wrapper.get('[data-testid="billing-subscriptions"]').text()).toContain('#10')
+    expect(wrapper.get('[data-testid="billing-subscriptions"]').text()).not.toContain('失败分组')
+  })
+
   it('仅详情模式优先展示时间与响应内容，并保留列显隐选择', async () => {
     const wrapper = mountTable({})
     const keys = () => wrapper.findComponent(DataTable).props('columns').map((column: { key: string }) => column.key)

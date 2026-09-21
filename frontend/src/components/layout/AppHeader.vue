@@ -50,6 +50,17 @@
             <Icon name="book" size="md" />
           </a>
 
+          <!-- 模型广场在窄屏保留图标入口，避免移动端只能展开侧栏访问。 -->
+          <router-link
+            v-if="user"
+            to="/models"
+            class="header-status-icon-button"
+            :aria-label="t('nav.modelMarketplace')"
+            :title="t('nav.modelMarketplace')"
+          >
+            <Icon name="grid" size="md" />
+          </router-link>
+
           <!-- 主题切换在窄屏始终保留，公告和文档入口优先让出空间。 -->
           <button
             type="button"

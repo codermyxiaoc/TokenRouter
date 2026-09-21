@@ -3559,7 +3559,8 @@ const openAITextRouteModeOptions = computed(() => [
 ])
 const openAIWorkloadCapabilityOptions = computed<{ value: OpenAIWorkloadCapability; label: string }[]>(() => [
   { value: 'text_generation', label: t('admin.accounts.openai.workloadTextGeneration') },
-  { value: 'embeddings', label: t('admin.accounts.openai.workloadEmbeddings') }
+  { value: 'embeddings', label: t('admin.accounts.openai.workloadEmbeddings') },
+  { value: 'seedance', label: t('admin.accounts.openai.workloadSeedance') }
 ])
 
 const normalizeOpenAIWorkloadCapabilities = (values: unknown[]) => {
@@ -3569,9 +3570,12 @@ const normalizeOpenAIWorkloadCapabilities = (values: unknown[]) => {
       selected.add('text_generation')
     } else if (value === 'embeddings') {
       selected.add('embeddings')
+    } else if (value === 'seedance') {
+      selected.add('seedance')
     }
   }
-  return (['text_generation', 'embeddings'] as OpenAIWorkloadCapability[]).filter((value) => selected.has(value))
+  // 同时保留新旧能力字段里的视频开关，不为历史账号默认开启。
+  return (['text_generation', 'embeddings', 'seedance'] as OpenAIWorkloadCapability[]).filter((value) => selected.has(value))
 }
 
 const readOpenAIWorkloadCapabilities = (credentials?: Record<string, unknown>): OpenAIWorkloadCapability[] => {
@@ -3588,6 +3592,7 @@ const readOpenAIWorkloadCapabilities = (credentials?: Record<string, unknown>): 
       values.push('text_generation')
     }
     if (capabilityMap.embeddings === true) values.push('embeddings')
+    if (capabilityMap.seedance === true) values.push('seedance')
     return normalizeOpenAIWorkloadCapabilities(values)
   }
   return hasNewShape || hasLegacyShape ? [] : ['text_generation', 'embeddings']

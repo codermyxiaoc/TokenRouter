@@ -79,17 +79,26 @@ export async function assign(request: AssignSubscriptionRequest): Promise<UserSu
   return data
 }
 
-/**
- * Bulk assign subscriptions to multiple users
- * @param request - Bulk assignment request
- * @returns Created subscriptions
- */
+// 批量分配保留逐用户状态；带幂等键的响应使用摘要，不返回完整订阅列表。
+export interface BulkAssignSubscriptionResult {
+  success_count: number
+  created_count: number
+  reused_count: number
+  failed_count: number
+  subscriptions: UserSubscription[]
+  errors: string[]
+  statuses?: Record<string, string>
+}
+
+// 响应丢失时使用原参数与幂等键确认结果，不自行重新发起分配。
 export async function bulkAssign(
-  request: BulkAssignSubscriptionRequest
-): Promise<UserSubscription[]> {
-  const { data } = await apiClient.post<UserSubscription[]>(
+  request: BulkAssignSubscriptionRequest,
+  idempotencyKey?: string
+): Promise<BulkAssignSubscriptionResult> {
+  const { data } = await apiClient.post<BulkAssignSubscriptionResult>(
     '/admin/subscriptions/bulk-assign',
-    request
+    request,
+    idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : undefined
   )
   return data
 }
@@ -174,6 +183,21 @@ export async function bulkResetQuota(
   return data
 }
 
+// 生命周期批量操作由服务端在一个事务中处理，客户端不拆成逐条请求。
+export async function bulkRevoke(subscriptionIds: number[], idempotencyKey: string): Promise<BulkSubscriptionResult> {
+  const { data } = await apiClient.post<BulkSubscriptionResult>('/admin/subscriptions/bulk-revoke', {
+    subscription_ids: subscriptionIds
+  }, { headers: { 'Idempotency-Key': idempotencyKey } })
+  return data
+}
+
+export async function bulkRestore(subscriptionIds: number[], idempotencyKey: string): Promise<BulkSubscriptionResult> {
+  const { data } = await apiClient.post<BulkSubscriptionResult>('/admin/subscriptions/bulk-restore', {
+    subscription_ids: subscriptionIds
+  }, { headers: { 'Idempotency-Key': idempotencyKey } })
+  return data
+}
+
 /**
  * List subscriptions by plan
  * @param planId - Plan ID
@@ -228,6 +252,8 @@ export const subscriptionsAPI = {
   resetQuota,
   bulkExtend,
   bulkResetQuota,
+  bulkRevoke,
+  bulkRestore,
   listByPlan,
   listByUser
 }

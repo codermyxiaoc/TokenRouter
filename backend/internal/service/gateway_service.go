@@ -1722,6 +1722,8 @@ func zeroCostBreakdown(mode BillingMode) *CostBreakdown {
 
 // usageBillingParams 统一扣费所需的参数
 type usageBillingParams struct {
+	// SubscriptionScopeID 固化异步任务创建时 auto 可以参与分摊的订阅，不来自客户端配置。
+	SubscriptionScopeID             *int64
 	Cost                            *CostBreakdown
 	User                            *User
 	APIKey                          *APIKey

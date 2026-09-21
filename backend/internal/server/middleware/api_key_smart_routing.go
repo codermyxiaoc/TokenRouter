@@ -104,6 +104,9 @@ func resolveSmartRoutingAPIKeyRequest(c *gin.Context, apiKeyService *service.API
 		if forcedPlatform != "" && group.Platform != forcedPlatform {
 			continue
 		}
+		if isSeedanceCreateRequest(c.Request.Method, c.Request.URL.Path) && group.Platform != service.PlatformOpenAI {
+			continue
+		}
 		if execution != nil && execution.visited[group.ID] {
 			continue
 		}
@@ -265,6 +268,9 @@ func smartRoutingBodyError(err, missing error) error {
 // smartRoutingModelEndpoint 显式列出能在认证阶段确定模型的入口。
 func smartRoutingModelEndpoint(c *gin.Context) bool {
 	path := strings.TrimSuffix(c.Request.URL.Path, "/")
+	if isSeedanceCreateRequest(c.Request.Method, path) {
+		return true
+	}
 	if isGeminiNativeModelEndpoint(path) {
 		if c.Request.Method == http.MethodGet {
 			return true

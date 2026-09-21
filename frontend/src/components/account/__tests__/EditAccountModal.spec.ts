@@ -1256,6 +1256,19 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_responses_supported')
   })
 
+  it.each(['openai_workload_capabilities', 'openai_capabilities'])('保留 %s 中的 Seedance 视频能力', async (field) => {
+    const account = buildAccount()
+    account.credentials[field] = ['text_generation', 'seedance']
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="openai-workload-capability-seedance"]').element.checked).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.openai_workload_capabilities)
+      .toEqual(['text_generation', 'seedance'])
+  })
+
   it('submits Codex image tool force-inject mode as bridge override', async () => {
     const account = buildAccount()
     account.extra = {

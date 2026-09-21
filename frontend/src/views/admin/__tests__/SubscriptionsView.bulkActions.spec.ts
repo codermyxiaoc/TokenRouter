@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import SubscriptionsView from '../SubscriptionsView.vue'
 
-const mocks = vi.hoisted(() => ({ list: vi.fn(), bulkExtend: vi.fn(), bulkResetQuota: vi.fn(), showError: vi.fn(), showSuccess: vi.fn() }))
+const mocks = vi.hoisted(() => ({ list: vi.fn(), bulkExtend: vi.fn(), bulkResetQuota: vi.fn(), bulkRevoke: vi.fn(), bulkRestore: vi.fn(), showError: vi.fn(), showSuccess: vi.fn() }))
 vi.mock('@/api/admin', () => ({ adminAPI: {
-  subscriptions: { list: mocks.list, bulkExtend: mocks.bulkExtend, bulkResetQuota: mocks.bulkResetQuota },
+  subscriptions: { list: mocks.list, bulkExtend: mocks.bulkExtend, bulkResetQuota: mocks.bulkResetQuota, bulkRevoke: mocks.bulkRevoke, bulkRestore: mocks.bulkRestore },
   payment: { getPlans: vi.fn().mockResolvedValue({ data: [] }) }
 } }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showError: mocks.showError, showSuccess: mocks.showSuccess }) }))
@@ -29,6 +29,7 @@ describe('subscription bulk management', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+    sessionStorage.clear()
     mocks.list.mockResolvedValue({ items: rows, total: 2, pages: 1 })
     mocks.bulkExtend.mockResolvedValue({ subscription_ids: [1, 2], updated_count: 2 })
     mocks.bulkResetQuota.mockResolvedValue({ subscription_ids: [1, 2], updated_count: 2 })
@@ -38,7 +39,7 @@ describe('subscription bulk management', () => {
     await flushPromises()
     wrapper.getComponent({ name: 'DataTable' }).vm.$emit('update:selectedKeys', [1, 2])
     await flushPromises()
-    await wrapper.findAll('button').find(button => button.text() === `admin.subscriptions.${action}`)!.trigger('click')
+    await wrapper.get(`[data-test="bulk-${action === 'bulkReset' ? 'reset' : 'extend'}"]`).trigger('click')
   }
 
   it('adds the entered days to the selected IDs and clears selection after success', async () => {
@@ -62,7 +63,7 @@ describe('subscription bulk management', () => {
       await wrapper.get('#bulk-subscription-days').setValue(3)
       await wrapper.get('#bulk-subscription-form').trigger('submit')
       await flushPromises()
-      expect(wrapper.get('[role="alert"]').text()).toBe('admin.subscriptions.bulkFailed')
+      expect(wrapper.get('[role="alert"]').text()).toBe('network')
       expect((wrapper.get('#bulk-subscription-days').element as HTMLInputElement).disabled).toBe(true)
       await wrapper.get('#bulk-subscription-form').trigger('submit')
       await flushPromises()
@@ -110,4 +111,111 @@ describe('subscription bulk management', () => {
       expect(mocks.bulkExtend).not.toHaveBeenCalled()
     } finally { wrapper.unmount() }
   })
+  it('confirms all non-revoked statuses for revocation, including queued and suspended subscriptions', async () => {
+    const targets = [...rows, { ...rows[0], id: 3, status: 'suspended' }, { ...rows[0], id: 4, status: 'revoked' }]
+    mocks.list.mockResolvedValue({ items: targets, total: 4, pages: 1 })
+    mocks.bulkRevoke.mockResolvedValue({ subscription_ids: [1, 2, 3], updated_count: 3 })
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      wrapper.getComponent({ name: 'DataTable' }).vm.$emit('update:selectedKeys', [1, 2, 3, 4])
+      await flushPromises()
+      await wrapper.get('[data-test="bulk-revoke"]').trigger('click')
+      expect(wrapper.findAll('[data-test="bulk-targets"] li')).toHaveLength(3)
+      expect(wrapper.find('[data-bulk-window]').exists()).toBe(false)
+      await wrapper.get('#bulk-subscription-form').trigger('submit')
+      await flushPromises()
+      expect(mocks.bulkRevoke).toHaveBeenCalledWith([1, 2, 3], expect.stringContaining('subscription-bulk-'))
+      expect(mocks.bulkResetQuota).not.toHaveBeenCalled()
+    } finally { wrapper.unmount() }
+  })
+
+  it('restores only the revoked records and preserves the server overlap error', async () => {
+    mocks.list.mockResolvedValue({ items: [rows[0], { ...rows[1], status: 'revoked' }], total: 2, pages: 1 })
+    mocks.bulkRestore.mockRejectedValueOnce({ response: { status: 409, data: { message: 'Subscription time overlaps' } } })
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      wrapper.getComponent({ name: 'DataTable' }).vm.$emit('update:selectedKeys', [1, 2])
+      await flushPromises()
+      await wrapper.get('[data-test="bulk-restore"]').trigger('click')
+      expect(wrapper.findAll('[data-test="bulk-targets"] li')).toHaveLength(1)
+      await wrapper.get('#bulk-subscription-form').trigger('submit')
+      await flushPromises()
+      expect(mocks.bulkRestore).toHaveBeenCalledWith([2], expect.any(String))
+      expect(wrapper.get('[role="alert"]').text()).toBe('Subscription time overlaps')
+      expect(wrapper.getComponent({ name: 'DataTable' }).props('selectedKeys')).toEqual([1, 2])
+    } finally { wrapper.unmount() }
+  })
+
+  it('keeps an unconfirmed batch when closed and reopened through another action', async () => {
+    mocks.bulkExtend.mockRejectedValueOnce(new Error('network'))
+    const wrapper = mountView()
+    try {
+      await selectAndOpen(wrapper)
+      await wrapper.get('#bulk-subscription-days').setValue(8)
+      await wrapper.get('#bulk-subscription-form').trigger('submit')
+      await flushPromises()
+      await wrapper.findAll('button').find(button => button.text() === 'common.cancel')!.trigger('click')
+      await wrapper.get('[data-test="bulk-reset"]').trigger('click')
+      expect((wrapper.get('#bulk-subscription-days').element as HTMLInputElement).value).toBe('8')
+      await wrapper.get('#bulk-subscription-form').trigger('submit')
+      await flushPromises()
+      expect(mocks.bulkExtend.mock.calls[1]).toEqual(mocks.bulkExtend.mock.calls[0])
+      expect(mocks.bulkResetQuota).not.toHaveBeenCalled()
+    } finally { wrapper.unmount() }
+  })
+
+  it('unlocks a definitively rolled-back restore conflict from the normalized API error', async () => {
+    mocks.list.mockResolvedValue({ items: [{ ...rows[0], status: 'revoked' }], total: 1, pages: 1 })
+    mocks.bulkRestore.mockRejectedValueOnce({ status: 409, reason: 'SUBSCRIPTION_RESTORE_CONFLICT', message: 'Overlapping subscription' })
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      wrapper.getComponent({ name: 'DataTable' }).vm.$emit('update:selectedKeys', [1])
+      await flushPromises()
+      await wrapper.get('[data-test="bulk-restore"]').trigger('click')
+      await wrapper.get('#bulk-subscription-form').trigger('submit')
+      await flushPromises()
+      expect(wrapper.get('[role="alert"]').text()).toBe('Overlapping subscription')
+      await wrapper.findAll('button').find(button => button.text() === 'common.cancel')!.trigger('click')
+      expect(wrapper.find('[data-test="resume-bulk-operation"]').exists()).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+
+  it('shows the specific expired-chain error and allows correcting the selection', async () => {
+    mocks.bulkExtend.mockRejectedValueOnce({ status: 400, reason: 'SUBSCRIPTION_BULK_EXPIRED_HAS_SUCCESSOR', metadata: { subscription_id: '1' }, message: 'Cannot extend past entry' })
+    const wrapper = mountView()
+    try {
+      await selectAndOpen(wrapper)
+      await wrapper.get('#bulk-subscription-form').trigger('submit')
+      await flushPromises()
+      expect(wrapper.get('[role="alert"]').text()).toBe('admin.subscriptions.bulkExpiredHasSuccessor')
+      expect((wrapper.get('#bulk-subscription-days').element as HTMLInputElement).disabled).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+
+  it('restores an unconfirmed request after remount even when its rows have left the current page', async () => {
+    localStorage.setItem('auth_user', JSON.stringify({ id: 100, role: 'admin' }))
+    mocks.bulkExtend.mockRejectedValueOnce({ status: 0, message: 'Network error' })
+    const first = mountView()
+    await selectAndOpen(first)
+    await first.get('#bulk-subscription-days').setValue(9)
+    await first.get('#bulk-subscription-form').trigger('submit')
+    await flushPromises()
+    const original = mocks.bulkExtend.mock.calls[0]
+    first.unmount()
+    mocks.list.mockResolvedValue({ items: [], total: 0, pages: 0 })
+    const second = mountView()
+    try {
+      await flushPromises()
+      await second.get('[data-test="resume-bulk-operation"]').trigger('click')
+      expect(second.findAll('[data-test="bulk-targets"] li')).toHaveLength(2)
+      await second.get('#bulk-subscription-form').trigger('submit')
+      await flushPromises()
+      expect(mocks.bulkExtend.mock.calls[1]).toEqual(original)
+      expect(second.find('[data-test="resume-bulk-operation"]').exists()).toBe(false)
+    } finally { second.unmount() }
+  })
+
 })

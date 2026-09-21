@@ -711,6 +711,28 @@ func TestNormalizeDeepSeekResponsesRequestBody(t *testing.T) {
 	require.Equal(t, string(body), string(normalizeDeepSeekResponsesRequestBody(openai, body)))
 }
 
+func TestNormalizeDeepSeekResponsesRequestBodyLiftsToolOutputImages(t *testing.T) {
+	account := &Account{
+		Platform: PlatformDeepseek, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_protocol": APIProtocolResponses},
+	}
+	body := []byte(`{"model":"deepseek-v4-pro","input":[
+		{"type":"function_call","call_id":"call_image","name":"view_image","arguments":"{}"},
+		{"type":"function_call_output","call_id":"call_image","output":[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]}
+	]}`)
+
+	normalized := normalizeDeepSeekResponsesRequestBody(account, body)
+	require.NotEqual(t, string(body), string(normalized))
+	require.Equal(t, "function_call_output", gjson.GetBytes(normalized, "input.1.type").String())
+	output := gjson.GetBytes(normalized, "input.1.output").String()
+	require.Contains(t, output, "Tool output media")
+	require.NotContains(t, output, "data:image/png")
+	require.Equal(t, "message", gjson.GetBytes(normalized, "input.2.type").String())
+	require.Equal(t, "user", gjson.GetBytes(normalized, "input.2.role").String())
+	require.Equal(t, "input_image", gjson.GetBytes(normalized, "input.2.content.1.type").String())
+	require.Equal(t, "data:image/png;base64,AQID", gjson.GetBytes(normalized, "input.2.content.1.image_url").String())
+}
+
 // TestGetAnthropicAPIKeyAuthScheme_CNProvider CN 账号可经 extra 覆写鉴权方案，
 // 默认保持 x-api-key。
 func TestGetAnthropicAPIKeyAuthScheme_CNProvider(t *testing.T) {

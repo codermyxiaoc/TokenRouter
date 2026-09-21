@@ -715,6 +715,10 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
     { path: '/admin/tickets', label: t('nav.ticketManagement'), icon: TicketIcon, featureFlag: flagTicketAccess },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },
+    // 菜单开关只影响可见性，插件的运行状态由插件管理页控制。
+    ...(adminSettingsStore.pluginManagementEnabled
+      ? [{ path: '/admin/plugins', label: t('nav.plugins'), icon: CogIcon }]
+      : []),
     {
       path: '/admin/risk-control',
       label: t('nav.riskControl'),

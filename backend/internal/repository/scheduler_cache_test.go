@@ -100,3 +100,39 @@ func TestSchedulerMetadataAccountKeepsOpenAISubscriptionIdentity(t *testing.T) {
 	require.True(t, metadata.IsOpenAIChatGPTSubscription())
 	require.Empty(t, metadata.GetCredential("access_token"))
 }
+
+// 精简投影需要保留端点资格所依赖的地址，且不能把未开通视频的旧账号自动升级。
+func TestSchedulerMetadataPreservesSeedanceEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		platform string
+		kind     string
+		baseURL  string
+		declared bool
+		want     bool
+	}{
+		{"explicit_ark", service.PlatformOpenAI, service.AccountTypeAPIKey, "https://ark.example/api/v3", true, true},
+		{"old_text_account", service.PlatformOpenAI, service.AccountTypeAPIKey, "https://relay.example/v1", false, false},
+		{"missing_base_url", service.PlatformOpenAI, service.AccountTypeAPIKey, "", true, false},
+		{"blank_base_url", service.PlatformOpenAI, service.AccountTypeAPIKey, "  ", true, false},
+		{"oauth_cannot_opt_in", service.PlatformOpenAI, service.AccountTypeOAuth, "https://ark.example/api/v3", true, false},
+		{"other_platform", service.PlatformGemini, service.AccountTypeAPIKey, "https://ark.example/api/v3", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := service.Account{Platform: tc.platform, Type: tc.kind, Credentials: map[string]any{
+				"base_url": tc.baseURL, "access_token": "not-in-projection", "refresh_token": "not-in-projection",
+			}}
+			if tc.declared {
+				account.Credentials["openai_workload_capabilities"] = []string{"seedance"}
+			}
+			_, payload, err := marshalSchedulerCacheAccount(account)
+			require.NoError(t, err)
+			got, err := decodeCachedAccount(payload)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got.SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilitySeedance))
+			require.Equal(t, account.SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilityTextGeneration), got.SupportsOpenAIEndpointCapability(service.OpenAIEndpointCapabilityTextGeneration))
+			require.Empty(t, got.GetCredential("access_token"))
+			require.Empty(t, got.GetCredential("refresh_token"))
+		})
+	}
+}

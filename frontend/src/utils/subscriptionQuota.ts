@@ -2,6 +2,34 @@ import type { UserSubscription } from '@/types'
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
+export type SubscriptionQuotaPeriod = 'daily' | 'weekly' | 'monthly'
+
+// 与后端窗口规则一致：有限外层额度允许日/周尾段刷新；无限额度不构成保护层。
+// @project-doc docs/domains/payments_and_entitlements.md#subscription_quota_windows
+export function isQuotaWindowEndingAtSubscriptionExpiry(
+  subscription: Pick<UserSubscription, 'starts_at' | 'expires_at' | 'weekly_limit_usd' | 'monthly_limit_usd'>,
+  windowStart: string | null,
+  period: SubscriptionQuotaPeriod
+): boolean {
+  if (!windowStart) return false
+  const start = new Date(windowStart).getTime()
+  const expiresAt = new Date(subscription.expires_at).getTime()
+  if (!Number.isFinite(start) || !Number.isFinite(expiresAt)) return false
+  if (period === 'daily' && isOneTimeDailyQuota(subscription)) return true
+
+  const days = { daily: 1, weekly: 7, monthly: 30 }[period]
+  const windowMs = days * ONE_DAY_MS
+  const nextWindowStart = start + windowMs
+  // 已到订阅有效期终点时，即使存在外层额度也不能展示下一次刷新。
+  if (nextWindowStart >= expiresAt) return true
+  if (nextWindowStart + windowMs <= expiresAt) return false
+
+  const positiveFiniteLimit = (value: number | null) => value != null && Number.isFinite(value) && value > 0
+  if (period === 'daily' && positiveFiniteLimit(subscription.weekly_limit_usd)) return false
+  if (period !== 'monthly' && positiveFiniteLimit(subscription.monthly_limit_usd)) return false
+  return true
+}
+
 // ExpirationDateRelation 表示到期时间与当前本地日历日期的关系。
 export type ExpirationDateRelation = 'expired' | 'today' | 'tomorrow' | 'later'
 

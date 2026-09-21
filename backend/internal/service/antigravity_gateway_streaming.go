@@ -174,6 +174,12 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.StreamKeepaliveInterval > 0 {
 		keepaliveInterval = time.Duration(s.settingService.cfg.Gateway.StreamKeepaliveInterval) * time.Second
 	}
+	// go-genai / python-genai 不会忽略 SSE 注释行；对这类客户端禁用注释心跳，
+	// 其他客户端继续保留心跳以避免长时间空闲连接被代理断开。
+	rejectsSSEComments := downstreamRejectsSSEComments(c)
+	if keepaliveInterval > 0 && rejectsSSEComments {
+		keepaliveInterval = 0
+	}
 	var keepaliveTicker *time.Ticker
 	if keepaliveInterval > 0 {
 		keepaliveTicker = time.NewTicker(keepaliveInterval)
@@ -223,6 +229,11 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 
 			line := ev.line
 			trimmed := strings.TrimRight(line, "\r\n")
+			// 同时过滤上游注释，避免 SDK 仍被透传心跳中断。忽略的注释不打开
+			// passthroughFrameOpen，随后空行也不会形成无内容的下游帧。
+			if rejectsSSEComments && strings.HasPrefix(trimmed, ":") {
+				continue
+			}
 			if strings.HasPrefix(trimmed, "data:") {
 				passthroughFrameOpen = false
 				payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))

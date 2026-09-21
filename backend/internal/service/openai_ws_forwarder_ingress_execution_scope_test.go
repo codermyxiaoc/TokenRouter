@@ -227,7 +227,7 @@ func (c *openAIWSGatedConn) Close() error {
 }
 
 // runOpenAIWSCodexThreadPair 用 OAuth 账号（抢占只对 OAuth ctx_pool 生效）跑两条并发接入：
-// A 的请求发到上游后 B 才接入并立即完成，B 完成后才放行 A 的上游事件。
+// A 的请求发到上游后 B 才接入并立即完成；不同线程放行 A，同线程保持阻塞以验证抢占。
 // 返回 A 与 B 的服务端返回值、A 客户端读结果的错误。
 func runOpenAIWSCodexThreadPair(t *testing.T, threadA, threadB string) (serverErrs []error, aReadErr error) {
 	t.Helper()
@@ -309,7 +309,12 @@ func runOpenAIWSCodexThreadPair(t *testing.T, threadA, threadB string) (serverEr
 	cancelB()
 	require.NoError(t, readErrB, "B 必须正常完成")
 	require.Equal(t, "resp_thread_b", gjson.GetBytes(completedB, "response.id").String())
-	close(gatedConn.gate)
+	if threadA == threadB {
+		// 同线程重连应在旧请求仍阻塞时完成抢占，不能先放行旧响应与关闭帧竞争。
+		defer close(gatedConn.gate)
+	} else {
+		close(gatedConn.gate)
+	}
 
 	readCtxA, cancelA := context.WithTimeout(context.Background(), 5*time.Second)
 	_, completedA, aReadErr := connA.Read(readCtxA)

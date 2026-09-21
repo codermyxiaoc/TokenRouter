@@ -47,6 +47,8 @@ const messages: Record<string, string> = {
   'admin.users.columnSettings': 'Columns',
   'admin.usage.group': 'Group',
   'admin.usage.billingType': 'Billing type',
+  'admin.usage.billingSubscriptions': 'Billed plans',
+  'admin.usage.billingSubscription': 'Subscription',
   'admin.usage.billingMode': 'Billing mode',
   'admin.usage.allTypes': 'All types',
   'admin.usage.allBillingTypes': 'All billing types',
@@ -324,7 +326,10 @@ describe('user UsageView', () => {
     { billing: { billing_type: 1 }, label: 'Subscription' },
     { billing: { billing_type: 1, subscription_amount_usd: 0.08, balance_amount_usd: 0.012883 }, label: 'Subscription + Balance' },
   ])('exports csv with current filters and billing source $label without admin-only fields', async ({ billing, label }) => {
-    query.mockResolvedValue({ items: [{ ...usageLog, ...billing }], total: 1, pages: 1 })
+    const billingSubscriptions = billing.billing_type === 1
+      ? [{ subscription_id: 9, plan_name: 'Pro', amount_usd: 0.08 }]
+      : []
+    query.mockResolvedValue({ items: [{ ...usageLog, ...billing, billing_subscriptions: billingSubscriptions }], total: 1, pages: 1 })
     const wrapper = mountUsageView()
     await flushPromises()
 
@@ -356,8 +361,8 @@ describe('user UsageView', () => {
     expect(showSuccess).toHaveBeenCalled()
     expect(csvContent.startsWith('\uFEFF')).toBe(true)
     expect(csvContent.slice(1)).toBe([
-      'Time,API Key Name,Model,Reasoning Effort,Inbound Endpoint,IP Address,Type,Billing Mode,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Rate Multiplier,Billing Type,Billed Cost,Original Cost,First Token (ms),Duration (ms)',
-      `2026-03-08T00:00:00Z,demo-key,gpt-5.4,"'-",,203.0.113.10,Sync,Token,4057,101,278272,4,1,${label},0.09288300,0.09288300,12,345`,
+      'Time,API Key Name,Model,Reasoning Effort,Inbound Endpoint,IP Address,Type,Billing Mode,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Rate Multiplier,Billing Type,Billed plans,Billed Cost,Original Cost,First Token (ms),Duration (ms)',
+      `2026-03-08T00:00:00Z,demo-key,gpt-5.4,"'-",,203.0.113.10,Sync,Token,4057,101,278272,4,1,${label},${billing.billing_type === 1 ? 'Pro (#9)' : ''},0.09288300,0.09288300,12,345`,
     ].join('\n'))
     expect(csvContent).toContain('IP Address')
     expect(csvContent).toContain('203.0.113.10')

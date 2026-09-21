@@ -16,6 +16,7 @@ import (
 
 var ErrUsageBillingRequestIDRequired = errors.New("usage billing request_id is required")
 var ErrUsageBillingRequestConflict = errors.New("usage billing request fingerprint conflict")
+var ErrUsageBillingSubscriptionScopeInvalid = errors.New("usage billing subscription scope is invalid")
 
 // UsageBillingCommand describes one billable request that must be applied at most once.
 type UsageBillingCommand struct {
@@ -26,6 +27,8 @@ type UsageBillingCommand struct {
 	// APIKeyBillingMode 与 PreferredSubscriptionID 固化请求进入网关时的资金来源选择。
 	APIKeyBillingMode       string
 	PreferredSubscriptionID *int64
+	// SubscriptionScopeID 仅由异步任务的创建快照提供，限制 auto 可分摊的订阅；nil 保留普通请求行为。
+	SubscriptionScopeID *int64 `json:"-"`
 
 	UserID                          int64
 	ActorUserID                     int64
@@ -78,11 +81,17 @@ func (c *UsageBillingCommand) Normalize() {
 		if mode != APIKeyBillingModeSubscription {
 			fingerprintCommand.PreferredSubscriptionID = nil
 		}
+		if mode != APIKeyBillingModeAuto {
+			fingerprintCommand.SubscriptionScopeID = nil
+		}
 		c.RequestFingerprint = buildUsageBillingFingerprint(&fingerprintCommand)
 	}
 	c.APIKeyBillingMode = mode
 	if mode != APIKeyBillingModeSubscription {
 		c.PreferredSubscriptionID = nil
+	}
+	if mode != APIKeyBillingModeAuto {
+		c.SubscriptionScopeID = nil
 	}
 	// 量化必须在指纹计算之后：指纹是请求幂等键，保持由原始金额派生可以避免
 	// 升级前后同一 request_id 的重试算出不同指纹而被判为 fingerprint conflict。
@@ -176,6 +185,10 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 	raw += fmt.Sprintf("|%s|%d", c.APIKeyBillingMode, preferredSubscriptionID)
 	if payloadHash := strings.TrimSpace(c.RequestPayloadHash); payloadHash != "" {
 		raw += "|" + payloadHash
+	}
+	// 仅受限异步结算扩展指纹，普通请求及历史重试继续使用原格式。
+	if c.SubscriptionScopeID != nil {
+		raw += fmt.Sprintf("|subscription_scope:%d", *c.SubscriptionScopeID)
 	}
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])

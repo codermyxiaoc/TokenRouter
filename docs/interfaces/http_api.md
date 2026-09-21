@@ -49,6 +49,8 @@ RequestLogger
 | `/api/v1/payment/webhook/*` | 提供商验签 | EasyPay、Alipay、WeChat Pay、Stripe、Airwallex 通知 |
 | `/v1/*` 和兼容裸别名 | TokenRouter API Key | Anthropic/OpenAI 兼容消息、Responses、Chat、图片、视频、模型、用量与批任务 |
 | `/v1beta/*` | TokenRouter API Key | Gemini 原生模型 URL、生成、流式生成和 token 统计 |
+| `/api/v3/contents/generations/tasks` 及 `/v3`、`/v1`、裸路径别名 | TokenRouter API Key + 视频账号能力与任务归属 | Ark 原生异步视频创建、查询、删除，响应不套面板 envelope，见 [Seedance 上游](seedance_upstream.md) |
+| `/api/v1/admin/plugins/*` | 管理员认证；修改与测试另需 step-up | 本地插件安装/运行与只读 `GET /:id/status`，见 [插件契约](local_plugins.md) |
 | `/antigravity/*` | TokenRouter API Key + 强制平台 | Antigravity 专用 Claude/Gemini 入口与管理型自省 |
 | `/backend-api/codex/*` | TokenRouter API Key | Codex Responses、Realtime 与 sideband 兼容入口 |
 | `/api/v1/pages/*` 等 page routes | 按页面类型为用户或管理员 JWT | 服务端生成/读取的 pricing、账单或管理页面数据 |

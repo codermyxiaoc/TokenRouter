@@ -48,6 +48,13 @@ func (r *usageLogRepository) GetByID(ctx context.Context, id int64) (log *servic
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
+	// 先释放原始查询连接，再加载套餐摘要，兼容单连接数据库与事务执行器。
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+	if err = hydrateUsageBillingSubscriptions(ctx, r.sql, []*service.UsageLog{log}); err != nil {
+		return nil, err
+	}
 	return log, nil
 }
 
@@ -313,6 +320,17 @@ func (r *usageLogRepository) queryUsageLogs(ctx context.Context, query string, a
 		logs = append(logs, *log)
 	}
 	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+	// 所有明细列表共用该入口，确保用户、管理员和导出获得相同的实际扣费套餐。
+	logPointers := make([]*service.UsageLog, len(logs))
+	for i := range logs {
+		logPointers[i] = &logs[i]
+	}
+	if err = hydrateUsageBillingSubscriptions(ctx, r.sql, logPointers); err != nil {
 		return nil, err
 	}
 	return logs, nil

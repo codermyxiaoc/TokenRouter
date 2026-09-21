@@ -402,6 +402,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyUsageRankingShowTotalTokens] = strconv.FormatBool(usageRanking.ShowTotalTokens)
 	updates[SettingKeyUsageRankingShowRequests] = strconv.FormatBool(usageRanking.ShowRequests)
 	updates[SettingKeyUsageRankingShowActualCost] = strconv.FormatBool(usageRanking.ShowActualCost)
+	updates[SettingKeyPluginManagementEnabled] = strconv.FormatBool(settings.PluginManagementEnabled)
 	updates[SettingKeyCustomMenuItems] = settings.CustomMenuItems
 	updates[SettingKeyCustomEndpoints] = settings.CustomEndpoints
 	updates[SettingKeyFooterLinks] = settings.FooterLinks

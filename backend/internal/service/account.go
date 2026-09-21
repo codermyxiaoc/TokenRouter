@@ -965,6 +965,10 @@ func normalizeQoderModelForWhitelist(model string) string {
 // 5. 为兼容旧数据，非 Qoder 平台若未配置独立 model_whitelist，会继续把精确自映射条目视作最终白名单。
 // 6. OpenAI OAuth 非透传账号排除明确的其它厂商模型；DeepSeek 无有效映射/白名单时按平台目录校验。
 func (a *Account) IsModelSupported(requestedModel string) bool {
+	// 仅限制 OpenCode GO 的 Jev 能力，仍保留 Zen 的显式白名单与其它平台语义。
+	if a.IsOpenCodeGoPlan() && IsOpenCodeSystemOneModel(a.GetMappedModel(requestedModel)) {
+		return false
+	}
 	// OpenAI 透传模式仅替换认证，模型能力由上游决定；必须在 model_mapping
 	// 分支前短路，否则调度快照中的历史映射会把可用账号误判为不支持模型。
 	if a.IsOpenAIPassthroughEnabled() {
@@ -2101,6 +2105,16 @@ func (a *Account) GetOpenAISessionID() string {
 func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapability) bool {
 	if a == nil {
 		return false
+	}
+	// System One 不借用通用文本能力，避免 GO 或其它平台被选中。
+	if capability == OpenAIEndpointCapabilitySystemOne {
+		return a.IsOpenCodeZen() && a.Type == AccountTypeAPIKey
+	}
+	// 方舟原生视频必须由管理员显式开启，不能落到普通 OpenAI 或 OAuth 账号。
+	if capability == OpenAIEndpointCapabilitySeedance {
+		configured, _ := a.openAIWorkloadCapabilitySet()
+		return configured[string(capability)] && a.Platform == PlatformOpenAI && a.Type == AccountTypeAPIKey &&
+			strings.TrimSpace(a.GetCredential("base_url")) != ""
 	}
 	if capability == "" {
 		return true

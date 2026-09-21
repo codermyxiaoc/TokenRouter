@@ -232,6 +232,10 @@ func (u *grokHybridUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*h
 	u.bodies = append(u.bodies, body)
 	u.mu.Unlock()
 
+	if req.URL.Path == "/v1/models" {
+		// 模型目录同步是独立后台查询，不能伪装成额度探测响应。
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"data":[]}`))}, nil
+	}
 	if req.URL.Path == "/v1/responses" {
 		status := u.activeStatus
 		if status == 0 {
@@ -300,6 +304,23 @@ func (u *grokHybridUpstream) snapshot() ([]*http.Request, [][]byte) {
 		bodies[i] = append([]byte(nil), u.bodies[i]...)
 	}
 	return requests, bodies
+}
+
+// quotaSnapshot 排除允许异步发生的模型目录读取，仍完整核对所有额度探测请求。
+func (u *grokHybridUpstream) quotaSnapshot(t *testing.T) ([]*http.Request, [][]byte) {
+	t.Helper()
+	requests, bodies := u.snapshot()
+	quotaRequests := make([]*http.Request, 0, len(requests))
+	quotaBodies := make([][]byte, 0, len(bodies))
+	for i, req := range requests {
+		if req.URL.Path == "/v1/models" {
+			require.Equal(t, http.MethodGet, req.Method)
+			continue
+		}
+		quotaRequests = append(quotaRequests, req)
+		quotaBodies = append(quotaBodies, bodies[i])
+	}
+	return quotaRequests, quotaBodies
 }
 
 func (r *grokQuotaProxyRepo) GetByID(_ context.Context, id int64) (*Proxy, error) {
@@ -742,7 +763,7 @@ func TestGrokQuotaServiceQueryQuotaFreeFallsBackToGrok45(t *testing.T) {
 	require.EqualValues(t, 2_000_000, *result.Snapshot.Tokens.Limit)
 	require.True(t, result.HeadersObserved)
 
-	requests, bodies := upstream.snapshot()
+	requests, bodies := upstream.quotaSnapshot(t)
 	require.Len(t, requests, 3)
 	responseCalls := 0
 	for i, req := range requests {
@@ -782,7 +803,7 @@ func TestGrokQuotaServiceQueryQuotaPaidBillingSkipsActiveProbe(t *testing.T) {
 	require.Empty(t, result.Model)
 	require.Nil(t, result.LocalUsage24h)
 
-	requests, _ := upstream.snapshot()
+	requests, _ := upstream.quotaSnapshot(t)
 	require.Len(t, requests, 2)
 	for _, req := range requests {
 		require.Equal(t, "/v1/billing", req.URL.Path)
@@ -807,7 +828,7 @@ func TestGrokQuotaServiceQueryQuotaCustomPaidMonthlyLimitSkipsActiveProbe(t *tes
 	require.InDelta(t, monthlyLimit, *result.Billing.MonthlyLimitCents, 1e-9)
 	require.Nil(t, result.Snapshot)
 
-	requests, _ := upstream.snapshot()
+	requests, _ := upstream.quotaSnapshot(t)
 	require.Len(t, requests, 2)
 	for _, req := range requests {
 		require.Equal(t, "/v1/billing", req.URL.Path)

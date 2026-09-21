@@ -574,6 +574,12 @@ func (s *BillingService) initFallbackPricing() {
 		CacheReadPricePerToken:     1e-6,
 		SupportsServiceTier:        true,
 	}
+	// OpenCode Zen Jev System One 官方价卡：Jev 1.13 输入 $0.042/M、输出免费；
+	// Free 版本输入和输出均免费。显式渠道定价仍优先于此回退价格。
+	s.fallbackPrices["jev-1.13"] = &ModelPricing{
+		InputPricePerToken: 0.042e-6,
+	}
+	s.fallbackPrices["jev-1.13-free"] = &ModelPricing{}
 
 	// OpenAI GPT-5.6 官方价格（USD/token）。缓存写入为输入价的 1.25 倍。
 	s.fallbackPrices["gpt-5.6-sol"] = &ModelPricing{
@@ -999,6 +1005,12 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 	if strings.Contains(modelLower, "deepseek-v4-pro") {
 		return s.fallbackPrices["deepseek-v4-pro"]
+	}
+	if modelLower == "jev-1.13" || strings.HasSuffix(modelLower, "/jev-1.13") {
+		return s.fallbackPrices["jev-1.13"]
+	}
+	if modelLower == "jev-1.13-free" || strings.HasSuffix(modelLower, "/jev-1.13-free") {
+		return s.fallbackPrices["jev-1.13-free"]
 	}
 	if strings.HasPrefix(modelLower, "deepseek-") {
 		return s.fallbackPrices["deepseek-v4-flash"]

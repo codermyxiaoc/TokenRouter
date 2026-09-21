@@ -272,6 +272,22 @@ describe('CreateAccountModal OpenAI account options', () => {
     expect(payload?.extra).not.toHaveProperty('openai_responses_supported')
   })
 
+  it('仅显式选中时创建 Seedance 视频能力', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    const seedance = wrapper.get<HTMLInputElement>('[data-testid="openai-workload-capability-seedance"]')
+    expect(seedance.element.checked).toBe(false)
+    await seedance.setValue(true)
+    await wrapper.get('[data-testid="openai-workload-capability-embeddings"]').setValue(false)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Ark 视频')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-ark-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials?.openai_workload_capabilities)
+      .toEqual(['text_generation', 'seedance'])
+  })
+
   it('omits the upstream request id header from extra when left empty', async () => {
     await submitApiKeyAccount('openai')
 

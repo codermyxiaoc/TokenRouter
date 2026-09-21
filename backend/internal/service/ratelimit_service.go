@@ -1103,6 +1103,12 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 		s.handleCNProviderConcurrencyLimit403(ctx, account)
 		return true
 	}
+	// Coding Plan 配额窗口耗尽返回 403 时，按可恢复限流冷却到快照重置时间，
+	// 避免落入通用 403 逻辑后永久禁用本应自动恢复的账号。
+	if isCNProviderQuotaExhausted403(account, responseBody, upstreamMsg) {
+		s.handleCNProviderQuotaExhausted403(ctx, account, upstreamMsg)
+		return true
+	}
 	if account.Platform == PlatformOpenAI || account.IsMultiProtocolAPIKey() {
 		return s.handleOpenAI403(ctx, account, upstreamMsg, responseBody)
 	}

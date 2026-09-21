@@ -5,6 +5,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import IpGeoBatchToolbar from '@/components/common/IpGeoBatchToolbar.vue'
 import OpsErrorLogTable from './OpsErrorLogTable.vue'
+import OpsRequestPayloadModal from './OpsRequestPayloadModal.vue'
 import { opsAPI, type OpsErrorLog } from '@/api/admin/ops'
 import { buildOpsErrorTimeParams } from '../utils/opsErrorParams'
 
@@ -33,6 +34,18 @@ const rows = ref<OpsErrorLog[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(10)
+const payloadRequestId = ref<string | null>(null)
+const showPayload = ref(false)
+
+// 运维详情列表与使用记录错误列表共享端点入口，关闭载荷后回到原筛选结果。
+function openRequestPayload(requestId: string) {
+  payloadRequestId.value = requestId
+  showPayload.value = true
+}
+
+watch(() => props.show, (show) => {
+  if (!show) showPayload.value = false
+})
 
 const q = ref('')
 const statusCode = ref<number | 'other' | null>(null)
@@ -217,7 +230,7 @@ watch(
 </script>
 
 <template>
-  <BaseDialog :show="show" :title="modalTitle" width="full" @close="close">
+  <BaseDialog :show="show && !showPayload" :title="modalTitle" width="full" @close="close">
     <div class="flex h-full min-h-0 flex-col">
       <!-- Filters -->
       <div class="mb-4 flex-shrink-0 border-b border-gray-200 pb-4 dark:border-dark-700">
@@ -286,6 +299,7 @@ watch(
             :page-size="pageSize"
             :show-ip-geo-toolbar="false"
             @openErrorDetail="emit('openErrorDetail', $event)"
+            @openRequestPayloadDetail="openRequestPayload"
             @sort="onSort"
 
             @update:page="page = $event"
@@ -295,6 +309,11 @@ watch(
       </div>
     </div>
   </BaseDialog>
+  <OpsRequestPayloadModal
+    :show="show && showPayload"
+    :request-id="payloadRequestId"
+    @update:show="showPayload = $event"
+  />
 </template>
 
 <style>

@@ -291,6 +291,25 @@ func filterOpenCodePrompt(text string) string {
 	return ""
 }
 
+// stripClaudeAttribution 删除 Antigravity 上游不需要的 Claude 归属提示行。
+// 该内容属于提示词元数据，部分 Gemini 上游会将其判定为资源异常；只在
+// Antigravity 转换链路内处理，避免影响原生 Anthropic 请求。
+func stripClaudeAttribution(text string) string {
+	trimmed := strings.TrimLeft(text, " \t\r\n")
+	if !strings.HasPrefix(trimmed, "x-anthropic-billing-header:") {
+		return text
+	}
+	end := strings.IndexAny(trimmed, "\r\n")
+	if end < 0 {
+		return ""
+	}
+	rest := trimmed[end+1:]
+	if trimmed[end] == '\r' {
+		rest = strings.TrimPrefix(rest, "\n")
+	}
+	return rest
+}
+
 // buildSystemInstruction 构建 systemInstruction（与 Antigravity-Manager 保持一致）
 func buildSystemInstruction(system json.RawMessage, modelName string, opts TransformOptions, tools []ClaudeTool) *GeminiContent {
 	var parts []GeminiPart
@@ -303,6 +322,7 @@ func buildSystemInstruction(system json.RawMessage, modelName string, opts Trans
 		// 尝试解析为字符串
 		var sysStr string
 		if err := json.Unmarshal(system, &sysStr); err == nil {
+			sysStr = stripClaudeAttribution(sysStr)
 			if strings.TrimSpace(sysStr) != "" {
 				if strings.Contains(sysStr, "You are Antigravity") {
 					userHasAntigravityIdentity = true
@@ -318,6 +338,7 @@ func buildSystemInstruction(system json.RawMessage, modelName string, opts Trans
 			var sysBlocks []SystemBlock
 			if err := json.Unmarshal(system, &sysBlocks); err == nil {
 				for _, block := range sysBlocks {
+					block.Text = stripClaudeAttribution(block.Text)
 					if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
 						if strings.Contains(block.Text, "You are Antigravity") {
 							userHasAntigravityIdentity = true

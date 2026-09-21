@@ -67,6 +67,7 @@ const (
 	APIProtocolChatCompletions = "chat_completions" // OpenAI Chat Completions（默认）
 	APIProtocolAnthropic       = "anthropic"        // 原生 Anthropic /v1/messages（适配 Claude Code）
 	APIProtocolResponses       = "responses"        // OpenAI Responses（deepseek / kimi 原生端点，适配 Codex）
+	APIProtocolSystemOne       = "systemone"        // OpenCode Zen Jev System One 结构化决策端点
 	APIProtocolAdaptive        = "adaptive"         // 按入站协议优先选择供应商原生端点
 )
 

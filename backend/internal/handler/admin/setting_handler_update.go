@@ -180,6 +180,7 @@ type UpdateSettingsRequest struct {
 	UsageRankingShowTotalTokens *bool                           `json:"usage_ranking_show_total_tokens"`
 	UsageRankingShowRequests    *bool                           `json:"usage_ranking_show_requests"`
 	UsageRankingShowActualCost  *bool                           `json:"usage_ranking_show_actual_cost"`
+	PluginManagementEnabled     *bool                           `json:"plugin_management_enabled"`
 	CustomMenuItems             *[]dto.CustomMenuItem           `json:"custom_menu_items"`
 	CustomEndpoints             *[]dto.CustomEndpoint           `json:"custom_endpoints"`
 	FooterLinks                 *[]dto.FooterLinkGroup          `json:"footer_links"`
@@ -1839,19 +1840,25 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		UsageRankingShowTotalTokens:            usageRanking.ShowTotalTokens,
 		UsageRankingShowRequests:               usageRanking.ShowRequests,
 		UsageRankingShowActualCost:             usageRanking.ShowActualCost,
-		CustomMenuItems:                        customMenuJSON,
-		CustomEndpoints:                        customEndpointsJSON,
-		FooterLinks:                            footerLinksJSON,
-		FooterText:                             footerText,
-		HomeFeaturedModels:                     homeFeaturedModelsJSON,
-		DefaultConcurrency:                     req.DefaultConcurrency,
-		DefaultBalance:                         req.DefaultBalance,
-		AffiliateEnabled:                       req.AffiliateEnabled,
-		AffiliateRebateRate:                    req.AffiliateRebateRate,
-		AffiliateRebateFreezeHours:             req.AffiliateRebateFreezeHours,
-		AffiliateRebateDurationDays:            req.AffiliateRebateDurationDays,
-		AffiliateRebatePerInviteeCap:           req.AffiliateRebatePerInviteeCap,
-		AdminRechargeRebateEnabled:             adminRechargeRebateEnabled,
+		PluginManagementEnabled: func() bool {
+			if req.PluginManagementEnabled != nil {
+				return *req.PluginManagementEnabled
+			}
+			return previousSettings.PluginManagementEnabled
+		}(),
+		CustomMenuItems:              customMenuJSON,
+		CustomEndpoints:              customEndpointsJSON,
+		FooterLinks:                  footerLinksJSON,
+		FooterText:                   footerText,
+		HomeFeaturedModels:           homeFeaturedModelsJSON,
+		DefaultConcurrency:           req.DefaultConcurrency,
+		DefaultBalance:               req.DefaultBalance,
+		AffiliateEnabled:             req.AffiliateEnabled,
+		AffiliateRebateRate:          req.AffiliateRebateRate,
+		AffiliateRebateFreezeHours:   req.AffiliateRebateFreezeHours,
+		AffiliateRebateDurationDays:  req.AffiliateRebateDurationDays,
+		AffiliateRebatePerInviteeCap: req.AffiliateRebatePerInviteeCap,
+		AdminRechargeRebateEnabled:   adminRechargeRebateEnabled,
 		TeamEnabled: func() bool {
 			if req.TeamEnabled != nil {
 				return *req.TeamEnabled
@@ -2432,6 +2439,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		UsageRankingShowTotalTokens:                      updatedSettings.UsageRankingShowTotalTokens,
 		UsageRankingShowRequests:                         updatedSettings.UsageRankingShowRequests,
 		UsageRankingShowActualCost:                       updatedSettings.UsageRankingShowActualCost,
+		PluginManagementEnabled:                          updatedSettings.PluginManagementEnabled,
 		CustomMenuItems:                                  dto.ParseCustomMenuItems(updatedSettings.CustomMenuItems),
 		CustomEndpoints:                                  dto.ParseCustomEndpoints(updatedSettings.CustomEndpoints),
 		FooterLinks:                                      dto.ParseFooterLinks(updatedSettings.FooterLinks),

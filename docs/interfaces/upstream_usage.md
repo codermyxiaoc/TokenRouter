@@ -82,4 +82,6 @@ GO 自动选择 `opencode_go` 适配器，按账号配置的 API 根地址追加
 
 余额模式低于 `balance_threshold` 时，监控写入带身份 hash 的临时不可调度原因；恢复到阈值以上时只清除同一身份创建的状态。coding 的百分比窗口快照用于已有额度阈值与重置时间判断，不把百分比伪装成货币余额。官方域名可直接监控；自定义中继只有在启用 URL allowlist 且 host 命中 `security.url_allowlist.upstream_hosts` 时才允许后台自动访问。监控复用账号代理、TLS 指纹、受保护 Header Override 和 `UpstreamUsageService`，不新增 CN 专用 HTTP 管理接口。
 
+国产 Coding Plan 账号（包括 Kimi）在转发中返回带 `usage limit`、`quota will reset` 或 `error.type=access_terminated_error` 的 403 时，按可恢复的额度耗尽处理。有效监控快照提供未来重置点时复用现有窗口选择规则写入限流截止；没有有效重置点或写入限流失败时回退短期临时停调，不将这类业务限制累计为永久凭据错误。Kimi 精确并发限制文案继续走独立临时冷却；普通按量账号的 403 不适用额度识别。管理员显式配置的自定义错误码处理仍先执行，自动恢复分类不覆盖管理员策略；请求失败记录和既有切号/智能路由边界保持不变。
+
 旧的 `upstream_billing_probe` 是已移除的自动倍率探测能力，本功能不恢复它，也不写入旧快照或调度状态。

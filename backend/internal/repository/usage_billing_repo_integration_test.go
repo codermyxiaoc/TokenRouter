@@ -424,14 +424,17 @@ func TestUsageBillingRepositoryBatchImageUnlimitedKeyReleaseKeepsExistingUsage(t
 		Key:    "sk-batch-unlimited-" + uuid.NewString(),
 		Name:   "batch-unlimited",
 	})
+	// 宿主与 Docker 数据库的时钟可能相差数毫秒；使用同一时间基准生成旧窗口，
+	// 避免将正常释放测试误造为“预占早于当前窗口”的跨窗口保护场景。
+	reservedAt := time.Now().UTC()
 	_, err := integrationDB.ExecContext(ctx, `
 		UPDATE api_keys SET quota_used = 1, usage_5h = 1, usage_1d = 1, usage_7d = 1,
-		       window_5h_start = NOW(), window_1d_start = date_trunc('day', NOW()), window_7d_start = date_trunc('day', NOW())
-		WHERE id = $1`, apiKey.ID)
+		       window_5h_start = $2::timestamptz - INTERVAL '1 minute',
+		       window_1d_start = date_trunc('day', $2::timestamptz), window_7d_start = date_trunc('day', $2::timestamptz)
+		WHERE id = $1`, apiKey.ID, reservedAt)
 	require.NoError(t, err)
 
 	batchID := "imgbatch_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	reservedAt := time.Now().UTC()
 	insertBatchImageAllowanceTestJob(t, batchID, user.ID, user.ID, apiKey.ID, nil, reservedAt)
 	reserveCommand := &service.BatchImageBalanceHoldCommand{
 		RequestID:   service.BatchImageHoldRequestID(batchID),
@@ -460,8 +463,9 @@ func TestUsageBillingRepositoryBatchImageUnlimitedKeyReleaseKeepsExistingUsage(t
 	require.NoError(t, err)
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT quota_used, usage_5h, usage_1d, usage_7d FROM api_keys WHERE id = $1`, apiKey.ID).
 		Scan(&quotaUsed, &usage5h, &usage1d, &usage7d))
-	for _, usage := range []float64{quotaUsed, usage5h, usage1d, usage7d} {
-		require.InDelta(t, 1, usage, 0.000001)
+	for name, usage := range map[string]float64{"quota_used": quotaUsed, "usage_5h": usage5h, "usage_1d": usage1d, "usage_7d": usage7d} {
+		// 标注具体窗口，便于区分额度回退失败与跨窗口保护。
+		require.InDelta(t, 1, usage, 0.000001, name)
 	}
 }
 

@@ -157,15 +157,17 @@ type UsageLog struct {
 	ImageOutputTokens int
 	ImageOutputCost   float64
 
-	InputCost                 float64
-	OutputCost                float64
-	CacheCreationCost         float64
-	CacheReadCost             float64
-	TotalCost                 float64
-	ActualCost                float64
-	SubscriptionAmountUSD     float64
-	BalanceAmountUSD          float64
-	BillingAllocations        []domain.BillingAllocation
+	InputCost             float64
+	OutputCost            float64
+	CacheCreationCost     float64
+	CacheReadCost         float64
+	TotalCost             float64
+	ActualCost            float64
+	SubscriptionAmountUSD float64
+	BalanceAmountUSD      float64
+	BillingAllocations    []domain.BillingAllocation
+	// BillingSubscriptions 在查询时按实际分配富化，仅供使用记录和错误请求展示。
+	BillingSubscriptions      []BillingSubscription
 	RateMultiplier            float64
 	LongContextBillingApplied bool // 长上下文规则是否实际增加费用
 	// AccountRateMultiplier 账号计费倍率快照（nil 表示历史数据，按 1.0 处理）

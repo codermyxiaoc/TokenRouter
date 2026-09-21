@@ -33,6 +33,7 @@ import adminPaymentAPI from './payment'
 import riskControlAPI from './riskControl'
 import auditAPI from './audit'
 import teamsAPI from './teams'
+import pluginsAPI from './plugins'
 
 /**
  * Unified admin API object for convenient access
@@ -67,7 +68,8 @@ export const adminAPI = {
   payment: adminPaymentAPI,
   riskControl: riskControlAPI,
   audit: auditAPI,
-  teams: teamsAPI
+  teams: teamsAPI,
+  plugins: pluginsAPI
 }
 
 export {
@@ -100,7 +102,8 @@ export {
   adminPaymentAPI,
   riskControlAPI,
   auditAPI,
-  teamsAPI
+  teamsAPI,
+  pluginsAPI
 }
 
 export default adminAPI
@@ -126,3 +129,4 @@ export type {
   UpdateTLSFingerprintRouterRequest
 } from './tlsFingerprintRouter'
 export type { ContentModerationConfig, ContentModerationLog, ModerationMode } from './riskControl'
+export type { PluginInstallation, PluginUISession, PluginStatusResult } from './plugins'

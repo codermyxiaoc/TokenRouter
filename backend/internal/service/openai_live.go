@@ -364,13 +364,7 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	upstreamReq.Header.Set(liveAttestationHeader, attestation)
 
 	s.applyLiveUpstreamRouting(ctx, account, upstreamReq.Header, tlsRouterMatch)
-	resp, err := s.httpUpstream.DoWithTLS(
-		upstreamReq,
-		resolveAccountProxyURL(account),
-		account.ID,
-		account.Concurrency,
-		s.resolveOpenAITLSProfile(account, tlsRouterMatch),
-	)
+	resp, err := s.doOpenAIUpstream(upstreamReq, resolveAccountProxyURL(account), account, s.resolveOpenAITLSProfile(account, tlsRouterMatch))
 	if err != nil {
 		logLiveCreateStageFailure(ctx, account.ID, "upstream_transport", err)
 		return nil, err

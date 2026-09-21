@@ -719,6 +719,17 @@ func TestEmbeddedFrontendBypassesBareVideoAPIRoutes(t *testing.T) {
 	}
 }
 
+// Ark 的无前缀和 v3 别名也必须交给网关，不能被嵌入式 SPA 返回 HTML。
+func TestEmbeddedFrontendBypassesSeedanceTasks(t *testing.T) {
+	for _, prefix := range []string{"/api/v3", "/v3", "/v1", ""} {
+		for _, suffix := range []string{"", "/cgt-123"} {
+			path := prefix + "/contents/generations/tasks" + suffix
+			require.True(t, shouldBypassEmbeddedFrontend(httptest.NewRequest(http.MethodGet, path, nil)), path)
+		}
+	}
+	require.False(t, shouldBypassEmbeddedFrontend(httptest.NewRequest(http.MethodGet, "/contents/library", nil)))
+}
+
 func TestEmbeddedFrontendModelsRouteNegotiation(t *testing.T) {
 	tests := []struct {
 		name       string

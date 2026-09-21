@@ -83,7 +83,7 @@ OpenAI 分组的 `max_reasoning_effort` 是显式推理强度上限，`max_reaso
 
 OpenAI API Key 的普通文本配置把四个概念分开持久化：
 
-- `credentials.openai_workload_capabilities` 是工作负载集合，只允许 `text_generation` 与 `embeddings`。缺失时写入两项默认值，显式空数组表示该账号不承接这两类工作负载。
+- `credentials.openai_workload_capabilities` 是工作负载集合，允许 `text_generation`、`embeddings` 与显式开启的 `seedance`。缺失时仍只写入前两项默认值，显式空数组表示不承接这些工作负载。Seedance 还要求 API Key 与自定义 Base URL，其原生异步任务及计费见 [Seedance 上游](seedance_upstream.md)。
 - `extra.openai_text_route_mode` 是管理员拥有的路由策略，只允许 `preserve_client_protocol`、`force_responses`、`force_chat_completions`。
 - `extra.openai_responses_probe_status` 是探测服务拥有的只读事实，只允许 `supported`、`unsupported`、`unknown`。探测更新不得改写管理员路由策略。
 - `extra.openai_responses_continuation_supported` 是管理员拥有的 HTTP continuation 能力开关，取值为布尔值，缺失时按 `false` 处理。只有显式为 `true` 时，Messages 转 Responses 的兼容桥才会发送和缓存 `previous_response_id`；它不改变协议路由，也不覆盖探测状态。
@@ -156,6 +156,10 @@ Responses 工具定义在进入 OAuth passthrough、Codex transform、Grok 或 A
 
 Responses 请求降级到 Chat Completions 时，工具结果中的 `input_image`、`image_url` 和完整图片 data URL 不能留在只接受文本的 `tool` message。转换器会按 `call_id` 从工具结果中提取图片，把原位置替换为稳定标记，并在对应的一组工具回复后追加用户多模态消息；并行调用按工具声明顺序归属图片，孤儿或未回答调用不携带媒体。没有可识别图片的工具结果必须保留原始字节，避免无关 JSON 重编码改变提示缓存前缀。
 
+国产供应商的原生 Responses 路径沿用无状态请求约束（`store=false`、移除 `previous_response_id`），并把工具输出中的合法图片提升到后续 user 多模态消息，工具输出本身保留文本及图片归属标记。并行工具回复保持连续，期间插入的 system/developer 通知在整批工具回复及提升图片之后恢复；无图片时不因这一步重编码正文。该处理不扩展到普通 OpenAI/Grok 原生 Responses，也不调整计费模型或账号调度。
+
+发往 DeepSeek 平台或官方 DeepSeek API host 的 Chat 请求，在桥接器完成真实推理内容回注后，仅给缺少或为空的 assistant `reasoning_content` 补单个空格占位，以兼容历史推理内容缺失的多轮工具会话。真实推理缓存命中或客户端已提供非空内容时保持原值；其它兼容 Chat 上游不使用该占位规则。
+
 OpenAI API Key 账号以 `force_chat_completions` 承接 `/v1/messages` 时，Chat 流中的并行 `tool_calls` 必须按 `tool_calls[].index` 聚合 ID、名称和全部参数分片，在流收尾时再按 index 顺序生成各自连续闭合的 `content_block_start`、`input_json_delta`、`content_block_stop`；参数分片暂存后一次拼接，聚合期间通过 Anthropic `ping` 维持下游活动，文本与 thinking 仍即时流式输出。空工具参数归一为 `{}`，call ID 保持原样，以便下一轮 `tool_result.tool_use_id` 配对。Anthropic `tool_choice.disable_parallel_tool_use=true` 映射为 Chat 顶层 `parallel_tool_calls=false`，字段缺失或为 `false` 时保持默认 `true`；`auto`、`any`、`none` 和具名工具的选择语义不变。
 
 <a id="openai_ws_pool_lifecycle"></a>
@@ -210,6 +214,8 @@ Codex 额度评分先读取规范化的 5h/7d 窗口；只有规范字段缺失�
 OpenAI 是通用高级调度器的能力适配者之一，而不是该调度器的全局所有者。只有最终目标 Group 的 `scheduler_type=advanced` 时，OpenAI 路径才在共同 active/schedulable、分组、模型、限流和并发硬过滤后使用通用 Top-K 评分；`basic` 保留原有默认选择路径。高级分组可用稀疏 `advanced_scheduler_overrides` 覆盖全局 Top-K、评分权重和粘性开关，未设置字段继续继承网关设置。高级分组还会考虑所需 transport/capability、账号优先级、负载、排队、错误率、近期延迟、配额余量和粘性上下文。previous response、WebSocket 会话和显式 session 可约束账号复用；只有策略允许时才能迁移。
 
 OpenAI 专属能力只在账号和请求具备对应条件时加入候选或分数：Responses transport、WebSocket、旧版 Compact、previous response、订阅优先和 Codex 额度余量都不会排除缺失这类可选信号的普通账号。OAuth 5 小时、7 天等上游窗口和自动暂停仍由 OpenAI 设置及账号运行状态控制，不随高级调度器通用化而迁移到其它平台。
+
+HTTP Responses 返回响应 ID 后，账号粘性绑定与用户/API Key 所有权绑定共用独立的三秒写入预算，保留请求上下文值但不继承客户端取消。这样客户端在收到终态后立即断开仍可完成后续续接所需的绑定；写入失败仍记录诊断，不延长原有绑定 TTL，也不绕过后续所有权与账号资格校验。
 
 OAuth 账号的 5 小时、7 天等上游窗口和重置时间保存在账号运行状态中，可触发临时限流或自动暂停；API Key 的 Responses 探测事实继续独立于工作负载能力和管理员路由策略。OpenAI 不再采集上游站点声明倍率，也不按该值进行低倍率优先或高级评分。账户本地 `rate_multiplier` 和渠道上游计费模型来源继续用于 TokenRouter 结算，但都不是用户余额、订阅、Key 限额或用户平台额度。
 

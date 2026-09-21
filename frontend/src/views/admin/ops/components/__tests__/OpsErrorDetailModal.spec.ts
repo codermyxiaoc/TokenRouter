@@ -93,6 +93,7 @@ describe('OpsErrorDetailModal', () => {
       group_name: '失败分组',
       recovered_group_id: 3,
       recovered_group_name: '恢复分组',
+      billing_subscriptions: [{ subscription_id: 9, plan_name: '恢复后扣费套餐', amount_usd: 0.1 }],
       platform: 'openai',
       model: 'gpt-6-astra',
       request_id: 'recovered-request',
@@ -103,7 +104,7 @@ describe('OpsErrorDetailModal', () => {
 
     const wrapper = shallowMount(OpsErrorDetailModal, {
       props: { show: true, errorId: 2, errorType: 'request' },
-      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true, ErrorRecoveryStatus: false, GroupBadge: false } },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true, ErrorRecoveryStatus: false, GroupBadge: false, BillingSubscriptionSummary: false } },
     })
     await flushPromises()
 
@@ -113,5 +114,6 @@ describe('OpsErrorDetailModal', () => {
     expect(wrapper.text()).toContain('失败分组')
     expect(wrapper.text()).toContain('usage.errors.recoveredTo')
     expect(wrapper.text()).toContain('恢复分组')
+    expect(wrapper.text()).toContain('恢复后扣费套餐')
   })
 })

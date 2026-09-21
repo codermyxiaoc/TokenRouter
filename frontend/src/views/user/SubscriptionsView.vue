@@ -225,6 +225,7 @@ import {
   getExpirationDateRelation,
   getRemainingDurationParts,
   isOneTimeDailyQuota,
+  isQuotaWindowEndingAtSubscriptionExpiry,
   highestQuotaExhausted,
   type RemainingDurationParts
 } from '@/utils/subscriptionQuota'
@@ -298,7 +299,7 @@ async function loadSubscriptions() {
 function usageWindows(subscription: UserSubscription) {
   return [
     {
-      key: 'daily',
+      key: 'daily' as const,
       label: t('userSubscriptions.daily'),
       used: subscription.daily_usage_usd || 0,
       limit: subscription.daily_limit_usd,
@@ -306,7 +307,7 @@ function usageWindows(subscription: UserSubscription) {
       hours: 24
     },
     {
-      key: 'weekly',
+      key: 'weekly' as const,
       label: t('userSubscriptions.weekly'),
       used: subscription.weekly_usage_usd || 0,
       limit: subscription.weekly_limit_usd,
@@ -314,7 +315,7 @@ function usageWindows(subscription: UserSubscription) {
       hours: 168
     },
     {
-      key: 'monthly',
+      key: 'monthly' as const,
       label: t('userSubscriptions.monthly'),
       used: subscription.monthly_usage_usd || 0,
       limit: subscription.monthly_limit_usd,
@@ -453,7 +454,7 @@ function formatUsageWindow(
       ? t('userSubscriptions.quotaEndsIn', { time: formatDurationParts(parts) })
       : t('userSubscriptions.windowNotActive')
   }
-  if (isQuotaWindowEndingAtSubscriptionExpiry(subscription, window)) {
+  if (isQuotaWindowEndingAtSubscriptionExpiry(subscription, window.window_start, window.key)) {
     const parts = getRemainingDurationParts(subscription.expires_at)
     return parts
       ? t('userSubscriptions.quotaEndsIn', { time: formatDurationParts(parts) })
@@ -462,20 +463,6 @@ function formatUsageWindow(
   return t('userSubscriptions.resetIn', {
     time: formatResetTime(window.window_start, window.hours)
   })
-}
-
-function isQuotaWindowEndingAtSubscriptionExpiry(
-  subscription: UserSubscription,
-  window: ReturnType<typeof usageWindows>[number]
-): boolean {
-  if (!window.window_start) return false
-  const windowStart = new Date(window.window_start).getTime()
-  const expiresAt = new Date(subscription.expires_at).getTime()
-  if (!Number.isFinite(windowStart) || !Number.isFinite(expiresAt)) return false
-
-  const windowMs = window.hours * 60 * 60 * 1000
-  const nextWindowStart = windowStart + windowMs
-  return nextWindowStart + windowMs > expiresAt
 }
 
 function formatResetTime(windowStart: string | null, windowHours: number): string {

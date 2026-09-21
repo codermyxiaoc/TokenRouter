@@ -39,6 +39,17 @@ function mountTable(rows: UserErrorRequest[]) {
 describe('用户错误请求恢复信息', () => {
   beforeEach(() => getMyErrorDetail.mockReset())
 
+  it('错误列表展示恢复后的实际扣费套餐，无账本关联不显示猜测套餐', () => {
+    const wrapper = mountTable([
+      errorRow({ recovered_upstream: true, billing_subscriptions: [{ subscription_id: 9, plan_name: '恢复后扣费套餐', amount_usd: 0.1 }] }),
+      errorRow({ id: 2 }),
+    ])
+    expect(wrapper.text()).toContain('admin.usage.billingSubscriptions')
+    expect(wrapper.text()).toContain('恢复后扣费套餐')
+    expect(wrapper.findAll('[data-testid="billing-subscriptions"]')).toHaveLength(1)
+    expect(wrapper.text()).not.toContain('admin.usage.billingTypeNone')
+  })
+
   // 同一列表同时包含恢复和最终失败，不以客户端 HTTP 200 判断恢复。
   it('区分恢复记录与最终失败并保留实际失败分组', () => {
     const wrapper = mountTable([
@@ -76,6 +87,7 @@ describe('用户错误请求恢复信息', () => {
       ...errorRow({ recovered_upstream: true, client_status_code: 200, recovered_group_name: '恢复分组' }),
       error_body: '',
       upstream_status_code: 503,
+      billing_subscriptions: [{ subscription_id: 9, plan_name: '实际扣费套餐', amount_usd: 0.1 }],
     }
     getMyErrorDetail.mockResolvedValue(detail)
     const wrapper = mount(UserErrorDetailModal, {
@@ -88,6 +100,7 @@ describe('用户错误请求恢复信息', () => {
     expect(getMyErrorDetail).toHaveBeenCalledWith(1)
     expect(wrapper.text()).toContain('失败分组')
     expect(wrapper.text()).toContain('恢复分组')
+    expect(wrapper.text()).toContain('实际扣费套餐')
     expect(wrapper.text()).toContain('usage.errors.recoveredTo')
     expect(wrapper.text()).toContain('usage.errors.finalStatus 200')
     expect(wrapper.text()).not.toContain('usage.errors.finalFailed')

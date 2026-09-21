@@ -5,7 +5,7 @@
  */
 
 import { apiClient, buildGatewayUrl } from '../client'
-import type { PaginatedResponse } from '@/types'
+import type { BillingSubscription, PaginatedResponse } from '@/types'
 
 export interface OpsRequestOptions {
   signal?: AbortSignal
@@ -134,6 +134,27 @@ export interface OpsRequestDetail {
   group_id?: number | null
 
   stream?: boolean
+}
+
+export interface OpsRequestPayloadDetail {
+  request_id: string
+  client_request_id?: string
+  method: string
+  path: string
+  inbound_endpoint?: string
+  upstream_endpoint?: string
+  platform?: string
+  model?: string
+  status_code: number
+  stream?: boolean
+  request_headers?: string
+  request_body?: string
+  response_headers?: string
+  response_body?: string
+  request_truncated?: boolean
+  response_truncated?: boolean
+  created_at: string
+  completed_at: string
 }
 
 export interface OpsRequestDetailsParams {
@@ -907,6 +928,8 @@ export interface OpsSystemLogSinkHealth {
 
 export interface OpsErrorLog {
   id: number
+  // 关联请求的实际结算摘要，与失败尝试的分组归属分别展示。
+  billing_subscriptions?: BillingSubscription[]
   created_at: string
 
   // Standardized classification
@@ -1189,6 +1212,11 @@ export async function listRequestDetails(params: OpsRequestDetailsParams): Promi
   return data
 }
 
+export async function getRequestPayloadDetail(requestID: string): Promise<OpsRequestPayloadDetail> {
+  const { data } = await apiClient.get<OpsRequestPayloadDetail>(`/admin/ops/requests/${encodeURIComponent(requestID)}/detail`)
+  return data
+}
+
 // Alert rules
 export async function listAlertRules(): Promise<AlertRule[]> {
   const { data } = await apiClient.get<AlertRule[]>('/admin/ops/alert-rules')
@@ -1351,6 +1379,7 @@ export const opsAPI = {
   listRequestErrorUpstreamErrors,
 
   listRequestDetails,
+  getRequestPayloadDetail,
   listAlertRules,
   createAlertRule,
   updateAlertRule,

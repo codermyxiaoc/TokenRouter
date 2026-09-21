@@ -815,6 +815,7 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		SubscriptionAmountUSD:     l.SubscriptionAmountUSD,
 		BalanceAmountUSD:          l.BalanceAmountUSD,
 		BillingAllocations:        cloneBillingAllocationsDTO(l.BillingAllocations),
+		BillingSubscriptions:      append([]service.BillingSubscription(nil), l.BillingSubscriptions...),
 		RateMultiplier:            l.RateMultiplier,
 		LongContextBillingApplied: l.LongContextBillingApplied,
 		BillingType:               l.BillingType,

@@ -502,6 +502,17 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it('批量启用 Seedance 时保留完整能力集合而不回退默认值', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['apikey'] })
+    await wrapper.get('#bulk-edit-openai-endpoint-capabilities-enabled').setValue(true)
+    await wrapper.get('[data-testid="bulk-edit-openai-endpoint-capability-seedance"]').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      credentials: { openai_workload_capabilities: ['text_generation', 'embeddings', 'seedance'] }
+    })
+  })
+
   it('OpenAI API Key 批量编辑可显式开启 HTTP continuation', async () => {
     const wrapper = mountModal({
       selectedPlatforms: ['openai'],

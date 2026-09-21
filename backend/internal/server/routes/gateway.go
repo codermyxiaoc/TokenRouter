@@ -111,6 +111,10 @@ func requireGeminiGenerateContentProtocol(c *gin.Context) {
 // enforceSmartRoutingRetryProtocol 保持跨组后的协议准入与首次入站完全一致。
 func enforceSmartRoutingRetryProtocol(c *gin.Context) bool {
 	path := c.Request.URL.Path
+	// System One 自带 OpenCode Zen/JeV 专用准入，不能套用三种文本协议门禁。
+	if strings.Contains(path, "/systemone") {
+		return true
+	}
 	if strings.Contains(path, "/v1beta/models/") {
 		return enforceGroupClientProtocol(c, service.GroupClientProtocolGeminiGenerateContent, groupClientProtocolErrorGoogle)
 	}
@@ -417,6 +421,8 @@ func RegisterGatewayRoutes(
 			h.Gateway.Responses(c)
 		})))
 		gateway.POST("/alpha/search", textBodyLimit, h.OpenAIGateway.AlphaSearch)
+		// OpenCode Zen Jev 使用独立的 System One JSON 协议，不经过三种文本协议门禁。
+		gateway.POST("/systemone", h.OpenAIGateway.SystemOne)
 		gateway.GET("/responses", responsesWebSocketHandler)
 		// OpenAI Chat Completions API: auto-route based on group platform
 		gateway.POST("/chat/completions", chatCompletionsProtocolGate, func(c *gin.Context) {
@@ -559,9 +565,21 @@ func RegisterGatewayRoutes(
 		}
 		h.Gateway.Responses(c)
 	}
+	// 方舟原生异步视频使用独立路由，复用 Key、分组、审计与请求体大小限制。
+	for _, prefix := range []string{"/api/v3", "/v3", "/v1", ""} {
+		for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
+			path := prefix + "/contents/generations/tasks"
+			if method != http.MethodPost {
+				path += "/:task_id"
+			}
+			r.Handle(method, path, bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.OpenAIGateway.SeedanceTasks)
+		}
+	}
 	r.POST("/responses", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, responsesProtocolGate, responsesHandler)
 	r.POST("/responses/*subpath", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, guardResponsesSubpath(withGroupClientProtocol(service.GroupClientProtocolOpenAIResponses, groupClientProtocolErrorOpenAI, responsesHandler)))
 	r.POST("/alpha/search", textBodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.OpenAIGateway.AlphaSearch)
+	// 保持与 /v1/systemone 相同的无 v1 别名，便于 OpenCode SDK 配置根地址。
+	r.POST("/systemone", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.OpenAIGateway.SystemOne)
 	r.GET("/responses", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, responsesWebSocketHandler)
 	// Codex 客户端会访问不带 v1 前缀的模型列表，保持与 /v1/models 相同的本地模型语义。
 	r.GET("/models", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.Gateway.Models)

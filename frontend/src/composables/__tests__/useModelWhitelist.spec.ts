@@ -19,6 +19,8 @@ describe('useModelWhitelist', () => {
   it('OpenCode 内置目录与现有平台隔离，并仅列出已登记图片型号', () => {
     const models = getModelsByPlatform('opencode_go')
     expect(models).toContain('gpt-5.6-luna')
+    expect(models).toContain('jev-1.13')
+    expect(models).toContain('jev-1.13-free')
     expect(models).toContain('minimax-m3')
     expect(models).not.toContain('MiniMax-M2.7')
     expect(getModelsByPlatform('openai')).not.toContain('gpt-image-2.5-unknown')

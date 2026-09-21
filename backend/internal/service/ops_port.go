@@ -11,6 +11,8 @@ type OpsRepository interface {
 	ListErrorLogs(ctx context.Context, filter *OpsErrorLogFilter) (*OpsErrorLogList, error)
 	GetErrorLogByID(ctx context.Context, id int64) (*OpsErrorLogDetail, error)
 	ListRequestDetails(ctx context.Context, filter *OpsRequestDetailFilter) ([]*OpsRequestDetail, int64, error)
+	UpsertRequestPayloadDetail(ctx context.Context, detail *OpsRequestPayloadDetail) error
+	GetRequestPayloadDetail(ctx context.Context, requestID string) (*OpsRequestPayloadDetail, error)
 	BatchInsertSystemLogs(ctx context.Context, inputs []*OpsInsertSystemLogInput) (int64, error)
 	ListSystemLogs(ctx context.Context, filter *OpsSystemLogFilter) (*OpsSystemLogList, error)
 	ListRequestTimings(ctx context.Context, clientRequestIDs []string) (map[string]*OpsRequestTiming, error)
@@ -60,6 +62,29 @@ type OpsRepository interface {
 	UpsertDailyMetrics(ctx context.Context, startTime, endTime time.Time) error
 	GetLatestHourlyBucketStart(ctx context.Context) (time.Time, bool, error)
 	GetLatestDailyBucketDate(ctx context.Context) (time.Time, bool, error)
+}
+
+// OpsRequestPayloadDetail 保存管理员排障所需的请求/响应快照。
+// 该数据只通过管理员运维接口返回，请求正文完整保存但必须脱敏；响应正文和请求头仍有大小上限。
+type OpsRequestPayloadDetail struct {
+	RequestID         string    `json:"request_id"`
+	ClientRequestID   string    `json:"client_request_id,omitempty"`
+	Method            string    `json:"method"`
+	Path              string    `json:"path"`
+	InboundEndpoint   string    `json:"inbound_endpoint,omitempty"`
+	UpstreamEndpoint  string    `json:"upstream_endpoint,omitempty"`
+	Platform          string    `json:"platform,omitempty"`
+	Model             string    `json:"model,omitempty"`
+	StatusCode        int       `json:"status_code"`
+	Stream            bool      `json:"stream"`
+	RequestHeaders    string    `json:"request_headers,omitempty"`
+	RequestBody       string    `json:"request_body,omitempty"`
+	ResponseHeaders   string    `json:"response_headers,omitempty"`
+	ResponseBody      string    `json:"response_body,omitempty"`
+	RequestTruncated  bool      `json:"request_truncated"`
+	ResponseTruncated bool      `json:"response_truncated"`
+	CreatedAt         time.Time `json:"created_at"`
+	CompletedAt       time.Time `json:"completed_at"`
 }
 
 type OpsInsertErrorLogInput struct {

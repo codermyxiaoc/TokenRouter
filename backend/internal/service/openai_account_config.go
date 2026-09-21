@@ -118,13 +118,16 @@ func normalizeOpenAIWorkloadCapabilities(credentials map[string]any, applyDefaul
 		return nil
 	}
 
-	enabled := make(map[string]bool, 2)
+	enabled := make(map[string]bool, 3)
 	add := func(value string) {
 		switch strings.ToLower(strings.TrimSpace(value)) {
 		case string(OpenAIEndpointCapabilityTextGeneration), "chat_completions":
 			enabled[string(OpenAIEndpointCapabilityTextGeneration)] = true
 		case string(OpenAIEndpointCapabilityEmbeddings):
 			enabled[string(OpenAIEndpointCapabilityEmbeddings)] = true
+		case string(OpenAIEndpointCapabilitySeedance):
+			// 视频任务必须显式开启；未配置能力的旧账号仍只使用原有默认值。
+			enabled[string(OpenAIEndpointCapabilitySeedance)] = true
 		}
 	}
 	switch capabilities := raw.(type) {
@@ -157,10 +160,11 @@ func normalizeOpenAIWorkloadCapabilities(credentials map[string]any, applyDefaul
 		)
 	}
 
-	normalized := make([]string, 0, 2)
+	normalized := make([]string, 0, 3)
 	for _, capability := range []OpenAIEndpointCapability{
 		OpenAIEndpointCapabilityTextGeneration,
 		OpenAIEndpointCapabilityEmbeddings,
+		OpenAIEndpointCapabilitySeedance,
 	} {
 		if enabled[string(capability)] {
 			normalized = append(normalized, string(capability))

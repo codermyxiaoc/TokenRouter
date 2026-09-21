@@ -175,6 +175,7 @@ type SystemSettings struct {
 	UsageRankingShowTotalTokens bool
 	UsageRankingShowRequests    bool
 	UsageRankingShowActualCost  bool
+	PluginManagementEnabled     bool
 	CustomMenuItems             string // JSON array of custom menu items
 	CustomEndpoints             string // JSON array of custom endpoints
 	FooterLinks                 string // JSON array of footer link groups
@@ -385,6 +386,7 @@ type PublicSettings struct {
 	UsageRankingShowTotalTokens bool
 	UsageRankingShowRequests    bool
 	UsageRankingShowActualCost  bool
+	PluginManagementEnabled     bool
 	CustomMenuItems             string // JSON array of custom menu items
 	CustomEndpoints             string // JSON array of custom endpoints
 	FooterLinks                 string // JSON array of footer link groups

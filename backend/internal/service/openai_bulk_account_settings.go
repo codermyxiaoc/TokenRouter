@@ -80,7 +80,7 @@ func normalizeBulkOpenAISettings(input *BulkUpdateAccountsInput) (bulkOpenAISett
 		if input.Extra == nil {
 			input.Extra = make(map[string]any, 1)
 		}
-		// 仅保留 embeddings 时清除旧的强制文本路由，避免更新后账号仍被选中转发文本请求。
+		// 仅保留非文本能力时清除旧的强制文本路由，避免账号仍被选中转发文本请求。
 		input.Extra[openai_compat.ExtraKeyTextRouteMode] = string(openai_compat.TextRouteModePreserveClientProtocol)
 		settings.textRouteMode = true
 	}
@@ -91,13 +91,15 @@ func validateBulkOpenAIWorkloadCapabilities(raw any) (bool, error) {
 	if raw == nil {
 		return true, nil
 	}
-	selected := make(map[string]bool, 2)
+	selected := make(map[string]bool, 3)
 	add := func(value string) error {
 		switch strings.ToLower(strings.TrimSpace(value)) {
 		case string(OpenAIEndpointCapabilityTextGeneration), "chat_completions":
 			selected[string(OpenAIEndpointCapabilityTextGeneration)] = true
 		case string(OpenAIEndpointCapabilityEmbeddings):
 			selected[string(OpenAIEndpointCapabilityEmbeddings)] = true
+		case string(OpenAIEndpointCapabilitySeedance):
+			selected[string(OpenAIEndpointCapabilitySeedance)] = true
 		default:
 			return invalidBulkOpenAIWorkloadCapabilities()
 		}
@@ -155,7 +157,7 @@ func validateBulkOpenAIWorkloadCapabilities(raw any) (bool, error) {
 func invalidBulkOpenAIWorkloadCapabilities() error {
 	return infraerrors.BadRequest(
 		"OPENAI_WORKLOAD_CAPABILITIES_INVALID",
-		"openai_workload_capabilities must contain text_generation, embeddings, or both",
+		"openai_workload_capabilities must contain one or more of text_generation, embeddings, seedance",
 	)
 }
 

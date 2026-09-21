@@ -38,6 +38,9 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 	if cmd.RequestID == "" {
 		return nil, service.ErrUsageBillingRequestIDRequired
 	}
+	if cmd.SubscriptionScopeID != nil && *cmd.SubscriptionScopeID <= 0 {
+		return nil, service.ErrUsageBillingSubscriptionScopeInvalid
+	}
 
 	return retryPostgresDeadlock(ctx, "usage_billing_apply", 0, func() (*service.UsageBillingApplyResult, error) {
 		return r.applyOnce(ctx, cmd)
@@ -898,6 +901,9 @@ func allocateUsageBillingSubscriptions(ctx context.Context, tx *sql.Tx, cmd *ser
 	if cmd.APIKeyBillingMode == service.APIKeyBillingModeSubscription && (cmd.PreferredSubscriptionID == nil || *cmd.PreferredSubscriptionID <= 0) {
 		return 0, 0, nil, service.ErrPreferredSubscriptionInvalid
 	}
+	if cmd.APIKeyBillingMode == service.APIKeyBillingModeAuto && cmd.SubscriptionScopeID != nil && *cmd.SubscriptionScopeID <= 0 {
+		return 0, 0, nil, service.ErrUsageBillingSubscriptionScopeInvalid
+	}
 
 	query := `
 		SELECT
@@ -928,11 +934,15 @@ func allocateUsageBillingSubscriptions(ctx context.Context, tx *sql.Tx, cmd *ser
 			AND status IN ($2, $3)
 			AND ($4::bigint IS NULL OR id = $4)
 `
-	var preferredSubscriptionID any
+	var candidateSubscriptionID any
 	if cmd.PreferredSubscriptionID != nil {
-		preferredSubscriptionID = *cmd.PreferredSubscriptionID
+		candidateSubscriptionID = *cmd.PreferredSubscriptionID
 	}
-	args := []any{cmd.UserID, service.SubscriptionStatusActive, service.SubscriptionStatusPending, preferredSubscriptionID}
+	if cmd.APIKeyBillingMode == service.APIKeyBillingModeAuto && cmd.SubscriptionScopeID != nil {
+		// 异步 auto 只允许创建时的套餐分摊；该套餐失效或额度耗尽后仍按原规则扣余额。
+		candidateSubscriptionID = *cmd.SubscriptionScopeID
+	}
+	args := []any{cmd.UserID, service.SubscriptionStatusActive, service.SubscriptionStatusPending, candidateSubscriptionID}
 	if cmd.GroupID != nil && *cmd.GroupID > 0 {
 		query += `
 			AND EXISTS (

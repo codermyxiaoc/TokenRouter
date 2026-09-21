@@ -177,6 +177,10 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *usageBill
 		preferredSubscriptionID := *p.APIKey.PreferredSubscriptionID
 		cmd.PreferredSubscriptionID = &preferredSubscriptionID
 	}
+	if p.SubscriptionScopeID != nil {
+		subscriptionScopeID := *p.SubscriptionScopeID
+		cmd.SubscriptionScopeID = &subscriptionScopeID
+	}
 	if p.APIKey.ActorUser != nil {
 		cmd.ActorUserID = p.APIKey.ActorUser.ID
 	}

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +16,8 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -434,4 +438,62 @@ func (s *OpenAIGatewayService) setReasoningContent(itemID, content string) {
 			zap.String("item_id", itemID),
 		)
 	}
+}
+
+// deepSeekChatReasoningPlaceholderText 是 Chat Completions 侧 thinking-mode
+// 占位明文。DeepSeek 拒绝空串，单个空格即可满足历史消息字段要求。
+const deepSeekChatReasoningPlaceholderText = " "
+
+// targetsDeepSeekAPIHost 报告该账号实际上游是否是 DeepSeek API。
+// 平台为 deepseek 时直接命中；OpenAI 兼容账号显式指向 DeepSeek 官方域名时
+// 也命中，避免把占位字段扩散到其他 OpenAI 兼容供应商。
+func targetsDeepSeekAPIHost(account *Account) bool {
+	if account == nil {
+		return false
+	}
+	if account.Platform == PlatformDeepseek {
+		return true
+	}
+	u, err := url.Parse(strings.TrimSpace(account.GetOpenAIBaseURL()))
+	if err != nil {
+		return false
+	}
+	ds, err := url.Parse(DefaultDeepseekBaseURL)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), ds.Hostname())
+}
+
+// ensureDeepSeekChatReasoningPlaceholders 给缺 reasoning_content 的 assistant
+// 消息补单个空格占位。Responses→Chat 桥接会优先回注真实 reasoning 内容，
+// 此处只修复缓存未命中或历史缺失的消息，绝不覆盖已有字段。
+func ensureDeepSeekChatReasoningPlaceholders(account *Account, body []byte) []byte {
+	if !targetsDeepSeekAPIHost(account) {
+		return body
+	}
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() {
+		return body
+	}
+	updated := body
+	changed := false
+	for i, msg := range messages.Array() {
+		if strings.TrimSpace(msg.Get("role").String()) != "assistant" {
+			continue
+		}
+		if msg.Get("reasoning_content").String() != "" {
+			continue
+		}
+		next, err := sjson.SetBytes(updated, "messages."+strconv.Itoa(i)+".reasoning_content", deepSeekChatReasoningPlaceholderText)
+		if err != nil {
+			return body
+		}
+		updated = next
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+	return updated
 }

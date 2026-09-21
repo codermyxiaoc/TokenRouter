@@ -24,13 +24,14 @@ const (
 )
 
 var (
-	ErrIdempotencyKeyRequired    = infraerrors.BadRequest("IDEMPOTENCY_KEY_REQUIRED", "idempotency key is required")
-	ErrIdempotencyKeyInvalid     = infraerrors.BadRequest("IDEMPOTENCY_KEY_INVALID", "idempotency key is invalid")
-	ErrIdempotencyKeyConflict    = infraerrors.Conflict("IDEMPOTENCY_KEY_CONFLICT", "idempotency key reused with different payload")
-	ErrIdempotencyInProgress     = infraerrors.Conflict("IDEMPOTENCY_IN_PROGRESS", "idempotent request is still processing")
-	ErrIdempotencyRetryBackoff   = infraerrors.Conflict("IDEMPOTENCY_RETRY_BACKOFF", "idempotent request is in retry backoff window")
-	ErrIdempotencyStoreUnavail   = infraerrors.ServiceUnavailable("IDEMPOTENCY_STORE_UNAVAILABLE", "idempotency store unavailable")
-	ErrIdempotencyInvalidPayload = infraerrors.BadRequest("IDEMPOTENCY_PAYLOAD_INVALID", "failed to normalize request payload")
+	ErrIdempotencyKeyRequired       = infraerrors.BadRequest("IDEMPOTENCY_KEY_REQUIRED", "idempotency key is required")
+	ErrIdempotencyKeyInvalid        = infraerrors.BadRequest("IDEMPOTENCY_KEY_INVALID", "idempotency key is invalid")
+	ErrIdempotencyKeyConflict       = infraerrors.Conflict("IDEMPOTENCY_KEY_CONFLICT", "idempotency key reused with different payload")
+	ErrIdempotencyInProgress        = infraerrors.Conflict("IDEMPOTENCY_IN_PROGRESS", "idempotent request is still processing")
+	ErrIdempotencyRetryBackoff      = infraerrors.Conflict("IDEMPOTENCY_RETRY_BACKOFF", "idempotent request is in retry backoff window")
+	ErrIdempotencyStoreUnavail      = infraerrors.ServiceUnavailable("IDEMPOTENCY_STORE_UNAVAILABLE", "idempotency store unavailable")
+	ErrIdempotencyInvalidPayload    = infraerrors.BadRequest("IDEMPOTENCY_PAYLOAD_INVALID", "failed to normalize request payload")
+	ErrIdempotencyResultUnconfirmed = infraerrors.Conflict("IDEMPOTENCY_RESULT_UNCONFIRMED", "result is unconfirmed; verify existing subscriptions before assigning again")
 )
 
 type IdempotencyRecord struct {
@@ -87,6 +88,8 @@ type IdempotencyExecuteOptions struct {
 	Payload        any
 	TTL            time.Duration
 	RequireKey     bool
+	// PreventReexecution 用于不能安全重做的权益发放；未知结果仅允许核对，不能重新领取执行权。
+	PreventReexecution bool
 }
 
 type IdempotencyExecuteResult struct {
@@ -287,6 +290,11 @@ func (c *IdempotencyCoordinator) Execute(
 			logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "existing->fingerprint_mismatch", false, nil)
 			return nil, ErrIdempotencyKeyConflict
 		}
+		// 分配可能已在独立事务中提交，即使租约或记录过期也不能据此重发权益。
+		if opts.PreventReexecution && (existing.Status != IdempotencyStatusSucceeded || !existing.ExpiresAt.After(now)) {
+			recordIdempotencyConflict(opts.Route, opts.Scope, map[string]string{"reason": "result_unconfirmed"})
+			return nil, ErrIdempotencyResultUnconfirmed
+		}
 		reclaimedByExpired := false
 		if !existing.ExpiresAt.After(now) {
 			taken, reclaimErr := c.repo.TryReclaim(ctx, existing.ID, existing.Status, now, lockedUntil, expiresAt)
@@ -414,6 +422,9 @@ func (c *IdempotencyCoordinator) Execute(
 				"operation": "mark_failed_retryable",
 			})
 		}
+		if opts.PreventReexecution {
+			return nil, ErrIdempotencyResultUnconfirmed.WithCause(execErr)
+		}
 		return nil, execErr
 	}
 
@@ -423,6 +434,9 @@ func (c *IdempotencyCoordinator) Execute(
 		logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->store_unavailable", false, map[string]string{
 			"operation": "marshal_response",
 		})
+		if opts.PreventReexecution {
+			return nil, ErrIdempotencyResultUnconfirmed.WithCause(marshalErr)
+		}
 		return nil, ErrIdempotencyStoreUnavail.WithCause(marshalErr)
 	}
 	if markErr := c.repo.MarkSucceeded(ctx, record.ID, 200, storedBody, expiresAt); markErr != nil {
@@ -430,6 +444,9 @@ func (c *IdempotencyCoordinator) Execute(
 		logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->store_unavailable", false, map[string]string{
 			"operation": "mark_succeeded",
 		})
+		if opts.PreventReexecution {
+			return nil, ErrIdempotencyResultUnconfirmed.WithCause(markErr)
+		}
 		return nil, ErrIdempotencyStoreUnavail.WithCause(markErr)
 	}
 	logIdempotencyAudit(opts.Route, opts.Scope, keyHash, "processing->succeeded", false, nil)

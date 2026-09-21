@@ -20,18 +20,20 @@ import (
 
 // OpenAIRecordUsageInput input for recording usage
 type OpenAIRecordUsageInput struct {
-	Result             *OpenAIForwardResult
-	APIKey             *APIKey
-	User               *User
-	Account            *Account
-	Subscription       *UserSubscription
-	InboundEndpoint    string
-	UpstreamEndpoint   string
-	UserAgent          string // 请求的 User-Agent
-	IPAddress          string // 请求的客户端 IP 地址
-	ClientSessionID    string // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
-	RequestPayloadHash string
-	RequestBody        []byte // 原始请求体，用于解析客户端请求的计费推理档位
+	// SubscriptionScopeID 只接受异步任务创建快照中的订阅 ID，禁止重新选择后来购买的套餐。
+	SubscriptionScopeID *int64 `json:"-"`
+	Result              *OpenAIForwardResult
+	APIKey              *APIKey
+	User                *User
+	Account             *Account
+	Subscription        *UserSubscription
+	InboundEndpoint     string
+	UpstreamEndpoint    string
+	UserAgent           string // 请求的 User-Agent
+	IPAddress           string // 请求的客户端 IP 地址
+	ClientSessionID     string // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
+	RequestPayloadHash  string
+	RequestBody         []byte // 原始请求体，用于解析客户端请求的计费推理档位
 	// PricingAt 是 WS turn 开始时刻；普通 HTTP 调用留空并在记录时取当前时间。
 	PricingAt     time.Time
 	APIKeyService APIKeyQuotaUpdater
@@ -216,7 +218,14 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 	subscriptionMultiplier := multiplier
 	balanceMultiplier := multiplier
-	subscription = resolveUsageSubscriptionForAPIKey(ctx, apiKey, subscription, s.userSubRepo, usageSubscriptionResolverFrom(s.usageBillingRepo), user.ID, apiKey.GroupID)
+	if input.SubscriptionScopeID != nil && APIKeyEffectiveBillingMode(apiKey) == APIKeyBillingModeAuto {
+		// 受限 auto 沿用创建快照；快照缺失时也不能为展示倍率另选新套餐。
+		if *input.SubscriptionScopeID <= 0 || (subscription != nil && subscription.ID != *input.SubscriptionScopeID) {
+			return ErrUsageBillingSubscriptionScopeInvalid
+		}
+	} else {
+		subscription = resolveUsageSubscriptionForAPIKey(ctx, apiKey, subscription, s.userSubRepo, usageSubscriptionResolverFrom(s.usageBillingRepo), user.ID, apiKey.GroupID)
+	}
 	if apiKey.GroupID != nil && apiKey.Group != nil {
 		subscriptionMultiplier = apiKey.Group.RateMultiplier
 		balanceMultiplier = apiKey.Group.RateMultiplier
@@ -502,6 +511,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			APIKey:                          apiKey,
 			Account:                         account,
 			Subscription:                    subscription,
+			SubscriptionScopeID:             input.SubscriptionScopeID,
 			RequestPayloadHash:              resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
 			AccountRateMultiplier:           accountRateMultiplier,
 			SubscriptionRateMultiplier:      subscriptionMultiplier,

@@ -133,8 +133,10 @@ func TestToUserErrorRequestDetail_WhitelistAndRedacts(t *testing.T) {
 			GroupName:        "grp-a",
 			Stream:           true,
 		},
-		ErrorBody:          `{"error":{"message":"upstream failed","type":"server_error"}}`,
-		UpstreamStatusCode: &upstreamStatus,
+		ErrorBody:           `{"error":{"message":"upstream failed","type":"server_error"}}`,
+		UpstreamStatusCode:  &upstreamStatus,
+		UpstreamErrorDetail: "private-upstream-diagnostic",
+		UpstreamErrors:      `[{"request_body":"private-request-prompt","request_headers":{"Authorization":"private-bearer"}}]`,
 	}
 
 	out := ToUserErrorRequestDetail(src)
@@ -177,7 +179,10 @@ func TestToUserErrorRequestDetail_WhitelistAndRedacts(t *testing.T) {
 		t.Fatalf("json.Marshal failed: %v", err)
 	}
 	raw := string(b)
-	for _, forbidden := range []string{"user_email", "upstream_endpoint"} {
+	for _, forbidden := range []string{
+		"user_email", "upstream_endpoint", "request_body", "request_headers", "response_body", "response_headers",
+		"private-upstream-diagnostic", "private-request-prompt", "private-bearer",
+	} {
 		if strings.Contains(raw, forbidden) {
 			t.Errorf("sensitive field %q leaked in JSON output: %s", forbidden, raw)
 		}
@@ -187,5 +192,30 @@ func TestToUserErrorRequestDetail_WhitelistAndRedacts(t *testing.T) {
 func TestToUserErrorRequestDetail_Nil(t *testing.T) {
 	if out := ToUserErrorRequestDetail(nil); out != nil {
 		t.Errorf("expected nil for nil input, got %+v", out)
+	}
+}
+
+// 用户错误视图只增加同请求的套餐摘要，恢复失败原文仍需脱敏。
+func TestToUserErrorRequest_BillingSubscriptionsRemainSafe(t *testing.T) {
+	planID := int64(8)
+	src := &OpsErrorLogDetail{OpsErrorLog: OpsErrorLog{
+		ID: 10, RecoveredUpstream: true, AccountName: "internal-account", UserEmail: "private@example.com",
+		BillingSubscriptions: []BillingSubscription{{SubscriptionID: 42, PlanID: &planID, PlanName: "月度套餐", AmountUSD: 0.125}},
+	}, ErrorBody: "sensitive upstream body"}
+	out := ToUserErrorRequestDetail(src)
+	if len(out.BillingSubscriptions) != 1 || out.BillingSubscriptions[0].PlanName != "月度套餐" || out.BillingSubscriptions[0].AmountUSD != 0.125 {
+		t.Fatalf("扣费套餐未正确投影: %+v", out.BillingSubscriptions)
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"internal-account", "private@example.com", "sensitive upstream body", "billing_allocations"} {
+		if strings.Contains(string(b), forbidden) {
+			t.Fatalf("套餐摘要意外暴露内部信息 %q: %s", forbidden, b)
+		}
+	}
+	if got := ToUserErrorRequest(&OpsErrorLog{ID: 11}); len(got.BillingSubscriptions) != 0 {
+		t.Fatalf("没有结算关联时不能推断套餐: %+v", got)
 	}
 }

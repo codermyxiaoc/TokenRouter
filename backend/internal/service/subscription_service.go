@@ -681,6 +681,10 @@ func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscripti
 				return err
 			}
 		}
+		// 延长期限可能让原本处于到期尾段的额度窗口重新具备启动条件。
+		// 在同一事务中维护窗口，避免延长成功后管理页面仍看不到重置时间，
+		// 也避免必须先发起一次网关请求才能激活窗口。
+		sub.ExpiresAt = newExpiresAt
 
 		var status string
 		if !newExpiresAt.After(now) {
@@ -690,7 +694,13 @@ func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscripti
 		} else {
 			status = SubscriptionStatusActive
 		}
-		return s.userSubRepo.UpdateStatus(txCtx, subscriptionID, status)
+		if err := s.userSubRepo.UpdateStatus(txCtx, subscriptionID, status); err != nil {
+			return err
+		}
+		if err := s.CheckAndActivateWindow(txCtx, sub); err != nil {
+			return err
+		}
+		return s.CheckAndResetWindows(txCtx, sub)
 	})
 	if err != nil {
 		return nil, err
@@ -772,6 +782,15 @@ func (s *SubscriptionService) SetSubscriptionValidityDays(ctx context.Context, s
 		status = SubscriptionStatusActive
 	}
 	if err := s.userSubRepo.UpdateStatus(txCtx, subscriptionID, status); err != nil {
+		return nil, err
+	}
+	// 与增加天数的路径保持一致：有效期变化后立即重新评估额度窗口，
+	// 使延长后的订阅在返回管理端前就拥有持久化的重置时间。
+	sub.ExpiresAt = newExpiresAt
+	if err := s.CheckAndActivateWindow(txCtx, sub); err != nil {
+		return nil, err
+	}
+	if err := s.CheckAndResetWindows(txCtx, sub); err != nil {
 		return nil, err
 	}
 

@@ -376,6 +376,8 @@ func shouldBypassEmbeddedFrontend(request *http.Request) bool {
 	}
 
 	return strings.HasPrefix(trimmed, "/api/") ||
+		trimmed == "/v3/contents/generations/tasks" || strings.HasPrefix(trimmed, "/v3/contents/generations/tasks/") ||
+		trimmed == "/contents/generations/tasks" || strings.HasPrefix(trimmed, "/contents/generations/tasks/") ||
 		strings.HasPrefix(trimmed, "/v1/") ||
 		strings.HasPrefix(trimmed, "/v1beta/") ||
 		strings.HasPrefix(trimmed, "/backend-api/") ||

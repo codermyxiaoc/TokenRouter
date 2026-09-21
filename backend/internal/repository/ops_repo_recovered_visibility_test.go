@@ -100,8 +100,14 @@ func checkOpsErrorListAndDetailRecoveredOutcome(t *testing.T, status int) {
 		}
 		return sqlmock.NewRows(columns).AddRow(row...)
 	}
+	// 该用例只验证恢复信息；没有结算记录时套餐摘要必须保持为空。
+	expectNoBilling := func() {
+		mock.ExpectQuery("(?s)SELECT e.id, u.id.*JOIN usage_logs u").
+			WithArgs(sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"error_id"}))
+	}
 	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 	mock.ExpectQuery("(?s)SELECT.*COALESCE\\(e.status_code, 0\\).*FROM ops_error_logs").WillReturnRows(makeRow(listColumns))
+	expectNoBilling()
 	list, err := repo.ListErrorLogs(context.Background(), &service.OpsErrorLogFilter{IncludeRecoveredUpstream: true, View: "all"})
 	require.NoError(t, err)
 	require.Len(t, list.Errors, 1)
@@ -114,6 +120,7 @@ func checkOpsErrorListAndDetailRecoveredOutcome(t *testing.T, status int) {
 	require.Equal(t, "recovered snapshot", list.Errors[0].RecoveredGroupName)
 	require.Equal(t, "anthropic", list.Errors[0].RecoveredPlatform)
 	mock.ExpectQuery("(?s)SELECT.*COALESCE\\(e.status_code, 0\\).*FROM ops_error_logs").WithArgs(int64(120)).WillReturnRows(makeRow(detailColumns))
+	expectNoBilling()
 	detail, err := repo.GetErrorLogByID(context.Background(), 120)
 	require.NoError(t, err)
 	require.Equal(t, status, detail.StatusCode)
@@ -128,6 +135,7 @@ func checkOpsErrorListAndDetailRecoveredOutcome(t *testing.T, status int) {
 	svc := service.NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	mock.ExpectQuery("(?s)SELECT COUNT.*Recovered upstream error%.*e.user_id =").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 	mock.ExpectQuery("(?s)SELECT.*Recovered upstream error%.*e.user_id =").WillReturnRows(makeRow(listColumns))
+	expectNoBilling()
 	phases, _ := service.CategoryToFilter("upstream")
 	userList, err := svc.ListUserErrorRequests(context.Background(), 1, &service.OpsErrorLogFilter{
 		IncludeRecoveredUpstream: true, ErrorPhasesAny: phases, StatusCodes: []int{status},
@@ -142,6 +150,7 @@ func checkOpsErrorListAndDetailRecoveredOutcome(t *testing.T, status int) {
 	require.Equal(t, int64(7), *userRow.RecoveredGroupID)
 	require.Equal(t, "recovered snapshot", userRow.RecoveredGroupName)
 	mock.ExpectQuery("(?s)SELECT.*COALESCE\\(e.status_code, 0\\).*FROM ops_error_logs").WithArgs(int64(120)).WillReturnRows(makeRow(detailColumns))
+	expectNoBilling()
 	userDetail, err := svc.GetUserErrorRequestDetail(context.Background(), 1, 120)
 	require.NoError(t, err)
 	require.Equal(t, *userRow, userDetail.UserErrorRequest)

@@ -32,6 +32,9 @@ func DefaultOpenCodeGoModelIDs() []string {
 	return []string{
 		"grok-4.6",
 		"gpt-5.6-luna",
+		// Jev 是 Zen 的 System One 结构化决策模型，实际端点由网关按 Zen 账号特判。
+		"jev-1.13",
+		"jev-1.13-free",
 		"glm-5.3-flash",
 		"glm-5.3",
 		"glm-5.2",
@@ -67,6 +70,17 @@ func normalizeOpenCodeGoModelID(model string) string {
 		model = strings.TrimPrefix(model, prefix)
 	}
 	return model
+}
+
+// IsOpenCodeSystemOneModel 判断模型是否属于 Zen 的 Jev System One 端点。
+// 该端点只对 Zen 账号开放，GO 账号即使共享平台目录也不能承载 Jev 请求。
+func IsOpenCodeSystemOneModel(model string) bool {
+	switch normalizeOpenCodeGoModelID(model) {
+	case "jev-1.13", "jev-1.13-free":
+		return true
+	default:
+		return false
+	}
 }
 
 // OpenCodeGoProtocolRule 按模型精确值或尾部通配符选择协议，首条命中生效。
@@ -298,7 +312,7 @@ func openCodeGoNativeProtocol(account *Account, model string) string {
 		return APIProtocolChatCompletions
 	}
 	switch proto := account.ResolveOpenCodeGoUpstreamProtocol(model); proto {
-	case APIProtocolAnthropic, APIProtocolResponses:
+	case APIProtocolAnthropic, APIProtocolResponses, APIProtocolSystemOne:
 		return proto
 	default:
 		return APIProtocolChatCompletions
@@ -311,6 +325,10 @@ func openCodeGoNativeProtocol(account *Account, model string) string {
 func (a *Account) ResolveOpenCodeGoUpstreamProtocol(model string) string {
 	if a == nil || !a.IsOpenCodeGo() {
 		return ""
+	}
+	// Jev 为独立结构化协议，不能被普通文本协议固定值或通配规则改写。
+	if IsOpenCodeSystemOneModel(model) {
+		return APIProtocolSystemOne
 	}
 	switch a.GetAPIProtocol() {
 	case APIProtocolChatCompletions, APIProtocolAnthropic, APIProtocolResponses:
@@ -372,7 +390,7 @@ func (a *Account) openCodeProtocolBaseURL(protocol string) string {
 		}
 	}
 	if base := strings.TrimSpace(a.GetCredential("base_url")); base != "" {
-		// OpenCode 三协议共享版本路径，构建请求时使用版本感知拼接。
+		// OpenCode 文本协议与 System One 共享版本路径，构建请求时使用版本感知拼接。
 		return base
 	}
 	if protocol == APIProtocolAnthropic {

@@ -2061,6 +2061,10 @@ const openAIWorkloadCapabilityOptions = computed(() => [
   {
     value: 'embeddings' as OpenAIWorkloadCapability,
     label: t('admin.accounts.openai.workloadEmbeddings')
+  },
+  {
+    value: 'seedance' as OpenAIWorkloadCapability,
+    label: t('admin.accounts.openai.workloadSeedance')
   }
 ])
 const openAITextRouteModeOptions = computed(() => [
@@ -2450,9 +2454,9 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   }
 
   if (enableOpenAIWorkloadCapabilities.value && allOpenAIAPIKey.value) {
-    // 空数组不是有效配置；全选时写 null 让后端清除账号级覆盖并回退默认能力。
+    // 仅文本与向量组合等于历史默认能力；包含视频时必须保留显式配置。
     credentials.openai_workload_capabilities =
-      openAIWorkloadCapabilities.value.length === openAIWorkloadCapabilityOptions.value.length
+      openAIWorkloadCapabilities.value.length === 2 && !openAIWorkloadCapabilities.value.includes('seedance')
         ? null
         : [...openAIWorkloadCapabilities.value]
     credentialsChanged = true

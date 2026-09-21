@@ -8,7 +8,35 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/TokenFlux/TokenRouter/internal/service"
+	"github.com/stretchr/testify/require"
 )
+
+func TestGetRequestPayloadDetailResolvesClientBillingRequestID(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	createdAt := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	completedAt := createdAt.Add(time.Second)
+	mock.ExpectQuery(`(?s)FROM ops_request_details.*ORDER BY CASE.*LIMIT 1`).
+		WithArgs("client:client-1", "client-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"request_id", "client_request_id", "method", "path", "inbound_endpoint", "upstream_endpoint",
+			"platform", "model", "status_code", "stream", "request_headers", "request_body",
+			"response_headers", "response_body", "request_truncated", "response_truncated", "created_at", "completed_at",
+		}).AddRow(
+			"internal-1", "client-1", "POST", "/v1/responses", "/v1/responses", "/v1/responses",
+			"openai", "gpt-5.6-sol", 200, true, []byte(`{"content-type":["application/json"]}`), `{"model":"gpt-5.6-sol"}`,
+			[]byte(`{"content-type":["text/event-stream"]}`), "data: done", false, false, createdAt, completedAt,
+		))
+
+	detail, err := (&opsRepository{db: db}).GetRequestPayloadDetail(context.Background(), "client:client-1")
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	require.Equal(t, "internal-1", detail.RequestID)
+	require.Equal(t, "client-1", detail.ClientRequestID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 func TestListRequestDetailsSLAOnlyUsesSLAErrorScope(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))

@@ -127,6 +127,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if account.IsOpenCodeGo() {
 		mapped := resolveOpenCodeGoMappedModel(account, body, defaultMappedModel)
 		proto := openCodeGoNativeProtocol(account, mapped)
+		if proto == APIProtocolSystemOne {
+			return nil, fmt.Errorf("Jev models must use the /v1/systemone endpoint")
+		}
 		if proto == APIProtocolResponses {
 			SetActualOpenAIUpstreamEndpoint(c, "/v1/responses")
 		}
@@ -403,7 +406,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
+	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}

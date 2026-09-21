@@ -137,6 +137,8 @@ type OpsErrorLog struct {
 	RecoveredGroupID   *int64 `json:"recovered_group_id,omitempty"`
 	RecoveredGroupName string `json:"recovered_group_name,omitempty"`
 	RecoveredPlatform  string `json:"recovered_platform,omitempty"`
+	// 扣费套餐仅从同请求的实际用量分配读取，不使用密钥当前绑定或失败分组推断。
+	BillingSubscriptions []BillingSubscription `json:"billing_subscriptions,omitempty"`
 
 	Resolved           bool       `json:"resolved"`
 	ResolvedAt         *time.Time `json:"resolved_at"`

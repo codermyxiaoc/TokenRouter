@@ -657,6 +657,19 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresAdmin: true, requiresTickets: true, title: 'Ticket', titleKey: 'tickets.conversation', hidePageHeading: true }
   },
   {
+    path: '/admin/plugins',
+    name: 'AdminPlugins',
+    component: () => import('@/views/admin/PluginsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Plugins',
+      titleKey: 'admin.plugins.title',
+      descriptionKey: 'admin.plugins.description',
+      hidePageHeading: true
+    }
+  },
+  {
     path: '/admin/risk-control',
     name: 'AdminRiskControl',
     component: () => import('@/views/admin/RiskControlView.vue'),

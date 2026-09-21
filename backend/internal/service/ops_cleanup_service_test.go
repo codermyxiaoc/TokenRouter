@@ -7,7 +7,38 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/stretchr/testify/require"
 )
+
+// 完整失败请求正文必须随错误日志保留期清理，不能因为新增快照表而无限累积。
+func TestOpsCleanupIncludesRequestPayloadDetails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		// SQL 连接清理也纳入测试断言，避免资源释放错误被静默忽略。
+		mock.ExpectClose()
+		require.NoError(t, db.Close())
+	})
+	svc := &OpsCleanupService{db: db, cfg: &config.Config{}, effective: config.OpsCleanupConfig{
+		ErrorLogRetentionDays: 7, SystemLogRetentionDays: -1,
+		MinuteMetricsRetentionDays: -1, HourlyMetricsRetentionDays: -1,
+		BatchSize: 100, BatchPauseMS: 1,
+	}}
+	for _, table := range []string{"ops_error_logs", "ops_ingress_reject_aggregates", "ops_alert_events", "ops_system_log_cleanup_audits", "ops_request_details"} {
+		deleted := int64(0)
+		if table == "ops_request_details" {
+			deleted = 3
+		}
+		mock.ExpectExec(`(?s)WITH batch AS MATERIALIZED.*DELETE FROM `+table+` AS target`).
+			WithArgs(sqlmock.AnyArg(), 100).WillReturnResult(sqlmock.NewResult(0, deleted))
+	}
+	counts, err := svc.runCleanupOnce(context.Background())
+	require.NoError(t, err)
+	require.EqualValues(t, 3, counts.requestDetails)
+	require.Contains(t, counts.String(), "request_details=3")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 func TestOpsCleanupPlan(t *testing.T) {
 	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)

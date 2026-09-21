@@ -48,6 +48,8 @@ Antigravity 分组支持 Messages、Responses、Chat 和 Gemini GenerateContent�
 
 Anthropic Messages 经过 Antigravity request transformer 生成上游 Gemini/内部请求形状，响应和 SSE 再恢复为 Anthropic 协议。工具定义、tool choice、thinking、缓存断点、图片输入、token 用量和停止原因都需要双向转换；schema cleaner 会移除上游不接受的 JSON Schema 表达。
 
+转换 system 指令时，字符串或文本块开头的 `x-anthropic-billing-header:` 元数据行会被移除，后续真实指令继续保留；正文中间的同名文本不作为元数据清理。该规则只作用于 Antigravity 转换，原生 Anthropic 的计费指纹同步仍遵守其独立契约。
+
 通用 OpenAI Chat Completions 和 Responses 在选到原生 Antigravity OAuth 账号时走兼容适配器：
 
 ```text
@@ -61,7 +63,7 @@ Chat Completions / Responses
 
 每次 failover attempt 都必须从原始请求重新转换，并刷新工具名回程映射。流开始后遵守共同不可切换边界。Gemini v1beta 专用入口保持 Google 错误/流形状，不经过 OpenAI envelope。
 
-Gemini 原生 SSE 转发会拆开上游包装并重新写出 data 帧分隔，因此不再重复转发上游空分隔行；LF 和 CRLF 输入都只生成一次帧分隔，其他事件与注释行继续保留。
+Gemini 原生 SSE 转发会拆开上游包装并重新写出 data 帧分隔，因此不再重复转发上游空分隔行；LF 和 CRLF 输入都只生成一次帧分隔。普通客户端仍可收到网关的空闲注释心跳；`User-Agent` 或 `X-Goog-Api-Client` 识别为 `google-genai-sdk` 且使用 `gl-go` 或 `gl-python` 时，网关关闭本地产生的注释心跳，并过滤上游注释行，避免这类 SDK 将 `:` 判定为非法流块。该兼容处理不改写正常 data 事件，也不改变普通客户端的注释转发。
 
 兼容层把 Chat 请求中的正数 `max_completion_tokens`（缺省时使用 `max_tokens`）在转换为 Anthropic 请求前封顶为 64000；零、负数或缺省值不会覆盖转换器已有的默认上限，避免超大客户端参数被上游拒绝。
 
@@ -82,7 +84,11 @@ Antigravity 账号 `extra.mixed_scheduling` 为布尔 `true` 时，可以作为 
 
 ## 模型与额度
 
-Antigravity 同时提供 Claude 与 Gemini 模型族。Gemini 3.6、3.7、3.8 Flash 的基础、high、low、medium 与 tiered 五种模型 ID 均进入默认模型目录和身份映射；账号存在自定义映射时，只要没有覆盖它们的通配符，这些精确直通映射仍会自动保留。可见模型来自默认映射、分组/渠道限制、账号资格和当前可请求解析；API Key 精确别名可投影到列表，目标不可请求时不展示。模型能力不能只由名称前缀推断，thinking/image 等能力由适配器与账号详情共同约束。
+Antigravity 同时提供 Claude 与 Gemini 模型族。Gemini 3.6、3.7、3.8 Flash 的基础、high、low、medium 与 tiered 五种模型 ID 均进入默认模型目录和身份映射；账号存在自定义映射时，只要没有覆盖它们的通配符，这些精确直通映射仍会自动保留。
+
+原生 Gemini 请求使用裸模型名时，网关按 `generationConfig.thinkingConfig.thinkingLevel` 或 `thinkingBudget` 选择账号映射中存在的思考变体；缺省配置按 `high` 选择。首选档位不可用时依次尝试 `high`、`medium`、`low`、`tiered`，不重复尝试首选项。管理员配置的精确映射和命中的通配符映射始终优先，包括显式原样透传；运行时自动补齐的裸名自映射不视为管理员的显式选择。请求已有思考后缀时保持常规模型映射，找不到任何变体也回到既有映射流程。
+
+可见模型来自默认映射、分组/渠道限制、账号资格和当前可请求解析；API Key 精确别名可投影到列表，目标不可请求时不展示。模型能力不能只由名称前缀推断，thinking/image 等能力由适配器与账号详情共同约束。
 
 额度查询按账号和模型 scope 保存上游 reset/remaining 状态，并可包含 AI Credits。429/503 分类区分模型限流、credits 耗尽和共享容量不足；请求结算的 `QuotaPlatform` 必须保留 Antigravity，即使客户端从 Anthropic/OpenAI 兼容入口进入。账号成本和用户扣费仍遵守渠道计价与分组倍率边界。
 

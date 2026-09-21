@@ -28,6 +28,12 @@ describe('AppHeader theme toggle', () => {
     expect(componentSource).toContain('class="header-status-icon-button hidden sm:flex"')
     expect(componentSource).toContain('@apply flex items-center gap-1 sm:gap-2;')
   })
+
+  it('keeps the model marketplace icon reachable from the mobile header', () => {
+    expect(componentSource).toContain('to="/models"')
+    expect(componentSource).toContain(':aria-label="t(\'nav.modelMarketplace\')"')
+    expect(componentSource).toContain('<Icon name="grid" size="md" />')
+  })
 })
 
 describe('AppHeader positioning', () => {

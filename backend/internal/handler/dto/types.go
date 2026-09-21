@@ -585,7 +585,9 @@ type UsageLog struct {
 	SubscriptionAmountUSD float64                    `json:"subscription_amount_usd"`
 	BalanceAmountUSD      float64                    `json:"balance_amount_usd"`
 	BillingAllocations    []domain.BillingAllocation `json:"billing_allocations,omitempty"`
-	RateMultiplier        float64                    `json:"rate_multiplier"`
+	// BillingSubscriptions 只包含实际扣费的订阅套餐，不暴露订阅所有者或订单详情。
+	BillingSubscriptions []service.BillingSubscription `json:"billing_subscriptions,omitempty"`
+	RateMultiplier       float64                       `json:"rate_multiplier"`
 	// LongContextBillingApplied 表示该请求是否实际应用长上下文加价。
 	LongContextBillingApplied bool `json:"long_context_billing_applied"`
 

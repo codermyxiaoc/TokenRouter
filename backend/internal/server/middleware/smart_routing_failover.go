@@ -213,7 +213,7 @@ func smartRoutingReplayEndpoint(c *gin.Context) bool {
 		path = strings.TrimPrefix(path, prefix)
 	}
 	switch path {
-	case "/messages", "/messages/count_tokens", "/responses", "/responses/compact", "/responses/input_tokens", "/chat/completions", "/embeddings":
+	case "/messages", "/messages/count_tokens", "/responses", "/responses/compact", "/responses/input_tokens", "/chat/completions", "/embeddings", "/systemone":
 		return true
 	}
 	return false

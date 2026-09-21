@@ -315,6 +315,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		UsageRankingShowTotalTokens:                      settings.UsageRankingShowTotalTokens,
 		UsageRankingShowRequests:                         settings.UsageRankingShowRequests,
 		UsageRankingShowActualCost:                       settings.UsageRankingShowActualCost,
+		PluginManagementEnabled:                          settings.PluginManagementEnabled,
 		CustomMenuItems:                                  dto.ParseCustomMenuItems(settings.CustomMenuItems),
 		CustomEndpoints:                                  dto.ParseCustomEndpoints(settings.CustomEndpoints),
 		FooterLinks:                                      dto.ParseFooterLinks(settings.FooterLinks),

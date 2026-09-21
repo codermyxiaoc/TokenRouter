@@ -151,6 +151,29 @@ const baseImageRow = {
 }
 
 describe('使用记录计费类型标签', () => {
+  it('混合扣费保留余额标识并展示全部实际扣费套餐', () => {
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [{
+          ...baseImageRow,
+          billing_type: 1,
+          subscription_amount_usd: 0.3,
+          balance_amount_usd: 0.1,
+          billing_subscriptions: [
+            { subscription_id: 10, plan_name: '基础套餐', amount_usd: 0.1 },
+            { subscription_id: 11, plan_name: '专业套餐', amount_usd: 0.2 },
+          ],
+        }],
+        columns: [{ key: 'billing_type', label: 'Billing type' }],
+      },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    expect(wrapper.get('[data-testid="usage-billing-type"]').text()).toBe('Subscription + Balance')
+    expect(wrapper.get('[data-testid="billing-subscriptions"]').text()).toContain('基础套餐')
+    expect(wrapper.get('[data-testid="billing-subscriptions"]').text()).toContain('专业套餐')
+    wrapper.unmount()
+  })
+
   it('展示本次扣费来源，混合扣费不误标为纯订阅', () => {
     const wrapper = mount(UsageTable, {
       props: {

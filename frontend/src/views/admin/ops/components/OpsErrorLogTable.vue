@@ -32,7 +32,13 @@
         </template>
 
         <template #cell-endpoint="{ row }">
-          <div class="max-w-[320px] space-y-1 text-xs">
+          <button
+            v-if="row.request_id || row.client_request_id"
+            type="button"
+            class="block max-w-[320px] space-y-1 text-left text-xs hover:underline"
+            :title="t('admin.ops.requestDetails.payload.title')"
+            @click.stop="emit('openRequestPayloadDetail', row.request_id || row.client_request_id)"
+          >
             <div class="break-all text-gray-700 dark:text-gray-300">
               <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('usage.inbound') }}:</span>
               <span class="ml-1">{{ row.inbound_endpoint?.trim() || '-' }}</span>
@@ -41,6 +47,10 @@
               <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('usage.upstream') }}:</span>
               <span class="ml-1">{{ row.upstream_endpoint?.trim() || '-' }}</span>
             </div>
+          </button>
+          <div v-else class="max-w-[320px] space-y-1 text-xs">
+            <div class="break-all text-gray-700 dark:text-gray-300"><span class="font-medium text-gray-500 dark:text-gray-400">{{ t('usage.inbound') }}:</span><span class="ml-1">{{ row.inbound_endpoint?.trim() || '-' }}</span></div>
+            <div v-if="row.upstream_endpoint" class="break-all text-gray-700 dark:text-gray-300"><span class="font-medium text-gray-500 dark:text-gray-400">{{ t('usage.upstream') }}:</span><span class="ml-1">{{ row.upstream_endpoint?.trim() || '-' }}</span></div>
           </div>
         </template>
 
@@ -55,6 +65,10 @@
           </div>
           <span v-else-if="displayModel(row)" class="text-sm font-medium text-gray-900 dark:text-white">{{ displayModel(row) }}</span>
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
+        <template #cell-billing_subscriptions="{ row }">
+          <BillingSubscriptionSummary :row="row" show-empty />
         </template>
 
         <template #cell-group="{ row }">
@@ -194,6 +208,7 @@ import { useI18n } from 'vue-i18n'
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorRecoveryStatus from '@/components/common/ErrorRecoveryStatus.vue'
+import BillingSubscriptionSummary from '@/components/common/BillingSubscriptionSummary.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
 import IpGeoBatchToolbar from '@/components/common/IpGeoBatchToolbar.vue'
@@ -215,6 +230,7 @@ const allColumns = computed<Column[]>(() => [
   { key: 'model', label: t('admin.ops.errorLog.model'), sortable: true },
   { key: 'endpoint', label: t('admin.ops.errorLog.endpoint') },
   { key: 'group', label: t('admin.ops.errorLog.group') },
+  { key: 'billing_subscriptions', label: t('admin.usage.billingSubscriptions') },
   { key: 'type', label: t('admin.ops.errorLog.type') },
   { key: 'category', label: t('usage.errors.category') },
   { key: 'status', label: t('admin.ops.errorLog.status'), sortable: true },
@@ -317,6 +333,7 @@ interface Props {
 
 interface Emits {
   (e: 'openErrorDetail', id: number): void
+  (e: 'openRequestPayloadDetail', requestID: string): void
   (e: 'update:page', value: number): void
   (e: 'update:pageSize', value: number): void
   (e: 'ipGeoBatchFailed'): void

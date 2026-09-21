@@ -8,6 +8,7 @@
 
 ## 文档
 
+- [AI 网关 API 参考](api_reference.md)：按当前网关路由、请求体和响应体整理的客户端调用参考，覆盖 OpenAI、Anthropic、Gemini、Grok、OpenCode 和 Seedance 接口。读取时机：编写模型客户端集成、调试网关请求或核对 AI 端点时读取。
 - [Seedance / 火山方舟原生视频任务](seedance_upstream.md)：显式账号能力、原生异步任务、归属隔离和完成后 token 计费。读取时机：修改方舟视频路由、任务查询/删除、模型映射或异步结算时读取。
 - [本地插件与宿主服务](local_plugins.md)：插件安装运行、能力授权、命名空间 KV、账号目录和只读状态 UI。读取时机：修改插件生命周期、HostService、传输绑定、插件页面或部署兼容性时读取。
 

@@ -61,6 +61,18 @@ tmp/
 temp/
 *.tmp
 
+# 本地验证、调试和发布中间产物不进入源码构建上下文。
+.dev/
+**/.dev/
+.playwright-mcp/
+**/__pycache__/
+*.pyc
+release/
+diagnostics/
+frontend/audit.json
+backend/server.exe
+backend/data/
+
 # Deploy files (not needed in image)
 deploy/install.sh
 deploy/sub2api.service

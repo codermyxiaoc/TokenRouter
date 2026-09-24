@@ -71,6 +71,11 @@
         </div>
 
         <!-- 完整定价：单列展示，标签与价格都不换行。 -->
+        <div v-if="pricingKind(model.pricing) === 'token' && Object.keys(model.pricing.reasoning_effort_multipliers || {}).length" class="mb-3 flex flex-wrap gap-2" data-testid="reasoning-effort-pricing">
+          <span v-for="(multiplier, effort) in model.pricing.reasoning_effort_multipliers" :key="effort" class="rounded bg-gray-100 px-2 py-1 text-xs text-gray-600 dark:bg-dark-800 dark:text-gray-300">
+            {{ t('admin.channels.form.reasoningEffortMultiplier', { effort }) }} {{ multiplier }}x
+          </span>
+        </div>
         <div v-if="activeRows.length > 0" class="space-y-2.5" data-testid="pricing-rows">
           <div
             v-for="row in activeRows"

@@ -131,7 +131,7 @@ func isCompositeKeyNoModelEndpoint(method, path string) bool {
 	if isCompositeKeyModelListEndpoint(method, path) || isAPIKeyUsageRequest(method, path) {
 		return true
 	}
-	return isBatchImageBillingBypassRequest(method, path) || isGrokVideoTaskRead(method, path) || isSeedanceTaskManagementRequest(method, path)
+	return isAsyncImageTaskRead(method, path) || isBatchImageBillingBypassRequest(method, path) || isGrokVideoTaskRead(method, path) || isSeedanceTaskManagementRequest(method, path)
 }
 
 // isCompositeKeyModelListEndpoint 识别复合 Key 需要聚合映射的模型列表入口。
@@ -169,7 +169,7 @@ func isCompositeKeyBillingBypassEndpoint(method, path string) bool {
 	if isAPIKeyUsageRequest(method, path) {
 		return true
 	}
-	return isBatchImageBillingBypassRequest(method, path) || isGrokVideoTaskRead(method, path) || isSeedanceTaskManagementRequest(method, path)
+	return isAsyncImageTaskRead(method, path) || isBatchImageBillingBypassRequest(method, path) || isGrokVideoTaskRead(method, path) || isSeedanceTaskManagementRequest(method, path)
 }
 
 // isGrokVideoTaskRead 识别不携带模型、仅通过任务归属查询的 Grok 视频入口。

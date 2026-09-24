@@ -1,6 +1,13 @@
 import { apiClient } from '../client'
 
 export type ModerationMode = 'off' | 'observe' | 'pre_block'
+export type ModerationEngine = 'openai' | 'typesafe'
+export interface ModerationEngineMeta {
+  engine: ModerationEngine
+  model: string
+  rules_version: string
+  skipped_images: number
+}
 export type KeywordBlockingMode = 'keyword_only' | 'keyword_and_api' | 'api_only'
 export type ContentModerationModelFilterType = 'all' | 'include' | 'exclude'
 
@@ -10,6 +17,8 @@ export interface ContentModerationModelFilter {
 }
 
 export interface ContentModerationConfig {
+  engine?: ModerationEngine
+  engine_configs?: Record<ModerationEngine, ContentModerationConfig>
   enabled: boolean
   mode: ModerationMode
   base_url: string
@@ -84,6 +93,8 @@ export interface ContentModerationAPIKeyMetadataUpdate {
 }
 
 export interface TestContentModerationAPIKeysPayload {
+  engine?: ModerationEngine
+  thresholds?: Record<string, number>
   api_keys?: string[]
   base_url?: string
   model?: string
@@ -101,6 +112,7 @@ export interface TestContentModerationAPIKeysResponse {
 }
 
 export interface ContentModerationTestAuditResult {
+  engine_meta?: ModerationEngineMeta
   flagged: boolean
   highest_category: string
   highest_score: number
@@ -110,6 +122,8 @@ export interface ContentModerationTestAuditResult {
 }
 
 export interface UpdateContentModerationConfig {
+  engine?: ModerationEngine
+  engine_configs?: Partial<Record<ModerationEngine, UpdateModerationEngineConfig>>
   enabled?: boolean
   mode?: ModerationMode
   base_url?: string
@@ -155,6 +169,7 @@ export interface UpdateContentModerationConfig {
 }
 
 export interface ContentModerationRuntimeStatus {
+  engine?: ModerationEngine
   enabled: boolean
   risk_control_enabled: boolean
   mode: ModerationMode
@@ -203,6 +218,7 @@ export interface ContentModerationAPIKeyLoad {
 }
 
 export interface ContentModerationLog {
+  engine_meta?: ModerationEngineMeta | null
   id: number
   request_id: string
   user_id: number | null
@@ -305,6 +321,10 @@ export interface ContentModerationMedia {
   snapshot_error: string
   created_at: string
 }
+
+export type UpdateModerationEngineConfig = Pick<UpdateContentModerationConfig,
+  'api_key_entries' | 'api_key_updates' | 'base_url' | 'model' | 'proxy_id' | 'api_keys' | 'api_keys_mode' | 'delete_api_key_hashes' |
+  'clear_api_key' | 'timeout_ms' | 'retry_count' | 'thresholds'>
 
 export interface ListContentModerationLogsParams {
   page?: number

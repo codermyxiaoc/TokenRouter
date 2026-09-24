@@ -202,6 +202,8 @@ const total = ref(0)
 const totalRecharged = ref(0)
 const pageSize = 15
 const typeFilter = ref('')
+// 分页、筛选及切换用户共用请求版本，避免迟到结果覆盖当前列表。
+let requestVersion = 0
 
 const totalPages = computed(() => Math.ceil(total.value / pageSize) || 1)
 
@@ -217,7 +219,12 @@ const typeOptions = computed(() => [
 ])
 
 // Watch modal open
-watch(() => props.show, (v) => {
+watch(() => [props.show, props.user?.id] as const, ([v], _, onCleanup) => {
+  onCleanup(() => { requestVersion++ })
+  history.value = []
+  total.value = 0
+  totalRecharged.value = 0
+  loading.value = false
   if (v && props.user) {
     typeFilter.value = ''
     loadHistory(1)
@@ -226,6 +233,7 @@ watch(() => props.show, (v) => {
 
 const loadHistory = async (page: number) => {
   if (!props.user) return
+  const version = ++requestVersion
   loading.value = true
   currentPage.value = page
   try {
@@ -235,13 +243,15 @@ const loadHistory = async (page: number) => {
       pageSize,
       typeFilter.value || undefined
     )
+    if (version !== requestVersion) return
     history.value = res.items || []
     total.value = res.total || 0
     totalRecharged.value = res.total_recharged || 0
   } catch (error) {
+    if (version !== requestVersion) return
     console.error('Failed to load balance history:', error)
   } finally {
-    loading.value = false
+    if (version === requestVersion) loading.value = false
   }
 }
 

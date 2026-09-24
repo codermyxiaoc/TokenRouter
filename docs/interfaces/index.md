@@ -22,7 +22,7 @@
 - [OpenAI 上游](openai_upstream.md)：OAuth/API Key、Responses、Chat、Messages、Embeddings、Images、Realtime 和 Codex 传输契约。读取时机：修改 OpenAI 认证、endpoint capability、WebSocket、模型或配额调度时读取。
 - [Gemini 上游](gemini_upstream.md)：OAuth 变体、API Key、Vertex Service Account、v1beta 原生和兼容协议契约。读取时机：修改 Gemini 认证、project/tier、协议转换、thought signature 或配额时读取。
 - [Antigravity 上游](antigravity_upstream.md)：Antigravity 专用端点、混合调度及模型协议边界。读取时机：修改 Antigravity 账号、OAuth、Claude/Gemini 转换或调度隔离时读取。
-- [Grok / xAI 上游](grok_upstream.md)：Grok OAuth/API Key、媒体资格与 OpenAI 兼容转发契约。读取时机：修改 Grok 登录、聊天、图片、视频、计费探测或模型配置时读取。
+- [Grok / xAI 上游](grok_upstream.md)：Grok OAuth/API Key、媒体资格、管理员多模式连接测试与 OpenAI 兼容转发契约。读取时机：修改 Grok 登录、聊天、图片、视频、语音测试、计费探测或模型配置时读取。
 - [Qoder 原生上游](qoder_upstream.md)：Qoder 站点、模型别名、思考能力、上下文、计费和刷新契约。读取时机：修改 Qoder 账号、模型能力、请求转换、定价或运维探测时读取。
 - [OpenCode Zen / GO 上游](opencode_upstream.md)：模型协议路由、缓存会话、GO 用量和现有计费/智能路由边界。读取时机：修改 OpenCode 账号模式、三协议、会话头、模型目录或额度监控时读取。
 - [MiniMax 上游](minimax_upstream.md)：MiniMax API Key、按量/Coding 模式、原生与兼容文本协议、模型和额度边界。读取时机：修改 MiniMax 账号、分组、端点、调度或上游用量时读取。

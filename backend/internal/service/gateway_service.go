@@ -562,6 +562,8 @@ type AccountWaitPlan struct {
 }
 
 type AccountSelectionResult struct {
+	// stickySessionHit 只记录已有会话绑定的命中，不把新建绑定记为命中。
+	stickySessionHit  bool
 	Account           *Account
 	Acquired          bool
 	ReleaseFunc       func()
@@ -1612,6 +1614,18 @@ func finalizeUsageBilling(p *usageBillingParams, deps *billingDeps, result *Usag
 		return
 	}
 
+	if p.SimpleModeKeyRateLimitOnly {
+		if p.APIKey != nil && deps.billingCacheService != nil {
+			if err := deps.billingCacheService.InvalidateAPIKeyRateLimit(context.Background(), p.APIKey.ID); err != nil {
+				logger.LegacyPrintf("service.gateway", "simple mode key window cache invalidation failed: %v", err)
+			}
+		}
+		if deps.deferredService != nil && p.Account != nil {
+			deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
+		}
+		return
+	}
+
 	if result != nil && result.BalanceAmountUSD > 0 && p.User != nil {
 		syncBalanceCacheAfterDeduction(context.Background(), p, deps, result)
 	}
@@ -1722,6 +1736,8 @@ func zeroCostBreakdown(mode BillingMode) *CostBreakdown {
 
 // usageBillingParams 统一扣费所需的参数
 type usageBillingParams struct {
+	// 简易模式仅累计密钥窗口，不扣余额、套餐或账号额度。
+	SimpleModeKeyRateLimitOnly bool
 	// SubscriptionScopeID 固化异步任务创建时 auto 可以参与分摊的订阅，不来自客户端配置。
 	SubscriptionScopeID             *int64
 	Cost                            *CostBreakdown

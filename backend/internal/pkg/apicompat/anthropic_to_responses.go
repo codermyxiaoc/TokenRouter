@@ -33,13 +33,6 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 		out.ServiceTier = "priority"
 	}
 
-	// Responses API 的 gpt-5.x 推理模型不接受采样参数，携带 temperature/top_p 会触发 400。
-	// 因此只有非推理模型才透传这些参数。
-	if !isReasoningModel(req.Model) {
-		out.Temperature = req.Temperature
-		out.TopP = req.TopP
-	}
-
 	storeFalse := false
 	out.Store = &storeFalse
 	parallelToolCalls := true
@@ -70,6 +63,11 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 	out.Reasoning = &ResponsesReasoning{
 		Effort:  mapAnthropicEffortToResponsesForModel(req.Model, effort),
 		Summary: "auto",
+	}
+	// GPT-6 Sol/Luna 只有关闭推理时支持采样参数；旧模型沿用原兼容规则。
+	if supportsResponsesSamplingParameters(req.Model, out.Reasoning.Effort) {
+		out.Temperature = req.Temperature
+		out.TopP = req.TopP
 	}
 
 	// Convert tool_choice
@@ -548,6 +546,16 @@ func boolPtr(v bool) *bool {
 // 当前所有 gpt-5.x 模型都按推理模型处理。
 func isReasoningModel(model string) bool {
 	return strings.HasPrefix(model, "gpt-5")
+}
+
+// supportsResponsesSamplingParameters 根据实际出站推理档位裁定新模型的采样参数。
+func supportsResponsesSamplingParameters(model, effort string) bool {
+	switch normalizeResponsesGPTModel(model) {
+	case "gpt-6-sol", "gpt-6-luna":
+		return effort == "none"
+	default:
+		return !isReasoningModel(model)
+	}
 }
 
 // normalizeToolParameters ensures the tool parameter schema is valid for

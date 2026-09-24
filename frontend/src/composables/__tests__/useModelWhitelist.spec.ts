@@ -40,6 +40,8 @@ describe('useModelWhitelist', () => {
 			'gpt-5.6-terra',
 			'gpt-5.6-luna',
 			'gpt-6-astra',
+      'gpt-6-sol',
+      'gpt-6-luna',
 			'gpt-5.4',
 			'gpt-5.4-mini',
 			'gpt-5.5'
@@ -72,6 +74,24 @@ describe('useModelWhitelist', () => {
     expect(models).not.toContain('gpt-5.4-2026-03-05')
     expect(models).not.toContain('gpt-4o-audio-preview')
     expect(models).not.toContain('gpt-image-1')
+  })
+
+  it('新增官方型号可选择和原名映射，且不扩展第三方平台预设', () => {
+    for (const model of ['gpt-6-sol', 'gpt-6-luna']) {
+      expect(getModelsByPlatform('openai')).toContain(model)
+      expect(getPresetMappingsByPlatform('openai')).toEqual(expect.arrayContaining([
+        expect.objectContaining({ from: model, to: model })
+      ]))
+      expect(getModelsByPlatform('opencode_go')).not.toContain(model)
+    }
+    expect(getModelsByPlatform('anthropic')).toContain('claude-opus-5-5')
+    expect(getPresetMappingsByPlatform('anthropic')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Opus 5.5', from: 'claude-opus-5-5', to: 'claude-opus-5-5' })
+    ]))
+    for (const platform of ['antigravity', 'opencode_go', 'qoder']) {
+      expect(getModelsByPlatform(platform)).not.toContain('claude-opus-5-5')
+    }
+    expect(getPresetMappingsByPlatform('bedrock').some(mapping => mapping.from === 'claude-opus-5-5')).toBe(false)
   })
 
   it('antigravity 模型列表包含图片模型兼容项', () => {

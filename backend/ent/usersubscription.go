@@ -53,6 +53,14 @@ type UserSubscription struct {
 	WeeklyUsageUsd float64 `json:"weekly_usage_usd,omitempty"`
 	// MonthlyUsageUsd holds the value of the "monthly_usage_usd" field.
 	MonthlyUsageUsd float64 `json:"monthly_usage_usd,omitempty"`
+	// DailyResetCount holds the value of the "daily_reset_count" field.
+	DailyResetCount int64 `json:"daily_reset_count,omitempty"`
+	// WeeklyResetCount holds the value of the "weekly_reset_count" field.
+	WeeklyResetCount int64 `json:"weekly_reset_count,omitempty"`
+	// MonthlyResetCount holds the value of the "monthly_reset_count" field.
+	MonthlyResetCount int64 `json:"monthly_reset_count,omitempty"`
+	// ResetCountedAt holds the value of the "reset_counted_at" field.
+	ResetCountedAt time.Time `json:"reset_counted_at,omitempty"`
 	// AssignedBy holds the value of the "assigned_by" field.
 	AssignedBy *int64 `json:"assigned_by,omitempty"`
 	// AssignedAt holds the value of the "assigned_at" field.
@@ -131,11 +139,11 @@ func (*UserSubscription) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case usersubscription.FieldDailyLimitUsd, usersubscription.FieldWeeklyLimitUsd, usersubscription.FieldMonthlyLimitUsd, usersubscription.FieldDailyUsageUsd, usersubscription.FieldWeeklyUsageUsd, usersubscription.FieldMonthlyUsageUsd:
 			values[i] = new(sql.NullFloat64)
-		case usersubscription.FieldID, usersubscription.FieldUserID, usersubscription.FieldPlanID, usersubscription.FieldAssignedBy, usersubscription.FieldSourceOrderID:
+		case usersubscription.FieldID, usersubscription.FieldUserID, usersubscription.FieldPlanID, usersubscription.FieldDailyResetCount, usersubscription.FieldWeeklyResetCount, usersubscription.FieldMonthlyResetCount, usersubscription.FieldAssignedBy, usersubscription.FieldSourceOrderID:
 			values[i] = new(sql.NullInt64)
 		case usersubscription.FieldStatus, usersubscription.FieldNotes:
 			values[i] = new(sql.NullString)
-		case usersubscription.FieldCreatedAt, usersubscription.FieldUpdatedAt, usersubscription.FieldDeletedAt, usersubscription.FieldStartsAt, usersubscription.FieldExpiresAt, usersubscription.FieldDailyWindowStart, usersubscription.FieldWeeklyWindowStart, usersubscription.FieldMonthlyWindowStart, usersubscription.FieldAssignedAt:
+		case usersubscription.FieldCreatedAt, usersubscription.FieldUpdatedAt, usersubscription.FieldDeletedAt, usersubscription.FieldStartsAt, usersubscription.FieldExpiresAt, usersubscription.FieldDailyWindowStart, usersubscription.FieldWeeklyWindowStart, usersubscription.FieldMonthlyWindowStart, usersubscription.FieldResetCountedAt, usersubscription.FieldAssignedAt:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -266,6 +274,30 @@ func (_m *UserSubscription) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field monthly_usage_usd", values[i])
 			} else if value.Valid {
 				_m.MonthlyUsageUsd = value.Float64
+			}
+		case usersubscription.FieldDailyResetCount:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field daily_reset_count", values[i])
+			} else if value.Valid {
+				_m.DailyResetCount = value.Int64
+			}
+		case usersubscription.FieldWeeklyResetCount:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field weekly_reset_count", values[i])
+			} else if value.Valid {
+				_m.WeeklyResetCount = value.Int64
+			}
+		case usersubscription.FieldMonthlyResetCount:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field monthly_reset_count", values[i])
+			} else if value.Valid {
+				_m.MonthlyResetCount = value.Int64
+			}
+		case usersubscription.FieldResetCountedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field reset_counted_at", values[i])
+			} else if value.Valid {
+				_m.ResetCountedAt = value.Time
 			}
 		case usersubscription.FieldAssignedBy:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -414,6 +446,18 @@ func (_m *UserSubscription) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("monthly_usage_usd=")
 	builder.WriteString(fmt.Sprintf("%v", _m.MonthlyUsageUsd))
+	builder.WriteString(", ")
+	builder.WriteString("daily_reset_count=")
+	builder.WriteString(fmt.Sprintf("%v", _m.DailyResetCount))
+	builder.WriteString(", ")
+	builder.WriteString("weekly_reset_count=")
+	builder.WriteString(fmt.Sprintf("%v", _m.WeeklyResetCount))
+	builder.WriteString(", ")
+	builder.WriteString("monthly_reset_count=")
+	builder.WriteString(fmt.Sprintf("%v", _m.MonthlyResetCount))
+	builder.WriteString(", ")
+	builder.WriteString("reset_counted_at=")
+	builder.WriteString(_m.ResetCountedAt.Format(time.ANSIC))
 	builder.WriteString(", ")
 	if v := _m.AssignedBy; v != nil {
 		builder.WriteString("assigned_by=")

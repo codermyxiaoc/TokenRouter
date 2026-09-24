@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
@@ -37,8 +38,71 @@ type GroupAvailabilityProbeRunnerService struct {
 	cron          *cron.Cron
 	lastCleanupAt time.Time
 	runMu         sync.Mutex
+	manualMu      sync.Mutex
+	manualRunning int
 	startOnce     sync.Once
 	stopOnce      sync.Once
+}
+
+// RunOnce 原子保存配置后执行一次探测；无论成功失败都写入渠道可用性，手动调用不追加重试。
+func (s *GroupAvailabilityProbeRunnerService) RunOnce(ctx context.Context, groupID int64, config GroupAvailabilityProbeConfig) (*GroupAvailabilityProbeResult, error) {
+	if s == nil || s.repo == nil || s.accountTestSvc == nil {
+		return nil, infraerrors.ServiceUnavailable("GROUP_AVAILABILITY_PROBE_UNAVAILABLE", "Availability probe service is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !config.Enabled {
+		return nil, infraerrors.BadRequest(invalidGroupAvailabilityProbeConfigReason, "Enable availability probing before testing")
+	}
+	config, err := normalizeGroupAvailabilityProbeConfigForAdminWrite(config)
+	if err != nil {
+		return nil, err
+	}
+	// 除分组级数据库租约外，限制管理员并行探测总数，避免跨分组点击耗尽实例资源。
+	s.manualMu.Lock()
+	if s.manualRunning >= groupAvailabilityProbeDefaultMaxWorkers {
+		s.manualMu.Unlock()
+		return nil, infraerrors.Conflict("GROUP_AVAILABILITY_PROBE_BUSY", "Availability probes are busy; please try again later")
+	}
+	s.manualRunning++
+	s.manualMu.Unlock()
+	defer func() {
+		s.manualMu.Lock()
+		s.manualRunning--
+		s.manualMu.Unlock()
+	}()
+	now := time.Now()
+	claimCtx, cancelClaim := context.WithTimeout(ctx, 10*time.Second)
+	due, err := s.repo.ClaimGroup(claimCtx, groupID, config, now, now.Add(time.Duration(maxGroupAvailabilityProbeTimeoutSeconds)*time.Second+time.Minute), s.instanceID)
+	cancelClaim()
+	if err != nil {
+		return nil, err
+	}
+	if due == nil {
+		return nil, infraerrors.Conflict("GROUP_AVAILABILITY_PROBE_BUSY", "This group is already being tested or is no longer enabled")
+	}
+	// 领取后独立完成有界测试及保存，关闭弹窗或客户端断连不能丢掉已经发生的探测。
+	probeConfig, configErr := normalizeGroupAvailabilityProbeConfig(due.Config)
+	var result *GroupAvailabilityProbeResult
+	if configErr != nil {
+		result = &GroupAvailabilityProbeResult{GroupID: groupID, ModelID: due.Config.ModelID, Protocol: due.Config.Protocol,
+			Status: GroupAvailabilityProbeStatusFailed, ErrorMessage: configErr.Error(), StartedAt: now, FinishedAt: time.Now()}
+	} else {
+		attemptCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(probeConfig.TimeoutSeconds)*time.Second)
+		result = s.runProbeAttempt(attemptCtx, *due, probeConfig)
+		cancel()
+	}
+	interval := probeConfig.IntervalMinutes
+	if interval <= 0 {
+		interval = defaultGroupAvailabilityProbeIntervalMinutes
+	}
+	saveCtx, cancelSave := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelSave()
+	if err := s.repo.SaveResultAndScheduleNext(saveCtx, result, time.Now().Add(time.Duration(interval)*time.Minute)); err != nil {
+		return nil, fmt.Errorf("save manual availability probe result: %w", err)
+	}
+	return result, nil
 }
 
 func NewGroupAvailabilityProbeRunnerService(
@@ -230,6 +294,7 @@ func (s *GroupAvailabilityProbeRunnerService) runProbeAttempt(ctx context.Contex
 		return &GroupAvailabilityProbeResult{
 			GroupID:      due.GroupID,
 			ModelID:      probeConfig.ModelID,
+			Protocol:     probeConfig.Protocol,
 			Status:       GroupAvailabilityProbeStatusFailed,
 			Success:      false,
 			LatencyMs:    finishedAt.Sub(startedAt).Milliseconds(),
@@ -239,12 +304,13 @@ func (s *GroupAvailabilityProbeRunnerService) runProbeAttempt(ctx context.Contex
 		}
 	}
 
-	result, err := s.accountTestSvc.RunTestBackgroundWithPromptAndUserAgent(ctx, account.ID, probeConfig.ModelID, probeConfig.Prompt, probeConfig.UserAgent)
+	result, err := s.accountTestSvc.RunTestBackgroundWithPromptAndUserAgentAndProtocol(ctx, account.ID, probeConfig.ModelID, probeConfig.Prompt, probeConfig.UserAgent, probeConfig.Protocol)
 	finishedAt := time.Now()
 	probeResult := &GroupAvailabilityProbeResult{
 		GroupID:    due.GroupID,
 		AccountID:  &account.ID,
 		ModelID:    probeConfig.ModelID,
+		Protocol:   probeConfig.Protocol,
 		Status:     GroupAvailabilityProbeStatusSuccess,
 		Success:    true,
 		LatencyMs:  finishedAt.Sub(startedAt).Milliseconds(),

@@ -80,13 +80,15 @@ Antigravity 账号 `extra.mixed_scheduling` 为布尔 `true` 时，可以作为 
 
 账号的混合调度状态或分组关系变化后要重建原生平台和 Antigravity 相关调度快照，清理旧粘性状态。Anthropic 与 Antigravity Claude 不能在同一显式会话里无约束切换；会话隔离、粘性和缓存计费规则用于防止上下文跨账号语义漂移。
 
+Gemini 混合分组的账号目录纳入开启混合调度的 Antigravity 账号，但只展示其 Gemini 模型，不混入 Claude 模型。Antigravity 系统提示只规范化开头固定的 Claude Agent SDK/Claude Code 身份句，不重写用户正文；tuple schema 的 `prefixItems` 被转换为 Gemini 支持的 `items`，并递归规范化对象属性、联合类型和数组。
+
 客户端函数工具与内置搜索/执行工具混合时，只保留客户端函数，移除不兼容的内置工具；纯搜索请求仍保留搜索能力。兼容入口不因已经移除的搜索工具再切换搜索 fallback 模型。本次工具清理步骤保留收到的未知字段和数字精度；没有混合冲突时该步骤原样返回。这不是整条原生转换链均不重新编码的承诺。
 
 ## 模型与额度
 
 Antigravity 同时提供 Claude 与 Gemini 模型族。Gemini 3.6、3.7、3.8 Flash 的基础、high、low、medium 与 tiered 五种模型 ID 均进入默认模型目录和身份映射；账号存在自定义映射时，只要没有覆盖它们的通配符，这些精确直通映射仍会自动保留。
 
-原生 Gemini 请求使用裸模型名时，网关按 `generationConfig.thinkingConfig.thinkingLevel` 或 `thinkingBudget` 选择账号映射中存在的思考变体；缺省配置按 `high` 选择。首选档位不可用时依次尝试 `high`、`medium`、`low`、`tiered`，不重复尝试首选项。管理员配置的精确映射和命中的通配符映射始终优先，包括显式原样透传；运行时自动补齐的裸名自映射不视为管理员的显式选择。请求已有思考后缀时保持常规模型映射，找不到任何变体也回到既有映射流程。
+裸 Gemini 模型通过统一最终模型解析器处理：原生请求使用 `generationConfig.thinkingConfig.thinkingLevel` 或 `thinkingBudget` 选择账号映射中存在的思考变体；Messages/OpenAI 兼容请求根据转换后的 `thinking.budget_tokens` 使用同一档位规则，缺省配置按 `high` 选择。调度上下文和重试冷却键保存相同档位，避免实际请求与限流 scope 不一致。首选档位不可用时依次尝试 `high`、`medium`、`low`、`tiered`，不重复尝试首选项。管理员配置的精确映射和命中的通配符映射始终优先，包括显式原样透传；运行时自动补齐的裸名自映射不视为管理员的显式选择。请求已有思考后缀时保持常规模型映射，找不到任何变体也回到既有映射流程。
 
 可见模型来自默认映射、分组/渠道限制、账号资格和当前可请求解析；API Key 精确别名可投影到列表，目标不可请求时不展示。模型能力不能只由名称前缀推断，thinking/image 等能力由适配器与账号详情共同约束。
 

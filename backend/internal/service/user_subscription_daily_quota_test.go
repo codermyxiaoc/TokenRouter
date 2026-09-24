@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
@@ -19,11 +20,13 @@ type dailyResetTrackingUserSubRepo struct {
 	activateCalled     bool
 	lastActivation     SubscriptionWindowActivation
 	lastDailyStart     time.Time
+	lastActivationAt   time.Time
 }
 
-func (r *dailyResetTrackingUserSubRepo) ActivateWindows(_ context.Context, _ int64, _ time.Time, activation SubscriptionWindowActivation) error {
+func (r *dailyResetTrackingUserSubRepo) ActivateWindows(_ context.Context, _ int64, at time.Time, activation SubscriptionWindowActivation) error {
 	r.activateCalled = true
 	r.lastActivation = activation
+	r.lastActivationAt = at
 	return nil
 }
 
@@ -89,8 +92,8 @@ func TestAssignOrExtendSubscription_ExpiredDailyCardStartsNewOneTimeQuota(t *tes
 }
 
 func TestUserSubscriptionNeedsDailyReset_DailyCardKeepsOneTimeQuota(t *testing.T) {
-	start := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
-	dailyWindowStart := time.Date(2026, 5, 18, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 5, 18, 12, 0, 0, 0, timezone.Location())
+	dailyWindowStart := time.Date(2026, 5, 18, 0, 0, 0, 0, timezone.Location())
 	sub := &UserSubscription{
 		StartsAt:         start,
 		ExpiresAt:        start.Add(24 * time.Hour),
@@ -103,8 +106,8 @@ func TestUserSubscriptionNeedsDailyReset_DailyCardKeepsOneTimeQuota(t *testing.T
 }
 
 func TestUserSubscriptionNeedsDailyReset_MultiDaySubscriptionStillRefreshes(t *testing.T) {
-	start := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
-	dailyWindowStart := time.Date(2026, 5, 18, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 5, 18, 12, 0, 0, 0, timezone.Location())
+	dailyWindowStart := time.Date(2026, 5, 18, 0, 0, 0, 0, timezone.Location())
 	sub := &UserSubscription{
 		StartsAt:         start,
 		ExpiresAt:        start.AddDate(0, 0, 2),
@@ -128,25 +131,26 @@ func TestUserSubscriptionNeedsDailyReset_LegacyAnchorHealsAtNextMidnight(t *test
 	require.True(t, sub.NeedsDailyResetAt(base.AddDate(0, 0, 1).Add(time.Minute)), "旧的非零点锚点应在下一个零点后自愈")
 }
 
-func TestUserSubscriptionNeedsDailyReset_SkipsExpiryTailWindow(t *testing.T) {
-	start := time.Date(2026, 4, 30, 8, 0, 0, 0, time.UTC)
-	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, time.UTC)
-	dailyWindowStart := time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
-	now := time.Date(2026, 5, 30, 0, 5, 0, 0, time.UTC)
+func TestUserSubscriptionNeedsDailyReset_AllowsExpiryTailWindow(t *testing.T) {
+	start := time.Date(2026, 4, 30, 8, 0, 0, 0, timezone.Location())
+	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, timezone.Location())
+	dailyWindowStart := time.Date(2026, 5, 29, 0, 0, 0, 0, timezone.Location())
+	now := time.Date(2026, 5, 30, 0, 5, 0, 0, timezone.Location())
 	sub := &UserSubscription{
 		StartsAt:         start,
 		ExpiresAt:        expiresAt,
 		DailyWindowStart: &dailyWindowStart,
 	}
 
-	require.False(t, sub.NeedsDailyResetAt(now), "到期当天不足完整日窗口时不应额外刷新 daily usage")
+	require.True(t, sub.NeedsDailyResetAt(now), "下一日零点早于到期即可刷新，不要求剩余完整一天")
+	require.False(t, sub.NeedsDailyResetAt(expiresAt), "到期时刻不再刷新日额度")
 }
 
-func TestUserSubscriptionNeedsDailyReset_ExpiryTailUsesFiniteOuterLimit(t *testing.T) {
-	start := time.Date(2026, 4, 30, 8, 0, 0, 0, time.UTC)
-	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, time.UTC)
-	dailyWindowStart := time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
-	now := time.Date(2026, 5, 30, 0, 5, 0, 0, time.UTC)
+func TestUserSubscriptionNeedsDailyReset_ExpiryTailDoesNotDependOnOuterLimit(t *testing.T) {
+	start := time.Date(2026, 4, 30, 8, 0, 0, 0, timezone.Location())
+	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, timezone.Location())
+	dailyWindowStart := time.Date(2026, 5, 29, 0, 0, 0, 0, timezone.Location())
+	now := time.Date(2026, 5, 30, 0, 5, 0, 0, timezone.Location())
 	dailyLimit := 10.0
 	outerLimit := 100.0
 	unlimited := 0.0
@@ -159,8 +163,8 @@ func TestUserSubscriptionNeedsDailyReset_ExpiryTailUsesFiniteOuterLimit(t *testi
 	}{
 		{name: "有限周额度", weeklyLimit: &outerLimit, want: true},
 		{name: "有限月额度", monthlyLimit: &outerLimit, want: true},
-		{name: "零值周额度", weeklyLimit: &unlimited, want: false},
-		{name: "没有外层额度", want: false},
+		{name: "零值周额度", weeklyLimit: &unlimited, want: true},
+		{name: "没有外层额度", want: true},
 	}
 
 	for _, tt := range tests {
@@ -179,11 +183,11 @@ func TestUserSubscriptionNeedsDailyReset_ExpiryTailUsesFiniteOuterLimit(t *testi
 	}
 }
 
-func TestUserSubscriptionNeedsWeeklyReset_ExpiryTailUsesFiniteMonthlyLimit(t *testing.T) {
-	start := time.Date(2026, 4, 30, 8, 0, 0, 0, time.UTC)
-	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, time.UTC)
-	weeklyWindowStart := time.Date(2026, 5, 23, 0, 0, 0, 0, time.UTC)
-	now := time.Date(2026, 5, 30, 0, 5, 0, 0, time.UTC)
+func TestUserSubscriptionNeedsWeeklyReset_ExpiryTailDoesNotDependOnMonthlyLimit(t *testing.T) {
+	start := time.Date(2026, 4, 30, 8, 0, 0, 0, timezone.Location())
+	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, timezone.Location())
+	weeklyWindowStart := time.Date(2026, 5, 23, 0, 0, 0, 0, timezone.Location())
+	now := time.Date(2026, 5, 30, 0, 5, 0, 0, timezone.Location())
 	weeklyLimit := 50.0
 	monthlyLimit := 100.0
 	sub := &UserSubscription{
@@ -194,14 +198,15 @@ func TestUserSubscriptionNeedsWeeklyReset_ExpiryTailUsesFiniteMonthlyLimit(t *te
 		MonthlyLimitUSD:   &monthlyLimit,
 	}
 
-	require.True(t, sub.NeedsWeeklyResetAt(now), "有限月额度应允许周额度在订阅尾段刷新")
+	require.True(t, sub.NeedsWeeklyResetAt(now), "周重置点早于到期即可刷新")
 	sub.MonthlyLimitUSD = nil
-	require.False(t, sub.NeedsWeeklyResetAt(now), "周额度没有外层保护时仍须容纳完整周窗口")
+	require.True(t, sub.NeedsWeeklyResetAt(now), "周额度尾段刷新不要求额外月额度")
+	require.False(t, sub.NeedsWeeklyResetAt(expiresAt))
 }
 
 func TestUserSubscriptionNeedsDailyReset_DailyCardIgnoresFiniteOuterLimit(t *testing.T) {
-	start := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
-	dailyWindowStart := time.Date(2026, 5, 30, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 5, 30, 12, 0, 0, 0, timezone.Location())
+	dailyWindowStart := time.Date(2026, 5, 30, 0, 0, 0, 0, timezone.Location())
 	dailyLimit := 10.0
 	monthlyLimit := 100.0
 	sub := &UserSubscription{
@@ -212,26 +217,27 @@ func TestUserSubscriptionNeedsDailyReset_DailyCardIgnoresFiniteOuterLimit(t *tes
 		MonthlyLimitUSD:  &monthlyLimit,
 	}
 
-	require.False(t, sub.NeedsDailyResetAt(time.Date(2026, 5, 31, 0, 5, 0, 0, time.UTC)), "1 日卡始终只有一份日额度")
+	require.False(t, sub.NeedsDailyResetAt(time.Date(2026, 5, 31, 0, 5, 0, 0, timezone.Location())), "1 日卡始终只有一份日额度")
 }
 
-func TestUserSubscriptionNeedsMonthlyReset_SkipsExpiryTailWindow(t *testing.T) {
-	start := time.Date(2026, 4, 30, 8, 0, 0, 0, time.UTC)
-	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, time.UTC)
-	monthlyWindowStart := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)
-	now := time.Date(2026, 5, 30, 0, 5, 0, 0, time.UTC)
+func TestUserSubscriptionNeedsMonthlyReset_AllowsExpiryTailWindow(t *testing.T) {
+	start := time.Date(2026, 3, 30, 8, 0, 0, 0, timezone.Location())
+	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, timezone.Location())
+	monthlyWindowStart := time.Date(2026, 4, 30, 0, 0, 0, 0, timezone.Location())
+	now := time.Date(2026, 5, 30, 0, 5, 0, 0, timezone.Location())
 	sub := &UserSubscription{
 		StartsAt:           start,
 		ExpiresAt:          expiresAt,
 		MonthlyWindowStart: &monthlyWindowStart,
 	}
 
-	require.False(t, sub.NeedsMonthlyResetAt(now), "到期当天不足完整月窗口时不应额外刷新 monthly usage")
+	require.True(t, sub.NeedsMonthlyResetAt(now), "月重置点早于到期即可刷新，不要求剩余完整月窗口")
+	require.False(t, sub.NeedsMonthlyResetAt(expiresAt))
 }
 
 func TestUserSubscriptionDailyResetTime_DailyCardReturnsExpiry(t *testing.T) {
-	start := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
-	dailyWindowStart := time.Date(2026, 5, 18, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 5, 18, 12, 0, 0, 0, timezone.Location())
+	dailyWindowStart := time.Date(2026, 5, 18, 0, 0, 0, 0, timezone.Location())
 	expiresAt := start.Add(24 * time.Hour)
 	sub := &UserSubscription{
 		StartsAt:         start,
@@ -258,10 +264,10 @@ func TestUserSubscriptionDailyResetTime_LegacyAnchorReturnsNextMidnight(t *testi
 	require.Equal(t, base.AddDate(0, 0, 1), *resetAt, "旧的非零点锚点应展示其所在日的下一个零点")
 }
 
-func TestUserSubscriptionMonthlyResetTime_TailWindowReturnsExpiry(t *testing.T) {
-	start := time.Date(2026, 4, 30, 8, 0, 0, 0, time.UTC)
-	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, time.UTC)
-	monthlyWindowStart := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)
+func TestUserSubscriptionMonthlyResetTime_TailWindowReturnsNextReset(t *testing.T) {
+	start := time.Date(2026, 3, 30, 8, 0, 0, 0, timezone.Location())
+	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, timezone.Location())
+	monthlyWindowStart := time.Date(2026, 4, 30, 0, 0, 0, 0, timezone.Location())
 	sub := &UserSubscription{
 		StartsAt:           start,
 		ExpiresAt:          expiresAt,
@@ -270,13 +276,13 @@ func TestUserSubscriptionMonthlyResetTime_TailWindowReturnsExpiry(t *testing.T) 
 
 	resetAt := sub.MonthlyResetTime()
 	require.NotNil(t, resetAt)
-	require.Equal(t, expiresAt, *resetAt, "到期尾段展示的月额度结束时间应为订阅过期时间")
+	require.Equal(t, monthlyWindowStart.Add(subscriptionMonthlyWindow), *resetAt, "到期尾段仍展示原月锚点对应的重置时间")
 }
 
 func TestUserSubscriptionDailyResetTime_TailWindowUsesFiniteMonthlyLimit(t *testing.T) {
-	start := time.Date(2026, 4, 30, 8, 0, 0, 0, time.UTC)
-	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, time.UTC)
-	dailyWindowStart := time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 4, 30, 8, 0, 0, 0, timezone.Location())
+	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, timezone.Location())
+	dailyWindowStart := time.Date(2026, 5, 29, 0, 0, 0, 0, timezone.Location())
 	monthlyLimit := 100.0
 	sub := &UserSubscription{
 		StartsAt:         start,
@@ -287,7 +293,7 @@ func TestUserSubscriptionDailyResetTime_TailWindowUsesFiniteMonthlyLimit(t *test
 
 	resetAt := sub.DailyResetTime()
 	require.NotNil(t, resetAt)
-	require.Equal(t, dailyWindowStart.Add(subscriptionDailyWindow), *resetAt, "有限月额度保护下应展示尾段日窗口的实际刷新时间")
+	require.Equal(t, dailyWindowStart.AddDate(0, 0, 1), *resetAt, "尾段仍展示项目时区下一日零点")
 }
 
 func TestCheckAndResetWindows_DailyCardDoesNotResetDailyUsage(t *testing.T) {
@@ -361,10 +367,10 @@ func TestCheckAndResetWindows_LegacyDailyAnchorHealsToMidnight(t *testing.T) {
 	require.Zero(t, sub.DailyUsageUSD)
 }
 
-func TestCheckAndResetWindows_ExpiryTailDoesNotResetMonthlyUsage(t *testing.T) {
-	start := time.Date(2026, 4, 30, 8, 0, 0, 0, time.UTC)
-	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, time.UTC)
-	monthlyWindowStart := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)
+func TestCheckAndResetWindows_ExpiryTailResetsMonthlyUsageAtScheduledTime(t *testing.T) {
+	start := time.Date(2026, 3, 30, 8, 0, 0, 0, timezone.Location())
+	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, timezone.Location())
+	monthlyWindowStart := time.Date(2026, 4, 30, 0, 0, 0, 0, timezone.Location())
 	repo := &dailyResetTrackingUserSubRepo{}
 	svc := NewSubscriptionService(groupRepoNoop{}, repo, nil, nil, nil)
 	sub := &UserSubscription{
@@ -377,48 +383,59 @@ func TestCheckAndResetWindows_ExpiryTailDoesNotResetMonthlyUsage(t *testing.T) {
 		MonthlyWindowStart: &monthlyWindowStart,
 	}
 
-	err := svc.CheckAndResetWindows(context.Background(), sub)
+	now := time.Date(2026, 5, 30, 0, 5, 0, 0, timezone.Location())
+	err := svc.checkAndResetWindowsAt(context.Background(), sub, now)
 
 	require.NoError(t, err)
-	require.False(t, repo.resetMonthlyCalled, "到期尾段不应重置 monthly usage")
-	require.Equal(t, 10.0, sub.MonthlyUsageUSD)
+	require.True(t, repo.resetMonthlyCalled, "到期前已经到达的月重置点应刷新额度")
+	require.Zero(t, sub.MonthlyUsageUSD)
+	require.Equal(t, monthlyWindowStart.Add(subscriptionMonthlyWindow), *sub.MonthlyWindowStart)
 }
 
-func TestValidateAndCheckLimits_ExpiryTailMissingWindowDoesNotNeedActivation(t *testing.T) {
-	now := time.Now()
-	monthlyLimit := 100.0
-	sub := &UserSubscription{
-		Status:          SubscriptionStatusActive,
-		StartsAt:        now.AddDate(0, 0, -29),
-		ExpiresAt:       now.Add(2 * time.Hour),
-		MonthlyLimitUSD: &monthlyLimit,
-		MonthlyUsageUSD: 90,
-	}
-	svc := NewSubscriptionService(groupRepoNoop{}, userSubRepoNoop{}, nil, nil, nil)
+func TestValidateAndCheckLimits_ExpiryTailMissingWindowNeedsActivation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Now()
+		monthlyLimit := 100.0
+		sub := &UserSubscription{
+			Status:          SubscriptionStatusActive,
+			StartsAt:        now.AddDate(0, 0, -29),
+			ExpiresAt:       now.Add(2 * time.Hour),
+			MonthlyLimitUSD: &monthlyLimit,
+			MonthlyUsageUSD: 90,
+		}
+		svc := NewSubscriptionService(groupRepoNoop{}, userSubRepoNoop{}, nil, nil, nil)
 
-	needsMaintenance, err := svc.ValidateAndCheckLimits(sub, nil)
+		needsMaintenance, err := svc.ValidateAndCheckLimits(sub, nil)
 
-	require.NoError(t, err)
-	require.False(t, needsMaintenance, "到期尾段不足完整月窗口时不应激活空窗口")
+		require.NoError(t, err)
+		require.True(t, needsMaintenance, "订阅生效期间的空月窗口应激活，不要求完整剩余周期")
+		require.Equal(t, 90.0, sub.MonthlyUsageUSD, "首次补齐窗口不能清除历史用量")
+	})
 }
 
-func TestDoWindowMaintenance_ExpiryTailMissingWindowDoesNotActivate(t *testing.T) {
-	now := time.Now()
-	monthlyLimit := 100.0
-	repo := &dailyResetTrackingUserSubRepo{}
-	svc := NewSubscriptionService(groupRepoNoop{}, repo, nil, nil, nil)
-	sub := &UserSubscription{
-		ID:              1,
-		Status:          SubscriptionStatusActive,
-		StartsAt:        now.AddDate(0, 0, -29),
-		ExpiresAt:       now.Add(2 * time.Hour),
-		MonthlyLimitUSD: &monthlyLimit,
-		MonthlyUsageUSD: 90,
-	}
+func TestDoWindowMaintenance_ExpiryTailMissingWindowActivatesWithoutClearingUsage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Now()
+		monthlyLimit := 100.0
+		repo := &dailyResetTrackingUserSubRepo{}
+		svc := NewSubscriptionService(groupRepoNoop{}, repo, nil, nil, nil)
+		sub := &UserSubscription{
+			ID:              1,
+			Status:          SubscriptionStatusActive,
+			StartsAt:        now.AddDate(0, 0, -29),
+			ExpiresAt:       now.Add(2 * time.Hour),
+			MonthlyLimitUSD: &monthlyLimit,
+			MonthlyUsageUSD: 90,
+		}
 
-	svc.DoWindowMaintenance(sub)
+		svc.DoWindowMaintenance(sub)
 
-	require.False(t, repo.activateCalled, "到期尾段不足完整月窗口时不应写入新的窗口起点")
+		require.True(t, repo.activateCalled, "生效尾段也应首次建立月窗口")
+		require.True(t, repo.lastActivation.Monthly)
+		require.Equal(t, now, repo.lastActivationAt, "周/月首次激活使用当前实际时间")
+		require.False(t, repo.resetMonthlyCalled)
+		require.Equal(t, 90.0, sub.MonthlyUsageUSD)
+	})
 }
 
 func TestDoWindowMaintenance_MissingDailyCardWindowStillActivates(t *testing.T) {
@@ -442,8 +459,8 @@ func TestDoWindowMaintenance_MissingDailyCardWindowStillActivates(t *testing.T) 
 	require.False(t, repo.lastActivation.Monthly)
 }
 
-func TestUserSubscriptionWindowActivation_MixedDailyMonthlyTailActivatesOnlyDaily(t *testing.T) {
-	now := time.Date(2026, 5, 30, 0, 5, 0, 0, time.UTC)
+func TestUserSubscriptionWindowActivation_MixedDailyMonthlyTailActivatesBoth(t *testing.T) {
+	now := time.Date(2026, 5, 30, 0, 5, 0, 0, timezone.Location())
 	dailyLimit := 10.0
 	monthlyLimit := 100.0
 	sub := &UserSubscription{
@@ -458,13 +475,13 @@ func TestUserSubscriptionWindowActivation_MixedDailyMonthlyTailActivatesOnlyDail
 
 	activation := sub.WindowActivationAt(now)
 
-	require.True(t, activation.Daily, "有限月额度存在时，到期尾段应激活日额度窗口")
+	require.True(t, activation.Daily, "生效尾段仍应激活日额度窗口")
 	require.False(t, activation.Weekly)
-	require.False(t, activation.Monthly, "不足完整月窗口时不应顺带激活月额度窗口")
+	require.True(t, activation.Monthly, "空月窗口也应激活，不受剩余周期长度限制")
 }
 
-func TestUserSubscriptionWindowActivation_MixedWeeklyMonthlyTailActivatesOnlyWeekly(t *testing.T) {
-	now := time.Date(2026, 5, 30, 0, 5, 0, 0, time.UTC)
+func TestUserSubscriptionWindowActivation_MixedWeeklyMonthlyTailActivatesBoth(t *testing.T) {
+	now := time.Date(2026, 5, 30, 0, 5, 0, 0, timezone.Location())
 	weeklyLimit := 50.0
 	monthlyLimit := 100.0
 	sub := &UserSubscription{
@@ -480,8 +497,8 @@ func TestUserSubscriptionWindowActivation_MixedWeeklyMonthlyTailActivatesOnlyWee
 	activation := sub.WindowActivationAt(now)
 
 	require.False(t, activation.Daily)
-	require.True(t, activation.Weekly, "有限月额度存在时，到期尾段应激活周额度窗口")
-	require.False(t, activation.Monthly, "月额度没有更高层保护，不应在尾段激活")
+	require.True(t, activation.Weekly, "生效尾段仍应激活周额度窗口")
+	require.True(t, activation.Monthly, "空月窗口也应激活，不受外层额度限制")
 }
 
 func TestCheckEffectiveSubscriptionEligibility_DailyTailUsesFiniteMonthlyLimit(t *testing.T) {

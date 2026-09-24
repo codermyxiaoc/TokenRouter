@@ -97,14 +97,18 @@ type Config struct {
 	UsageCleanup            UsageCleanupConfig            `mapstructure:"usage_cleanup"`
 	Concurrency             ConcurrencyConfig             `mapstructure:"concurrency"`
 	TokenRefresh            TokenRefreshConfig            `mapstructure:"token_refresh"`
-	RunMode                 string                        `mapstructure:"run_mode" yaml:"run_mode"`
-	Timezone                string                        `mapstructure:"timezone"` // e.g. "Asia/Shanghai", "UTC"
-	Gemini                  GeminiConfig                  `mapstructure:"gemini"`
-	Update                  UpdateConfig                  `mapstructure:"update"`
-	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
-	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
-	Creative                CreativeConfig                `mapstructure:"creative"`
-	Team                    TeamConfig                    `mapstructure:"team"`
+	SimpleMode              SimpleModeConfig              `mapstructure:"simple_mode" yaml:"simple_mode"`
+	// 简易模式可独立开启密钥额度窗口，默认关闭。
+	SimpleModeKeyRateLimitEnabled bool               `mapstructure:"simple_mode_key_rate_limit_enabled" yaml:"simple_mode_key_rate_limit_enabled"`
+	RunMode                       string             `mapstructure:"run_mode" yaml:"run_mode"`
+	Timezone                      string             `mapstructure:"timezone"` // e.g. "Asia/Shanghai", "UTC"
+	Gemini                        GeminiConfig       `mapstructure:"gemini"`
+	Update                        UpdateConfig       `mapstructure:"update"`
+	Idempotency                   IdempotencyConfig  `mapstructure:"idempotency"`
+	ImageStorage                  ImageStorageConfig `mapstructure:"image_storage"`
+	BatchImage                    BatchImageConfig   `mapstructure:"batch_image"`
+	Creative                      CreativeConfig     `mapstructure:"creative"`
+	Team                          TeamConfig         `mapstructure:"team"`
 }
 
 // TeamConfig 控制团队功能的默认开放策略。
@@ -112,6 +116,11 @@ type TeamConfig struct {
 	Enabled            bool `mapstructure:"enabled"`
 	SelfServiceEnabled bool `mapstructure:"self_service_enabled"`
 	DefaultMemberLimit int  `mapstructure:"default_member_limit"`
+}
+
+// SimpleModeConfig 控制简易模式启动行为。
+type SimpleModeConfig struct {
+	AutoCreateDefaultGroups bool `mapstructure:"auto_create_default_groups" yaml:"auto_create_default_groups"`
 }
 
 // PluginConfig 控制管理员手动上传的本地进程插件。
@@ -2001,6 +2010,8 @@ func configureConfigSource(setConfigFile, addConfigPath func(string)) {
 
 func setDefaults() {
 	viper.SetDefault("run_mode", RunModeStandard)
+	viper.SetDefault("simple_mode.auto_create_default_groups", true)
+	viper.SetDefault("simple_mode_key_rate_limit_enabled", false)
 
 	// Server
 	viper.SetDefault("server.host", "0.0.0.0")
@@ -2205,6 +2216,19 @@ func setDefaults() {
 	viper.SetDefault("redis.enable_tls", false)
 
 	// Batch Image queue
+
+	// 异步图片对象存储默认关闭，注册所有环境变量键，避免纯环境配置漏读。
+	viper.SetDefault("image_storage.enabled", false)
+	viper.SetDefault("image_storage.region", "auto")
+	viper.SetDefault("image_storage.prefix", "images/")
+	viper.SetDefault("image_storage.force_path_style", false)
+	viper.SetDefault("image_storage.presign_expiry_hours", 24)
+	viper.SetDefault("image_storage.max_download_bytes", 33554432)
+	viper.SetDefault("image_storage.endpoint", "")
+	viper.SetDefault("image_storage.bucket", "")
+	viper.SetDefault("image_storage.access_key_id", "")
+	viper.SetDefault("image_storage.secret_access_key", "")
+	viper.SetDefault("image_storage.public_base_url", "")
 	viper.SetDefault("batch_image.enabled", false)
 	viper.SetDefault("batch_image.max_items_per_job_default", 200)
 	viper.SetDefault("batch_image.max_items_per_job_trial", 50)

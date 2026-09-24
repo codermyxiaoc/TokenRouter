@@ -18,6 +18,7 @@ import (
 
 // OpenAIOAuthHandler handles OpenAI OAuth-related operations
 type OpenAIOAuthHandler struct {
+	referralService    openAIReferralService
 	openaiOAuthService *service.OpenAIOAuthService
 	adminService       service.AdminService
 	quotaService       openAIQuotaService
@@ -52,6 +53,7 @@ type openAIQuotaResetResponse struct {
 }
 
 type openAIQuotaRefreshResponse struct {
+	CreditsCachePersisted bool `json:"credits_cache_persisted"`
 	service.OpenAIQuotaUsage
 	CachePersisted bool `json:"cache_persisted"`
 }
@@ -83,6 +85,7 @@ func NewOpenAIOAuthHandler(
 	// 接口字段不能直接保存带类型的 nil 指针，否则能力检查会误判为可用并触发 panic。
 	if quotaService != nil {
 		handler.quotaService = quotaService
+		handler.referralService = quotaService
 	}
 	if rateLimitService != nil {
 		handler.rateLimitService = rateLimitService
@@ -516,6 +519,14 @@ func (h *OpenAIOAuthHandler) RefreshQuota(c *gin.Context) {
 
 	refreshResponse := openAIQuotaRefreshResponse{OpenAIQuotaUsage: *usage}
 	// 快照写入失败属于部分成功：实时查询结果仍返回给前端，旧缓存保持不变。
+	// 积分余额与重置机会各自缓存，重置明细缺失不会丢掉本次积分观测。
+	creditsPersisted := true
+	if cacher, ok := h.quotaService.(interface {
+		CacheCreditsSnapshot(context.Context, int64, *service.OpenAIQuotaUsage) error
+	}); ok {
+		creditsPersisted = cacher.CacheCreditsSnapshot(c.Request.Context(), accountID, usage) == nil
+	}
+	refreshResponse.CreditsCachePersisted = creditsPersisted
 	if err := h.quotaService.CacheResetCreditsSnapshot(c.Request.Context(), accountID, usage.RateLimitResetCredits); err != nil {
 		slog.Warn("openai_quota_reset_credit_cache_persist_failed", "account_id", accountID, "error", err)
 		response.Success(c, refreshResponse)
@@ -585,6 +596,11 @@ func (h *OpenAIOAuthHandler) ResetQuota(c *gin.Context) {
 	}
 
 	resetResponse := openAIQuotaResetResponse{OpenAIQuotaResetResult: *result}
+	// 上游无次数或结果不明也可能返回 200；不能据此清除真实限流或伪造新额度。
+	if !result.Applied() {
+		response.Success(c, resetResponse)
+		return
+	}
 	postCtx, cancelPost := openAIQuotaResetPostProcessContext(c.Request.Context())
 	defer cancelPost()
 

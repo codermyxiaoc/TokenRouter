@@ -29,6 +29,20 @@ describe('插件管理菜单开关', () => {
     expect(store.pluginManagementEnabled).toBe(false)
   })
 
+  it('首次加载失败保留缓存，并允许普通 fetch 重试', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    localStorage.setItem('plugin_management_enabled_cached', 'true')
+    getSettings.mockRejectedValueOnce(new Error('temporary unavailable'))
+    const store = useAdminSettingsStore()
+    await store.fetch()
+    expect(store.loaded).toBe(false)
+    expect(store.pluginManagementEnabled).toBe(true)
+    await store.fetch()
+    expect(getSettings).toHaveBeenCalledTimes(2)
+    expect(store.loaded).toBe(true)
+    errorSpy.mockRestore()
+  })
+
   it('读取并刷新持久化开关，不调用任何插件启停接口', async () => {
     getSettings.mockResolvedValueOnce({ plugin_management_enabled: true })
     const store = useAdminSettingsStore()

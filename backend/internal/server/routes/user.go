@@ -28,6 +28,7 @@ func RegisterUserRoutes(
 	{
 		// 工单始终按当前登录用户隔离。
 		registerTicketRoutes(authenticated, h)
+		registerMediaTaskRoutes(authenticated, h, false)
 
 		// 用户接口
 		user := authenticated.Group("/user")

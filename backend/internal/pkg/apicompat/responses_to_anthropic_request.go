@@ -4,13 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 )
 
 // ResponsesToAnthropicRequest converts a Responses API request into an
 // Anthropic Messages request. This is the reverse of AnthropicToResponses and
 // enables Anthropic platform groups to accept OpenAI Responses API requests
 // by converting them to the native /v1/messages format before forwarding upstream.
-func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, error) {
+// upstreamModel 可传入账号映射后的型号，仅用于选择转换能力，不改写公开模型 ID。
+func ResponsesToAnthropicRequest(req *ResponsesRequest, upstreamModel ...string) (*AnthropicRequest, error) {
 	system, messages, err := convertResponsesInputToAnthropic(req.Instructions, req.Input)
 	if err != nil {
 		return nil, err
@@ -63,8 +66,14 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 		}
 		effort := mapResponsesEffortToAnthropic(req.Reasoning.Effort)
 		out.OutputConfig = &AnthropicOutputConfig{Effort: effort}
-		// Enable thinking for non-low efforts
-		if effort != "low" {
+		// 按账号映射后的实际型号决定思考协议，避免别名请求生成不受支持的手动预算。
+		thinkingModel := req.Model
+		if len(upstreamModel) > 0 && upstreamModel[0] != "" {
+			thinkingModel = upstreamModel[0]
+		}
+		if claude.IsOpus55Model(thinkingModel) {
+			out.Thinking = &AnthropicThinking{Type: "adaptive"}
+		} else if effort != "low" {
 			out.Thinking = &AnthropicThinking{
 				Type:         "enabled",
 				BudgetTokens: defaultThinkingBudget(effort),

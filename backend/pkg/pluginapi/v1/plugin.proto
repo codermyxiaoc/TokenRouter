@@ -196,7 +196,24 @@ message ListAccountsRequest {
 }
 
 message ListAccountsResponse {
+  // 保留 v1 插件使用的账号 ID，新插件可以读取结构化账号列表。
   repeated int64 account_ids = 1;
+  // v2 提供已授权范围内的运行状态；暂停账号仍可列出，停用和影子账号不列出。
+  repeated AccountInfo accounts = 2;
+}
+
+// 只读账号元数据不返回凭据、代理密码和任意扩展配置。
+message AccountInfo {
+  int64 id = 1;
+  string platform = 2;
+  string account_type = 3;
+  string name = 4;
+  string status = 5;
+  // 调度资格由宿主计算，插件无需重复实现限流和暂停规则。
+  bool schedulable = 6;
+  bool is_shadow = 7;
+  // 非敏感账号字段快照，不包含 Credentials、Extra、Proxy 或循环关联。
+  bytes metadata_json = 20;
 }
 
 message ResolveOutboundIdentityRequest {

@@ -339,6 +339,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		line = applyOllamaCloudRawChatCompletionsSSELine(account, line)
 		line = stripEmptyChatToolCallIdentityFromSSELine(line)
 
+		line = s.replaceModelInSSELine(line, upstreamModel, originalModel)
 		writeLine(line)
 		if line == "" {
 			if !clientDisconnected && clientOutputStarted {
@@ -518,6 +519,7 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		return nil, newGrokMissingUsageFailoverError(c, account, upstreamRequestID)
 	}
 	respBody = applyOllamaCloudRawChatCompletionsResponse(account, respBody)
+	respBody = s.replaceModelInResponseBody(respBody, upstreamModel, originalModel)
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

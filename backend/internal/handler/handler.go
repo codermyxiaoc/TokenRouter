@@ -62,6 +62,8 @@ type Handlers struct {
 	Passkey          *PasskeyHandler
 	Payment          *PaymentHandler
 	PaymentWebhook   *PaymentWebhookHandler
+	MediaTask        *MediaTaskHandler
+	AsyncImage       *AsyncImageHandler
 	BatchImage       *BatchImageHandler
 	Creative         *CreativeHandler
 	Team             *TeamHandler

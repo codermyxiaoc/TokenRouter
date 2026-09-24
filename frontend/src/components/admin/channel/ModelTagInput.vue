@@ -23,9 +23,9 @@
         type="text"
         class="flex-1 min-w-[120px] border-none bg-transparent text-sm outline-none placeholder:text-gray-400 dark:text-white"
         :placeholder="models.length === 0 ? placeholder : ''"
-        @keydown.enter.prevent="addModel"
-        @keydown.tab.prevent="addModel"
-        @keydown.delete="handleBackspace"
+        @keydown.enter="handleEnter"
+        @keydown.tab="handleTab"
+        @keydown.backspace="handleBackspace"
         @paste="handlePaste"
       />
     </div>
@@ -71,7 +71,21 @@ function removeModel(idx: number) {
   emit('update:models', newModels)
 }
 
-function handleBackspace() {
+// 输入法确认候选字时不新增标签，也不拦截其键盘操作。
+function handleEnter(event: KeyboardEvent) {
+  if (event.isComposing) return
+  event.preventDefault()
+  addModel()
+}
+
+function handleTab(event: KeyboardEvent) {
+  if (event.isComposing || !inputValue.value.trim()) return
+  event.preventDefault()
+  addModel()
+}
+
+function handleBackspace(event: KeyboardEvent) {
+  if (event.isComposing) return
   if (inputValue.value === '' && props.models.length > 0) {
     removeModel(props.models.length - 1)
   }

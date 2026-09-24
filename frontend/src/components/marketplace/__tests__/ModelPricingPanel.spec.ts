@@ -96,6 +96,15 @@ const unpricedPricing: MarketplaceModelPricing = {
 }
 
 describe('ModelPricingPanel', () => {
+  it('仅 token 价卡展示已配置推理倍率，按张价格不混入该倍率', async () => {
+    const wrapper = mountPanel(marketplaceModel('gpt-6-sol', { ...tokenPricing, reasoning_effort_multipliers: { high: 1.5, max: 3 } }))
+    await wrapper.get('[data-testid="model-pricing-toggle"]').trigger('click')
+    expect(wrapper.get('[data-testid="reasoning-effort-pricing"]').text()).toContain('1.5x')
+    expect(wrapper.get('[data-testid="reasoning-effort-pricing"]').text()).toContain('3x')
+    await wrapper.setProps({ model: marketplaceModel('gpt-image-2', { ...imagePricing, reasoning_effort_multipliers: { high: 1.5 } }) })
+    expect(wrapper.find('[data-testid="reasoning-effort-pricing"]').exists()).toBe(false)
+  })
+
   it('视频定价展示分辨率和真实计费单位，零价不消失', async () => {
     const wrapper = mountPanel(marketplaceModel('grok-imagine-video-1.5', {
       pricing_mode: 'video',

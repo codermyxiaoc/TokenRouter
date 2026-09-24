@@ -237,6 +237,62 @@ func TestOpenAIResetQuotaPostProcessingSurvivesClientCancellation(t *testing.T) 
 	require.NoError(t, quota.cacheCtxErr)
 }
 
+// 无消费与未知结果必须原样返回，不能清除账号限流、刷新为零用量或自动再次消费。
+func TestOpenAIResetQuotaUnconfirmedResultPreservesAccountState(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		code    string
+		windows int
+	}{
+		{"没有可用次数", "no_credit", 0},
+		{"无次数结果含矛盾窗口数", "no_credit", 1},
+		{"空响应", "", 0},
+		{"未知结果", "pending", 0},
+		{"未知结果含窗口数", "future_result", 1},
+		{"成功码未重置窗口", "reset", 0},
+		{"非法负数窗口", "success", -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			quota := successfulOpenAIQuotaWorkflowStub()
+			quota.resetResult = &service.OpenAIQuotaResetResult{Code: tc.code, WindowsReset: tc.windows}
+			recoverer := &openAIAccountStateRecovererStub{}
+			adminService := recoveredOpenAIAccountStub()
+			handler := &OpenAIOAuthHandler{adminService: adminService, quotaService: quota, rateLimitService: recoverer}
+			status, envelope := performOpenAIQuotaResetRequest(t, handler, nil)
+			require.Equal(t, http.StatusOK, status)
+			require.Equal(t, tc.code, envelope.Data.Code)
+			require.Equal(t, tc.windows, envelope.Data.WindowsReset)
+			require.False(t, envelope.Data.AccountStateRecovered)
+			require.False(t, envelope.Data.CacheRefreshed)
+			require.Nil(t, envelope.Data.Account)
+			require.Nil(t, envelope.Data.Quota)
+			require.Zero(t, recoverer.calls)
+			require.Zero(t, quota.queryCalls)
+			require.Zero(t, quota.cacheCalls)
+			require.Zero(t, adminService.calls)
+			require.Equal(t, 1, quota.resetCalls)
+		})
+	}
+}
+
+// 兼容已有上游返回及测试夹具中的三种明确成功码，保持原有状态恢复流程。
+func TestOpenAIResetQuotaAcceptsKnownAppliedResults(t *testing.T) {
+	for _, code := range []string{"reset", "success", "ok", " RESET "} {
+		t.Run(code, func(t *testing.T) {
+			quota := successfulOpenAIQuotaWorkflowStub()
+			quota.resetResult.Code = code
+			recoverer := &openAIAccountStateRecovererStub{}
+			handler := &OpenAIOAuthHandler{adminService: recoveredOpenAIAccountStub(), quotaService: quota, rateLimitService: recoverer}
+			status, envelope := performOpenAIQuotaResetRequest(t, handler, nil)
+			require.Equal(t, http.StatusOK, status)
+			require.True(t, envelope.Data.AccountStateRecovered)
+			require.True(t, envelope.Data.CacheRefreshed)
+			require.Equal(t, 1, recoverer.calls)
+			require.Equal(t, 1, quota.resetCalls)
+		})
+	}
+}
+
 func TestOpenAIRefreshQuotaPersistFailureStillReturnsUsage(t *testing.T) {
 	quota := successfulOpenAIQuotaWorkflowStub()
 	quota.queryResult = &service.OpenAIQuotaUsage{

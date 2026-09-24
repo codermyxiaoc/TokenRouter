@@ -38,7 +38,7 @@ func focusPersistedProgress(progress *service.SubscriptionProgress, kind string)
 	}
 }
 
-// 在独立 PostgreSQL 中依次检查临期禁用、管理延期、立即显示、真实持久化清零及并发旧快照保护。
+// 在独立 PostgreSQL 中检查临期激活、管理延期、真实窗口推进及并发旧快照保护。
 func TestSubscriptionFocus_PostgresExtensionResetLifecycle(t *testing.T) {
 	for _, window := range []struct {
 		kind string
@@ -53,8 +53,8 @@ func TestSubscriptionFocus_PostgresExtensionResetLifecycle(t *testing.T) {
 					plan := mustCreatePlan(t, client, &service.SubscriptionPlan{Name: "窗口专项", Price: 10, ValidityDays: 90, ValidityUnit: "day"})
 					now := time.Now().Truncate(time.Microsecond)
 					today := timezone.StartOfDay(now)
-					// 原到期时间在当天结束之前，日窗口也不再具备完整新周期。
-					expiry := today.AddDate(0, 0, 1).Add(-time.Microsecond)
+					// 即使剩余时长不足一个周期，只要订阅有效就应允许激活或推进已到点的窗口。
+					expiry := now.Add(time.Hour)
 					sub := &service.UserSubscription{UserID: user.ID, PlanID: plan.ID, StartsAt: today.AddDate(0, 0, -90), ExpiresAt: expiry}
 					switch window.kind {
 					case "daily":
@@ -64,7 +64,11 @@ func TestSubscriptionFocus_PostgresExtensionResetLifecycle(t *testing.T) {
 					default:
 						sub.MonthlyLimitUSD, sub.MonthlyUsageUSD = float64Ptr(10), 3
 					}
-					oldWindow := today.AddDate(0, 0, -window.days)
+					currentWindow := now.Add(-time.Hour)
+					if window.kind == "daily" {
+						currentWindow = today
+					}
+					oldWindow := currentWindow.AddDate(0, 0, -window.days*2)
 					if stale {
 						switch window.kind {
 						case "daily":
@@ -78,12 +82,23 @@ func TestSubscriptionFocus_PostgresExtensionResetLifecycle(t *testing.T) {
 					mustCreateSubscription(t, client, sub)
 					repo := NewUserSubscriptionRepository(client)
 					svc := service.NewSubscriptionService(nil, repo, nil, client, nil)
+					activationStarted := time.Now()
 					before, err := svc.EnsureWindowMaintenance(ctx, sub)
 					require.NoError(t, err)
+					activationFinished := time.Now()
 					beforeAnchor, beforeUsed := focusPersistedWindow(before, window.kind)
-					require.Equal(t, 3.0, beforeUsed)
-					if !stale {
-						require.Nil(t, beforeAnchor, "迁移遗留 NULL 窗口在原有效期内确实不能启动")
+					require.NotNil(t, beforeAnchor)
+					if stale {
+						require.Zero(t, beforeUsed, "已到点窗口无需等到有效期容纳下一完整周期才推进")
+						require.True(t, currentWindow.Equal(*beforeAnchor), "旧窗口应按整数周期推进，不能改为请求当日午夜")
+					} else {
+						require.Equal(t, 3.0, beforeUsed, "首次激活不能抹掉迁移记录的历史用量")
+						if window.kind == "daily" {
+							require.True(t, today.Equal(*beforeAnchor))
+						} else {
+							require.False(t, beforeAnchor.Before(activationStarted.Add(-time.Microsecond)))
+							require.False(t, beforeAnchor.After(activationFinished.Add(time.Microsecond)), "首次周、月窗口应锚定实际激活时刻")
+						}
 					}
 
 					var extended *service.UserSubscription
@@ -108,7 +123,7 @@ func TestSubscriptionFocus_PostgresExtensionResetLifecycle(t *testing.T) {
 					}
 					anchor, used := focusPersistedWindow(extended, window.kind)
 					require.NotNil(t, anchor)
-					require.True(t, today.Equal(*anchor))
+					require.True(t, beforeAnchor.Equal(*anchor), "延期不能重新锚定已经激活的窗口")
 					if stale {
 						require.Zero(t, used)
 					} else {
@@ -118,7 +133,7 @@ func TestSubscriptionFocus_PostgresExtensionResetLifecycle(t *testing.T) {
 					require.NoError(t, err)
 					visible := focusPersistedProgress(progress, window.kind)
 					require.NotNil(t, visible)
-					require.True(t, today.AddDate(0, 0, window.days).Equal(visible.ResetsAt))
+					require.True(t, anchor.AddDate(0, 0, window.days).Equal(visible.ResetsAt))
 					require.Greater(t, visible.ResetsInSeconds, int64(0))
 
 					// 仅移动本测试记录的窗口锚点，等价于走过完整周期，真实执行生产维护和条件 UPDATE。
@@ -130,7 +145,7 @@ func TestSubscriptionFocus_PostgresExtensionResetLifecycle(t *testing.T) {
 					require.NoError(t, err)
 					resetAnchor, resetUsed := focusPersistedWindow(reset, window.kind)
 					require.Zero(t, resetUsed, "到期窗口必须在 PostgreSQL 内实际清零")
-					require.True(t, resetAnchor.Equal(today))
+					require.True(t, resetAnchor.Equal(currentWindow))
 					require.True(t, reset.ExpiresAt.Equal(extended.ExpiresAt), "窗口重置不能改变订阅有效期")
 
 					// 新窗口已扣费后，60 个持有相同旧窗口的在途请求不能再清空这笔新消费。
@@ -262,15 +277,24 @@ func TestSubscriptionFocus_PostgresExtensionDoesNotEraseConcurrentConsumption(t 
 					t.Fatal("延期未进入受控事务交错点")
 				}
 				other := service.NewSubscriptionService(nil, repo, nil, client, nil)
-				_, err := other.AdminResetQuota(ctx, sub.ID, kind == "daily", kind == "weekly", kind == "monthly")
+				resetStarted := time.Now()
+				reset, err := other.AdminResetQuota(ctx, sub.ID, kind == "daily", kind == "weekly", kind == "monthly")
 				require.NoError(t, err)
+				resetAnchor, _ := focusPersistedWindow(reset, kind)
+				require.NotNil(t, resetAnchor)
+				if kind == "daily" {
+					require.True(t, resetAnchor.Equal(timezone.StartOfDay(resetStarted)))
+				} else {
+					require.False(t, resetAnchor.Before(resetStarted.Add(-time.Microsecond)))
+					require.False(t, resetAnchor.After(time.Now().Add(time.Microsecond)), "手动周、月重置应使用实际操作时刻")
+				}
 				require.NoError(t, other.RecordUsage(ctx, sub.ID, 4.25))
 				close(paused.resume)
 				require.NoError(t, <-finished)
 				final, err := repo.GetByID(ctx, sub.ID)
 				require.NoError(t, err)
 				anchor, used := focusPersistedWindow(final, kind)
-				require.True(t, anchor.Equal(timezone.StartOfDay(now)))
+				require.True(t, anchor.Equal(*resetAnchor), "延期必须保留并发手动重置已经写入的精确锚点")
 				require.Equal(t, 4.25, used, "延期时旧锚点 CAS 不匹配，必须保留新窗口已经实际产生的消费")
 			})
 		}
@@ -326,34 +350,33 @@ func TestSubscriptionFocus_PostgresExpiredExtensionRestoresEligibility(t *testin
 	}
 }
 
-// 追加一天跨过完整窗口阈值时，以 PostgreSQL 微秒精度核对“不足、恰好、超过”三个边界。
-func TestSubscriptionFocus_PostgresExtensionFullWindowBoundary(t *testing.T) {
+// 下一次重置早于到期时间就可以显示，以 PostgreSQL 微秒精度核对相等边界和精确周、月锚点。
+func TestSubscriptionFocus_PostgresExtensionNextResetBoundary(t *testing.T) {
 	for _, window := range []struct {
 		kind string
 		days int
 	}{{"weekly", 7}, {"monthly", 30}} {
 		for _, operation := range []string{"extend", "bulk_extend"} {
 			for _, delta := range []time.Duration{-time.Microsecond, 0, time.Microsecond} {
-				for _, stale := range []bool{false, true} {
-					t.Run(fmt.Sprintf("%s/%s/%s/stale_%v", window.kind, operation, delta, stale), func(t *testing.T) {
+				for _, preciseAnchor := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%s/%s/precise_%v", window.kind, operation, delta, preciseAnchor), func(t *testing.T) {
 						ctx := context.Background()
 						client := testEntClient(t)
 						user := mustCreateUser(t, client, &service.User{Email: "boundary-" + uuid.NewString() + "@example.invalid"})
-						plan := mustCreatePlan(t, client, &service.SubscriptionPlan{Name: "完整窗口边界", Price: 10})
-						today := timezone.StartOfDay(time.Now())
-						expires := today.AddDate(0, 0, window.days-1).Add(delta)
-						old := today.AddDate(0, 0, -window.days)
+						plan := mustCreatePlan(t, client, &service.SubscriptionPlan{Name: "下一重置边界", Price: 10})
+						now := time.Now().Truncate(time.Microsecond)
+						today := timezone.StartOfDay(now)
+						current := today
+						if preciseAnchor {
+							current = now.Add(-time.Hour)
+						}
+						nextReset := current.AddDate(0, 0, window.days)
+						expires := nextReset.AddDate(0, 0, -1).Add(delta)
 						sub := &service.UserSubscription{UserID: user.ID, PlanID: plan.ID, StartsAt: today.AddDate(0, 0, -90), ExpiresAt: expires, Status: service.SubscriptionStatusActive}
 						if window.kind == "weekly" {
-							sub.WeeklyLimitUSD, sub.WeeklyUsageUSD = float64Ptr(10), 3.25
-							if stale {
-								sub.WeeklyWindowStart = &old
-							}
+							sub.WeeklyLimitUSD, sub.WeeklyWindowStart, sub.WeeklyUsageUSD = float64Ptr(10), &current, 3.25
 						} else {
-							sub.MonthlyLimitUSD, sub.MonthlyUsageUSD = float64Ptr(10), 3.25
-							if stale {
-								sub.MonthlyWindowStart = &old
-							}
+							sub.MonthlyLimitUSD, sub.MonthlyWindowStart, sub.MonthlyUsageUSD = float64Ptr(10), &current, 3.25
 						}
 						mustCreateSubscription(t, client, sub)
 						repo := NewUserSubscriptionRepository(client)
@@ -368,33 +391,17 @@ func TestSubscriptionFocus_PostgresExtensionFullWindowBoundary(t *testing.T) {
 						require.NoError(t, err)
 						got, err := repo.GetByID(ctx, sub.ID)
 						require.NoError(t, err)
-						require.True(t, got.ExpiresAt.Equal(today.AddDate(0, 0, window.days).Add(delta)))
+						require.True(t, got.ExpiresAt.Equal(nextReset.Add(delta)))
 						anchor, used := focusPersistedWindow(got, window.kind)
-						if delta < 0 {
-							require.Equal(t, 3.25, used, "延期仍不足一个完整周期时不能提前赠送额度")
-							if stale {
-								require.True(t, anchor.Equal(old))
-							} else {
-								require.Nil(t, anchor)
-							}
-						} else {
-							require.NotNil(t, anchor)
-							require.True(t, anchor.Equal(today), "恰好容纳完整周期时也必须启动")
-							if stale {
-								require.Zero(t, used)
-							} else {
-								require.Equal(t, 3.25, used, "首次激活保留历史消费")
-							}
-						}
+						require.NotNil(t, anchor)
+						require.True(t, anchor.Equal(current), "尚未到点时，延期不能提前重置窗口")
+						require.Equal(t, 3.25, used, "延期只调整未来重置资格，保留当前窗口消费")
 						progress, err := svc.GetSubscriptionProgress(ctx, sub.ID)
 						require.NoError(t, err)
 						visible := focusPersistedProgress(progress, window.kind)
-						if !stale && delta < 0 {
-							require.Nil(t, visible)
-						} else {
-							require.NotNil(t, visible)
-							require.True(t, visible.ResetsAt.Equal(got.ExpiresAt), "仅一个完整窗口时不能显示额外第二个周期的刷新")
-						}
+						require.NotNil(t, visible)
+						// 上游进度接口返回原始下一周期；页面再依据到期时间决定显示重置还是结束。
+						require.True(t, visible.ResetsAt.Equal(nextReset))
 					})
 				}
 			}
@@ -402,8 +409,8 @@ func TestSubscriptionFocus_PostgresExtensionFullWindowBoundary(t *testing.T) {
 	}
 }
 
-// 单条“设置目标有效期”先延到仍不足一周期，再延到充足周期，验证与追加入口相同的恢复规则。
-func TestSubscriptionFocus_PostgresSetValidityInsufficientThenRecover(t *testing.T) {
+// 单条设置目标有效期在不足完整周期时即可恢复窗口，再次延期必须保留锚点及中间产生的消费。
+func TestSubscriptionFocus_PostgresSetValidityPartialPeriodThenExtend(t *testing.T) {
 	for _, window := range []struct {
 		kind string
 		days int
@@ -414,9 +421,10 @@ func TestSubscriptionFocus_PostgresSetValidityInsufficientThenRecover(t *testing
 				client := testEntClient(t)
 				user := mustCreateUser(t, client, &service.User{Email: "target-window-" + uuid.NewString() + "@example.invalid"})
 				plan := mustCreatePlan(t, client, &service.SubscriptionPlan{Name: "目标有效期边界", Price: 10})
-				today := timezone.StartOfDay(time.Now())
-				old := today.AddDate(0, 0, -window.days)
-				sub := &service.UserSubscription{UserID: user.ID, PlanID: plan.ID, StartsAt: today.AddDate(0, 0, -90), ExpiresAt: today.AddDate(0, 0, 1).Add(-time.Microsecond), Status: service.SubscriptionStatusActive}
+				now := time.Now().Truncate(time.Microsecond)
+				current := now.Add(-time.Hour)
+				old := current.AddDate(0, 0, -window.days)
+				sub := &service.UserSubscription{UserID: user.ID, PlanID: plan.ID, StartsAt: now.AddDate(0, 0, -90), ExpiresAt: now.Add(time.Hour), Status: service.SubscriptionStatusActive}
 				if window.kind == "weekly" {
 					sub.WeeklyLimitUSD, sub.WeeklyUsageUSD = float64Ptr(10), 3.25
 					if stale {
@@ -431,30 +439,38 @@ func TestSubscriptionFocus_PostgresSetValidityInsufficientThenRecover(t *testing
 				mustCreateSubscription(t, client, sub)
 				repo := NewUserSubscriptionRepository(client)
 				svc := service.NewSubscriptionService(nil, repo, nil, client, nil)
+				activationStarted := time.Now()
 				got, err := svc.SetSubscriptionValidityDays(ctx, sub.ID, window.days-1)
 				require.NoError(t, err)
 				anchor, used := focusPersistedWindow(got, window.kind)
-				require.Equal(t, 3.25, used)
-				if stale {
-					require.True(t, anchor.Equal(old))
-				} else {
-					require.Nil(t, anchor)
-				}
-				got, err = svc.SetSubscriptionValidityDays(ctx, sub.ID, window.days*2+1)
-				require.NoError(t, err)
-				anchor, used = focusPersistedWindow(got, window.kind)
 				require.NotNil(t, anchor)
-				require.True(t, anchor.Equal(today))
 				if stale {
-					require.Zero(t, used)
+					require.True(t, anchor.Equal(current), "周、月窗口保持旧锚点的整数周期节奏")
+					require.Zero(t, used, "下一窗口起点在有效期内即可推进，无需容纳完整周期")
 				} else {
-					require.Equal(t, 3.25, used)
+					require.False(t, anchor.Before(activationStarted.Add(-time.Microsecond)))
+					require.False(t, anchor.After(time.Now().Add(time.Microsecond)))
+					require.Equal(t, 3.25, used, "首次激活保留历史消费")
 				}
+				firstAnchor := *anchor
+				firstUsed := used
 				progress, err := svc.GetSubscriptionProgress(ctx, sub.ID)
 				require.NoError(t, err)
 				visible := focusPersistedProgress(progress, window.kind)
 				require.NotNil(t, visible)
-				require.True(t, visible.ResetsAt.Equal(today.AddDate(0, 0, window.days)))
+				require.True(t, visible.ResetsAt.Equal(firstAnchor.AddDate(0, 0, window.days)), "进度接口保留上游的原始下一重置时间")
+				require.NoError(t, svc.RecordUsage(ctx, sub.ID, 1.5))
+				got, err = svc.SetSubscriptionValidityDays(ctx, sub.ID, window.days*2+1)
+				require.NoError(t, err)
+				anchor, used = focusPersistedWindow(got, window.kind)
+				require.NotNil(t, anchor)
+				require.True(t, anchor.Equal(firstAnchor))
+				require.Equal(t, firstUsed+1.5, used, "再次延期不能抹掉首次恢复后新产生的消费")
+				progress, err = svc.GetSubscriptionProgress(ctx, sub.ID)
+				require.NoError(t, err)
+				visible = focusPersistedProgress(progress, window.kind)
+				require.NotNil(t, visible)
+				require.True(t, visible.ResetsAt.Equal(firstAnchor.AddDate(0, 0, window.days)))
 			})
 		}
 	}

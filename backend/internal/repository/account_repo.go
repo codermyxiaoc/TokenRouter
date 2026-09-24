@@ -76,6 +76,8 @@ func discardDeprecatedAccountExtra(extra map[string]any) {
 }
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
+	"codex_credits_snapshot": {},
+	"codex_referral_snapshot": {},
 	"codex_usage_updated_at":               {},
 	"grok_billing_snapshot":                {},
 	"qoder_quota_snapshot":                 {},

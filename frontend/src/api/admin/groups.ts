@@ -7,6 +7,8 @@ import { apiClient } from '../client'
 import type {
   AdminGroup,
   GroupPlatform,
+  GroupAvailabilityProbeConfig,
+  GroupAvailabilityProbeResult,
   CreateGroupRequest,
   UpdateGroupRequest,
   PaginatedResponse
@@ -212,6 +214,24 @@ export async function duplicate(id: number): Promise<AdminGroup> {
  */
 export async function update(id: number, updates: UpdateGroupRequest): Promise<AdminGroup> {
   const { data } = await apiClient.put<AdminGroup>(`/admin/groups/${id}`, updates)
+  return data
+}
+
+/** 保存探测配置并执行一次探测，成功或失败结果均计入渠道状态。 */
+export async function testAvailabilityProbe(
+  id: number,
+  config: GroupAvailabilityProbeConfig
+): Promise<GroupAvailabilityProbeResult> {
+  const configuredTimeout = Number(config.timeout_seconds ?? 30)
+  // 探测最长 120 秒，额外保留数据库保存和响应传输的时间。
+  const timeoutSeconds = Number.isFinite(configuredTimeout)
+    ? Math.min(120, Math.max(5, configuredTimeout))
+    : 30
+  const { data } = await apiClient.post<GroupAvailabilityProbeResult>(
+    `/admin/groups/${id}/availability-probe/test`,
+    { availability_probe_config: config },
+    { timeout: (timeoutSeconds + 30) * 1000 }
+  )
   return data
 }
 
@@ -426,6 +446,7 @@ export const groupsAPI = {
   create,
   duplicate,
   update,
+  testAvailabilityProbe,
   delete: deleteGroup,
   toggleStatus,
   getStats,

@@ -487,6 +487,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 
 	// Claude Code version check
+	updates[SettingKeyClaudeCodeClientVersion] = NormalizeClaudeCodeClientVersion(settings.ClaudeCodeClientVersion)
+	updates[SettingKeyClaudeCodeVersionAutoSyncEnabled] = strconv.FormatBool(settings.ClaudeCodeVersionAutoSyncEnabled)
+	// 同步值由后台服务独占保存，不允许普通设置保存覆盖。
 	updates[SettingKeyMinClaudeCodeVersion] = settings.MinClaudeCodeVersion
 	updates[SettingKeyMaxClaudeCodeVersion] = settings.MaxClaudeCodeVersion
 
@@ -792,6 +795,7 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 }
 
 func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
+	s.InvalidateClaudeCodeClientVersionCache()
 	if settings == nil {
 		return
 	}

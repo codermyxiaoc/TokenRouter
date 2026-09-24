@@ -12,21 +12,24 @@ import (
 )
 
 type dashboardAggregationRepoTestStub struct {
-	aggregateCalls       int
-	aggregateRanges      []aggregationRangeCall
-	recomputeCalls       int
-	cleanupUsageCalls    int
-	cleanupDedupCalls    int
-	ensurePartitionCalls int
-	lastStart            time.Time
-	lastEnd              time.Time
-	watermark            time.Time
-	aggregateErr         error
-	cleanupAggregatesErr error
-	cleanupUsageErr      error
-	cleanupDedupErr      error
-	ensurePartitionErr   error
-	aggregateStarted     chan struct{}
+	cleanupAggregateCalls int
+	cleanupUsageCutoff    time.Time
+	cleanupDedupCutoff    time.Time
+	aggregateCalls        int
+	aggregateRanges       []aggregationRangeCall
+	recomputeCalls        int
+	cleanupUsageCalls     int
+	cleanupDedupCalls     int
+	ensurePartitionCalls  int
+	lastStart             time.Time
+	lastEnd               time.Time
+	watermark             time.Time
+	aggregateErr          error
+	cleanupAggregatesErr  error
+	cleanupUsageErr       error
+	cleanupDedupErr       error
+	ensurePartitionErr    error
+	aggregateStarted      chan struct{}
 }
 
 func (s *dashboardAggregationRepoTestStub) AggregateRange(ctx context.Context, start, end time.Time) error {
@@ -119,15 +122,18 @@ func (s *dashboardAggregationRepoTestStub) UpdateAggregationWatermark(ctx contex
 }
 
 func (s *dashboardAggregationRepoTestStub) CleanupAggregates(ctx context.Context, hourlyCutoff, dailyCutoff time.Time) error {
+	s.cleanupAggregateCalls++
 	return s.cleanupAggregatesErr
 }
 
 func (s *dashboardAggregationRepoTestStub) CleanupUsageLogs(ctx context.Context, cutoff time.Time) error {
+	s.cleanupUsageCutoff = cutoff
 	s.cleanupUsageCalls++
 	return s.cleanupUsageErr
 }
 
 func (s *dashboardAggregationRepoTestStub) CleanupUsageBillingDedup(ctx context.Context, cutoff time.Time) error {
+	s.cleanupDedupCutoff = cutoff
 	s.cleanupDedupCalls++
 	return s.cleanupDedupErr
 }
@@ -248,6 +254,7 @@ func TestDashboardAggregationService_CleanupRetentionFailure_DoesNotRecord(t *te
 	svc := &DashboardAggregationService{
 		repo: repo,
 		cfg: config.DashboardAggregationConfig{
+			Enabled: true,
 			Retention: config.DashboardAggregationRetentionConfig{
 				UsageLogsDays: 1,
 				HourlyDays:    1,
@@ -256,11 +263,22 @@ func TestDashboardAggregationService_CleanupRetentionFailure_DoesNotRecord(t *te
 		},
 	}
 
-	svc.maybeCleanupRetention(context.Background(), time.Now().UTC())
+	now := time.Now().UTC()
+	svc.maybeCleanupRetention(context.Background(), now)
 
 	require.Nil(t, svc.lastRetentionCleanup.Load())
 	require.Equal(t, 1, repo.cleanupUsageCalls)
 	require.Equal(t, 1, repo.cleanupDedupCalls)
+
+	// 失败不能开启六小时节流；下一分钟恢复后必须重新执行并记录成功时间。
+	repo.cleanupAggregatesErr = nil
+	repo.cleanupDedupErr = nil
+	next := now.Add(time.Minute)
+	svc.maybeCleanupRetention(context.Background(), next)
+	require.Equal(t, 2, repo.cleanupAggregateCalls)
+	require.Equal(t, 2, repo.cleanupUsageCalls)
+	require.Equal(t, 2, repo.cleanupDedupCalls)
+	require.Equal(t, next, svc.lastRetentionCleanup.Load())
 }
 
 func TestDashboardAggregationService_CleanupDedupFailure_DoesNotRecord(t *testing.T) {
@@ -268,6 +286,7 @@ func TestDashboardAggregationService_CleanupDedupFailure_DoesNotRecord(t *testin
 	svc := &DashboardAggregationService{
 		repo: repo,
 		cfg: config.DashboardAggregationConfig{
+			Enabled: true,
 			Retention: config.DashboardAggregationRetentionConfig{
 				UsageLogsDays: 1,
 				HourlyDays:    1,
@@ -276,10 +295,21 @@ func TestDashboardAggregationService_CleanupDedupFailure_DoesNotRecord(t *testin
 		},
 	}
 
-	svc.maybeCleanupRetention(context.Background(), time.Now().UTC())
+	now := time.Now().UTC()
+	svc.maybeCleanupRetention(context.Background(), now)
 
 	require.Nil(t, svc.lastRetentionCleanup.Load())
 	require.Equal(t, 1, repo.cleanupDedupCalls)
+
+	// 失败不能开启六小时节流；下一分钟恢复后必须重新执行并记录成功时间。
+	repo.cleanupAggregatesErr = nil
+	repo.cleanupDedupErr = nil
+	next := now.Add(time.Minute)
+	svc.maybeCleanupRetention(context.Background(), next)
+	require.Equal(t, 2, repo.cleanupAggregateCalls)
+	require.Equal(t, 2, repo.cleanupUsageCalls)
+	require.Equal(t, 2, repo.cleanupDedupCalls)
+	require.Equal(t, next, svc.lastRetentionCleanup.Load())
 }
 
 func TestDashboardAggregationService_PartitionFailure_DoesNotAggregate(t *testing.T) {

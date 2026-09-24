@@ -3,7 +3,7 @@
 当前标准、本地目录和 standalone Compose 默认从 DockerHub 拉取：
 
 ```text
-coderxiaoc/tokenrouter:v0.1.278-ct-v1.8
+coderxiaoc/tokenrouter:v0.1.278-ct-v2.5
 ```
 
 在 `.env` 中设置 `SUB2API_IMAGE` 可选择其他已发布标签或镜像摘要。这些 Compose 保留 `pull_policy: always`，部署服务器无需源码。应用依赖 PostgreSQL 和 Redis；Compose 提供运行配置、持久化存储、健康检查和依赖启动顺序。
@@ -27,10 +27,10 @@ coderxiaoc/tokenrouter:v0.1.278-ct-v1.8
 
 ```bash
 docker login
-docker buildx build --platform linux/amd64 --build-arg VERSION=0.1.278-ct-v1.8 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v1.8 --load --file Dockerfile .
-docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v1.8 --version
-docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v1.8 --version
-docker push coderxiaoc/tokenrouter:v0.1.278-ct-v1.8
+docker buildx build --platform linux/amd64 --build-arg VERSION=0.1.278-ct-v2.5 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v2.5 --load --file Dockerfile .
+docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v2.5 --version
+docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v2.5 --version
+docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.5
 ```
 
 版本和 PostgreSQL 客户端检查不挂载现有数据，也不启动应用服务。程序内部版本号不带 `v`，镜像标签保留 `v` 前缀。根 `Dockerfile` 还支持 `COMMIT`、`DATE` 构建参数；发布下一版本时同时替换构建参数、镜像标签与部署端 `SUB2API_IMAGE`。以上命令只发布 `amd64`，不会同时生成 `arm64` 镜像。
@@ -43,8 +43,8 @@ docker push coderxiaoc/tokenrouter:v0.1.278-ct-v1.8
 
 ```bash
 set -e
-binary="$PWD/release/sub2api_v0.1.278-ct-v1.8_linux_amd64/sub2api"
-image=coderxiaoc/tokenrouter:v0.1.278-ct-v1.8
+binary="$PWD/release/sub2api_v0.1.278-ct-v2.5_linux_amd64/sub2api"
+image=coderxiaoc/tokenrouter:v0.1.278-ct-v2.5
 build_context="$(mktemp -d)"
 test -s "$binary"
 mkdir -p "$build_context/backend" "$build_context/deploy"
@@ -64,7 +64,7 @@ image_binary_hash="$(docker run --rm --entrypoint sha256sum "$image" /app/sub2ap
 test "$binary_hash" = "$image_binary_hash"
 ```
 
-核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v1.8`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
+核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v2.5`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
 
 ```bash
 docker login
@@ -89,7 +89,7 @@ nano .env
 在现有部署目录修改 `.env`，保留原有密码、JWT/TOTP 密钥以及其他配置：
 
 ```dotenv
-SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v1.8
+SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v2.5
 POSTGRES_BIND_HOST=127.0.0.1
 POSTGRES_PORT=5433
 ```
@@ -107,7 +107,7 @@ docker compose -f docker-compose.yml pull sub2api
 
 ```bash
 docker compose -f docker-compose.yml stop sub2api
-backup_dir="backups/pre-v1.5-$(date +%Y%m%d-%H%M%S)"
+backup_dir="backups/pre-v2.5-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$backup_dir"
 chmod 700 "$backup_dir"
 cp -p .env docker-compose.yml "$backup_dir/"
@@ -128,7 +128,61 @@ docker compose -f docker-compose.yml exec -T sub2api wget -q -O - http://127.0.0
 
 私有 DockerHub 仓库需要先在服务器执行 `docker login`。应用镜像更新或端口映射变更应使用 `up -d` 重建相关容器；仅 `restart` 不会应用这些变更。已有部署无需用 `.env.example` 覆盖 `.env`，也不要执行 `down -v`。
 
-`--no-deps sub2api` 只更新应用，不替换 PostgreSQL 或 Redis。新应用启动时自动执行待应用迁移。从 `v0.1.278-ct-v1.4` 升级到 `v0.1.278-ct-v1.5` 不新增 SQL 迁移，当前最高迁移仍为 `277_allow_opencode_user_platform_quotas.sql`；此前 v1.3 到 v1.4 同样没有新增迁移。沿用既有数据、配置和稳定安全密钥，完成升级后检查程序版本、健康状态、登录、网关调用和用量记录。
+`--no-deps sub2api` 只更新应用，不替换 PostgreSQL 或 Redis。新应用启动时自动执行待应用迁移。沿用既有数据、配置和稳定安全密钥，完成升级后检查程序版本、健康状态、登录、网关调用和用量记录。
+
+### v2.5 升级检查
+
+从 `v0.1.278-ct-v2.4` 更新到 `v0.1.278-ct-v2.5` 不新增或修改数据库迁移，最高迁移仍为 `288_affiliate_ledger_operation_id.sql`。本次恢复 OpenAI OAuth 账号的手动额度重置入口，并适配用户、管理员工单界面的手机布局。
+
+更新后，账号管理先查询剩余次数，再确认重置；真实重置会消耗上游机会。无次数或无法确认的上游结果不清除账号限流，成功但后续刷新失败会分别提示，不应重复消费。Spark 影子账号仍在母账号操作。工单手机端使用卡片列表、筛选面板及独立对话/回复滚动，权限和处理流程保持原有规则。升级沿用原数据库、配置、数据目录和固定密钥，用户余额、订阅用量、窗口、次数和有效期不因升级重算。跨越 v2.4 升级时仍需遵守下面的历史迁移边界。
+
+### v2.4 历史升级检查
+
+从 `v0.1.278-ct-v2.3` 更新到 `v0.1.278-ct-v2.4` 会执行新增迁移 286–288：追加审核引擎元数据、渠道推理档位倍率配置、提现流水操作号及唯一索引。既有迁移保持不变，旧 Max 倍率、显式零价及现有订阅扣费、窗口和次数规则保留。迁移 288 在普通事务内创建唯一索引，大型流水表需预留维护时间。
+
+更新前验证数据库备份、排空在途请求并停止全部旧应用实例；先启动一个新实例完成迁移，再启动其余新实例，避免新旧审核、倍率与提现语义混跑。升级后确认最高迁移为 `288_affiliate_ledger_operation_id.sql`，抽查余额、订阅用量、重置次数及到期时间。应用回退不会撤销已经结算的扣费或返利，新功能启用后的回退需按数据库备份与兼容性单独处理。
+
+本次同步上游功能与优化，并补充 Grok 七种账号测试模式、其他平台的手动测试端点选择。默认自动测试保留原流程，手动选择只影响本次测试，不写入账号协议配置；图片、视频、语音等真实测试仍可能消耗上游额度。详细边界见[部署与迁移](../docs/operations/deployment_and_migrations.md)、[管理员账号连接测试](../docs/interfaces/http_api.md#account_connection_tests)。
+
+### v2.3 历史升级检查
+
+从 `v0.1.278-ct-v2.2` 更新到 `v0.1.278-ct-v2.3` 不新增 SQL 迁移，最高迁移仍为 `285_subscription_scheduled_reset_counts.sql`。渠道探测新增协议选择与“立即测试”，旧配置缺少协议时继续按 `auto` 执行，不会自动改成某个单一协议。对于只支持 Chat Completions、不允许 `/v1/messages` 的上游，可在分组编辑页选择 Chat Completions 后立即测试。
+
+“立即测试”只保存本次探测配置并执行一次；不会提交其它分组草稿。成功、失败均写入原渠道状态历史，切换协议不会清空历史红色区间。手动与定时探测共用租约，忙碌时不保存本次配置；已开始的探测在浏览器断开后仍按超时结束并保存结果。升级后核对协议选项、单次结果、渠道状态更新与后续定时探测；先完成全部后端实例及前端更新，再使用显式协议，避免旧实例忽略新增协议设置。正常业务的账号协议与路由规则保持原样，订阅额度、重置次数及有效期也不因本次升级改变。完整边界见[渠道探测](../docs/interfaces/model_catalog_and_marketplace.md#group_availability_probe)。
+
+### v2.2 历史升级检查
+
+从 `v0.1.278-ct-v2.1` 更新到 `v0.1.278-ct-v2.2` 不新增 SQL 迁移，最高迁移仍为 `285_subscription_scheduled_reset_counts.sql`，已应用迁移保持不变。本次增加 `gpt-6-sol`、`gpt-6-luna`、`claude-opus-5-5` 的模型目录、账号选择、客户端配置、定价和协议适配，并修正缓存写入与 Fast 档位的展示、结算倍率一致性；显式渠道价格和零价仍保持原有优先级。
+
+沿用 v2.1 的订阅窗口和到点累计重置次数规则，不重算已有次数、不清空用量或修改订阅有效期。升级后核对新模型的可见目录、价格和正常请求扣费；已配置模型白名单的账号需显式加入对应模型，上游也需提供这些模型。二进制部署应同步安装本版本的官方离线定价资源，保留用户自定义定价覆盖；Docker 镜像已包含同版本资源。模型价格与协议边界见[模型目录与展示定价](../docs/interfaces/model_catalog_and_marketplace.md)。
+
+### v2.1 历史升级检查
+
+从 `v0.1.278-ct-v2.0` 更新到 `v0.1.278-ct-v2.1` 不新增 SQL 迁移，最高迁移仍为 `285_subscription_scheduled_reset_counts.sql`。本次对齐订阅额度窗口与重置次数的时间规则：
+
+- 日额度按项目配置时区零点刷新，不超过一天的日卡仍是一次性日额度；周、月额度首次激活或手动重置以实际操作时刻为锚点，自动刷新按锚点的 7 天、30 天整数周期推进。
+- 只要重置点严格早于订阅到期就可刷新，不再要求尾段剩余一个完整周期，也不依赖额外月额度保护。原先被该限制挡住的有效重置点会恢复刷新，属于预期的额度权益变化。
+- 到点计数采用相同时间表，即使未消费或用量为零也累计；保留本期已有次数，不自动回填或重算历史。首次激活与手动重置本身不加次数，管理员延期保留计数，续费新一期从零开始。
+- 仅将明确对应订阅生效当天、且早于生效时刻的旧初始周/月零点锚点按生效时刻识别；后续手动重置等真实锚点保留。无需批量清空用量、窗口或修改有效期。
+
+升级前备份并验证数据库与配置，排空在途请求，停止所有旧后端后完整切换新后端及前端资源。多实例不能混跑新旧额度规则。沿用原数据目录、PostgreSQL、Redis、对象存储及固定 JWT/TOTP 密钥，不执行 `down -v`。升级后抽样核对日/周/月重置时间、临期订阅与管理员延期、用户和管理员计数，以及正常请求的扣费。回退应用不会撤销已经发放的额度或累计的次数，也不会恢复旧规则期间错过的重置点，不能把回退视为业务数据回滚。详细规则见[订阅额度窗口](../docs/domains/payments_and_entitlements.md#subscription_quota_windows)。
+
+### v2.0 历史升级检查
+
+从 v1.9 更新到 `v0.1.278-ct-v2.0` 新增 `285_subscription_scheduled_reset_counts.sql`。它只增加计数水位与索引，保留已有日、周、月次数，以及原额度、窗口、有效期和账务数据；升级前无法可靠恢复的历史次数不自动补算。
+
+- 重置次数按符合额度规则的到点时间累计，即使未使用或用量为零也累计；后台在启动时及每分钟处理，列表查询即时展示。
+- 管理员订阅列表显示日、周、月次数。首次激活或手动重置本身不加次数，管理员延期保留次数，续费新一期从零开始。
+- 当时实际额度刷新、临期完整窗口与有限外层保护规则保持原样；v2.1 已按上文调整窗口规则。计数任务本身不清零额度、不改变扣费。
+- 先停止所有旧后端，再启动新版本，避免旧版实际推进计次与新版到点计次混跑导致重复。沿用原数据库、Redis、对象存储配置和固定安全密钥。
+
+升级后核对迁移 285、版本、健康、登录、任务记录、管理员计数展示及临期延期后的重置时间。迁移不会自动回滚；回退 v1.9 会恢复旧计数语义，不能把回退期间次数视为连续准确的到点统计。详细规则见[订阅额度窗口](../docs/domains/payments_and_entitlements.md#subscription_quota_windows)。
+
+从 v1.8 或更早版本跨级升级还会执行此前未应用的迁移 282–284：图片/视频任务记录、异步图片持久结果及三项计数字段。升级前等待在途生成完成，保留 Redis、S3 配置与固定 TOTP_ENCRYPTION_KEY；不能恢复已经丢失的旧进程内图片。详见[异步图片与任务记录](../docs/domains/media_tasks.md)。
+
+### 历史版本升级要求
+
+从 `v0.1.278-ct-v1.4` 升级到 `v0.1.278-ct-v1.5` 不新增 SQL 迁移，当时最高迁移仍为 `277_allow_opencode_user_platform_quotas.sql`；此前 v1.3 到 v1.4 同样没有新增迁移。
 
 v1.5 的智能路由扩展真实上游错误的换组恢复，并在管理员和用户错误页显示最终恢复分组。恢复目标复用已有错误事件 JSON，不改写历史缺失的快照。升级后抽样检查候选顺序、冷却及恢复分组展示；已输出内容或已产生用量的请求仍不重放。详细边界见[智能路由换组与冷却](../docs/domains/smart_routing_api_keys.md#group_failover)和[恢复错误的查询与归属](../docs/operations/ops_monitoring_and_alerting.md#recovered_error_visibility)。
 
@@ -186,7 +240,7 @@ v1.3 的 WS 执行状态按 API Key、原始线程/会话和 `request_kind` 隔�
 
 ## 镜像标签
 
-当前默认固定版本标签 `v0.1.278-ct-v1.8`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
+当前默认固定版本标签 `v0.1.278-ct-v2.5`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
 
 ## 相关链接
 

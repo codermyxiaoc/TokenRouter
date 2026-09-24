@@ -1235,10 +1235,11 @@ func TestRecoverStaleRecords(t *testing.T) {
 	})
 	// 模拟一条孤立的恢复中记录
 	_ = svc.saveRecord(context.Background(), &BackupRecord{
-		ID:            "stale-2",
-		Status:        "completed",
-		RestoreStatus: "running",
-		StartedAt:     time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+		ID:               "stale-2",
+		RestoreStartedAt: time.Now().Add(-time.Hour).Format(time.RFC3339),
+		Status:           "completed",
+		RestoreStatus:    "running",
+		StartedAt:        time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
 	})
 
 	svc.recoverStaleRecords()
@@ -1345,7 +1346,7 @@ func TestStartRestore_Async(t *testing.T) {
 	sqlMock.ExpectExec("SELECT pg_advisory_unlock").
 		WithArgs(databaseHeavyMaintenanceLockID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	svc.SetMaintenanceDB(db)
+	svc.SetLeaderLock(&fakeLeaderLockCache{}, db)
 
 	// 异步恢复
 	restored, err := svc.StartRestore(context.Background(), record.ID)

@@ -963,22 +963,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
-			safeErr := sanitizeUpstreamErrorMessage(err.Error())
-			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-				Platform:           account.Platform,
-				AccountID:          account.ID,
-				AccountName:        account.Name,
-				UpstreamStatusCode: 0,
-				Kind:               "request_error",
-				Message:            safeErr,
-			})
-			if attempt < geminiMaxRetries {
-				logger.LegacyPrintf("service.gemini_messages_compat", "Gemini account %d: upstream request failed, retry %d/%d: %v", account.ID, attempt, geminiMaxRetries, err)
-				sleepGeminiBackoff(attempt)
-				continue
-			}
-			setOpsUpstreamError(c, 0, safeErr, "")
-			return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after retries: "+safeErr)
+			return nil, s.handleUpstreamTransportError(ctx, c, account, err)
 		}
 
 		// Special-case: signature/thought_signature validation errors are not transient, but may be fixed by
@@ -1032,7 +1017,9 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 					logger.LegacyPrintf("service.gemini_messages_compat", "Gemini account %d: detected signature-related 400, retrying with downgraded Claude blocks (%s)", account.ID, stageName)
 					geminiReq = retryGeminiReq
 					// Consume one retry budget attempt and continue with the updated request payload.
-					sleepGeminiBackoff(1)
+					if err := sleepGeminiBackoff(ctx, 1); err != nil {
+						return nil, err
+					}
 					continue
 				}
 			}
@@ -1097,7 +1084,9 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				})
 
 				logger.LegacyPrintf("service.gemini_messages_compat", "Gemini account %d: upstream status %d, retry %d/%d", account.ID, resp.StatusCode, attempt, geminiMaxRetries)
-				sleepGeminiBackoff(attempt)
+				if err := sleepGeminiBackoff(ctx, attempt); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			// Final attempt: surface the upstream error body (mapped below) instead of a generic retry error.
@@ -1436,21 +1425,10 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
-			safeErr := sanitizeUpstreamErrorMessage(err.Error())
-			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-				Platform:           account.Platform,
-				AccountID:          account.ID,
-				AccountName:        account.Name,
-				UpstreamStatusCode: 0,
-				Kind:               "request_error",
-				Message:            safeErr,
-			})
-			if attempt < geminiMaxRetries {
-				logger.LegacyPrintf("service.gemini_messages_compat", "Gemini account %d: upstream request failed, retry %d/%d: %v", account.ID, attempt, geminiMaxRetries, err)
-				sleepGeminiBackoff(attempt)
-				continue
-			}
-			if action == "countTokens" {
+			transportErr := s.handleUpstreamTransportError(ctx, c, account, err)
+			// 仅上游传输失败允许本地计数估算，客户端取消不转为成功。
+			var failoverErr *UpstreamFailoverError
+			if action == "countTokens" && errors.As(transportErr, &failoverErr) {
 				estimated := estimateGeminiCountTokens(body)
 				c.JSON(http.StatusOK, map[string]any{"totalTokens": estimated})
 				return &ForwardResult{
@@ -1463,8 +1441,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					FirstTokenMs:  nil,
 				}, nil
 			}
-			setOpsUpstreamError(c, 0, safeErr, "")
-			return nil, s.writeGoogleError(c, http.StatusBadGateway, "Upstream request failed after retries: "+safeErr)
+			return nil, transportErr
 		}
 
 		// 错误策略优先：匹配则跳过重试直接处理。
@@ -1517,7 +1494,9 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				})
 
 				logger.LegacyPrintf("service.gemini_messages_compat", "Gemini account %d: upstream status %d, retry %d/%d", account.ID, resp.StatusCode, attempt, geminiMaxRetries)
-				sleepGeminiBackoff(attempt)
+				if err := sleepGeminiBackoff(ctx, attempt); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			if action == "countTokens" {
@@ -1692,6 +1671,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		Model:           originalModel,
 		UpstreamModel:   mappedModel,
 		Stream:          stream,
+		ReasoningEffort: extractGeminiReasoningEffortFromBody(body),
 		Duration:        time.Since(startTime),
 		FirstTokenMs:    firstTokenMs,
 		ImageCount:      imageCount,
@@ -1843,7 +1823,7 @@ func (s *GeminiMessagesCompatService) writeGeminiNativeUpstreamError(c *gin.Cont
 	return fmt.Errorf("gemini upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
 }
 
-func sleepGeminiBackoff(attempt int) {
+func sleepGeminiBackoff(ctx context.Context, attempt int) error {
 	delay := geminiRetryBaseDelay * time.Duration(1<<uint(attempt-1))
 	if delay > geminiRetryMaxDelay {
 		delay = geminiRetryMaxDelay
@@ -1856,7 +1836,15 @@ func sleepGeminiBackoff(attempt int) {
 	if sleepFor < 0 {
 		sleepFor = 0
 	}
-	time.Sleep(sleepFor)
+	// 退避期间响应客户端取消，避免已断开的请求继续占用账号。
+	timer := time.NewTimer(sleepFor)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 var (
@@ -3160,6 +3148,9 @@ func (s *GeminiMessagesCompatService) handleGeminiUpstreamError(ctx context.Cont
 			} else {
 				logger.LegacyPrintf("service.gemini_messages_compat", "[Gemini 429] Account %d (Google One OAuth, tier=%s, project=%s) rate limited, cooldown=%v", account.ID, tierID, projectID, time.Until(ra).Truncate(time.Second))
 			}
+		} else if account.IsVertexServiceAccount() {
+			// Vertex 没有每日重置窗口，缺少有效上游提示时仅短冷却。
+			ra = time.Now().Add(geminiVertexFallbackCooldown)
 		} else {
 			// API Key / AI Studio OAuth: PST 午夜
 			if ts := nextGeminiDailyResetUnix(); ts != nil {
@@ -3218,6 +3209,13 @@ func (s *GeminiMessagesCompatService) applyGeminiUpstreamErrorPolicy(
 }
 
 // ParseGeminiRateLimitResetTime 解析 Gemini 格式的 429 响应，返回重置时间的 Unix 时间戳
+const (
+	geminiRetryInfoTypeURL  = "type.googleapis.com/google.rpc.RetryInfo"
+	geminiRetryInfoMaxDelay = 15 * time.Minute
+	// Vertex 按量服务的限速为短窗口，没有可供推断的每日配额。
+	geminiVertexFallbackCooldown = time.Minute
+)
+
 func ParseGeminiRateLimitResetTime(body []byte) *int64 {
 	// 第一阶段：gjson 结构化提取
 	errMsg := gjson.GetBytes(body, "error.message").String()
@@ -3232,6 +3230,16 @@ func ParseGeminiRateLimitResetTime(body []byte) *int64 {
 	gjson.GetBytes(body, "error.details").ForEach(func(_, detail gjson.Result) bool {
 		v := detail.Get("metadata.quotaResetDelay").String()
 		if v == "" {
+			if detail.Get("@type").String() == geminiRetryInfoTypeURL {
+				if dur, err := time.ParseDuration(detail.Get("retryDelay").String()); err == nil && dur > 0 {
+					if dur > geminiRetryInfoMaxDelay {
+						dur = geminiRetryInfoMaxDelay
+					}
+					ts := time.Now().Unix() + int64(math.Ceil(dur.Seconds()))
+					found = &ts
+					return false
+				}
+			}
 			return true
 		}
 		if dur, err := time.ParseDuration(v); err == nil {

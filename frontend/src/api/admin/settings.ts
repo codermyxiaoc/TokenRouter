@@ -699,6 +699,9 @@ export interface SystemSettings {
   ops_metrics_interval_seconds: number;
 
   // Claude Code version check
+  claude_code_client_version: string;
+  claude_code_client_version_synced: string;
+  claude_code_version_auto_sync_enabled: boolean;
   min_claude_code_version: string;
   max_claude_code_version: string;
 
@@ -1027,6 +1030,8 @@ export interface UpdateSettingsRequest {
   ops_monitoring_enabled?: boolean;
   ops_realtime_monitoring_enabled?: boolean;
   ops_metrics_interval_seconds?: number;
+  claude_code_client_version?: string;
+  claude_code_version_auto_sync_enabled?: boolean;
   min_claude_code_version?: string;
   max_claude_code_version?: string;
   allow_ungrouped_key_scheduling?: boolean;

@@ -144,10 +144,21 @@
                 :key="window.key"
                 class="space-y-2"
               >
-                <div class="flex items-center justify-between">
-                  <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ window.label }}
-                  </span>
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ window.label }}
+                    </span>
+                    <!-- 次数始终来自服务端，窗口未启动时也展示，避免将倒计时误解成重置历史。 -->
+                    <span
+                      :data-testid="`quota-reset-count-${window.key}`"
+                      :title="t('userSubscriptions.resetCountHint')"
+                      tabindex="0"
+                      class="cursor-help rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500 dark:bg-dark-700 dark:text-dark-400"
+                    >
+                      {{ t('userSubscriptions.resetCount', { count: window.reset_count }) }}
+                    </span>
+                  </div>
                   <span class="text-sm text-gray-500 dark:text-dark-400">
                     {{ formatBalanceAmount(window.used) }} / {{ formatBalanceAmount(window.limit) }}
                   </span>
@@ -161,6 +172,13 @@
                 </div>
                 <p v-if="window.window_start" class="text-xs text-gray-500 dark:text-dark-400">
                   {{ formatUsageWindow(chain.active, window) }}
+                </p>
+                <p
+                  v-if="usageWindowExplanation(chain.active, window)"
+                  :data-testid="`quota-window-explanation-${window.key}`"
+                  class="text-xs leading-relaxed text-gray-500 dark:text-dark-400"
+                >
+                  {{ usageWindowExplanation(chain.active, window) }}
                 </p>
               </div>
 
@@ -224,6 +242,7 @@ import { formatDateOnly, formatDateTimeToMinute } from '@/utils/format'
 import {
   getExpirationDateRelation,
   getRemainingDurationParts,
+  getSubscriptionQuotaResetTime,
   isOneTimeDailyQuota,
   isQuotaWindowEndingAtSubscriptionExpiry,
   highestQuotaExhausted,
@@ -304,7 +323,7 @@ function usageWindows(subscription: UserSubscription) {
       used: subscription.daily_usage_usd || 0,
       limit: subscription.daily_limit_usd,
       window_start: subscription.daily_window_start,
-      hours: 24
+      reset_count: subscription.daily_reset_count ?? 0
     },
     {
       key: 'weekly' as const,
@@ -312,7 +331,7 @@ function usageWindows(subscription: UserSubscription) {
       used: subscription.weekly_usage_usd || 0,
       limit: subscription.weekly_limit_usd,
       window_start: subscription.weekly_window_start,
-      hours: 168
+      reset_count: subscription.weekly_reset_count ?? 0
     },
     {
       key: 'monthly' as const,
@@ -320,7 +339,7 @@ function usageWindows(subscription: UserSubscription) {
       used: subscription.monthly_usage_usd || 0,
       limit: subscription.monthly_limit_usd,
       window_start: subscription.monthly_window_start,
-      hours: 720
+      reset_count: subscription.monthly_reset_count ?? 0
     }
   ].filter((window) => window.limit != null && window.limit > 0)
 }
@@ -444,6 +463,20 @@ function formatDurationParts(parts: RemainingDurationParts): string {
   return `${parts.minutes}m`
 }
 
+// 只解释既有窗口判断，不在界面重新决定额度是否重置；一次性日额度单独说明。
+function usageWindowExplanation(
+  subscription: UserSubscription,
+  window: ReturnType<typeof usageWindows>[number]
+): string {
+  if (window.key === 'daily' && isOneTimeDailyQuota(subscription)) {
+    return t('userSubscriptions.oneTimeQuotaHint')
+  }
+  if (isQuotaWindowEndingAtSubscriptionExpiry(subscription, window.window_start, window.key)) {
+    return t('userSubscriptions.quotaNoFurtherResetHint')
+  }
+  return ''
+}
+
 function formatUsageWindow(
   subscription: UserSubscription,
   window: ReturnType<typeof usageWindows>[number]
@@ -461,14 +494,13 @@ function formatUsageWindow(
       : t('userSubscriptions.windowNotActive')
   }
   return t('userSubscriptions.resetIn', {
-    time: formatResetTime(window.window_start, window.hours)
+    time: formatResetTime(subscription, window)
   })
 }
 
-function formatResetTime(windowStart: string | null, windowHours: number): string {
-  if (!windowStart) return t('userSubscriptions.windowNotActive')
-  const start = new Date(windowStart)
-  const end = new Date(start.getTime() + windowHours * 60 * 60 * 1000)
+function formatResetTime(subscription: UserSubscription, window: ReturnType<typeof usageWindows>[number]): string {
+  const end = getSubscriptionQuotaResetTime(subscription, window.window_start, window.key)
+  if (!end) return t('userSubscriptions.windowNotActive')
   const parts = getRemainingDurationParts(end)
   return parts ? formatDurationParts(parts) : t('userSubscriptions.windowNotActive')
 }

@@ -226,8 +226,11 @@ type SystemSettings struct {
 	OpsRealtimeMonitoringEnabled bool `json:"ops_realtime_monitoring_enabled"`
 	OpsMetricsIntervalSeconds    int  `json:"ops_metrics_interval_seconds"`
 
-	MinClaudeCodeVersion string `json:"min_claude_code_version"`
-	MaxClaudeCodeVersion string `json:"max_claude_code_version"`
+	ClaudeCodeClientVersion          string `json:"claude_code_client_version"`
+	ClaudeCodeClientVersionSynced    string `json:"claude_code_client_version_synced"`
+	ClaudeCodeVersionAutoSyncEnabled bool   `json:"claude_code_version_auto_sync_enabled"`
+	MinClaudeCodeVersion             string `json:"min_claude_code_version"`
+	MaxClaudeCodeVersion             string `json:"max_claude_code_version"`
 
 	// 分组隔离
 	AllowUngroupedKeyScheduling bool `json:"allow_ungrouped_key_scheduling"`

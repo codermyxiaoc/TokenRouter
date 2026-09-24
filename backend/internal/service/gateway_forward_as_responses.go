@@ -57,9 +57,14 @@ func (s *GatewayService) ForwardAsResponses(
 	}
 	originalModel := responsesReq.Model
 	clientStream := responsesReq.Stream
+	// 在协议转换前解析账号映射，思考能力必须依据真正的上游型号。
+	mappedModel := resolveAccountUpstreamModel(ctx, account, originalModel)
+	if mappedModel == "" {
+		mappedModel = originalModel
+	}
 
 	// 2. Convert Responses → Anthropic
-	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq)
+	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq, mappedModel)
 	if err != nil {
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
 	}
@@ -69,17 +74,6 @@ func (s *GatewayService) ForwardAsResponses(
 	reqStream := true
 
 	// 4. 模型映射：渠道映射已由 handler 写入 body，此处继续执行账号映射和平台规范化。
-	mappedModel := resolveAccountUpstreamModel(ctx, account, originalModel)
-	if mappedModel == "" {
-		mappedModel = originalModel
-	}
-	reasoningEffort := ExtractResponsesReasoningEffortFromBody(body, mappedModel, originalModel)
-	// 按 Anthropic 出站档位记录，不能用 OpenAI 模型能力过滤掉 Claude 的 max。
-	if anthropicReq.OutputConfig != nil {
-		reasoningEffort = NormalizeClaudeOutputEffort(anthropicReq.OutputConfig.Effort)
-	}
-	// 国产模型没有显式 effort 档位时，thinking 启用后补默认展示值。
-	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
 	anthropicReq.Model = mappedModel
 
 	logger.L().Debug("gateway forward_as_responses: model mapping applied",
@@ -125,6 +119,9 @@ func (s *GatewayService) ForwardAsResponses(
 	// 10. Build upstream request
 	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
 	upstreamReq, wireBody, err := s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
+	// 计费读取最终发送档位，保留账号转换和策略降档结果。
+	reasoningEffort := NormalizeClaudeOutputEffort(gjson.GetBytes(wireBody, "output_config.effort").String())
+	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, wireBody, mappedModel)
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)

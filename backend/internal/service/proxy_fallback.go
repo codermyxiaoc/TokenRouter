@@ -27,7 +27,8 @@ func ResolveProxyFallbackTarget(start Proxy, byID map[int64]Proxy, now time.Time
 			if !ok {
 				return nil, false
 			}
-			if !(&p).IsExpired(now) && p.Status != StatusExpired {
+			// 停用节点可继续定义回退链，但不能作为本次出口。
+			if p.IsActive() && !p.IsExpired(now) {
 				id := p.ID
 				return &id, true
 			}

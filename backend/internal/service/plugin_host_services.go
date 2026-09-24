@@ -55,6 +55,11 @@ type PluginAccountDirectory interface {
 	ResolvePluginOutboundIdentity(ctx context.Context, accountID int64) (*PluginOutboundIdentity, error)
 }
 
+// PluginAccountMetadataDirectory 为原有账号目录增加可选的只读元数据能力；旧目录实现继续兼容。
+type PluginAccountMetadataDirectory interface {
+	ListPluginAccountMetadata(ctx context.Context, platform, accountType string) ([]*pluginv1.AccountInfo, error)
+}
+
 // pluginHostServiceServer 实现 pluginv1.HostServiceServer，是宿主经 go-plugin broker
 // 反向暴露给单个插件进程的服务端点。它绑定到具体插件的 pluginKey，因此每个运行时都有
 // 自己的实例；所有键值操作都被强制限定在该插件的命名空间内。
@@ -176,6 +181,25 @@ func (s *pluginHostServiceServer) ListAccounts(ctx context.Context, req *pluginv
 	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "请求为空")
+	}
+	if directory, ok := s.directory.(PluginAccountMetadataDirectory); ok {
+		accounts, err := directory.ListPluginAccountMetadata(ctx, req.Platform, req.AccountType)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "列举账号失败: %v", err)
+		}
+		result := &pluginv1.ListAccountsResponse{}
+		for _, account := range accounts {
+			// 纵深校验保持当前插件仅能访问 OpenAI OAuth 正式账号的授权边界。
+			if account == nil || account.Platform != PlatformOpenAI || account.AccountType != AccountTypeOAuth || account.Status != StatusActive || account.IsShadow {
+				continue
+			}
+			if req.Platform != "" && req.Platform != account.Platform || req.AccountType != "" && req.AccountType != account.AccountType {
+				continue
+			}
+			result.AccountIds = append(result.AccountIds, account.Id)
+			result.Accounts = append(result.Accounts, account)
+		}
+		return result, nil
 	}
 	ids, err := s.directory.ListPluginAccounts(ctx, req.Platform, req.AccountType)
 	if err != nil {

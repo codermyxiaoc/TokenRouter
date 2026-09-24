@@ -58,6 +58,7 @@ func (s *OpenAIGatewayService) ForwardOpenCodeSystemOne(
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 
 	start := time.Now()

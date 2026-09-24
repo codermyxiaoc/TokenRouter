@@ -96,9 +96,11 @@ type ChannelModelPricing struct {
 	FlexMultiplier *float64 `json:"flex_multiplier,omitempty"`
 	// MaxReasoningEffortMultiplier 仅在最终转发档位为 max 时应用；nil 沿用模型默认倍率。
 	MaxReasoningEffortMultiplier *float64 `json:"max_reasoning_effort_multiplier,omitempty"`
-	InputPrice                   *float64 `json:"input_price"`
-	OutputPrice                  *float64 `json:"output_price"`
-	CacheWritePrice              *float64 `json:"cache_write_price"`
+	// ReasoningEffortMultipliers 优先使用明确配置的档位，缺省时保留旧 Max 及模型默认规则。
+	ReasoningEffortMultipliers map[string]float64 `json:"reasoning_effort_multipliers,omitempty"`
+	InputPrice                 *float64           `json:"input_price"`
+	OutputPrice                *float64           `json:"output_price"`
+	CacheWritePrice            *float64           `json:"cache_write_price"`
 	// CacheWrite1hPrice 是可选的 1 小时缓存写入单价；为空时沿用 CacheWritePrice。
 	CacheWrite1hPrice *float64            `json:"cache_write_1h_price"`
 	CacheReadPrice    *float64            `json:"cache_read_price"`
@@ -230,7 +232,7 @@ func (p *ChannelModelPricing) HasEffectivePricing() bool {
 			p.ImageOutputPrice != nil ||
 			p.FastMultiplier != nil ||
 			p.FlexMultiplier != nil ||
-			p.MaxReasoningEffortMultiplier != nil {
+			p.MaxReasoningEffortMultiplier != nil || len(p.ReasoningEffortMultipliers) > 0 {
 			return true
 		}
 		for i := range p.Intervals {
@@ -254,6 +256,7 @@ func (p *ChannelModelPricing) HasEffectivePricing() bool {
 // Clone 返回 ChannelModelPricing 的拷贝；模型、区间和分时配置切片彼此独立。
 func (p ChannelModelPricing) Clone() ChannelModelPricing {
 	cp := p
+	cp.ReasoningEffortMultipliers = cloneReasoningEffortMultipliers(p.ReasoningEffortMultipliers)
 	if p.Models != nil {
 		cp.Models = make([]string, len(p.Models))
 		copy(cp.Models, p.Models)

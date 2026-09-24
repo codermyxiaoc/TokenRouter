@@ -218,6 +218,7 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 		setHeaderRaw(req.Header, "anthropic-version", "2023-06-01")
 	}
 
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	if account.IsOpenCodeGo() {
 		// OpenCode 的三种原生协议都遵守当前 UA/TLS 路由，原有 CN 请求保持原行为。
 		s.applyOpenAIUpstreamUserAgent(ctx, c, account, req, false, tlsRouterMatch...)

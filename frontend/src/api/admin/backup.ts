@@ -32,6 +32,19 @@ export interface BackupScheduleConfig {
   cron_expr: string
   retain_days: number
   retain_count: number
+  monthly_archive?: BackupMonthlyArchiveConfig
+}
+
+export interface BackupMonthlyArchiveConfig {
+  enabled: boolean
+  days: number[]
+  include_month_end: boolean
+  retain_count: number // 0 为永久保留
+}
+
+export interface BackupMonthlyArchive {
+  dates: string[]
+  retain_count: number
 }
 
 export interface BackupRecord {
@@ -51,8 +64,10 @@ export interface BackupRecord {
   expires_at?: string
   progress?: string
   restore_status?: string
+  restore_started_at?: string
   restore_error?: string
   restored_at?: string
+  monthly_archive?: BackupMonthlyArchive
 }
 
 export interface BackupPart {
@@ -81,6 +96,42 @@ export interface CreateBackupRequest {
 export interface TestS3Response {
   ok: boolean
   message: string
+}
+
+// 异步图片可复用备份 S3 凭据，独立保存图片桶、路径和链接有效期。
+export interface ImageStorageConfig {
+  enabled: boolean
+  reuse_backup_s3: boolean
+  bucket: string
+  prefix: string
+  public_base_url: string
+  presign_expiry_hours: number
+  max_download_bytes: number
+  endpoint: string
+  region: string
+  access_key_id: string
+  secret_access_key?: string
+  force_path_style: boolean
+}
+
+export interface ImageStorageConfigResponse {
+  config: ImageStorageConfig
+  secret_configured: boolean
+}
+
+export async function getImageStorageConfig(): Promise<ImageStorageConfigResponse> {
+  const { data } = await apiClient.get<ImageStorageConfigResponse>('/admin/backups/image-storage')
+  return data
+}
+
+export async function updateImageStorageConfig(config: ImageStorageConfig): Promise<ImageStorageConfig> {
+  const { data } = await apiClient.put<ImageStorageConfig>('/admin/backups/image-storage', config)
+  return data
+}
+
+export async function testImageStorageConnection(config: ImageStorageConfig): Promise<TestS3Response> {
+  const { data } = await apiClient.post<TestS3Response>('/admin/backups/image-storage/test', config)
+  return data
 }
 
 // 存储配置
@@ -153,8 +204,8 @@ export async function getBackup(id: string): Promise<BackupRecord> {
   return data
 }
 
-export async function deleteBackup(id: string): Promise<void> {
-  await apiClient.delete(`/admin/backups/${id}`)
+export async function deleteBackup(id: string, deleteArchived = false): Promise<void> {
+  await apiClient.delete(`/admin/backups/${id}`, deleteArchived ? { params: { delete_archived: true } } : undefined)
 }
 
 export async function getDownloadURL(id: string): Promise<BackupDownloadResponse> {
@@ -176,6 +227,9 @@ export async function restoreBackup(id: string, password: string): Promise<Backu
 }
 
 export const backupAPI = {
+  getImageStorageConfig,
+  updateImageStorageConfig,
+  testImageStorageConnection,
   getStorageConfig,
   updateStorageConfig,
   testStorageConnection,

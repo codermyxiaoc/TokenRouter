@@ -39,6 +39,10 @@ func applyOpenAICompatModelNormalization(req *apicompat.AnthropicRequest) {
 	}
 
 	claudeEffort := openAIReasoningEffortToClaudeOutputEffort(derivedEffort)
+	// 新型号明确支持关闭推理，模型后缀也不能意外回落到桥接默认 medium。
+	if derivedEffort == "none" && (isOpenAIGPT6SolModel(originalModel) || isOpenAIGPT6LunaModel(originalModel)) {
+		claudeEffort = "none"
+	}
 	if claudeEffort == "" {
 		return
 	}
@@ -79,7 +83,11 @@ func splitOpenAICompatReasoningModel(model string) (normalizedModel string, reas
 
 	last := strings.NewReplacer("-", "", "_", "", " ", "").Replace(parts[len(parts)-1])
 	switch last {
-	case "none", "minimal":
+	case "none":
+		if isOpenAIGPT6SolModel(modelID) || isOpenAIGPT6LunaModel(modelID) {
+			reasoningEffort = "none"
+		}
+	case "minimal":
 	case "low", "medium", "high":
 		reasoningEffort = last
 	case "xhigh", "extrahigh":

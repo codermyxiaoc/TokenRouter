@@ -40,3 +40,13 @@ func TestDefaultModelsPreferConcreteGPT56SolForAccountTests(t *testing.T) {
 	require.NotEmpty(t, DefaultModels)
 	require.Equal(t, "gpt-5.6-sol", DefaultModels[0].ID)
 }
+
+// 新模型进入默认账号目录，但不能挤掉已使用的默认测试型号。
+func TestDefaultModelsContainsGPT6SolLunaWithoutChangingDefaults(t *testing.T) {
+	for _, model := range []string{"gpt-6-sol", "gpt-6-luna"} {
+		require.Contains(t, DefaultModelIDs(), model)
+	}
+	require.NotContains(t, DefaultModelIDs(), "gpt-6")
+	require.Equal(t, "gpt-5.6-sol", DefaultModels[0].ID)
+	require.Equal(t, "gpt-5.4", DefaultTestModel)
+}

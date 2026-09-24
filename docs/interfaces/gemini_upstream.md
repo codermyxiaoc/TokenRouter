@@ -55,6 +55,10 @@ Gemini tier、上游配额和按模型 reset 信息作为账号资格与容量�
 
 原生路径会解析 HTTP 2xx 的错误信封、流内错误和空响应，将真实的 429/5xx 等语义状态登记到运维。模型正常 finishReason 不等同于上游故障；promptFeedback.blockReason 和内容过滤类 finishReason 按请求级 400 分类，不计入账号 SLA，Google error 信封则保留自身上游语义状态。已有失败 attempt 仍单独保留恢复记录，不因最终请求级拒绝覆盖；非流正文/聚合结果使用 NonStream 标记，不能误记为流式。诊断采集不改变原生响应字节、HTTP 状态或用量，也不为已经输出的流新增重放动作。
 
+Gemini 原生、Messages、Chat/Responses 兼容路径的网络传输错误统一记录为 status=0/request_error，并在未写客户端响应时立即交给故障转移。持久的 DNS/代理凭据/连接拒绝问题临时移出账号，瞬时 EOF/断连不停调；客户端取消不换号、不停调，countTokens 的真实上游传输失败继续本地估算。退避等待可由请求取消及时中断。
+
+Vertex 429 支持 `google.rpc.RetryInfo.retryDelay`，小数秒向上取整、最长 15 分钟；没有可解析时间时只冷却 1 分钟。AI Studio 的既有每日兜底、公共池与管理员错误策略保持不变。
+
 OAuth refresh、Service Account token、project/tier 发现和上游请求错误分别记录。401/403 需要区分凭据、project/region、API 未启用或策略拒绝；429 解析 reset 并更新限流；网络/5xx 只在响应未开始时允许换账号。
 
 Gemini 原生入口返回 Google 形状，Anthropic/OpenAI 入口返回对应客户端形状。最终错误可应用[网关错误响应策略](gateway_error_policy.md)，但 project、service account JSON、token、API key 和内部上游响应不能无条件透传。排障应核对 OAuth variant、project/location/tier、最终模型、thought/session 状态、quota reset 和 attempt 链。

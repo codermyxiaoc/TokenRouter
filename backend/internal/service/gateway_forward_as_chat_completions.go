@@ -42,6 +42,11 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	originalModel := ccReq.Model
 	clientStream := ccReq.Stream
 	includeUsage := ccReq.StreamOptions != nil && ccReq.StreamOptions.IncludeUsage
+	// 在协议转换前解析账号映射，思考能力必须依据真正的上游型号。
+	mappedModel := resolveAccountUpstreamModel(ctx, account, originalModel)
+	if mappedModel == "" {
+		mappedModel = originalModel
+	}
 
 	// 2. Convert CC → Responses → Anthropic (chained conversion)
 	responsesReq, err := apicompat.ChatCompletionsToResponses(&ccReq)
@@ -49,7 +54,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		return nil, fmt.Errorf("convert chat completions to responses: %w", err)
 	}
 
-	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(responsesReq)
+	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(responsesReq, mappedModel)
 	if err != nil {
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
 	}
@@ -59,10 +64,6 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	reqStream := true
 
 	// 4. 模型映射：渠道映射已由 handler 写入 body，此处继续执行账号映射和平台规范化。
-	mappedModel := resolveAccountUpstreamModel(ctx, account, originalModel)
-	if mappedModel == "" {
-		mappedModel = originalModel
-	}
 	anthropicReq.Model = mappedModel
 
 	logger.L().Debug("gateway forward_as_chat_completions: model mapping applied",
@@ -163,14 +164,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
 	}
 
-	// 13. Extract reasoning effort from CC request body
-	reasoningEffort := extractCCReasoningEffortFromBody(body, mappedModel, originalModel)
-	// 按 Anthropic 出站档位记录，不能用 OpenAI 模型能力过滤掉 Claude 的 max。
-	if anthropicReq.OutputConfig != nil {
-		reasoningEffort = NormalizeClaudeOutputEffort(anthropicReq.OutputConfig.Effort)
-	}
-	// 国产模型没有显式 effort 档位时，thinking 启用后补默认展示值。
-	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
+	// 以账号归一化后的最终出站档位计费，避免按转换前的档位扣款。
+	reasoningEffort := NormalizeClaudeOutputEffort(gjson.GetBytes(wireBody, "output_config.effort").String())
+	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, wireBody, mappedModel)
 
 	// 14. Handle normal response
 	// Read Anthropic SSE → convert to Responses events → convert to CC format
@@ -413,6 +409,15 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	}
 
 	processAnthropicEvent := func(event *apicompat.AnthropicStreamEvent) bool {
+		if event == nil {
+			return false
+		}
+		// Drop Anthropic keepalive pings before OpenAI conversion:
+		// leaking `event: ping` frames crashes OpenAI-stream clients.
+		// Error events must still forward — they carry upstream failures.
+		if event.Type == "ping" {
+			return false
+		}
 		if firstChunk {
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())

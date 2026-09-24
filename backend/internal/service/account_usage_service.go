@@ -412,7 +412,7 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 		usage, err := s.getOpenAIUsage(ctx, account, forceProbe)
 		if err == nil {
 			s.applyOpenAIQuotaAutoPauseState(ctx, account, usage)
-			s.tryClearRecoverableAccountError(ctx, account)
+			// 用量可能来自缓存，不能据此认定刷新令牌错误已恢复。
 		}
 		return usage, err
 	}

@@ -6,6 +6,7 @@
 
 - [全局入口](#全局入口)：理解所有请求共享的处理顺序。
 - [路由族](#路由族)：选择 URL、认证和拥有者。
+- [管理员账号连接测试](#account_connection_tests)：选择本次测试的协议或媒体模式。
 - [API Key 结算策略接口](#api-key-结算策略接口)：配置资金来源、查询订阅和收窄分组。
 - [分组客户端协议](#分组客户端协议)：理解上游平台与客户端准入的独立契约。
 - [认证方式](#认证方式)：区分 JWT、管理密钥、API Key 和签名票据。
@@ -45,9 +46,12 @@ RequestLogger
 | `/api/v1/admin/*` | 管理员 JWT 或受限管理密钥；部分操作另需 step-up | `routes/admin.go`；用户、分组、账号、渠道、设置、运维、备份、支付和安全管理 |
 | `/api/v1/payment/*` | 用户 JWT | `routes/payment.go`；配置/套餐读取、下单、查单、取消、invoice 和退款申请 |
 | `/api/v1/tickets/*`、`/api/v1/admin/tickets/*` | 个人入口为用户 JWT，管理入口为管理员认证 | `routes/tickets.go`；工单、私有附件、后台对话与工单设置，继承面板限流和审计 |
+| `/api/v1/media-tasks`、`/api/v1/admin/media-tasks` 及 `/:id` | 个人入口为用户 JWT，管理入口为管理员认证 | 图片/视频任务只读列表与详情，用户仅本人、管理员可筛选用户，见[任务记录观测](../domains/media_tasks.md#media_task_observation) |
 | `/api/v1/payment/public/*` | 签名 resume token 或遗留订单验证约束 | 支付结果恢复；不得扩展为匿名订单枚举接口 |
 | `/api/v1/payment/webhook/*` | 提供商验签 | EasyPay、Alipay、WeChat Pay、Stripe、Airwallex 通知 |
 | `/v1/*` 和兼容裸别名 | TokenRouter API Key | Anthropic/OpenAI 兼容消息、Responses、Chat、图片、视频、模型、用量与批任务 |
+| `/v1/images/generations/async`、`/v1/images/edits/async`、`/v1/images/tasks/:task_id` 及裸别名 | TokenRouter API Key；查询限定原用户和 Key | 显式提交异步图片、轮询结果，HTTP 202 接受后由后台执行；默认关闭，见[异步图片](../domains/media_tasks.md#async_image_lifecycle) |
+| `/api/v1/admin/backups/image-storage` 及 `/test` | 管理员；PUT 和 POST 测试另需 step-up | 异步图片存储 GET/PUT 配置与 POST 连通性测试，密钥脱敏/空值保留 |
 | `/v1beta/*` | TokenRouter API Key | Gemini 原生模型 URL、生成、流式生成和 token 统计 |
 | `/api/v3/contents/generations/tasks` 及 `/v3`、`/v1`、裸路径别名 | TokenRouter API Key + 视频账号能力与任务归属 | Ark 原生异步视频创建、查询、删除，响应不套面板 envelope，见 [Seedance 上游](seedance_upstream.md) |
 | `/api/v1/admin/plugins/*` | 管理员认证；修改与测试另需 step-up | 本地插件安装/运行与只读 `GET /:id/status`，见 [插件契约](local_plugins.md) |
@@ -121,13 +125,34 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 
 账号批量删除使用 `POST /api/v1/admin/accounts/batch-delete`，请求体为 `account_ids`。服务端先去除非正数和重复 ID，再以最多 5 路并发执行删除；同批选择父账号及其影子账号时只删除根账号一次，并将级联影响映射回逐账号结果。响应返回稳定排序的 `success_ids`、`failed_ids` 和错误明细，单项失败不会取消其它账号。管理端“全选筛选结果”先以同一筛选快照分页读取轻量 ID，任何分页缺失或重复都保留原选择，不得提交部分集合。
 
-管理员账号连接测试使用 `POST /api/v1/admin/accounts/:id/test`，响应为 SSE。请求体可包含 `model_id`、`prompt`、OpenAI 专用的 `mode`，以及 `test_type`（`text` 或 `image`）；历史客户端也可用 `test_mode` 作为类型字段别名。管理端必须显式发送 `test_type`：普通 `text` 始终走文字测试路径并使用自定义提示词，`image` 始终走图片测试路径并使用自定义提示词；OpenAI 的 `compact` 与 `legacy_compact` 是固定载荷的能力探测，不使用自定义提示词。服务端只对未携带该字段的旧调用保留按模型名兼容判断。图片测试结果以 SSE `image` 事件返回，文字结果以 `content` 事件返回；不具备对应平台图片端点的账号返回流式错误事件。
+管理员分组接口新增 `POST /api/v1/admin/groups/:id/availability-probe/test`，请求体为 `{availability_probe_config: {...}}`，要求分组已保存且 active、提交的探测配置 enabled。接口在同一事务内领取租约并仅更新该探测配置，按提交快照执行一次后通过标准响应封装返回 `{group_id, account_id?, model_id, protocol, status, success, latency_ms, error_message?, started_at, finished_at}`；不会整行覆盖分组的倍率、定价或路由配置。上游探测失败但观测保存成功仍返回 HTTP 200 和 `success=false`；配置非法返回 400，已有探测在执行或手动槽位已满返回 409 `GROUP_AVAILABILITY_PROBE_BUSY`，忙碌时不保存本次配置。存储故障返回错误而不宣称记录成功。该入口只对管理员开放；结果与定时探测共用渠道状态历史，详见 [容量与可用性](model_catalog_and_marketplace.md#group_availability_probe)。
 
 管理员设置接口 `GET|PUT /api/v1/admin/settings` 的 `creative_model_settings` 字段用于维护创作台全局生图模型白名单，结构为 `[{"group_id":123,"model":"gpt-image-2","operations":["generate","edit","inpaint"]}]`。省略字段保留现值，显式空数组清空；服务端校验能力值和 `(group_id, model)` 唯一性，并在审计中只记录字段是否发生变化。保存时按实际分组平台规范化：Gemini 移除 `inpaint`，移除后无能力的条目删除；无法解析的平台暂时保留，但运行时仍不放行。`creative_worker_count` 同属该接口，要求为大于 0 的整数，默认 128，保存后热更新当前实例的创作台 worker 池。`GET /api/v1/admin/settings/creative-model-candidates` 返回当前 active、启用图片生成且存在可调度图片模型的 `{group_id, group_name, platform, model, operations}` 候选，不按管理员用户权限过滤；OpenAI 返回三项能力，Gemini/Grok 返回 `generate`/`edit`。`GET /api/v1/admin/settings/creative-worker-status` 返回创作台任务 worker 池快照 `{running, worker_count, busy_workers}`：运行中 `worker_count` 为当前活动 worker 数、`busy_workers` 为正在处理任务的 worker 数，管理端设置页据此轮询展示当前使用情况；未运行时返回 `running=false` 的零值快照，由前端回退到 `creative_worker_count` 配置值。
 
 账号高级调度评分诊断仅限管理员：`GET /api/v1/admin/accounts/:id/advanced-scheduler-score` 返回该账号所属高级分组摘要；携带 `group_id` 时返回指定高级分组的完整候选池、硬过滤、有效配置、指标原值/归一化值/贡献、Top-K 权重与实际活动池概率及平台策略提示。订阅优先启用且存在合格订阅账号时，普通账号标记为延后且不进入本轮概率；开启粘性加权时 previous-response 和 session 只影响 Top-K 权重，关闭时有效硬粘性账号按实际强制选择显示概率 1。`POST /api/v1/admin/accounts/:id/advanced-scheduler-score/preview` 接受 `group_id`、可选 `requested_model`、`sticky_account_id` 和 `previous_response_account_id`，用于无状态的评分模拟；previous-response 只对 OpenAI 分组有效，其它平台返回 `ignored`。请求体严格拒绝其它字段，尤其不得传入 session hash、响应正文或凭据。两个接口不分配并发槽、不写粘性，并且响应不包含凭据、代理认证、session hash 或上游响应内容。诊断复用请求信息足以判断的生产硬过滤；endpoint、transport、compact、media 等缺少请求上下文的能力以 `not_evaluated` 明示，不伪装成已通过。
 
 路由前缀不独自决定协议处理器。例如 `/v1/messages` 会根据分组平台分派到 Anthropic、OpenAI/Grok 或 Qoder handler；路由层拥有分派，handler/service 不能通过字符串猜测调用方已经具备某个平台能力。
+
+<a id="account_connection_tests"></a>
+## 管理员账号连接测试
+
+`POST /api/v1/admin/accounts/:id/test` 只对管理员开放，正常测试和测试失败均通过 SSE 事件返回。请求包含 `model_id`、`prompt`、`test_type`、可选 `test_endpoint` 与 OpenAI 专用的 `mode`；历史客户端可用 `test_mode` 作为 `test_type` 的低优先级别名。管理端显式发送 `test_type=text|image`，Grok 还支持 `video|search|tts|stt|realtime`，媒体素材字段及能力约束见 [Grok 上游](grok_upstream.md)。
+
+`test_endpoint` 省略、空值或 `auto` 时沿用账号的原测试流程，包括 CN 自适应账号的多协议诊断和 OpenCode 按模型选择协议。文字测试可以显式选择下表端点；选择只作用于当前请求，不保存到账号的 `api_protocol`、文本路由模式或分协议 Base URL，也不改变正常网关或计划测试的分派规则。
+
+| `test_endpoint` | 实际测试 | 可手动选择的账号 |
+| --- | --- | --- |
+| `chat_completions` | `/v1/chat/completions` | OpenAI、Anthropic、Kimi、DeepSeek、MiniMax、Zhipu、OpenCode API Key |
+| `responses` | `/v1/responses`；DeepSeek 保留原生路径规则 | 上述 API Key 中除 Zhipu 外的账号，以及 OpenAI OAuth、Grok |
+| `anthropic`（兼容 `messages`） | `/v1/messages` | 上述 API Key，以及 Anthropic OAuth / Setup Token / Bedrock / Vertex |
+| `gemini` | Gemini 原生 `streamGenerateContent` | Gemini API Key / OAuth / Vertex |
+| `systemone` | `/v1/systemone`，同步 JSON | OpenCode API Key 的 Jev 模型 |
+
+显式选择只验证所选协议，不做跨协议回退，沿用账号的模型映射、代理、TLS 与受保护 Header Override；CN 自适应和 OpenCode 读取对应协议的 Base URL，保留中继主机与路径前缀。OpenCode 普通文字模型不因模型目录而覆盖手动选择；Jev 必须选择 System One，不能与 SSE 文字协议混用。端点选择是诊断入口，选项可用不代表上游保证支持，实际能力仍由上游响应确认。未知端点、不支持的凭据组合、文字端点与媒体类型混用在发起上游请求前拒绝。
+
+普通 `text` 始终走文字路径，即使模型名含图片标记也不生图；`image` 使用平台图片端点。只有未携带 `test_type` 的旧调用保留按模型名判断，旧 `mode=image|text` 调用也保持兼容。OpenAI 的 `compact` 与 `legacy_compact` 使用固定载荷、不使用自定义提示词，只允许自动或 Responses 端点；其他平台显式指定端点时不得请求 Compact。图片以 `image` 事件、文字以 `content` 事件、失败以 `error` 事件返回；不支持的图片平台不能静默降级为文字测试。
+
+新增的兼容 API Key 端点测试分支只展示本次错误，不把账号标为错误；OpenAI 自身的 Chat/Responses 测试继续复用原有认证错误与限额处理，例如 401 认证错误标记、429 配额状态对账。Anthropic 非 API Key 原生测试也保留原有账号状态处理。选择自动仍执行原流程，不通过本次端点选择修改既有维护或恢复规则。
 
 ## API Key 结算策略接口
 

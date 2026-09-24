@@ -78,13 +78,16 @@ describe('AccountStatusIndicator', () => {
     expect(wrapper.text()).not.toContain('claude-sonnet-5')
   })
 
-  it('Claude Opus 5 模型限流时显示短别名', () => {
+  it.each([
+    ['claude-opus-5', 'COpus5'],
+    ['claude-opus-5-5', 'COpus55']
+  ])('%s 模型限流时显示短别名', (model, alias) => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {
         account: makeAccount({
           extra: {
             model_rate_limits: {
-              'claude-opus-5': {
+              [model]: {
                 rate_limited_at: '2026-07-28T00:00:00Z',
                 rate_limit_reset_at: '2099-07-28T00:00:00Z'
               }
@@ -98,8 +101,8 @@ describe('AccountStatusIndicator', () => {
         }
       }
     })
-    expect(wrapper.text()).toContain('COpus5')
-    expect(wrapper.text()).not.toContain('claude-opus-5')
+    expect(wrapper.text()).toContain(alias)
+    expect(wrapper.text()).not.toContain(model)
   })
 
   it('Grok 账号额度限流时显示自动恢复时间而非临时不可调度', () => {

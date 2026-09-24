@@ -840,6 +840,7 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	}
 	return &OpenAIForwardResult{
 		RequestID:            requestIDHeader,
+		MediaTaskObservation: videoTaskObservation(endpoint, respBody, resp.StatusCode),
 		UpstreamHeaders:      resp.Header,
 		ResponseID:           usage.ResponseID,
 		Usage:                usage.Usage,
@@ -978,10 +979,11 @@ func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
 	// 内容下载也是完成观测入口：状态体满足官方 done 和 video.url 条件时附加计费单位，
 	// 使处理器能够按与状态轮询相同的路径领取一次计费；待计费快照由处理器合并。
 	result := &OpenAIForwardResult{
-		RequestID:       contentRequestID,
-		UpstreamHeaders: contentResp.Header,
-		ResponseHeaders: contentResp.Header.Clone(),
-		Duration:        time.Since(startTime),
+		RequestID:            contentRequestID,
+		MediaTaskObservation: videoTaskObservation(GrokMediaEndpointVideoStatus, statusBody, statusResp.StatusCode),
+		UpstreamHeaders:      contentResp.Header,
+		ResponseHeaders:      contentResp.Header.Clone(),
+		Duration:             time.Since(startTime),
 	}
 	if billed := ExtractGrokVideoBillingFromStatusBody(statusBody, nil, requestID); billed != nil {
 		result.ResponseID = firstNonEmpty(billed.ResponseID, strings.TrimSpace(requestID))
@@ -993,6 +995,70 @@ func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
 		result.VideoDurationSeconds = billed.VideoDurationSeconds
 	}
 	return result, nil
+}
+
+// videoTaskObservation 只提取状态枚举，不保存可能含提示词、凭据或签名地址的原始响应。
+// 查询接口的 HTTP 失败不代表视频任务失败，由调用方保留最近一次成功观测的状态。
+func videoTaskObservation(endpoint GrokMediaEndpoint, body []byte, httpStatus int) *MediaTaskObservation {
+	observation := &MediaTaskObservation{MediaType: "video", HTTPStatus: httpStatus}
+	create := false
+	if endpoint.IsSeedance() {
+		observation.Source, observation.Platform = "seedance_video", PlatformOpenAI
+		create = endpoint == SeedanceEndpointCreate
+	} else {
+		switch endpoint {
+		case GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions:
+			create = true
+		case GrokMediaEndpointVideoStatus, GrokMediaEndpointVideoContent:
+		default:
+			return nil
+		}
+		observation.Source, observation.Platform = "grok_video", PlatformGrok
+	}
+	status := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "status").String()))
+	if endpoint == SeedanceEndpointDelete {
+		// 方舟删除响应可能为空；只记录取消观测，不改变原生删除行为。
+		status = "deleted"
+	}
+	switch status {
+	case "queued":
+		observation.Status = "queued"
+	case "pending", "running", "processing":
+		observation.Status = "processing"
+	case "succeeded":
+		if !endpoint.IsSeedance() {
+			return nil
+		}
+		observation.Status = "completed"
+	case "done":
+		if endpoint.IsSeedance() {
+			return nil
+		}
+		observation.Status = "processing"
+		if strings.TrimSpace(gjson.GetBytes(body, "video.url").String()) != "" {
+			observation.Status = "completed"
+		}
+	case "failed":
+		observation.Status = "failed"
+		observation.ErrorMessage = "Upstream video task failed"
+	case "cancelled", "canceled", "deleted":
+		observation.Status = "cancelled"
+	case "expired":
+		observation.Status = "expired"
+	default:
+		if !create {
+			return nil
+		}
+		observation.Status = "queued"
+		// 未知状态不落库，避免上游在自由字段里返回敏感内容。
+		status = ""
+	}
+	observation.UpstreamStatus = status
+	if observation.Status == "completed" || observation.Status == "failed" || observation.Status == "cancelled" || observation.Status == "expired" {
+		now := time.Now().UTC()
+		observation.CompletedAt = &now
+	}
+	return observation
 }
 
 func grokMediaSignedVideoContentURL(body []byte, requestID string) (string, error) {

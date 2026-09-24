@@ -7,6 +7,7 @@ import admin from './admin'
 import misc from './misc'
 import team from './team'
 import tickets from './tickets'
+import mediaTasks from './mediaTasks'
 
 export default {
   ...landing,
@@ -18,4 +19,5 @@ export default {
   ...misc,
   ...team,
   ...tickets,
+  ...mediaTasks,
 }

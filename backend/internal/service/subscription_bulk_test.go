@@ -102,7 +102,7 @@ func (r *bulkSubscriptionTestRepo) ResetUsageWindows(ctx context.Context, id int
 	}
 	update := r.db(ctx).UserSubscription.UpdateOneID(id)
 	if daily {
-		update.SetDailyUsageUsd(0).SetDailyWindowStart(start)
+		update.SetDailyUsageUsd(0).SetDailyWindowStart(startOfDay(start))
 	}
 	if weekly {
 		update.SetWeeklyUsageUsd(0).SetWeeklyWindowStart(start)

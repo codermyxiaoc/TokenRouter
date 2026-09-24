@@ -151,6 +151,15 @@ func normalizeKnownOpenAICodexModel(model string) string {
 		return ""
 	}
 
+	if mapped := normalizeOpenAIGPT6SolLunaModel(normalized); mapped != "" {
+		return mapped
+	}
+	// 新产品只接受已登记的别名，未知后缀不能再进入旧 Codex 兜底。
+	if normalized == "gpt-6-sol" || strings.HasPrefix(normalized, "gpt-6-sol-") ||
+		normalized == "gpt-6-luna" || strings.HasPrefix(normalized, "gpt-6-luna-") {
+		return ""
+	}
+
 	if mapped := getNormalizedCodexModel(normalized); mapped != "" {
 		return mapped
 	}
@@ -215,6 +224,35 @@ func isOpenAIGPT56Model(model string) bool {
 func isOpenAIGPT6AstraModel(model string) bool {
 	normalized := canonicalizeOpenAIModelAliasSpelling(model)
 	return normalized == "gpt-6-astra" || strings.HasPrefix(normalized, "gpt-6-astra-")
+}
+
+// normalizeOpenAIGPT6SolLunaModel 仅归一明确产品和受支持的推理别名。
+// 官方尚未公布日期快照；不能把未知版本、preview 或其它产品后缀归入现有定价。
+func normalizeOpenAIGPT6SolLunaModel(model string) string {
+	normalized := canonicalizeOpenAIModelAliasSpelling(model)
+	normalized = strings.TrimSuffix(normalized, "-openai-compact")
+	for _, base := range []string{"gpt-6-sol", "gpt-6-luna"} {
+		if normalized == base {
+			return base
+		}
+		if suffix, ok := strings.CutPrefix(normalized, base+"-"); ok {
+			switch suffix {
+			case "none", "low", "medium", "high", "xhigh", "max":
+				return base
+			}
+		}
+	}
+	return ""
+}
+
+// isOpenAIGPT6SolModel 供模型能力和专属价格回退复用同一产品边界。
+func isOpenAIGPT6SolModel(model string) bool {
+	return normalizeOpenAIGPT6SolLunaModel(model) == "gpt-6-sol"
+}
+
+// isOpenAIGPT6LunaModel 不接受未公布的其它 Luna 变体。
+func isOpenAIGPT6LunaModel(model string) bool {
+	return normalizeOpenAIGPT6SolLunaModel(model) == "gpt-6-luna"
 }
 
 func appendUsageBillingModelCandidate(candidates []string, seen map[string]struct{}, model string) []string {

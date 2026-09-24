@@ -73,6 +73,8 @@ Ent schema 不是生产迁移器。数据库权威变更仍须新增 `backend/mi
 
 验证范围随风险扩大，先运行受影响包/组件，再运行仓库门禁。后端常用命令：
 
+公开 Images 网关可用 `python tools/test_image_gateway.py --base-url https://你的站点` 做单次真实调用验证。程序从 `TOKENROUTER_API_KEY` 环境变量或隐藏输入读取分组密钥，默认请求 `gpt-image-2`、一张 `3840x2160` 的 4K 图片，不自动重试或跟随重定向；每次运行都会产生真实调用费用。图片和脱敏 JSON 报告保存到 `.dev/reports/image-gateway/`，报告记录请求 ID、原始 usage 和实际 PNG 尺寸。HTTP 成功只能证明接口返回结果，扣费须另外按请求 ID 与 Key 核对 `usage_logs`、`usage_billing_dedup` 和余额/配额变化；客户端超时后也先对账，避免再次生图。该工具不使用创作台接口，不改变服务端计费设置。
+
 ```bash
 # 受影响包
 (cd backend && go test ./internal/service ./internal/handler)

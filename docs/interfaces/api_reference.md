@@ -78,6 +78,8 @@ Gemini 错误遵循 Google 格式：
 | `GET` | `/v1/responses`、`/responses`、`/backend-api/codex/responses` | Responses WebSocket 升级入口 |
 | `POST` | `/v1/embeddings`、无前缀 `/embeddings` | OpenAI Embeddings；仅 OpenAI 账号组 |
 | `POST` | `/v1/images/generations`、`/v1/images/edits` 及无前缀别名 | OpenAI/Grok 图片 |
+| `POST` | `/v1/images/generations/async`、`/v1/images/edits/async` 及无前缀别名 | 提交异步图片，需管理员启用图片对象存储 |
+| `GET` | `/v1/images/tasks/{task_id}` 及无前缀别名 | 使用原 Key 查询异步图片结果 |
 | `POST/GET/DELETE` | `/v1/images/batches...` | Gemini / Vertex 批量图片任务 |
 | `POST/GET` | `/v1/videos...` 及无前缀别名 | Grok 视频创建、编辑、扩展、查询和内容下载 |
 | `POST/GET/PATCH/DELETE` | `/v1/tts`、`/v1/stt`、`/v1/custom-voices...` | Grok Voice |
@@ -296,6 +298,64 @@ x-goog-api-key: <tokenrouter_api_key>
 ```
 
 该端点不经过普通 Messages、Chat Completions 或 Responses 转换，也不支持图片、音频、视频和流式响应。OpenCode 账号会派生 `X-OpenCode-Session` 以保持提示词缓存命中。
+
+### OpenAI / Grok 异步图片
+
+#### `POST /v1/images/generations/async`
+
+使用原有图片请求字段，`model` 必须是当前分组支持的图片模型，`size`/`quality`/`n` 的支持范围与同步接口一致。`prompt` 必须是非空字符串，缺失、空白或类型错误会在创建任务前返回 400。不接受 `stream: true`。
+
+```json
+{
+  "model": "gpt-image-2",
+  "prompt": "一幅山间日出的水彩画",
+  "size": "3840x2160",
+  "n": 1,
+  "quality": "auto"
+}
+```
+
+启用对象存储并通过请求校验后立即返回 **HTTP 202**，`Location` 指向轮询地址，建议按 `Retry-After: 3` 间隔查询：
+
+```json
+{
+  "id": "imgtask_example",
+  "task_id": "imgtask_example",
+  "object": "image.generation.task",
+  "status": "processing",
+  "created_at": 1750000000,
+  "expires_at": 1750086400,
+  "poll_url": "/v1/images/tasks/imgtask_example"
+}
+```
+
+`POST /v1/images/edits/async` 使用同步编辑接口的 JSON 或 multipart 形状，包括模型和图片、mask 等字段。异步只是改变提交和获取结果的方式，不改变图片参数、路由或计费规则。没有启用 S3 图片存储时返回 404；不要将它当作可无条件替换同步接口的 SDK 协议。
+
+#### `GET /v1/images/tasks/{task_id}`
+
+继续使用创建任务的同一个 TokenRouter API Key。处理中返回 `status: processing`；完成后示例如下，`image_url` 是第一张图片，完整结果在 `result`：
+
+```json
+{
+  "id": "imgtask_example",
+  "task_id": "imgtask_example",
+  "object": "image.generation.task",
+  "status": "completed",
+  "http_status": 200,
+  "image_url": "https://images.example.com/images/imgtask_example/0.png",
+  "result": {
+    "created": 1750000120,
+    "data": [{"url": "https://images.example.com/images/imgtask_example/0.png"}]
+  },
+  "created_at": 1750000000,
+  "completed_at": 1750000120,
+  "expires_at": 1750086520
+}
+```
+
+失败任务的查询仍返回 HTTP 200，任务内 `status: failed`、`http_status` 和 `error` 表示执行失败原因。任务不存在、过期或归属不匹配返回 404。创建和完成时分别保留 24 小时查询记录；S3 图片链接有效期独立于任务保留期。已落库的完成结果可跨重启和 Redis 丢失继续查询。执行实例失联后会登记 `failed / 503`、`error.type: execution_interrupted`，表示上游结果不确定且可能已经计费；不会静默一直处理中。轮询和状态补偿不再次生成或收费；图片已经生成但结果存储失败时可能仍有真实用量扣费，不要看到失败就自动重复生成。未完成上游调用无法在进程重启后安全续跑。
+
+该方式让长耗时生成在后台执行，客户端通过短请求取结果；客户端需要实现提交、轮询与保存返回链接。详细权限、结果存储和计费边界见[异步图片与任务记录](../domains/media_tasks.md)。
 
 ### Seedance 原生视频任务
 

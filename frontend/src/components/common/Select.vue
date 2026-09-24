@@ -55,6 +55,7 @@
           :class="[instanceId]"
           :style="dropdownStyle"
           role="listbox"
+          tabindex="-1"
           @click.stop
           @mousedown.stop
           @keydown="onDropdownKeyDown"
@@ -324,6 +325,13 @@ const findPrevEnabledIndex = (startIndex: number): number => {
   return -1
 }
 
+// 搜索结果或候选刷新后重新定位，避免高亮落在越界或禁用项。
+watch(filteredOptions, () => {
+  if (!isOpen.value) return
+  focusedIndex.value = findNextEnabledIndex(0)
+  if (focusedIndex.value >= 0) scrollToFocused()
+})
+
 const handleOptionMouseEnter = (option: any, index: number) => {
   if (isOptionDisabled(option) || isGroupHeaderOption(option)) return
   focusedIndex.value = index
@@ -385,6 +393,8 @@ watch(isOpen, (open) => {
 
     if (isSearchable.value) {
       nextTick(() => searchInputRef.value?.focus())
+    } else {
+      nextTick(() => dropdownRef.value?.focus())
     }
     // Add scroll listener to update position
     window.addEventListener('scroll', updateTriggerRect, { capture: true, passive: true })

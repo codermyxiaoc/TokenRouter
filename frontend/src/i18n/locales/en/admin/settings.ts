@@ -469,6 +469,12 @@ export default {
         previewHint: 'This preview applies to internal balance, quota, and usage cost displays across the site.'
       },
       claudeCode: {
+        claudeCodeClientVersion: 'Claude Code client version',
+        claudeCodeClientVersionHint: "The client version this gateway declares upstream when impersonating the official Claude Code CLI. A manual value pins the version. If empty, a valid SUB2API_CLAUDE_CLI_VERSION environment pin takes priority over the synced version, with the built-in version as the final fallback.",
+        claudeCodeVersionAutoSync: 'Auto-sync Claude Code version',
+        claudeCodeVersionAutoSyncHint: 'Fetches the latest Claude Code client version from the official release channel every hour, so you never need to upgrade this service just to keep the version current. When disabled, fetching stops but the previously synced version remains available. The manual version above and any valid environment pin take priority.',
+        claudeCodeVersionSyncedValue: 'Currently synced: {version}',
+
         title: 'Claude Code Settings',
         description: 'Control Claude Code client access requirements',
         minVersion: 'Minimum Version',

@@ -46,4 +46,24 @@ describe('useAnnouncementStore', () => {
 
     expect(store.announcements).toHaveLength(25)
   })
+
+  it('重置会话后迟到的旧公告不会覆盖新会话或结束新请求的加载状态', async () => {
+    const store = useAnnouncementStore()
+    let resolveOld!: (value: unknown[]) => void
+    let resolveNew!: (value: unknown[]) => void
+    mockList.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve }))
+    const oldRequest = store.fetchAnnouncements()
+    store.reset()
+    mockList.mockReturnValueOnce(new Promise(resolve => { resolveNew = resolve }))
+    const newRequest = store.fetchAnnouncements()
+    resolveOld([{ id: 1, notify_mode: 'popup' }])
+    await oldRequest
+    expect(store.announcements).toEqual([])
+    expect(store.currentPopup).toBeNull()
+    expect(store.loading).toBe(true)
+    resolveNew([{ id: 2, notify_mode: 'silent' }])
+    await newRequest
+    expect(store.announcements.map(item => item.id)).toEqual([2])
+    expect(store.loading).toBe(false)
+  })
 })

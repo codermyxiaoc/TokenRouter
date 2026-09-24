@@ -318,6 +318,11 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if err != nil {
 		return nil, err
 	}
+	if availabilityProbeConfig.Enabled {
+		if err := ValidateGroupAvailabilityProbeProtocol(platform, availabilityProbeConfig.Protocol); err != nil {
+			return nil, infraerrors.BadRequest(invalidGroupAvailabilityProbeConfigReason, err.Error())
+		}
+	}
 
 	sortOrder := 0
 	if input.SortOrder != nil {
@@ -829,6 +834,11 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			return nil, err
 		}
 		group.AvailabilityProbeConfig = config
+	}
+	if group.AvailabilityProbeConfig.Enabled {
+		if err := ValidateGroupAvailabilityProbeProtocol(group.Platform, group.AvailabilityProbeConfig.Protocol); err != nil {
+			return nil, infraerrors.BadRequest(invalidGroupAvailabilityProbeConfigReason, err.Error())
+		}
 	}
 	if input.RPMLimit != nil {
 		group.RPMLimit = *input.RPMLimit

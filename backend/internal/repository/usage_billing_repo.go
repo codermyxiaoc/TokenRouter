@@ -137,6 +137,10 @@ func (r *usageBillingRepository) resolveUsableSubscriptionForGroup(ctx context.C
 			us.daily_usage_usd,
 			us.weekly_usage_usd,
 			us.monthly_usage_usd,
+			us.daily_reset_count,
+			us.weekly_reset_count,
+			us.monthly_reset_count,
+			us.reset_counted_at,
 			COALESCE((
 				SELECT jsonb_agg(spg.group_id ORDER BY spg.group_id)
 				FROM subscription_plan_groups spg
@@ -199,6 +203,10 @@ func (r *usageBillingRepository) resolveUsableSubscriptionForGroup(ctx context.C
 			&row.DailyUsageUSD,
 			&row.WeeklyUsageUSD,
 			&row.MonthlyUsageUSD,
+			&row.DailyResetCount,
+			&row.WeeklyResetCount,
+			&row.MonthlyResetCount,
+			&row.ResetCountedAt,
 			&row.PlanGroupIDsRaw,
 			&row.PlanGroupRateMultipliersRaw,
 		); err != nil {
@@ -811,6 +819,10 @@ type usageBillingSubscriptionRow struct {
 	DailyUsageUSD               float64
 	WeeklyUsageUSD              float64
 	MonthlyUsageUSD             float64
+	DailyResetCount             int64
+	WeeklyResetCount            int64
+	MonthlyResetCount           int64
+	ResetCountedAt              time.Time
 	PlanGroupIDsRaw             []byte
 	PlanGroupRateMultipliersRaw []byte
 }
@@ -832,6 +844,10 @@ func usageBillingSubscriptionRowToService(userID int64, row usageBillingSubscrip
 		DailyUsageUSD:      row.DailyUsageUSD,
 		WeeklyUsageUSD:     row.WeeklyUsageUSD,
 		MonthlyUsageUSD:    row.MonthlyUsageUSD,
+		DailyResetCount:    row.DailyResetCount,
+		WeeklyResetCount:   row.WeeklyResetCount,
+		MonthlyResetCount:  row.MonthlyResetCount,
+		ResetCountedAt:     row.ResetCountedAt,
 		Plan: &service.SubscriptionPlan{
 			ID:                   row.PlanID,
 			GroupIDs:             parseInt64JSONSlice(row.PlanGroupIDsRaw),
@@ -920,6 +936,10 @@ func allocateUsageBillingSubscriptions(ctx context.Context, tx *sql.Tx, cmd *ser
 			daily_usage_usd,
 			weekly_usage_usd,
 			monthly_usage_usd,
+			daily_reset_count,
+			weekly_reset_count,
+			monthly_reset_count,
+			reset_counted_at,
 			COALESCE((
 				SELECT jsonb_object_agg(spg.group_id, spg.rate_multiplier)
 				FROM subscription_plan_groups spg
@@ -1000,6 +1020,10 @@ func allocateUsageBillingSubscriptions(ctx context.Context, tx *sql.Tx, cmd *ser
 			&row.DailyUsageUSD,
 			&row.WeeklyUsageUSD,
 			&row.MonthlyUsageUSD,
+			&row.DailyResetCount,
+			&row.WeeklyResetCount,
+			&row.MonthlyResetCount,
+			&row.ResetCountedAt,
 			&row.PlanGroupRateMultipliersRaw,
 		); err != nil {
 			_ = rows.Close()
@@ -1087,6 +1111,7 @@ func allocateUsageBillingSubscriptions(ctx context.Context, tx *sql.Tx, cmd *ser
 			row.DailyUsageUSD,
 			row.WeeklyUsageUSD,
 			row.MonthlyUsageUSD,
+			row,
 		); err != nil {
 			return 0, 0, nil, err
 		}
@@ -1138,85 +1163,22 @@ func usageBillingSubscriptionRateMultiplier(row usageBillingSubscriptionRow, gro
 // @project-doc docs/domains/payments_and_entitlements.md#subscription_quota_windows
 // normalizeUsageBillingSubscriptionRow 统一解析倍率与事务扣费看到的额度窗口状态。
 func normalizeUsageBillingSubscriptionRow(row usageBillingSubscriptionRow, now time.Time) usageBillingSubscriptionRow {
-	windowStart := startOfDay(now)
-	dailyHasFiniteOuterLimit := hasFiniteUsageBillingLimit(row.WeeklyLimitUSD) || hasFiniteUsageBillingLimit(row.MonthlyLimitUSD)
-	weeklyHasFiniteOuterLimit := hasFiniteUsageBillingLimit(row.MonthlyLimitUSD)
-
-	dailyStart, dailyUsage := normalizeUsageBillingWindow(
-		row.DailyWindowStart, row.DailyLimitUSD, row.DailyUsageUSD,
-		windowStart, 24*time.Hour, now, row.StartsAt, row.ExpiresAt, dailyHasFiniteOuterLimit,
-	)
-	weeklyStart, weeklyUsage := normalizeUsageBillingWindow(
-		row.WeeklyWindowStart, row.WeeklyLimitUSD, row.WeeklyUsageUSD,
-		windowStart, 7*24*time.Hour, now, row.StartsAt, row.ExpiresAt, weeklyHasFiniteOuterLimit,
-	)
-	monthlyStart, monthlyUsage := normalizeUsageBillingWindow(
-		row.MonthlyWindowStart, row.MonthlyLimitUSD, row.MonthlyUsageUSD,
-		windowStart, 30*24*time.Hour, now, row.StartsAt, row.ExpiresAt, false,
-	)
-
-	row.DailyWindowStart = nullTimePtr(dailyStart)
-	row.WeeklyWindowStart = nullTimePtr(weeklyStart)
-	row.MonthlyWindowStart = nullTimePtr(monthlyStart)
-	row.DailyUsageUSD = dailyUsage
-	row.WeeklyUsageUSD = weeklyUsage
-	row.MonthlyUsageUSD = monthlyUsage
+	// 必须在重写窗口前结算原计划的时间点；只读调用仅投影，持有行锁的账务更新再一起落库。
+	counter := usageBillingSubscriptionRowToService(0, row)
+	counter.AccrueScheduledResetCounts(now)
+	// 复用请求准入的窗口规则，避免事务扣费继续使用旧的完整尾段限制或重锚到午夜。
+	counter.NormalizeQuotaWindowsAt(now)
+	row.DailyResetCount = counter.DailyResetCount
+	row.WeeklyResetCount = counter.WeeklyResetCount
+	row.MonthlyResetCount = counter.MonthlyResetCount
+	row.ResetCountedAt = counter.ResetCountedAt
+	row.DailyWindowStart = nullTimePtr(counter.DailyWindowStart)
+	row.WeeklyWindowStart = nullTimePtr(counter.WeeklyWindowStart)
+	row.MonthlyWindowStart = nullTimePtr(counter.MonthlyWindowStart)
+	row.DailyUsageUSD = counter.DailyUsageUSD
+	row.WeeklyUsageUSD = counter.WeeklyUsageUSD
+	row.MonthlyUsageUSD = counter.MonthlyUsageUSD
 	return row
-}
-
-func normalizeUsageBillingWindow(
-	windowStart sql.NullTime,
-	limit sql.NullFloat64,
-	used float64,
-	resetStart time.Time,
-	duration time.Duration,
-	now, startsAt, expiresAt time.Time,
-	hasFiniteOuterLimit bool,
-) (*time.Time, float64) {
-	if !limit.Valid || limit.Float64 <= 0 {
-		if !windowStart.Valid {
-			return nil, used
-		}
-		start := windowStart.Time
-		return &start, used
-	}
-
-	// 1 日卡是一次性日额度：首次扣费要记录窗口，但跨过 24 小时边界后不能清零。
-	if duration == 24*time.Hour && !expiresAt.After(startsAt.AddDate(0, 0, 1)) {
-		if !windowStart.Valid || windowStart.Time.IsZero() {
-			start := resetStart
-			return &start, 0
-		}
-		start := windowStart.Time
-		return &start, used
-	}
-
-	// 没有有限外层额度保护时，尾段仍须容纳完整窗口，避免最高层额度重复发放。
-	if !canStartUsageBillingWindow(resetStart, duration, expiresAt, hasFiniteOuterLimit) {
-		if !windowStart.Valid || windowStart.Time.IsZero() {
-			return nil, used
-		}
-		start := windowStart.Time
-		return &start, used
-	}
-
-	if !windowStart.Valid || windowStart.Time.IsZero() || !windowStart.Time.Add(duration).After(now) {
-		start := resetStart
-		return &start, 0
-	}
-	start := windowStart.Time
-	return &start, used
-}
-
-func canStartUsageBillingWindow(windowStart time.Time, duration time.Duration, expiresAt time.Time, hasFiniteOuterLimit bool) bool {
-	if expiresAt.IsZero() || duration <= 0 || !windowStart.Before(expiresAt) {
-		return false
-	}
-	return hasFiniteOuterLimit || !windowStart.Add(duration).After(expiresAt)
-}
-
-func hasFiniteUsageBillingLimit(limit sql.NullFloat64) bool {
-	return limit.Valid && limit.Float64 > 0
 }
 
 func windowRemaining(limit sql.NullFloat64, used float64) *float64 {
@@ -1261,10 +1223,16 @@ func updateUsageBillingSubscription(
 	dailyUsageUSD float64,
 	weeklyUsageUSD float64,
 	monthlyUsageUSD float64,
+	counter usageBillingSubscriptionRow,
 ) error {
+	// 行锁读取的次数与计数水位、窗口和费用原子提交，后台计数与并发扣费不能重复累加。
 	res, err := tx.ExecContext(ctx, `
 		UPDATE user_subscriptions
 		SET
+			daily_reset_count = $8,
+			weekly_reset_count = $9,
+			monthly_reset_count = $10,
+			reset_counted_at = $11,
 			daily_window_start = $1,
 			weekly_window_start = $2,
 			monthly_window_start = $3,
@@ -1274,7 +1242,8 @@ func updateUsageBillingSubscription(
 			updated_at = NOW()
 		WHERE id = $7
 			AND deleted_at IS NULL
-	`, nullTimePtr(dailyWindowStart), nullTimePtr(weeklyWindowStart), nullTimePtr(monthlyWindowStart), dailyUsageUSD, weeklyUsageUSD, monthlyUsageUSD, subscriptionID)
+	`, nullTimePtr(dailyWindowStart), nullTimePtr(weeklyWindowStart), nullTimePtr(monthlyWindowStart), dailyUsageUSD, weeklyUsageUSD, monthlyUsageUSD, subscriptionID,
+		counter.DailyResetCount, counter.WeeklyResetCount, counter.MonthlyResetCount, counter.ResetCountedAt)
 	if err != nil {
 		return err
 	}
@@ -1293,10 +1262,6 @@ func nullTimePtr(value *time.Time) sql.NullTime {
 		return sql.NullTime{}
 	}
 	return sql.NullTime{Time: *value, Valid: true}
-}
-
-func startOfDay(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }
 
 // usage billing 必须完整记录本次请求成本，余额不足时扣成负数作为欠费。

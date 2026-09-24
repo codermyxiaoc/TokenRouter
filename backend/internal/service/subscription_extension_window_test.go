@@ -40,7 +40,9 @@ func (r *extensionWindowRepo) ActivateWindows(_ context.Context, id int64, start
 		return ErrSubscriptionNotFound
 	}
 	if activation.Daily {
-		sub.DailyWindowStart = &start
+		// 仓储只将日窗口对齐零点，周/月窗口保留传入的精确时刻。
+		dailyStart := startOfDay(start)
+		sub.DailyWindowStart = &dailyStart
 	}
 	if activation.Weekly {
 		sub.WeeklyWindowStart = &start

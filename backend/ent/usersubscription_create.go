@@ -231,6 +231,62 @@ func (_c *UserSubscriptionCreate) SetNillableMonthlyUsageUsd(v *float64) *UserSu
 	return _c
 }
 
+// SetDailyResetCount sets the "daily_reset_count" field.
+func (_c *UserSubscriptionCreate) SetDailyResetCount(v int64) *UserSubscriptionCreate {
+	_c.mutation.SetDailyResetCount(v)
+	return _c
+}
+
+// SetNillableDailyResetCount sets the "daily_reset_count" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableDailyResetCount(v *int64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetDailyResetCount(*v)
+	}
+	return _c
+}
+
+// SetWeeklyResetCount sets the "weekly_reset_count" field.
+func (_c *UserSubscriptionCreate) SetWeeklyResetCount(v int64) *UserSubscriptionCreate {
+	_c.mutation.SetWeeklyResetCount(v)
+	return _c
+}
+
+// SetNillableWeeklyResetCount sets the "weekly_reset_count" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableWeeklyResetCount(v *int64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetWeeklyResetCount(*v)
+	}
+	return _c
+}
+
+// SetMonthlyResetCount sets the "monthly_reset_count" field.
+func (_c *UserSubscriptionCreate) SetMonthlyResetCount(v int64) *UserSubscriptionCreate {
+	_c.mutation.SetMonthlyResetCount(v)
+	return _c
+}
+
+// SetNillableMonthlyResetCount sets the "monthly_reset_count" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableMonthlyResetCount(v *int64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetMonthlyResetCount(*v)
+	}
+	return _c
+}
+
+// SetResetCountedAt sets the "reset_counted_at" field.
+func (_c *UserSubscriptionCreate) SetResetCountedAt(v time.Time) *UserSubscriptionCreate {
+	_c.mutation.SetResetCountedAt(v)
+	return _c
+}
+
+// SetNillableResetCountedAt sets the "reset_counted_at" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableResetCountedAt(v *time.Time) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetResetCountedAt(*v)
+	}
+	return _c
+}
+
 // SetAssignedBy sets the "assigned_by" field.
 func (_c *UserSubscriptionCreate) SetAssignedBy(v int64) *UserSubscriptionCreate {
 	_c.mutation.SetAssignedBy(v)
@@ -398,6 +454,25 @@ func (_c *UserSubscriptionCreate) defaults() error {
 		v := usersubscription.DefaultMonthlyUsageUsd
 		_c.mutation.SetMonthlyUsageUsd(v)
 	}
+	if _, ok := _c.mutation.DailyResetCount(); !ok {
+		v := usersubscription.DefaultDailyResetCount
+		_c.mutation.SetDailyResetCount(v)
+	}
+	if _, ok := _c.mutation.WeeklyResetCount(); !ok {
+		v := usersubscription.DefaultWeeklyResetCount
+		_c.mutation.SetWeeklyResetCount(v)
+	}
+	if _, ok := _c.mutation.MonthlyResetCount(); !ok {
+		v := usersubscription.DefaultMonthlyResetCount
+		_c.mutation.SetMonthlyResetCount(v)
+	}
+	if _, ok := _c.mutation.ResetCountedAt(); !ok {
+		if usersubscription.DefaultResetCountedAt == nil {
+			return fmt.Errorf("ent: uninitialized usersubscription.DefaultResetCountedAt (forgotten import ent/runtime?)")
+		}
+		v := usersubscription.DefaultResetCountedAt()
+		_c.mutation.SetResetCountedAt(v)
+	}
 	if _, ok := _c.mutation.AssignedAt(); !ok {
 		if usersubscription.DefaultAssignedAt == nil {
 			return fmt.Errorf("ent: uninitialized usersubscription.DefaultAssignedAt (forgotten import ent/runtime?)")
@@ -444,6 +519,33 @@ func (_c *UserSubscriptionCreate) check() error {
 	}
 	if _, ok := _c.mutation.MonthlyUsageUsd(); !ok {
 		return &ValidationError{Name: "monthly_usage_usd", err: errors.New(`ent: missing required field "UserSubscription.monthly_usage_usd"`)}
+	}
+	if _, ok := _c.mutation.DailyResetCount(); !ok {
+		return &ValidationError{Name: "daily_reset_count", err: errors.New(`ent: missing required field "UserSubscription.daily_reset_count"`)}
+	}
+	if v, ok := _c.mutation.DailyResetCount(); ok {
+		if err := usersubscription.DailyResetCountValidator(v); err != nil {
+			return &ValidationError{Name: "daily_reset_count", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.daily_reset_count": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.WeeklyResetCount(); !ok {
+		return &ValidationError{Name: "weekly_reset_count", err: errors.New(`ent: missing required field "UserSubscription.weekly_reset_count"`)}
+	}
+	if v, ok := _c.mutation.WeeklyResetCount(); ok {
+		if err := usersubscription.WeeklyResetCountValidator(v); err != nil {
+			return &ValidationError{Name: "weekly_reset_count", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.weekly_reset_count": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.MonthlyResetCount(); !ok {
+		return &ValidationError{Name: "monthly_reset_count", err: errors.New(`ent: missing required field "UserSubscription.monthly_reset_count"`)}
+	}
+	if v, ok := _c.mutation.MonthlyResetCount(); ok {
+		if err := usersubscription.MonthlyResetCountValidator(v); err != nil {
+			return &ValidationError{Name: "monthly_reset_count", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.monthly_reset_count": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.ResetCountedAt(); !ok {
+		return &ValidationError{Name: "reset_counted_at", err: errors.New(`ent: missing required field "UserSubscription.reset_counted_at"`)}
 	}
 	if _, ok := _c.mutation.AssignedAt(); !ok {
 		return &ValidationError{Name: "assigned_at", err: errors.New(`ent: missing required field "UserSubscription.assigned_at"`)}
@@ -540,6 +642,22 @@ func (_c *UserSubscriptionCreate) createSpec() (*UserSubscription, *sqlgraph.Cre
 	if value, ok := _c.mutation.MonthlyUsageUsd(); ok {
 		_spec.SetField(usersubscription.FieldMonthlyUsageUsd, field.TypeFloat64, value)
 		_node.MonthlyUsageUsd = value
+	}
+	if value, ok := _c.mutation.DailyResetCount(); ok {
+		_spec.SetField(usersubscription.FieldDailyResetCount, field.TypeInt64, value)
+		_node.DailyResetCount = value
+	}
+	if value, ok := _c.mutation.WeeklyResetCount(); ok {
+		_spec.SetField(usersubscription.FieldWeeklyResetCount, field.TypeInt64, value)
+		_node.WeeklyResetCount = value
+	}
+	if value, ok := _c.mutation.MonthlyResetCount(); ok {
+		_spec.SetField(usersubscription.FieldMonthlyResetCount, field.TypeInt64, value)
+		_node.MonthlyResetCount = value
+	}
+	if value, ok := _c.mutation.ResetCountedAt(); ok {
+		_spec.SetField(usersubscription.FieldResetCountedAt, field.TypeTime, value)
+		_node.ResetCountedAt = value
 	}
 	if value, ok := _c.mutation.AssignedAt(); ok {
 		_spec.SetField(usersubscription.FieldAssignedAt, field.TypeTime, value)
@@ -939,6 +1057,72 @@ func (u *UserSubscriptionUpsert) UpdateMonthlyUsageUsd() *UserSubscriptionUpsert
 // AddMonthlyUsageUsd adds v to the "monthly_usage_usd" field.
 func (u *UserSubscriptionUpsert) AddMonthlyUsageUsd(v float64) *UserSubscriptionUpsert {
 	u.Add(usersubscription.FieldMonthlyUsageUsd, v)
+	return u
+}
+
+// SetDailyResetCount sets the "daily_reset_count" field.
+func (u *UserSubscriptionUpsert) SetDailyResetCount(v int64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldDailyResetCount, v)
+	return u
+}
+
+// UpdateDailyResetCount sets the "daily_reset_count" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateDailyResetCount() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldDailyResetCount)
+	return u
+}
+
+// AddDailyResetCount adds v to the "daily_reset_count" field.
+func (u *UserSubscriptionUpsert) AddDailyResetCount(v int64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldDailyResetCount, v)
+	return u
+}
+
+// SetWeeklyResetCount sets the "weekly_reset_count" field.
+func (u *UserSubscriptionUpsert) SetWeeklyResetCount(v int64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldWeeklyResetCount, v)
+	return u
+}
+
+// UpdateWeeklyResetCount sets the "weekly_reset_count" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateWeeklyResetCount() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldWeeklyResetCount)
+	return u
+}
+
+// AddWeeklyResetCount adds v to the "weekly_reset_count" field.
+func (u *UserSubscriptionUpsert) AddWeeklyResetCount(v int64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldWeeklyResetCount, v)
+	return u
+}
+
+// SetMonthlyResetCount sets the "monthly_reset_count" field.
+func (u *UserSubscriptionUpsert) SetMonthlyResetCount(v int64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldMonthlyResetCount, v)
+	return u
+}
+
+// UpdateMonthlyResetCount sets the "monthly_reset_count" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateMonthlyResetCount() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldMonthlyResetCount)
+	return u
+}
+
+// AddMonthlyResetCount adds v to the "monthly_reset_count" field.
+func (u *UserSubscriptionUpsert) AddMonthlyResetCount(v int64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldMonthlyResetCount, v)
+	return u
+}
+
+// SetResetCountedAt sets the "reset_counted_at" field.
+func (u *UserSubscriptionUpsert) SetResetCountedAt(v time.Time) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldResetCountedAt, v)
+	return u
+}
+
+// UpdateResetCountedAt sets the "reset_counted_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateResetCountedAt() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldResetCountedAt)
 	return u
 }
 
@@ -1371,6 +1555,83 @@ func (u *UserSubscriptionUpsertOne) AddMonthlyUsageUsd(v float64) *UserSubscript
 func (u *UserSubscriptionUpsertOne) UpdateMonthlyUsageUsd() *UserSubscriptionUpsertOne {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.UpdateMonthlyUsageUsd()
+	})
+}
+
+// SetDailyResetCount sets the "daily_reset_count" field.
+func (u *UserSubscriptionUpsertOne) SetDailyResetCount(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetDailyResetCount(v)
+	})
+}
+
+// AddDailyResetCount adds v to the "daily_reset_count" field.
+func (u *UserSubscriptionUpsertOne) AddDailyResetCount(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddDailyResetCount(v)
+	})
+}
+
+// UpdateDailyResetCount sets the "daily_reset_count" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateDailyResetCount() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateDailyResetCount()
+	})
+}
+
+// SetWeeklyResetCount sets the "weekly_reset_count" field.
+func (u *UserSubscriptionUpsertOne) SetWeeklyResetCount(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetWeeklyResetCount(v)
+	})
+}
+
+// AddWeeklyResetCount adds v to the "weekly_reset_count" field.
+func (u *UserSubscriptionUpsertOne) AddWeeklyResetCount(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddWeeklyResetCount(v)
+	})
+}
+
+// UpdateWeeklyResetCount sets the "weekly_reset_count" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateWeeklyResetCount() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateWeeklyResetCount()
+	})
+}
+
+// SetMonthlyResetCount sets the "monthly_reset_count" field.
+func (u *UserSubscriptionUpsertOne) SetMonthlyResetCount(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetMonthlyResetCount(v)
+	})
+}
+
+// AddMonthlyResetCount adds v to the "monthly_reset_count" field.
+func (u *UserSubscriptionUpsertOne) AddMonthlyResetCount(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddMonthlyResetCount(v)
+	})
+}
+
+// UpdateMonthlyResetCount sets the "monthly_reset_count" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateMonthlyResetCount() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateMonthlyResetCount()
+	})
+}
+
+// SetResetCountedAt sets the "reset_counted_at" field.
+func (u *UserSubscriptionUpsertOne) SetResetCountedAt(v time.Time) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetResetCountedAt(v)
+	})
+}
+
+// UpdateResetCountedAt sets the "reset_counted_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateResetCountedAt() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateResetCountedAt()
 	})
 }
 
@@ -1981,6 +2242,83 @@ func (u *UserSubscriptionUpsertBulk) AddMonthlyUsageUsd(v float64) *UserSubscrip
 func (u *UserSubscriptionUpsertBulk) UpdateMonthlyUsageUsd() *UserSubscriptionUpsertBulk {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.UpdateMonthlyUsageUsd()
+	})
+}
+
+// SetDailyResetCount sets the "daily_reset_count" field.
+func (u *UserSubscriptionUpsertBulk) SetDailyResetCount(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetDailyResetCount(v)
+	})
+}
+
+// AddDailyResetCount adds v to the "daily_reset_count" field.
+func (u *UserSubscriptionUpsertBulk) AddDailyResetCount(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddDailyResetCount(v)
+	})
+}
+
+// UpdateDailyResetCount sets the "daily_reset_count" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateDailyResetCount() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateDailyResetCount()
+	})
+}
+
+// SetWeeklyResetCount sets the "weekly_reset_count" field.
+func (u *UserSubscriptionUpsertBulk) SetWeeklyResetCount(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetWeeklyResetCount(v)
+	})
+}
+
+// AddWeeklyResetCount adds v to the "weekly_reset_count" field.
+func (u *UserSubscriptionUpsertBulk) AddWeeklyResetCount(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddWeeklyResetCount(v)
+	})
+}
+
+// UpdateWeeklyResetCount sets the "weekly_reset_count" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateWeeklyResetCount() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateWeeklyResetCount()
+	})
+}
+
+// SetMonthlyResetCount sets the "monthly_reset_count" field.
+func (u *UserSubscriptionUpsertBulk) SetMonthlyResetCount(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetMonthlyResetCount(v)
+	})
+}
+
+// AddMonthlyResetCount adds v to the "monthly_reset_count" field.
+func (u *UserSubscriptionUpsertBulk) AddMonthlyResetCount(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddMonthlyResetCount(v)
+	})
+}
+
+// UpdateMonthlyResetCount sets the "monthly_reset_count" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateMonthlyResetCount() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateMonthlyResetCount()
+	})
+}
+
+// SetResetCountedAt sets the "reset_counted_at" field.
+func (u *UserSubscriptionUpsertBulk) SetResetCountedAt(v time.Time) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetResetCountedAt(v)
+	})
+}
+
+// UpdateResetCountedAt sets the "reset_counted_at" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateResetCountedAt() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateResetCountedAt()
 	})
 }
 

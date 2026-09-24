@@ -30,6 +30,7 @@ export interface PricingFormEntry {
   fast_multiplier?: number | string | null
   flex_multiplier?: number | string | null
   max_reasoning_effort_multiplier?: number | string | null
+  reasoning_effort_multipliers?: Record<string, number | string | null>
   input_price: number | string | null
   output_price: number | string | null
   cache_write_price: number | string | null
@@ -180,6 +181,20 @@ export function isValidPositiveMultiplier(val: number | string | null | undefine
   if (val === null || val === undefined || val === '') return true
   const multiplier = Number(val)
   return Number.isFinite(multiplier) && multiplier > 0
+}
+
+// 仅发送已填写的档位，空值继续由服务端沿用旧 Max 与模型默认规则。
+export const REASONING_EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+export function reasoningEffortMultipliersToAPI(values: PricingFormEntry['reasoning_effort_multipliers']): Record<string, number> {
+  return Object.fromEntries(Object.entries(values || {})
+    .filter(([, value]) => value !== null && value !== undefined && value !== '')
+    .map(([effort, value]) => [effort, Number(value)]))
+}
+
+export function isValidReasoningEffortMultipliers(values: PricingFormEntry['reasoning_effort_multipliers']): boolean {
+  return Object.entries(values || {}).every(([effort, value]) =>
+    (REASONING_EFFORT_LEVELS as readonly string[]).includes(effort) && isValidPositiveMultiplier(value))
 }
 
 /** 前端显示值($/MTok) → 后端存储值(per-token) */

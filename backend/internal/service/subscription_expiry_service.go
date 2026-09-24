@@ -109,6 +109,14 @@ func (s *SubscriptionExpiryService) Stop() {
 }
 
 func (s *SubscriptionExpiryService) runOnce() {
+	// 复用现有每分钟生命周期任务；计数失败独立记录，不阻止过期状态更新和提醒。
+	if counter, ok := s.userSubRepo.(ScheduledSubscriptionResetCounter); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), subscriptionExpiryUpdateTimeout)
+		if err := counter.RefreshScheduledResetCounts(ctx, time.Now()); err != nil {
+			log.Printf("[SubscriptionExpiry] Update scheduled reset counts failed: %v", err)
+		}
+		cancel()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.expiredStatusUpdateTimeout())
 	updated, err := s.userSubRepo.BatchUpdateExpiredStatus(ctx)
 	cancel()

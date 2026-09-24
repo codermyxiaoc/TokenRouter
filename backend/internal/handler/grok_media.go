@@ -52,6 +52,56 @@ func (h *OpenAIGatewayHandler) GrokVideoContent(c *gin.Context) {
 	h.handleGrokMedia(c, service.GrokMediaEndpointVideoContent, c.Param("request_id"))
 }
 
+// SetMediaTaskObserver 在装配时注入列表投影存储，不改变视频网关的查询与结算流程。
+func (h *OpenAIGatewayHandler) SetMediaTaskObserver(observer service.MediaTaskObserver) {
+	h.mediaTaskObserver = observer
+}
+
+// observeVideoTask 记录经过既有任务归属校验后的安全元数据；存储故障不能改写上游响应。
+func (h *OpenAIGatewayHandler) observeVideoTask(c *gin.Context, endpoint service.GrokMediaEndpoint, requestID string, key *service.APIKey, _ int64, account *service.Account, result *service.OpenAIForwardResult, createdAt string, requestModel string) {
+	if h.mediaTaskObserver == nil || result == nil || result.MediaTaskObservation == nil || key == nil || account == nil {
+		return
+	}
+	observation := *result.MediaTaskObservation
+	observation.TaskID = firstNonEmptyString(requestID, result.ResponseID)
+	if endpoint.IsSeedance() {
+		observation.TaskID = strings.TrimPrefix(observation.TaskID, "seedance:")
+	}
+	if observation.TaskID == "" {
+		return
+	}
+	// 列表归属沿用使用记录中的 Key 成员；团队付款人只参与原任务鉴权与结算。
+	observation.UserID, observation.APIKeyID = key.UserID, key.ID
+	if key.GroupID != nil {
+		id := *key.GroupID
+		observation.GroupID = &id
+	}
+	accountID := account.ID
+	observation.AccountID = &accountID
+	if isGrokVideoCreateEndpoint(endpoint) {
+		observation.Model = clientRequestedModel(c, requestModel)
+		observation.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+		if observation.CreatedAt.IsZero() {
+			observation.CreatedAt = time.Now().UTC()
+		}
+		expiresAt := observation.CreatedAt.Add(24 * time.Hour)
+		observation.ExpiresAt = &expiresAt
+	}
+	// 只有已有可计费用量的完成观测关联账单 ID，完成状态本身不代表已成功扣费。
+	if result.VideoCount > 0 || (endpoint.IsSeedance() && result.Usage.OutputTokens > 0) {
+		billingID := observation.TaskID
+		if endpoint.IsSeedance() {
+			billingID = service.SeedanceTaskKey(billingID)
+		}
+		observation.RequestID = service.StableGrokVideoBillingRequestID(billingID)
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
+	defer cancel()
+	if err := h.mediaTaskObserver.ObserveMediaTask(ctx, observation); err != nil {
+		logger.L().Warn("media_task.observation_failed", zap.String("source", observation.Source), zap.String("task_id", observation.TaskID), zap.Error(err))
+	}
+}
+
 func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.GrokMediaEndpoint, requestID string) {
 	platform := service.PlatformGrok
 	noAccountCode, noAccountMessage := "grok_media_no_eligible_account", "No eligible Grok media accounts"
@@ -477,6 +527,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		}
 
 		h.gatewayService.ReportOpenAIAccountScheduleResult(account, grokMediaScheduleModel(account, routingModel, result), true, nil)
+		h.observeVideoTask(c, endpoint, requestID, apiKey, subject.UserID, account, result, videoCreateStartedAt, requestModel)
 		if isGrokVideoCreateEndpoint(endpoint) && strings.TrimSpace(result.ResponseID) != "" {
 			persistCtx := requestCtx
 			if endpoint.IsSeedance() {

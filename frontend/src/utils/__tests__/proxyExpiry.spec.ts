@@ -38,6 +38,9 @@ describe('proxyExpiryBadgeClass', () => {
 })
 
 describe('proxyExpiryLabelKey', () => {
+  it('已到期不足一天且后台仍为 active 时立即标记过期', () => {
+    expect(proxyExpiryLabelKey(isoInDays(-0.25), 'active')).toEqual({ key: 'admin.proxies.expired' })
+  })
   it('status=expired → expired key', () => {
     expect(proxyExpiryLabelKey(isoInDays(30), 'expired')).toEqual({ key: 'admin.proxies.expired' })
   })

@@ -694,13 +694,42 @@ describe('UseKeyModal', () => {
 
     const parsed = JSON.parse(wrapper.find('pre code').text())
     const models = parsed.provider.openai.models
-    for (const model of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra']) {
+    for (const model of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']) {
       expect(models[model]).toBeDefined()
       expect(models[model].variants).toHaveProperty('max')
       expect(models[model].variants).toHaveProperty('xhigh')
     }
     expect(models).not.toHaveProperty('gpt-5.6')
     expect(models['gpt-6-astra'].name).toBe('GPT-6 Astra')
+    for (const model of ['gpt-6-sol', 'gpt-6-luna']) {
+      expect(models[model].limit).toEqual({ context: 1050000, output: 128000 })
+      expect(models[model].options).toEqual({ store: false, reasoningEffort: 'medium' })
+      expect(models[model].tool_call).toBe(true)
+      for (const effort of ['none', 'low', 'medium', 'high', 'xhigh', 'max']) {
+        expect(models[model].variants[effort].reasoningEffort).toBe(effort)
+      }
+    }
+  })
+
+  it('原生 Anthropic 配置导出 Opus 5.5 的自适应思考，保留客户端默认模型选择', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: { show: true, apiKey: 'sk-test', baseUrl: 'https://example.com/v1', platform: 'anthropic',
+        allowedClientProtocols: ['anthropic_messages'] },
+      global: { stubs: { BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }, Icon: true } }
+    })
+    const openCodeTab = wrapper.findAll('button').find(button => button.text().includes('keys.useKeyModal.cliTabs.opencode'))
+    await openCodeTab!.trigger('click')
+    const config = JSON.parse(wrapper.get('pre code').text())
+    expect(config).not.toHaveProperty('model')
+    expect(config.provider.anthropic.npm).toBe('@ai-sdk/anthropic')
+    expect(config.provider.anthropic.options.baseURL).toBe('https://example.com/v1')
+    expect(config.provider.anthropic.models['claude-opus-5-5']).toEqual({
+      name: 'Claude Opus 5.5',
+      limit: { context: 1000000, output: 128000 },
+      modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+      options: { thinking: { type: 'adaptive' } },
+      tool_call: true
+    })
   })
 
   it('renders Claude Fable 5 OpenCode config with adaptive thinking', async () => {
@@ -738,6 +767,7 @@ describe('UseKeyModal', () => {
 
     expect(claudeConfig).toBeDefined()
     const parsed = JSON.parse(claudeConfig!)
+    expect(parsed.provider['antigravity-claude'].models).not.toHaveProperty('claude-opus-5-5')
     const fable = parsed.provider['antigravity-claude'].models['claude-fable-5']
     const fable51 = parsed.provider['antigravity-claude'].models['claude-fable-5-1']
 

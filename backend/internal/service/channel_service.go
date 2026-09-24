@@ -726,6 +726,17 @@ func validatePricingBillingMode(pricing []ChannelModelPricing) error {
 }
 
 func checkBillingModeRequirements(p ChannelModelPricing) error {
+	// 新倍率只允许已知档位和有限正数；空映射不改变旧价卡语义。
+	for effort, multiplier := range p.ReasoningEffortMultipliers {
+		switch effort {
+		case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+		default:
+			return infraerrors.BadRequest("INVALID_REASONING_EFFORT_MULTIPLIER", fmt.Sprintf("unsupported reasoning effort %q", effort))
+		}
+		if math.IsNaN(multiplier) || math.IsInf(multiplier, 0) || multiplier <= 0 {
+			return infraerrors.BadRequest("INVALID_REASONING_EFFORT_MULTIPLIER", fmt.Sprintf("reasoning_effort_multipliers.%s must be finite and > 0", effort))
+		}
+	}
 	if p.BillingMode == BillingModePerRequest || p.BillingMode == BillingModeImage || p.BillingMode == BillingModeVideo {
 		if p.PerRequestPrice == nil && len(p.Intervals) == 0 {
 			return infraerrors.BadRequest(
@@ -780,7 +791,7 @@ func checkBillingModeRequirements(p ChannelModelPricing) error {
 			return infraerrors.BadRequest("INVALID_MULTIPLIER", fmt.Sprintf("%s must be > 0", c.field))
 		}
 	}
-	if p.FastMultiplier != nil || p.FlexMultiplier != nil || p.MaxReasoningEffortMultiplier != nil {
+	if p.FastMultiplier != nil || p.FlexMultiplier != nil || p.MaxReasoningEffortMultiplier != nil || len(p.ReasoningEffortMultipliers) > 0 {
 		mode := p.BillingMode
 		if mode == "" {
 			mode = BillingModeToken
@@ -788,7 +799,7 @@ func checkBillingModeRequirements(p ChannelModelPricing) error {
 		if mode != BillingModeToken {
 			return infraerrors.BadRequest(
 				"TIER_MULTIPLIER_UNSUPPORTED_BILLING_MODE",
-				"fast_multiplier, flex_multiplier and max_reasoning_effort_multiplier are only supported for token billing mode",
+				"service tier and reasoning effort multipliers are only supported for token billing mode",
 			)
 		}
 	}
@@ -864,7 +875,7 @@ func validateAccountStatsPricingEntries(pricing []ChannelModelPricing) error {
 				"service tier multipliers are not supported for account stats pricing",
 			)
 		}
-		if p.MaxReasoningEffortMultiplier != nil {
+		if p.MaxReasoningEffortMultiplier != nil || len(p.ReasoningEffortMultipliers) > 0 {
 			return infraerrors.BadRequest(
 				"ACCOUNT_STATS_REASONING_MULTIPLIER_UNSUPPORTED",
 				"max_reasoning_effort_multiplier is not supported for account stats pricing",

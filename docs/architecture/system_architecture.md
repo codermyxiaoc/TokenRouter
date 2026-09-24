@@ -64,10 +64,12 @@
 完整应用启动顺序为：
 
 1. 初始化 bootstrap 日志并用 `LoadForBootstrap` 读取配置。启动阶段允许 JWT secret 暂空，但会使用临时值完成初次结构校验。
-2. 初始化正式日志；`simple` 模式在此明确发出跳过计费和配额的警告。
-3. Wire 构建依赖图。`repository.InitEnt` 先初始化时区和 PostgreSQL 连接池，在十分钟超时内执行嵌入式 SQL 迁移，再从配置或数据库补齐系统密钥并执行完整配置校验。`simple` 模式还会补齐默认分组与管理员并发值。
+2. 初始化正式日志；`simple` 模式在此说明跳过余额/订阅扣费，并显示可选密钥消费窗口限制是否开启。
+3. Wire 构建依赖图。`repository.InitEnt` 先初始化时区和 PostgreSQL 连接池，在十分钟超时内执行嵌入式 SQL 迁移，再从配置或数据库补齐系统密钥并执行完整配置校验。`simple` 模式按 `simple_mode.auto_create_default_groups` 决定是否补齐默认分组；管理员并发初始化保持执行。
 4. 创建 Redis 客户端、仓储、服务、handler、中间件和 Gin server。多个 provider 会在构造后立即启动各自 worker，例如 token 刷新、到期处理、调度快照、用量记录、聚合、清理、备份、批量图片作业、创作台队列（`CreativeWorkerRuntime`，`creative.queue_enabled` 时运行数据库设置 `creative_worker_count` 指定数量的任务 worker、一个 delayed mover、一个 stale active recovery、outbox reconciler 和 transient cleanup reconciler）和支付订单过期处理。
 5. 在 goroutine 中调用 `ListenAndServe`，主 goroutine 等待 `SIGINT` 或 `SIGTERM`。
+
+订阅过期服务在现有启动及每分钟循环中同时结算计划重置次数，后台通过短事务锁定订阅行并更新计数水位；它不激活或清零实际扣费窗口。列表投影、请求扣费与管理员修改共用计数算法，多实例以数据库水位保持幂等。计数失败不阻止过期状态更新和原有到期提醒，详见[订阅额度窗口](../domains/payments_and_entitlements.md#subscription_quota_windows)。
 
 `ProvideTicketRuntime` 启动工单每分钟到期扫描及独立邮件队列，`provideCleanup` 在数据库关闭前调用幂等 `Stop` 并取消执行上下文。多实例过期扫描使用状态和截止时间条件更新，避免覆盖同时到达的用户回复；通知只由新消息写入实例入队，以消息编号复用通知发送去重。工单状态及附件持久化见[工单](../domains/support_tickets.md)。
 
@@ -78,6 +80,10 @@
 依赖 Redis Pub/Sub 的 TLS 指纹 Profile/Router 缓存订阅由对应服务在 Redis 关闭前主动取消并等待退出；Redis 被动关闭导致的 channel 结束只作为异常路径记录告警。
 
 新增有 goroutine、定时器、缓冲写或外部连接的服务时，必须同时回答三个问题：由哪个 provider 启动、停止方法是否幂等、在 Redis/PostgreSQL 关闭前需要完成什么 drain/flush。只加入 Wire provider set 而不加入 `provideCleanup` 会留下关闭竞态。
+
+`ProvideClaudeCodeVersionSyncService` 启动 Claude Code 官方稳定版同步任务，初次启动在已有同步结果仍新鲜时跳过拉取，随后每小时运行。`ProvideSettingService` 注入运行时版本解析器；Cleanup 在数据库关闭前等待同步服务幂等停止。网络失败仅保留已有版本，不影响站点启动或正常网关转发。
+
+`ProvideImageTaskService` 启动异步图片状态补偿循环，接受的任务另有执行心跳；`provideCleanup` 在数据库和 Redis 关闭前调用幂等 `Stop` 等待循环退出。完成结果保存于 PostgreSQL，实例中断只登记执行结果不确定，不重新调用模型；恢复及保留边界见[异步图片与任务记录](../domains/media_tasks.md)。
 
 ## 数据所有权
 

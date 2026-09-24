@@ -52,7 +52,9 @@ func (r *resetQuotaUserSubRepoStub) ResetUsageWindows(_ context.Context, _ int64
 	}
 	if resetDaily {
 		r.sub.DailyUsageUSD = 0
-		r.sub.DailyWindowStart = &windowStart
+		// 模拟真实仓储：日窗口按零点，周/月保留操作时刻。
+		dailyStart := startOfDay(windowStart)
+		r.sub.DailyWindowStart = &dailyStart
 	}
 	if resetWeekly {
 		r.sub.WeeklyUsageUSD = 0

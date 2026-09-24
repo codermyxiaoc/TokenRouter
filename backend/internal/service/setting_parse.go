@@ -220,8 +220,11 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpsMetricsIntervalSeconds:    "60",
 
 		// Claude Code version check (default: empty = disabled)
-		SettingKeyMinClaudeCodeVersion: "",
-		SettingKeyMaxClaudeCodeVersion: "",
+		SettingKeyClaudeCodeClientVersion:          "",
+		SettingKeyClaudeCodeClientVersionSynced:    "",
+		SettingKeyClaudeCodeVersionAutoSyncEnabled: "true",
+		SettingKeyMinClaudeCodeVersion:             "",
+		SettingKeyMaxClaudeCodeVersion:             "",
 
 		// 分组隔离（默认不允许未分组 Key 调度）
 		SettingKeyAllowUngroupedKeyScheduling:                  "false",
@@ -853,6 +856,9 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 
 	// Claude Code version check
+	result.ClaudeCodeClientVersion = NormalizeClaudeCodeClientVersion(settings[SettingKeyClaudeCodeClientVersion])
+	result.ClaudeCodeClientVersionSynced = NormalizeClaudeCodeClientVersion(settings[SettingKeyClaudeCodeClientVersionSynced])
+	result.ClaudeCodeVersionAutoSyncEnabled = settings[SettingKeyClaudeCodeVersionAutoSyncEnabled] != "false"
 	result.MinClaudeCodeVersion = settings[SettingKeyMinClaudeCodeVersion]
 	result.MaxClaudeCodeVersion = settings[SettingKeyMaxClaudeCodeVersion]
 

@@ -132,6 +132,7 @@ func TestContentModerationRepositoryCreateLog_PersistsMatchedKeyword(t *testing.
 			log.ImageUnitCount,
 			log.FailedUnitCount,
 			sqlmock.AnyArg(), // 失败单元
+			sqlmock.AnyArg(), // 审核引擎元数据
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(99), createdAt))
 	mock.ExpectCommit()
@@ -204,12 +205,12 @@ func TestContentModerationRepositoryListLogsReturnsTeamAttribution(t *testing.T)
 			"endpoint", "provider", "model", "mode", "action", "flagged", "highest_category", "highest_score",
 			"category_scores", "threshold_snapshot", "input_excerpt", "upstream_latency_ms", "error",
 			"violation_count", "auto_banned", "email_sent", "user_status", "queue_delay_ms", "matched_keyword",
-			"source", "content_complete", "audit_complete", "text_unit_count", "image_unit_count", "failed_unit_count", "created_at",
+			"source", "content_complete", "audit_complete", "text_unit_count", "image_unit_count", "failed_unit_count", "created_at", "engine_meta",
 		}).AddRow(
 			int64(9), "req", int64(2002), "member@example.com", int64(1001), int64(3003), int64(4004), "team-key", nil, "",
 			"/v1/responses", "openai", "gpt-5", "pre_block", "block", true, "violence", 0.9,
 			`{"violence":0.9}`, `{"violence":0.8}`, "excerpt", 12, "",
-			1, true, false, "disabled", 3, "", "user", true, true, 1, 0, 0, createdAt,
+			1, true, false, "disabled", 3, "", "user", true, true, 1, 0, 0, createdAt, `{"engine":"openai","model":"omni-moderation"}`,
 		),
 	)
 
@@ -218,6 +219,7 @@ func TestContentModerationRepositoryListLogsReturnsTeamAttribution(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), page.Total)
 	require.Len(t, items, 1)
+	require.Equal(t, "openai", items[0].EngineMeta.Engine)
 	require.Equal(t, int64(2002), *items[0].UserID)
 	require.Equal(t, int64(1001), *items[0].BillingUserID)
 	require.Equal(t, int64(3003), *items[0].TeamID)
@@ -239,11 +241,11 @@ func TestContentModerationRepositoryGetLogReturnsFullReviewPayload(t *testing.T)
 			"category_scores", "threshold_snapshot", "input_excerpt", "upstream_latency_ms", "error",
 			"violation_count", "auto_banned", "email_sent", "user_status", "queue_delay_ms", "matched_keyword",
 			"source", "input_items", "content_complete", "audit_complete", "text_unit_count", "image_unit_count",
-			"failed_unit_count", "failed_units", "created_at",
+			"failed_unit_count", "failed_units", "created_at", "engine_meta",
 		}).AddRow(
 			int64(9), "req", int64(1001), "user@example.com", int64(1000), int64(3001), nil, "", nil, "", "/v1/responses", "openai", "gpt-5", "pre_block", "allow", false, "sexual", 0.1,
 			`{"sexual":0.1}`, `{"sexual":0.65}`, "excerpt", 12, "timeout", 0, false, false, "active", 3, "",
-			"tool", inputItems, true, false, 1, 1, 1, failedUnits, createdAt,
+			"tool", inputItems, true, false, 1, 1, 1, failedUnits, createdAt, `{"engine":"typesafe","model":"jev-test","rules_version":"v1","skipped_images":1}`,
 		),
 	)
 	mock.ExpectQuery("FROM content_moderation_media").WithArgs(int64(9)).WillReturnRows(
@@ -259,6 +261,8 @@ func TestContentModerationRepositoryGetLogReturnsFullReviewPayload(t *testing.T)
 	require.Equal(t, int64(3001), *item.TeamID)
 	require.True(t, item.ContentComplete)
 	require.False(t, item.AuditComplete)
+	require.Equal(t, "typesafe", item.EngineMeta.Engine)
+	require.Equal(t, 1, item.EngineMeta.SkippedImages)
 	require.Equal(t, "complete output", item.InputItems[0].Text)
 	require.Equal(t, "timeout", item.FailedUnits[0].Error)
 	require.Len(t, item.Media, 1)

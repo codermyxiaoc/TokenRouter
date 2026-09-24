@@ -30,6 +30,7 @@ func RegisterAdminRoutes(
 	{
 		// 工单处理和设置沿用管理员认证与操作审计。
 		registerAdminTicketRoutes(admin, h)
+		registerMediaTaskRoutes(admin, h, true)
 
 		// 仪表盘
 		registerDashboardRoutes(admin, h)
@@ -160,6 +161,7 @@ func registerAffiliateRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		affiliates.GET("/invites", h.Admin.Affiliate.ListInviteRecords)
 		affiliates.GET("/rebates", h.Admin.Affiliate.ListRebateRecords)
 		affiliates.GET("/transfers", h.Admin.Affiliate.ListTransferRecords)
+		affiliates.POST("/users/:user_id/withdraw", h.Admin.Affiliate.WithdrawQuota)
 	}
 }
 
@@ -341,6 +343,7 @@ func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		groups.GET("/:id", h.Admin.Group.GetByID)
 		groups.POST("", h.Admin.Group.Create)
 		groups.POST("/:id/duplicate", h.Admin.Group.Duplicate)
+		groups.POST("/:id/availability-probe/test", h.Admin.Group.TestAvailabilityProbe)
 		groups.PUT("/:id", h.Admin.Group.Update)
 		groups.DELETE("/:id", h.Admin.Group.Delete)
 		groups.GET("/:id/stats", h.Admin.Group.GetStats)
@@ -451,6 +454,8 @@ func registerOpenAIOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		openai.POST("/create-from-codex-pat", h.Admin.OpenAIOAuth.CreateAccountFromCodexPAT)
 		openai.GET("/accounts/:id/quota", h.Admin.OpenAIOAuth.QueryQuota)
 		openai.POST("/accounts/:id/quota/refresh", h.Admin.OpenAIOAuth.RefreshQuota)
+		openai.POST("/accounts/:id/referrals/refresh", h.Admin.OpenAIOAuth.RefreshReferrals)
+		openai.POST("/accounts/:id/referrals/invite", h.Admin.OpenAIOAuth.SendReferralInvite)
 		openai.POST("/accounts/:id/reset-quota", h.Admin.OpenAIOAuth.ResetQuota)
 	}
 }
@@ -645,6 +650,9 @@ func registerBackupRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAut
 		backup.PUT("/content-config", h.Admin.Backup.UpdateContentConfig)
 
 		// S3 存储配置
+		backup.GET("/image-storage", h.Admin.Backup.GetImageStorageConfig)
+		backup.PUT("/image-storage", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.UpdateImageStorageConfig)
+		backup.POST("/image-storage/test", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.TestImageStorageConnection)
 		backup.GET("/s3-config", h.Admin.Backup.GetS3Config)
 		// 修改 S3 目标可将数据库备份外泄——要求 step-up 2FA
 		backup.PUT("/s3-config", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.UpdateS3Config)

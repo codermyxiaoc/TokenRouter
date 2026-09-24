@@ -597,6 +597,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if account.Platform != PlatformGrok && responsesLite {
 			upstreamReq.Header.Set(responsesLiteHeader, "true")
 		}
+		if err := applyMappedGPT55LiteCompatibility(upstreamReq, account, requestBody); err != nil {
+			return nil, err
+		}
 		return upstreamReq, nil
 	}
 
@@ -760,6 +763,12 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		return result
 	}
 
+	// 已观测用量或图片也属于不可重放边界，即使尚未成功写出客户端事件。
+	// 客户端断开时继续收尾原请求，不能以恢复为由发起新的上游消费。
+	canReplayAttempt := func() bool {
+		return !clientDisconnected && !wroteDownstream && !openAIUsageHasTokens(&usage) && imageCounter.Count() == 0
+	}
+
 	maxLineSize := defaultMaxLineSize
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.cfg.Gateway.MaxLineSize
@@ -915,7 +924,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			if statusCode == 0 {
 				statusCode = http.StatusServiceUnavailable
 			}
-			if !wroteDownstream && shouldFailover &&
+			if canReplayAttempt() && shouldFailover &&
 				(turn == 1 || statusCode == http.StatusTooManyRequests) {
 				retrySame := requestScopedCapacity || terminalPolicy.Decision.RetryableOnSameAccount(account, statusCode)
 				if !requestScopedCapacity {
@@ -981,7 +990,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			if decision.ShouldReturnGenericError() && !requestScopedCapacity {
 				upstreamMessage = buildOpenAIWSHTTPBridgeErrorEvent(http.StatusInternalServerError, "Upstream gateway error")
 				upstreamEventErr = errors.New("upstream error not in custom error codes")
-			} else if !wroteDownstream && (requestScopedCapacity || (!requestScopedError && decision.ShouldFailover(account, policyStatus, defaultFailover))) &&
+			} else if canReplayAttempt() && (requestScopedCapacity || (!requestScopedError && decision.ShouldFailover(account, policyStatus, defaultFailover))) &&
 				(turn == 1 || policyStatus == http.StatusTooManyRequests) {
 				retrySame := requestScopedCapacity || decision.RetryableOnSameAccount(account, policyStatus)
 				if c != nil && !requestScopedCapacity && !requestScopedError {
@@ -1020,11 +1029,13 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			}
 		}
 		if !clientDisconnected && !suppressClientMessage {
-			stageBeforeSemanticOutput := turn == 1 && account.Platform == PlatformOpenAI && !wroteDownstream
+			// 仅白名单内的纯心跳可独立送达，不提交暂存的生命周期与模型输出。
+			isKeepalive := (eventType == "keepalive" || eventType == "ping" || eventType == "heartbeat") && openAIStreamSafeEmptyEvent(string(clientMessage), eventType)
+			stageBeforeSemanticOutput := turn == 1 && account.Platform == PlatformOpenAI && canReplayAttempt()
 			commitStagedMessages := !stageBeforeSemanticOutput ||
 				openAIStreamDataStartsClientOutput(string(clientMessage), eventType) ||
 				isOpenAIWSTerminalEvent(eventType)
-			if stageBeforeSemanticOutput && !commitStagedMessages {
+			if stageBeforeSemanticOutput && !commitStagedMessages && !isKeepalive {
 				if pendingClientMessageBytes+int64(len(clientMessage)) > openAIFirstOutputStageMaxBytes {
 					return nil, s.newOpenAIStreamPolicyFailoverError(
 						c,
@@ -1041,9 +1052,13 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 				pendingClientMessages = append(pendingClientMessages, append([]byte(nil), clientMessage...))
 				pendingClientMessageBytes += int64(len(clientMessage))
 			} else {
-				messages := append(pendingClientMessages, clientMessage)
-				pendingClientMessages = nil
-				pendingClientMessageBytes = 0
+				var messages [][]byte
+				if !isKeepalive {
+					messages = pendingClientMessages
+					pendingClientMessages = nil
+					pendingClientMessageBytes = 0
+				}
+				messages = append(messages, clientMessage)
 				for _, message := range messages {
 					if err := writeClientMessage(message); err != nil {
 						if isOpenAIWSClientDisconnectError(err) {
@@ -1058,13 +1073,19 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 							)
 							break
 						}
-						return nil, wrapOpenAIWSIngressTurnError(
+						var partial *OpenAIForwardResult
+						if openAIUsageHasTokens(&usage) || imageCounter.Count() > 0 {
+							partial = resultWithUsage()
+						}
+						return partial, wrapOpenAIWSIngressTurnError(
 							"write_client",
 							fmt.Errorf("write client websocket event: %w", err),
 							wroteDownstream,
 						)
 					}
-					wroteDownstream = true
+					if !isKeepalive {
+						wroteDownstream = true
+					}
 				}
 			}
 		}
@@ -1111,7 +1132,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	}
 	if err := scanner.Err(); err != nil {
 		streamErr := fmt.Errorf("read upstream http bridge stream: %w", err)
-		if turn == 1 && !wroteDownstream {
+		if turn == 1 && canReplayAttempt() {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, streamErr, true)
 		}
 		return resultWithUsage(), streamErr
@@ -1120,7 +1141,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if sawDone {
 		terminalErr = errors.New("upstream http bridge stream sent [DONE] before terminal event")
 	}
-	if turn == 1 && !wroteDownstream {
+	if turn == 1 && canReplayAttempt() {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, terminalErr, true)
 	}
 	return resultWithUsage(), terminalErr

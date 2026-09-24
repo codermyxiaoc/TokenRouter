@@ -1,29 +1,71 @@
 <template>
   <AppLayout>
-    <template #page-heading-actions>
-      <div class="flex gap-2"><button type="button" class="btn btn-secondary" :disabled="loading || closing" @click="refresh">{{ t('common.refresh') }}</button><button v-if="!admin && !disabled" type="button" class="btn btn-primary" :disabled="!settings?.enabled" @click="showCreate = true">{{ t('tickets.create') }}</button></div>
-    </template>
-    <div class="space-y-6">
-      <p v-if="disabled" role="status" class="rounded-xl bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">{{ t('tickets.disabled') }}</p>
-      <form v-if="!disabled" class="flex flex-wrap items-end gap-3" @submit.prevent="search">
-        <div class="w-36"><label class="input-label" for="filter-ticket-type">{{ t('tickets.type') }}</label><Select id="filter-ticket-type" v-model="filters.type" :options="typeOptions" @change="search" /></div>
-        <div class="w-36"><label class="input-label" for="filter-ticket-status">{{ t('tickets.status') }}</label><Select id="filter-ticket-status" v-model="filters.status" :options="statusOptions" @change="search" /></div>
-        <div class="w-36"><label class="input-label" for="filter-ticket-priority">{{ t('tickets.priority') }}</label><Select id="filter-ticket-priority" v-model="filters.priority" :options="priorityOptions" @change="search" /></div>
-        <div class="min-w-48 flex-1"><label class="input-label" for="filter-ticket-query">{{ t('tickets.search') }}</label><input id="filter-ticket-query" v-model="filters.q" type="search" maxlength="200" class="input w-full" :placeholder="t('tickets.searchPlaceholder')" /></div>
-        <button type="submit" class="btn btn-secondary">{{ t('common.search') }}</button>
-      </form>
-      <p v-if="error" role="alert" class="text-sm text-red-600">{{ error }}</p>
-      <div v-if="!disabled" class="card overflow-hidden">
-        <div v-if="loading" class="p-12 text-center text-gray-500" role="status">{{ t('common.loading') }}</div>
-        <div v-else-if="!items.length" class="p-12 text-center"><p class="font-medium text-gray-900 dark:text-white">{{ t('tickets.empty') }}</p><p class="mt-2 text-sm text-gray-500">{{ t(admin ? 'tickets.emptyAdminHint' : 'tickets.emptyHint') }}</p></div>
-        <div v-else class="overflow-x-auto">
-          <table class="w-full text-left text-sm"><thead class="bg-gray-50 text-xs text-gray-500 dark:bg-dark-800"><tr><th class="px-5 py-3">{{ t('tickets.subject') }}</th><th v-if="admin" class="px-4 py-3">{{ t('tickets.user') }}</th><th class="px-4 py-3">{{ t('tickets.type') }}</th><th class="px-4 py-3">{{ t('tickets.priority') }}</th><th class="px-4 py-3">{{ t('tickets.status') }}</th><th class="px-4 py-3">{{ t('tickets.updatedAt') }}</th><th class="px-4 py-3">{{ t('common.actions') }}</th></tr></thead>
-            <tbody class="divide-y divide-gray-100 dark:divide-dark-700"><tr v-for="ticket in items" :key="ticket.id" class="hover:bg-gray-50 dark:hover:bg-dark-800/50"><td class="max-w-sm px-5 py-4"><RouterLink :to="`${base}/${ticket.id}`" :title="ticket.title" class="block max-w-64 truncate font-medium sm:max-w-sm text-primary-600 hover:underline dark:text-primary-400">{{ ticket.title }}</RouterLink><span class="mt-1 block text-xs text-gray-400">#{{ ticket.id }}</span></td><td v-if="admin" class="px-4 py-4"><p>{{ ticket.user_name }}</p><p class="text-xs text-gray-500">{{ ticket.user_email }}</p></td><td class="whitespace-nowrap px-4 py-4">{{ t(`tickets.types.${ticket.type}`) }}</td><td class="px-4 py-4"><TicketBadge kind="priority" :value="ticket.priority" /></td><td class="whitespace-nowrap px-4 py-4"><TicketBadge kind="status" :value="ticket.status" :closed-by-role="ticket.closed_by_role" /></td><td class="whitespace-nowrap px-4 py-4 text-xs text-gray-500">{{ new Date(ticket.updated_at).toLocaleString() }}</td><td class="whitespace-nowrap px-4 py-4"><div v-if="isOpen(ticket)" class="flex gap-2"><button type="button" class="btn btn-secondary btn-sm" :disabled="closing" @click="requestClose(ticket, 'complete')">{{ t('tickets.complete') }}</button><button type="button" class="btn btn-secondary btn-sm" :disabled="closing" @click="requestClose(ticket, 'cancel')">{{ t('tickets.cancel') }}</button></div><span v-else class="text-gray-400">—</span></td></tr></tbody>
-          </table>
+    <p v-if="disabled" role="status" class="rounded-xl bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">{{ t('tickets.disabled') }}</p>
+    <button v-if="disabled" type="button" class="btn btn-secondary mt-3" :disabled="loading || closing" @click="refresh">{{ t('common.refresh') }}</button>
+    <!-- 与账号管理共用响应式表格：手机为字段卡片，桌面为独立滚动表体。 -->
+    <TablePageLayout v-else class="ticket-list">
+      <template #filters>
+        <div class="flex flex-col-reverse gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <form class="flex min-w-0 flex-1 items-center gap-2" @submit.prevent="search">
+            <div class="min-w-0 flex-1">
+              <label class="sr-only" for="filter-ticket-query">{{ t('tickets.search') }}</label>
+              <input id="filter-ticket-query" v-model="filters.q" type="search" maxlength="200" class="input h-9 w-full" :placeholder="t('tickets.searchPlaceholder')" />
+            </div>
+            <button type="submit" class="btn btn-secondary h-9 shrink-0">{{ t('common.search') }}</button>
+            <!-- 筛选面板按需展开，避免手机首屏被多个下拉框占满。 -->
+            <details ref="filterPanel" class="relative shrink-0" @keydown.esc="closeFilters">
+              <summary class="btn btn-secondary flex h-9 w-9 cursor-pointer list-none items-center justify-center p-0 [&::-webkit-details-marker]:hidden" :class="{ 'border-primary-400 text-primary-600': filters.type || filters.status || filters.priority }" :aria-label="t('common.filter')" :title="t('common.filter')">
+                <Icon name="filter" size="sm" />
+              </summary>
+              <div class="absolute right-0 top-full z-40 mt-2 grid w-[min(26rem,calc(100vw-2rem))] grid-cols-2 gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-xl dark:border-dark-600 dark:bg-dark-900">
+                <div class="col-span-2 flex items-center justify-between gap-2">
+                  <span class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('common.filter') }}</span>
+                  <button type="button" class="flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-dark-800" :aria-label="t('common.close')" @click="closeFilters"><Icon name="x" size="sm" /></button>
+                </div>
+                <div class="min-w-0"><label class="input-label" for="filter-ticket-type">{{ t('tickets.type') }}</label><Select id="filter-ticket-type" v-model="filters.type" :options="typeOptions" @change="search" /></div>
+                <div class="min-w-0"><label class="input-label" for="filter-ticket-status">{{ t('tickets.status') }}</label><Select id="filter-ticket-status" v-model="filters.status" :options="statusOptions" @change="search" /></div>
+                <div class="col-span-2 min-w-0"><label class="input-label" for="filter-ticket-priority">{{ t('tickets.priority') }}</label><Select id="filter-ticket-priority" v-model="filters.priority" :options="priorityOptions" @change="search" /></div>
+              </div>
+            </details>
+          </form>
+          <div class="flex shrink-0 justify-end gap-2">
+            <button type="button" class="btn btn-secondary h-9" :disabled="loading || closing" @click="refresh">{{ t('common.refresh') }}</button>
+            <button v-if="!admin" type="button" class="btn btn-primary h-9" :disabled="!settings?.enabled" @click="showCreate = true">{{ t('tickets.create') }}</button>
+          </div>
         </div>
+        <p v-if="error" role="alert" class="mt-3 break-words text-sm text-red-600">{{ error }}</p>
+      </template>
+      <template #table>
+        <DataTable :columns="columns" :data="items" :loading="loading" row-key="id" :expandable-actions="false" :sticky-first-column="false">
+          <template #empty>
+            <p class="font-medium text-gray-900 dark:text-white">{{ t('tickets.empty') }}</p>
+            <p class="mt-2 text-sm text-gray-500">{{ t(admin ? 'tickets.emptyAdminHint' : 'tickets.emptyHint') }}</p>
+          </template>
+          <template #cell-title="{ row: ticket }">
+            <RouterLink :to="`${base}/${ticket.id}`" :title="ticket.title" class="block max-w-full truncate font-medium text-primary-600 hover:underline dark:text-primary-400 lg:max-w-sm">{{ ticket.title }}</RouterLink>
+            <span class="mt-1 block text-xs text-gray-400">#{{ ticket.id }}</span>
+          </template>
+          <template #cell-user="{ row: ticket }">
+            <p class="truncate lg:max-w-56" :title="ticket.user_name">{{ ticket.user_name }}</p>
+            <p class="break-all text-xs text-gray-500 lg:max-w-56 lg:truncate" :title="ticket.user_email">{{ ticket.user_email }}</p>
+          </template>
+          <template #cell-type="{ row: ticket }">{{ t(`tickets.types.${ticket.type}`) }}</template>
+          <template #cell-priority="{ row: ticket }"><TicketBadge kind="priority" :value="ticket.priority" /></template>
+          <template #cell-status="{ row: ticket }"><TicketBadge kind="status" :value="ticket.status" :closed-by-role="ticket.closed_by_role" /></template>
+          <template #cell-updated_at="{ row: ticket }"><span class="text-xs text-gray-500">{{ new Date(ticket.updated_at).toLocaleString() }}</span></template>
+          <template #cell-actions="{ row: ticket }">
+            <div v-if="isOpen(ticket)" class="flex justify-end gap-2 lg:justify-start">
+              <button type="button" class="btn btn-secondary min-h-9 flex-1 lg:flex-none" :disabled="closing" @click="requestClose(ticket, 'complete')">{{ t('tickets.complete') }}</button>
+              <button type="button" class="btn btn-secondary min-h-9 flex-1 lg:flex-none" :disabled="closing" @click="requestClose(ticket, 'cancel')">{{ t('tickets.cancel') }}</button>
+            </div>
+            <span v-else class="text-gray-400">—</span>
+          </template>
+        </DataTable>
+      </template>
+      <template #pagination>
         <Pagination v-if="total > 0" :page="page" :page-size="pageSize" :total="total" @update:page="changePage" @update:page-size="changePageSize" />
-      </div>
-    </div>
+      </template>
+    </TablePageLayout>
     <CreateTicketDialog v-if="settings && !admin && !disabled" :show="showCreate" :settings="settings" @close="showCreate = false" @created="created" @disabled="markDisabled" />
     <ConfirmDialog :show="!!closeTarget" :title="t(closeTarget?.action === 'cancel' ? 'tickets.cancel' : 'tickets.complete')" :message="t(closeTarget?.action === 'cancel' ? 'tickets.cancelConfirm' : 'tickets.completeConfirm')" :danger="closeTarget?.action === 'cancel'" :loading="closing" @cancel="!closing && (closeTarget = null)" @confirm="closeTicket"><p class="break-words text-sm text-gray-500">{{ closeTarget?.ticket.title }}</p></ConfirmDialog>
   </AppLayout>
@@ -34,6 +76,10 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import TablePageLayout from '@/components/layout/TablePageLayout.vue'
+import DataTable from '@/components/common/DataTable.vue'
+import Icon from '@/components/icons/Icon.vue'
+import type { Column } from '@/components/common/types'
 import Select from '@/components/common/Select.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -48,7 +94,19 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const router = useRouter()
 const base = computed(() => props.admin ? '/admin/tickets' : '/tickets')
+// 两种角色共用同一组展示槽，管理员额外显示用户身份，不改变服务端排序。
+const columns = computed<Column[]>(() => [
+  { key: 'title', label: t('tickets.subject') },
+  ...(props.admin ? [{ key: 'user', label: t('tickets.user') }] : []),
+  { key: 'type', label: t('tickets.type') },
+  { key: 'priority', label: t('tickets.priority') },
+  { key: 'status', label: t('tickets.status') },
+  { key: 'updated_at', label: t('tickets.updatedAt') },
+  { key: 'actions', label: t('common.actions') },
+])
 const filters = reactive({ type: '', status: '', priority: '', q: '' })
+const filterPanel = ref<HTMLDetailsElement>()
+function closeFilters() { if (filterPanel.value) filterPanel.value.open = false }
 const items = ref<Ticket[]>([])
 const page = ref(1)
 const pageSize = ref(20)
@@ -133,3 +191,10 @@ async function closeTicket() {
 watch(() => props.admin, () => { page.value = 1; settings.value = undefined; disabled.value = false; closeTarget.value = null; void load() })
 onMounted(load)
 </script>
+
+<style scoped>
+/* 手机卡片固定字段标签，长标题和邮箱仅在右侧收缩，不能把标签挤成竖排。 */
+@media (max-width: 1023px) {
+  .ticket-list :deep([data-field] > span:first-child) { flex-shrink: 0; white-space: nowrap; }
+}
+</style>

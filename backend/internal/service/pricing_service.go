@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
@@ -84,6 +85,30 @@ var (
 		LiteLLMProvider:             "openai",
 		Mode:                        "chat",
 		SupportsPromptCaching:       true,
+	}
+	// 2026-09-22 发布的 Sol/Luna 使用独立官方价卡；目录缺失时仍保留长上下文计费边界。
+	openAIGPT6SolPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 2e-6, OutputCostPerToken: 10e-6,
+		CacheCreationInputTokenCost: 2.5e-6, CacheReadInputTokenCost: 0.2e-6,
+		InputCostPerTokenPriority: 4e-6, OutputCostPerTokenPriority: 20e-6,
+		CacheCreationInputTokenCostPriority: 5e-6, CacheReadInputTokenCostPriority: 0.4e-6,
+		LongContextInputTokenThreshold: 272000, LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
+		SupportsServiceTier: true, LiteLLMProvider: "openai", Mode: "chat", SupportsPromptCaching: true,
+	}
+	openAIGPT6LunaPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 0.1e-6, OutputCostPerToken: 0.5e-6,
+		CacheCreationInputTokenCost: 0.125e-6, CacheReadInputTokenCost: 0.01e-6,
+		InputCostPerTokenPriority: 0.2e-6, OutputCostPerTokenPriority: 1e-6,
+		CacheCreationInputTokenCostPriority: 0.25e-6, CacheReadInputTokenCostPriority: 0.02e-6,
+		LongContextInputTokenThreshold: 272000, LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
+		SupportsServiceTier: true, LiteLLMProvider: "openai", Mode: "chat", SupportsPromptCaching: true,
+	}
+	// Opus 5.5 缓存命中为输入价的 5%，不能继承 Opus 5 的 10% 或基础价格。
+	claudeOpus55FallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 4e-6, OutputCostPerToken: 20e-6,
+		CacheCreationInputTokenCost: 5e-6, CacheCreationInputTokenCostAbove1hr: 8e-6,
+		CacheReadInputTokenCost: 0.2e-6, SupportsPromptCaching: true,
+		SupportsServiceTier: true, LiteLLMProvider: "anthropic", Mode: "chat",
 	}
 	openAIGPT56SolPricing = &LiteLLMModelPricing{
 		InputCostPerToken:                   5e-06,   // $5 per MTok
@@ -202,6 +227,13 @@ type LiteLLMModelPricing struct {
 	// 此类条目只可用于图片计费，token 计费必须回退到 fallback 或 fail-closed，
 	// 否则 token 流量会被按 $0 计费。零值（false）表示条目具备 token 价格。
 	TokenPricingAbsent bool `json:"-"`
+
+	// 保留目录中缺省与显式免费之间的区别，仅由新型号的兼容策略读取。
+	CacheCreationInputTokenCostExplicit         bool `json:"-"`
+	InputCostPerTokenPriorityExplicit           bool `json:"-"`
+	OutputCostPerTokenPriorityExplicit          bool `json:"-"`
+	CacheCreationInputTokenCostPriorityExplicit bool `json:"-"`
+	CacheReadInputTokenCostPriorityExplicit     bool `json:"-"`
 }
 
 // PricingRemoteClient 远程价格数据获取接口
@@ -654,18 +686,24 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 			continue
 		}
 
+		preserveCatalogPrices := isOpenAIGPT6SolModel(modelName) || isOpenAIGPT6LunaModel(modelName)
 		pricing := &LiteLLMModelPricing{
-			LiteLLMProvider:           entry.LiteLLMProvider,
-			Mode:                      entry.Mode,
-			SupportsPromptCaching:     entry.SupportsPromptCaching,
-			SupportsServiceTier:       entry.SupportsServiceTier,
-			SupportedModalities:       entry.SupportedModalities,
-			SupportedOutputModalities: entry.SupportedOutputModalities,
-			SupportsVision:            entry.SupportsVision,
-			SupportsAudioInput:        entry.SupportsAudioInput,
-			SupportsAudioOutput:       entry.SupportsAudioOutput,
-			SupportsVideoInput:        entry.SupportsVideoInput,
-			TokenPricingAbsent:        entry.InputCostPerToken == nil && entry.OutputCostPerToken == nil,
+			LiteLLMProvider:                             entry.LiteLLMProvider,
+			Mode:                                        entry.Mode,
+			SupportsPromptCaching:                       entry.SupportsPromptCaching,
+			SupportsServiceTier:                         entry.SupportsServiceTier,
+			SupportedModalities:                         entry.SupportedModalities,
+			SupportedOutputModalities:                   entry.SupportedOutputModalities,
+			SupportsVision:                              entry.SupportsVision,
+			SupportsAudioInput:                          entry.SupportsAudioInput,
+			SupportsAudioOutput:                         entry.SupportsAudioOutput,
+			SupportsVideoInput:                          entry.SupportsVideoInput,
+			TokenPricingAbsent:                          entry.InputCostPerToken == nil && entry.OutputCostPerToken == nil,
+			CacheCreationInputTokenCostExplicit:         preserveCatalogPrices && entry.CacheCreationInputTokenCost != nil,
+			InputCostPerTokenPriorityExplicit:           preserveCatalogPrices && entry.InputCostPerTokenPriority != nil,
+			OutputCostPerTokenPriorityExplicit:          preserveCatalogPrices && entry.OutputCostPerTokenPriority != nil,
+			CacheCreationInputTokenCostPriorityExplicit: preserveCatalogPrices && entry.CacheCreationInputTokenCostPriority != nil,
+			CacheReadInputTokenCostPriorityExplicit:     preserveCatalogPrices && entry.CacheReadInputTokenCostPriority != nil,
 		}
 		// 保持原字段优先，兼容部分厂商使用的输入模态字段名。
 		if len(pricing.SupportedModalities) == 0 {
@@ -1196,8 +1234,11 @@ func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing 
 		}
 	}
 
-	// 3. Claude Opus 4.8 专属静态兜底，避免误用旧 Opus 系列价格。
+	// 3. Claude 新型号使用专属静态兜底，避免误用旧 Opus 系列价格。
 	for _, candidate := range lookupCandidates {
+		if claude.IsOpus55Model(candidate) {
+			return claudeOpus55FallbackPricing
+		}
 		if isClaudeOpus48Model(candidate) {
 			return claudeOpus48FallbackPricing
 		}
@@ -1566,6 +1607,10 @@ func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 	for _, pattern := range lookups {
 		for key, pricing := range s.pricingData {
 			keyLower := strings.ToLower(key)
+			// 旧 Opus 5 的子串匹配不能借用新增 5.5 的低价。
+			if claude.IsOpus55Model(keyLower) && !claude.IsOpus55Model(model) {
+				continue
+			}
 			if strings.Contains(keyLower, pattern) {
 				logger.LegacyPrintf("service.pricing", "[Pricing] Fuzzy matched %s -> %s", model, key)
 				return pricing
@@ -1631,6 +1676,10 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		product, fallback = "gpt-5.5-pro", openAIGPT55ProFallbackPricing
 	case isOpenAIGPT6AstraModel(model):
 		product, fallback = "gpt-6-astra", openAIGPT6AstraPricing
+	case isOpenAIGPT6SolModel(sameModel):
+		product, fallback = "gpt-6-sol", openAIGPT6SolPricing
+	case isOpenAIGPT6LunaModel(sameModel):
+		product, fallback = "gpt-6-luna", openAIGPT6LunaPricing
 	case strings.HasPrefix(model, "gpt-5.6-sol"):
 		product, fallback = "gpt-5.6-sol", openAIGPT56SolPricing
 	case strings.HasPrefix(model, "gpt-5.6-terra"):
@@ -1655,6 +1704,10 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		logger.With(zap.String("component", "service.pricing")).
 			Info(fmt.Sprintf("[Pricing] OpenAI fallback matched %s -> %s(static)", model, product))
 		return fallback
+	}
+	// 新产品的未知变体不按其它 GPT 型号收费；完整目录中的显式条目仍优先。
+	if strings.HasPrefix(model, "gpt-6-sol-") || strings.HasPrefix(model, "gpt-6-luna-") {
+		return nil
 	}
 
 	// 专属价均未命中后，才继续原有通用变体与跨型号回退。

@@ -89,7 +89,7 @@ func TestGetOrCreateFingerprintRejectsMalformedUserAgentOnCreate(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, defaultFingerprint.UserAgent, fingerprint.UserAgent)
+	require.Equal(t, defaultFingerprint().UserAgent, fingerprint.UserAgent)
 	require.NotContains(t, cache.lastSet.UserAgent, "999.0.0")
 }
 
@@ -107,8 +107,10 @@ func TestGetOrCreateFingerprintRejectsSentinelVersionOnUpgrade(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, "claude-cli/2.1.22 (external, cli)", fingerprint.UserAgent)
-	require.Zero(t, cache.setCalls)
+	// 哨兵仍被拒绝，历史低版本同时抬升到有效基线，保持账号身份不变。
+	require.Equal(t, claude.DefaultUserAgent(), fingerprint.UserAgent)
+	require.Equal(t, "cid-1", fingerprint.ClientID)
+	require.Equal(t, 1, cache.setCalls)
 }
 
 func TestGetOrCreateFingerprintStillUpgradesOnValidNewerVersion(t *testing.T) {
@@ -141,7 +143,7 @@ func TestGetOrCreateFingerprintAcceptsValidUserAgentOnCreate(t *testing.T) {
 }
 
 func TestDefaultFingerprintUserAgentIsAcceptable(t *testing.T) {
-	require.True(t, isAcceptableFingerprintUserAgent(defaultFingerprint.UserAgent))
+	require.True(t, isAcceptableFingerprintUserAgent(defaultFingerprint().UserAgent))
 }
 
 func TestGetOrCreateFingerprintHealsPoisonedCacheUsingValidClientUA(t *testing.T) {
@@ -156,7 +158,7 @@ func TestGetOrCreateFingerprintHealsPoisonedCacheUsingValidClientUA(t *testing.T
 	fingerprint, err := service.GetOrCreateFingerprint(context.Background(), 1, fingerprintHeadersWithUA(realUserAgent))
 
 	require.NoError(t, err)
-	require.Equal(t, realUserAgent, fingerprint.UserAgent)
+	require.Equal(t, claude.DefaultUserAgent(), fingerprint.UserAgent)
 	require.Equal(t, 1, cache.setCalls)
 	require.NotContains(t, cache.lastSet.UserAgent, "999.0.0")
 	require.Equal(t, "cid-1", fingerprint.ClientID)
@@ -176,7 +178,7 @@ func TestGetOrCreateFingerprintHealsPoisonedCacheWithoutValidClientUA(t *testing
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, defaultFingerprint.UserAgent, fingerprint.UserAgent)
+	require.Equal(t, defaultFingerprint().UserAgent, fingerprint.UserAgent)
 	require.Equal(t, 1, cache.setCalls)
 }
 
@@ -205,5 +207,5 @@ func TestGetOrCreateFingerprintMissingUserAgentKeepsDefault(t *testing.T) {
 	fingerprint, err := service.GetOrCreateFingerprint(context.Background(), 1, http.Header{})
 
 	require.NoError(t, err)
-	require.Equal(t, defaultFingerprint.UserAgent, fingerprint.UserAgent)
+	require.Equal(t, defaultFingerprint().UserAgent, fingerprint.UserAgent)
 }

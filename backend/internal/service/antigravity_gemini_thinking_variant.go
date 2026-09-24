@@ -1,7 +1,9 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/antigravity"
 	"strings"
 )
 
@@ -83,6 +85,29 @@ func geminiThinkingLevelFromBody(body []byte) string {
 	}
 }
 
+// geminiThinkingLevelFromClaudeThinking 用 Claude Messages 协议的 thinking 配置推导档位，
+// 阈值与 geminiThinkingLevelFromBody 保持一致，使同一请求无论走 Gemini 原生还是
+// Chat Completions / Messages 兼容层都落到同一个上游变体。
+func geminiThinkingLevelFromClaudeThinking(thinking *antigravity.ThinkingConfig) string {
+	if thinking == nil {
+		return "high"
+	}
+	if strings.EqualFold(strings.TrimSpace(thinking.Type), "disabled") {
+		return "low"
+	}
+	budget := thinking.BudgetTokens
+	switch {
+	case budget <= 0:
+		return "high" // 动态思考 / 未指定预算
+	case budget <= geminiThinkingBudgetLowMax:
+		return "low"
+	case budget <= geminiThinkingBudgetMediumMax:
+		return "medium"
+	default:
+		return "high"
+	}
+}
+
 // accountRawModelMappingMatches 判断模型是否命中用户显式配置的精确或通配符映射，
 // 区分管理员映射意图与 resolveModelMapping 运行时补进来的默认透传条目。
 func accountRawModelMappingMatches(account *Account, model string) bool {
@@ -102,6 +127,11 @@ func accountRawModelMappingMatches(account *Account, model string) bool {
 // resolveGeminiThinkingVariant 为裸 Gemini 模型名挑选账号映射表里存在的思考深度变体。
 // 返回 (映射后的上游模型名, 是否命中)。未命中时调用方应回退到常规 getMappedModel 流程。
 func resolveGeminiThinkingVariant(account *Account, requestedModel string, body []byte) (string, bool) {
+	return resolveGeminiThinkingVariantForLevel(account, requestedModel, geminiThinkingLevelFromBody(body))
+}
+
+// resolveGeminiThinkingVariantForLevel 统一不同入站协议的思考档位解析结果。
+func resolveGeminiThinkingVariantForLevel(account *Account, requestedModel string, preferred string) (string, bool) {
 	if account == nil {
 		return "", false
 	}
@@ -125,7 +155,9 @@ func resolveGeminiThinkingVariant(account *Account, requestedModel string, body 
 		}
 	}
 
-	preferred := geminiThinkingLevelFromBody(body)
+	if preferred == "" {
+		preferred = "high"
+	}
 	order := []string{preferred}
 	for _, level := range []string{"high", "medium", "low", "tiered"} {
 		if level != preferred {
@@ -139,4 +171,39 @@ func resolveGeminiThinkingVariant(account *Account, requestedModel string, body 
 		}
 	}
 	return "", false
+}
+
+// antigravityThinkingLevelKey 使调度、重试和实际转发使用同一个 Gemini 变体。
+type antigravityThinkingLevelKey struct{}
+
+func withAntigravityThinkingLevel(ctx context.Context, level string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, antigravityThinkingLevelKey{}, level)
+}
+
+// WithAntigravityThinkingLevelFromBody 在调度前保存 Gemini 原生或 Messages 入站的思考预算。
+func WithAntigravityThinkingLevelFromBody(ctx context.Context, body []byte) context.Context {
+	var probe struct {
+		Thinking         *antigravity.ThinkingConfig `json:"thinking"`
+		GenerationConfig json.RawMessage             `json:"generationConfig"`
+	}
+	if json.Unmarshal(body, &probe) != nil {
+		return ctx
+	}
+	level := geminiThinkingLevelFromClaudeThinking(probe.Thinking)
+	if len(probe.GenerationConfig) > 0 {
+		level = geminiThinkingLevelFromBody(body)
+	}
+	return withAntigravityThinkingLevel(ctx, level)
+}
+
+func antigravityThinkingLevelFromContext(ctx context.Context) string {
+	if ctx != nil {
+		if level, ok := ctx.Value(antigravityThinkingLevelKey{}).(string); ok {
+			return level
+		}
+	}
+	return "high"
 }

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -66,6 +67,7 @@ type channelModelPricingRequest struct {
 	FastMultiplier               *float64                   `json:"fast_multiplier" binding:"omitempty,gt=0"`
 	FlexMultiplier               *float64                   `json:"flex_multiplier" binding:"omitempty,gt=0"`
 	MaxReasoningEffortMultiplier *float64                   `json:"max_reasoning_effort_multiplier" binding:"omitempty,gt=0"`
+	ReasoningEffortMultipliers   map[string]float64         `json:"reasoning_effort_multipliers"`
 	InputPrice                   *float64                   `json:"input_price" binding:"omitempty,min=0"`
 	OutputPrice                  *float64                   `json:"output_price" binding:"omitempty,min=0"`
 	CacheWritePrice              *float64                   `json:"cache_write_price" binding:"omitempty,min=0"`
@@ -143,6 +145,7 @@ type channelModelPricingResponse struct {
 	FastMultiplier               *float64                    `json:"fast_multiplier"`
 	FlexMultiplier               *float64                    `json:"flex_multiplier"`
 	MaxReasoningEffortMultiplier *float64                    `json:"max_reasoning_effort_multiplier"`
+	ReasoningEffortMultipliers   map[string]float64          `json:"reasoning_effort_multipliers,omitempty"`
 	InputPrice                   *float64                    `json:"input_price"`
 	OutputPrice                  *float64                    `json:"output_price"`
 	CacheWritePrice              *float64                    `json:"cache_write_price"`
@@ -286,6 +289,7 @@ func pricingToResponse(p *service.ChannelModelPricing) channelModelPricingRespon
 		FastMultiplier:               firstNonNilFloat(p.FastMultiplier, p.FastModeMultiplier),
 		FlexMultiplier:               p.FlexMultiplier,
 		MaxReasoningEffortMultiplier: p.MaxReasoningEffortMultiplier,
+		ReasoningEffortMultipliers:   maps.Clone(p.ReasoningEffortMultipliers),
 		InputPrice:                   p.InputPrice,
 		OutputPrice:                  p.OutputPrice,
 		CacheWritePrice:              p.CacheWritePrice,
@@ -374,6 +378,7 @@ func pricingRequestToService(reqs []channelModelPricingRequest) []service.Channe
 			FastMultiplier:               firstNonNilFloat(r.FastMultiplier, r.FastModeMultiplier),
 			FlexMultiplier:               r.FlexMultiplier,
 			MaxReasoningEffortMultiplier: r.MaxReasoningEffortMultiplier,
+			ReasoningEffortMultipliers:   maps.Clone(r.ReasoningEffortMultipliers),
 			InputPrice:                   r.InputPrice,
 			OutputPrice:                  r.OutputPrice,
 			CacheWritePrice:              r.CacheWritePrice,
@@ -639,6 +644,7 @@ func (h *ChannelHandler) GetModelDefaultPricing(c *gin.Context) {
 		"cache_write_1h_price":            cacheWrite1hPrice,
 		"cache_read_price":                pricing.CacheReadPricePerToken,
 		"max_reasoning_effort_multiplier": pricing.MaxReasoningEffortMultiplier,
+		"reasoning_effort_multipliers":    pricing.ReasoningEffortMultipliers,
 		"image_input_price":               pricing.ImageInputPricePerToken,
 		"image_output_price":              pricing.ImageOutputPricePerToken,
 	})

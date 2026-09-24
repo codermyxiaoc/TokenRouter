@@ -75,11 +75,13 @@ func (s *AccountTestService) testCNProviderAdaptiveAnthropicConnection(c *gin.Co
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("anthropic-version", "2023-06-01")
-	for key, value := range claude.DefaultHeaders {
+	for key, value := range claude.DefaultHeaders() {
 		req.Header.Set(key, value)
 	}
 	req.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
 	setAnthropicAPIKeyAuthHeader(req.Header, account, authToken)
+	applyAccountTestUserAgent(req)
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 
 	resp, err := s.doCNProviderAdaptiveRequest(req, account)
@@ -172,6 +174,8 @@ func (s *AccountTestService) testCNProviderAdaptiveResponsesConnection(c *gin.Co
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+authToken)
 	applyOpenAICodexProbeHeaders(req.Header)
+	applyAccountTestUserAgent(req)
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 
 	resp, err := s.doCNProviderAdaptiveRequest(req, account)

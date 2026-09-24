@@ -744,8 +744,8 @@ function buildProviderConfig(): Record<string, string> {
   // If base URL is empty, auto-fill with current domain
   const paths = PROVIDER_CALLBACK_PATHS[form.provider_key]
   if (paths) {
-    const notifyBase = notifyBaseUrl.value.trim() || defaultBaseUrl
-    const returnBase = returnBaseUrl.value.trim() || defaultBaseUrl
+    const notifyBase = (notifyBaseUrl.value.trim() || defaultBaseUrl).replace(/\/+$/, '')
+    const returnBase = (returnBaseUrl.value.trim() || defaultBaseUrl).replace(/\/+$/, '')
     notifyBaseUrl.value = notifyBase
     returnBaseUrl.value = returnBase
     if (paths.notifyUrl) filteredConfig['notifyUrl'] = notifyBase + paths.notifyUrl

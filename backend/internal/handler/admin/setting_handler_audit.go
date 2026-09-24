@@ -498,6 +498,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OpsMetricsIntervalSeconds != after.OpsMetricsIntervalSeconds {
 		changed = append(changed, "ops_metrics_interval_seconds")
 	}
+	if before.ClaudeCodeClientVersion != after.ClaudeCodeClientVersion {
+		changed = append(changed, "claude_code_client_version")
+	}
+	if before.ClaudeCodeVersionAutoSyncEnabled != after.ClaudeCodeVersionAutoSyncEnabled {
+		changed = append(changed, "claude_code_version_auto_sync_enabled")
+	}
 	if before.MinClaudeCodeVersion != after.MinClaudeCodeVersion {
 		changed = append(changed, "min_claude_code_version")
 	}

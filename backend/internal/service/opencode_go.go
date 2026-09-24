@@ -30,7 +30,7 @@ const (
 // 供 /v1/models 在尚未同步上游列表时回退，以及账号白名单预填。
 func DefaultOpenCodeGoModelIDs() []string {
 	return []string{
-		"grok-4.6",
+		"grok-4.6", "grok-4.7",
 		"gpt-5.6-luna",
 		// Jev 是 Zen 的 System One 结构化决策模型，实际端点由网关按 Zen 账号特判。
 		"jev-1.13",
@@ -346,7 +346,9 @@ func openCodeGoQuotaURL(baseURL string) string {
 	if base == "" {
 		base = DefaultOpenCodeGoBaseURL
 	}
-	return base + openCodeGoUsagePath
+	// Anthropic 根路径可能没有 /v1，用量统一访问 /v1/usage，保留中继前缀。
+	base = strings.TrimSuffix(base, "/v1")
+	return base + "/v1" + openCodeGoUsagePath
 }
 
 // normalizeOpenCodeCredentials 保留现有账号类型，独立校验 Zen/GO，避免更改 CN 账号规则。

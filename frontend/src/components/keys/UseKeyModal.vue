@@ -1487,6 +1487,33 @@ function generateOpenCodeConfig(
         max: {}
       }
     },
+    // 新产品独立声明推理档位，避免客户端将 none 当成未设置。
+    'gpt-6-sol': {
+      name: 'GPT-6 Sol',
+      limit: { context: 1050000, output: 128000 },
+      options: { store: false, reasoningEffort: 'medium' },
+      variants: {
+        none: { reasoningEffort: 'none' },
+        low: { reasoningEffort: 'low' },
+        medium: { reasoningEffort: 'medium' },
+        high: { reasoningEffort: 'high' },
+        xhigh: { reasoningEffort: 'xhigh' },
+        max: { reasoningEffort: 'max' }
+      }
+    },
+    'gpt-6-luna': {
+      name: 'GPT-6 Luna',
+      limit: { context: 1050000, output: 128000 },
+      options: { store: false, reasoningEffort: 'medium' },
+      variants: {
+        none: { reasoningEffort: 'none' },
+        low: { reasoningEffort: 'low' },
+        medium: { reasoningEffort: 'medium' },
+        high: { reasoningEffort: 'high' },
+        xhigh: { reasoningEffort: 'xhigh' },
+        max: { reasoningEffort: 'max' }
+      }
+    },
     'gpt-5.5': {
       name: 'GPT-5.5',
       limit: {
@@ -1933,6 +1960,16 @@ function generateOpenCodeConfig(
   } else if (profile === 'qoder') {
     provider[profile].name = 'Qoder'
     provider[profile].models = buildQoderOpenCodeModels()
+  } else if (profile === 'anthropic') {
+    // 官方原生型号仅进入 Anthropic 配置，不据此推断第三方平台支持。
+    provider[profile].models = withOpenCodeToolCalling({
+      'claude-opus-5-5': {
+        name: 'Claude Opus 5.5',
+        limit: { context: 1000000, output: 128000 },
+        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+        options: { thinking: { type: 'adaptive' } }
+      }
+    })
   } else if (profile === 'antigravity-claude') {
     provider[profile].name = 'Antigravity (Claude)'
     provider[profile].models = withOpenCodeToolCalling(claudeModels)

@@ -142,7 +142,8 @@ func runMainServer() {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
 	if cfg.RunMode == config.RunModeSimple {
-		log.Println("⚠️  WARNING: Running in SIMPLE mode - billing and quota checks are DISABLED")
+		// 简易模式仍不扣资金，但启动日志要准确反映可选的密钥窗口限制。
+		log.Printf("⚠️  WARNING: Running in SIMPLE mode - balance/subscription billing is DISABLED; API key rate-limit windows enabled=%t", cfg.SimpleModeKeyRateLimitEnabled)
 	}
 
 	buildInfo := handler.BuildInfo{

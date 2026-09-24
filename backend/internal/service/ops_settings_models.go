@@ -69,17 +69,19 @@ type OpsMetricThresholds struct {
 }
 
 type OpsRuntimeLogConfig struct {
-	Level           string         `json:"level"`
-	EnableSampling  bool           `json:"enable_sampling"`
-	SamplingInitial int            `json:"sampling_initial"`
-	SamplingNext    int            `json:"sampling_thereafter"`
-	Caller          bool           `json:"caller"`
-	StacktraceLevel string         `json:"stacktrace_level"`
-	RetentionDays   int            `json:"retention_days"`
-	Source          string         `json:"source,omitempty"`
-	UpdatedAt       string         `json:"updated_at,omitempty"`
-	UpdatedByUserID int64          `json:"updated_by_user_id,omitempty"`
-	Extra           map[string]any `json:"extra,omitempty"`
+	// 使用记录保留天数；0为永久，旧客户端省略时保留当前值。
+	RequestRetentionDays *int           `json:"request_retention_days"`
+	Level                string         `json:"level"`
+	EnableSampling       bool           `json:"enable_sampling"`
+	SamplingInitial      int            `json:"sampling_initial"`
+	SamplingNext         int            `json:"sampling_thereafter"`
+	Caller               bool           `json:"caller"`
+	StacktraceLevel      string         `json:"stacktrace_level"`
+	RetentionDays        int            `json:"retention_days"`
+	Source               string         `json:"source,omitempty"`
+	UpdatedAt            string         `json:"updated_at,omitempty"`
+	UpdatedByUserID      int64          `json:"updated_by_user_id,omitempty"`
+	Extra                map[string]any `json:"extra,omitempty"`
 }
 
 type OpsAlertRuntimeSettings struct {

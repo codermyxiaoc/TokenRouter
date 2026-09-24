@@ -50,7 +50,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	originalModel := claudeReq.Model
 	// thinking 状态必须参与最终模型解析，确保调度限制与真正转发的模型一致。
 	thinkingEnabled := claudeReq.Thinking != nil && (claudeReq.Thinking.Type == "enabled" || claudeReq.Thinking.Type == "adaptive")
-	modelCtx := WithThinkingEnabled(ctx, thinkingEnabled, false)
+	modelCtx := withAntigravityThinkingLevel(WithThinkingEnabled(ctx, thinkingEnabled, false), geminiThinkingLevelFromClaudeThinking(claudeReq.Thinking))
+	ctx = modelCtx
 	mappedModel := resolveFinalAntigravityModelKey(modelCtx, account, claudeReq.Model)
 	if mappedModel == "" {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)

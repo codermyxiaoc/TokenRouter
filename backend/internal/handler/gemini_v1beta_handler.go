@@ -305,6 +305,8 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(stream, false)))
 	// 用户提示词替换必须早于内容审计、会话 hash 和转发，避免审计与上游请求不一致。
 	body = h.gatewayService.ApplyUserPromptReplacement(c.Request.Context(), body, "gemini")
+	// 在选账号之前确定变体，避免限流查询与真正转发使用不同模型键。
+	c.Request = c.Request.WithContext(service.WithAntigravityThinkingLevelFromBody(c.Request.Context(), body))
 
 	if decision := h.checkContentModeration(c, reqLog, apiKey, authSubject, service.ContentModerationProtocolGemini, modelName, body); decision != nil && decision.Blocked {
 		googleError(c, contentModerationStatus(decision), decision.Message)

@@ -9,6 +9,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/payment"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/antigravity"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 	"github.com/google/wire"
@@ -212,12 +213,14 @@ func ProvideOpenAIQuotaService(
 	tlsFPProfileService *TLSFingerprintProfileService,
 	tlsFPRouterService *TLSFingerprintRouterService,
 	openAIGatewayService *OpenAIGatewayService,
+	referralClient OpenAIReferralClient,
 ) *OpenAIQuotaService {
 	service := NewOpenAIQuotaService(adminService, httpUpstream, tokenProvider, tlsFPProfileService, tlsFPRouterService)
 	if openAIGatewayService != nil {
 		service.accountRepo = openAIGatewayService.accountRepo
 	}
 	service.agentIdentityWS = openAIGatewayService
+	service.referralClient = referralClient
 	return service
 }
 
@@ -377,6 +380,9 @@ func ProvideGrokTokenProvider(
 func ProvideDashboardAggregationService(repo DashboardAggregationRepository, timingWheel *TimingWheelService, lockCache LeaderLockCache, db *sql.DB, cfg *config.Config, settings *PreAggregationSettingsService) *DashboardAggregationService {
 	svc := NewDashboardAggregationService(repo, timingWheel, cfg)
 	svc.SetPreAggregationSettings(settings)
+	if settings != nil {
+		svc.SetRequestRetentionSettings(settings.settingRepo)
+	}
 	svc.SetLeaderLock(lockCache, db)
 	svc.Start()
 	return svc
@@ -392,6 +398,18 @@ func ProvideUsageCleanupService(repo UsageCleanupRepository, timingWheel *Timing
 // ProvideAccountExpiryService creates and starts AccountExpiryService.
 func ProvideAccountExpiryService(accountRepo AccountRepository) *AccountExpiryService {
 	svc := NewAccountExpiryService(accountRepo, time.Minute)
+	svc.Start()
+	return svc
+}
+
+// ProvideClaudeCodeVersionSyncService 创建并启动 Claude Code 官方版本同步服务。
+// 出站 Claude Code 身份的版本号靠它跟随官方发布，无需为了跟版本而发新版本；面板可关闭。
+func ProvideClaudeCodeVersionSyncService(
+	settingRepo SettingRepository,
+	settingService *SettingService,
+	githubClient GitHubReleaseClient,
+) *ClaudeCodeVersionSyncService {
+	svc := NewClaudeCodeVersionSyncService(settingRepo, settingService, githubClient, claudeCodeVersionSyncInterval)
 	svc.Start()
 	return svc
 }
@@ -692,9 +710,10 @@ func ProvideBackupService(
 	storeFactory BackupObjectStoreFactory,
 	dumper DBDumper,
 	db *sql.DB,
+	lockCache LeaderLockCache,
 ) *BackupService {
 	svc := NewBackupService(settingRepo, cfg, encryptor, storeFactory, dumper)
-	svc.SetMaintenanceDB(db)
+	svc.SetLeaderLock(lockCache, db)
 	svc.Start()
 	return svc
 }
@@ -768,6 +787,7 @@ func ProvideSettingService(settingRepo SettingRepository, paymentConfigService *
 	if err := svc.MigrateGrokDefaultTextModel(context.Background()); err != nil {
 		logger.LegacyPrintf("service.setting", "Warning: migrate Grok default text model failed: %v", err)
 	}
+	claude.SetCLIVersionResolver(func() string { return svc.GetClaudeCodeClientVersion(context.Background()) })
 	antigravity.SetUserAgentVersionResolver(svc.GetAntigravityUserAgentVersion)
 	// 无账号句柄的 OAuth/PAT/用量探针路径也必须复用后台配置的 Codex 身份。
 	SetCodexCanonicalUserAgentResolver(func() string {
@@ -846,6 +866,9 @@ var ProviderSet = wire.NewSet(
 	NewCodexInviteResetService,
 	ProvideOpenAIQuotaService,
 	ProvideBatchImageModelPricingResolver,
+	ProvideImageStorageSettingService,
+	ProvideImageTaskService,
+	NewMediaTaskService,
 	NewBatchImagePublicService,
 	NewBatchImageDownloadService,
 	ProvideBatchImageCleanupService,
@@ -920,6 +943,7 @@ var ProviderSet = wire.NewSet(
 	ProvideTokenRefreshService,
 	wire.Bind(new(GrokOAuthReconciler), new(*TokenRefreshService)),
 	ProvideAccountExpiryService,
+	ProvideClaudeCodeVersionSyncService,
 	ProvideProxyExpiryService,
 	ProvideSubscriptionExpiryService,
 	ProvideAnnouncementExpiryService,
@@ -1003,6 +1027,18 @@ func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, 
 func ProvidePaymentOrderExpiryService(paymentSvc *PaymentService, lockCache LeaderLockCache, db *sql.DB) *PaymentOrderExpiryService {
 	svc := NewPaymentOrderExpiryService(paymentSvc, 60*time.Second)
 	svc.SetLeaderLock(lockCache, db)
+	svc.Start()
+	return svc
+}
+
+// ProvideImageStorageSettingService 复用后台加密器与备份凭据，配置文件只作为未设置时的回落。
+func ProvideImageStorageSettingService(repo SettingRepository, encryptor SecretEncryptor, backup *BackupService, factory ImageStorageFactory, cfg *config.Config) *ImageStorageSettingService {
+	return NewImageStorageSettingService(repo, encryptor, backup, factory, cfg.ImageStorage)
+}
+
+// ProvideImageTaskService 保持热更新开关和已接收任务的查询能力。
+func ProvideImageTaskService(store ImageTaskStore, settings *ImageStorageSettingService) *ImageTaskService {
+	svc := NewImageTaskServiceWithResolver(store, settings.Resolver(), 0, 0)
 	svc.Start()
 	return svc
 }

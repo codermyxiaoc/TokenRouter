@@ -1,33 +1,93 @@
-import type { UserSubscription } from '@/types'
+import type { PublicSettings, UserSubscription } from '@/types'
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
 export type SubscriptionQuotaPeriod = 'daily' | 'weekly' | 'monthly'
+type QuotaSubscription = Pick<UserSubscription, 'starts_at' | 'expires_at'>
+type QuotaTimezone = Pick<PublicSettings, 'server_timezone' | 'server_utc_offset'>
+const calendarFormatters = new Map<string, Intl.DateTimeFormat>()
 
-// 与后端窗口规则一致：有限外层额度允许日/周尾段刷新；无限额度不构成保护层。
+// 复用公共设置中的项目时区；旧缓存的偏移是兼容兜底，不使用浏览器本地时区。
+function quotaTimezone(settings?: QuotaTimezone): Intl.DateTimeFormat | number {
+  const config = settings ?? (typeof window === 'undefined' ? undefined : window.__APP_CONFIG__)
+  if (config?.server_timezone) {
+    try {
+      let formatter = calendarFormatters.get(config.server_timezone)
+      if (!formatter) {
+        formatter = new Intl.DateTimeFormat('en-CA', {
+          timeZone: config.server_timezone, year: 'numeric', month: '2-digit', day: '2-digit'
+        })
+        calendarFormatters.set(config.server_timezone, formatter)
+      }
+      return formatter
+    } catch {
+      // 无效的旧时区名称改用服务端公布的 UTC 偏移。
+    }
+  }
+  const offset = config?.server_utc_offset?.match(/^([+-])(\d{2}):(\d{2})$/)
+  if (offset && Number(offset[2]) <= 14 && Number(offset[3]) < 60) {
+    return (offset[1] === '-' ? -1 : 1) * (Number(offset[2]) * 60 + Number(offset[3])) * 60_000
+  }
+  // 与未配置后端时区时的 Asia/Shanghai 默认值一致。
+  return quotaTimezone({ server_timezone: 'Asia/Shanghai' })
+}
+
+function calendarDay(timestamp: number, formatter: Intl.DateTimeFormat): number {
+  const parts = formatter.formatToParts(timestamp)
+  const part = (name: string) => Number(parts.find(value => value.type === name)?.value)
+  return Date.UTC(part('year'), part('month') - 1, part('day'))
+}
+
+// 在项目日历中寻找零点，按日期边界定位可兼容夏令时的 23/25 小时日。
+function quotaDayStart(timestamp: number, dayOffset: number, settings?: QuotaTimezone): number {
+  const timezone = quotaTimezone(settings)
+  if (typeof timezone === 'number') {
+    return (Math.floor((timestamp + timezone) / ONE_DAY_MS) + dayOffset) * ONE_DAY_MS - timezone
+  }
+  const targetDay = calendarDay(timestamp, timezone) + dayOffset * ONE_DAY_MS
+  let lower = targetDay - 2 * ONE_DAY_MS
+  let upper = targetDay + 2 * ONE_DAY_MS
+  while (lower < upper) {
+    const middle = Math.floor((lower + upper) / 2)
+    if (calendarDay(middle, timezone) < targetDay) lower = middle + 1
+    else upper = middle
+  }
+  return lower
+}
+
+// 两类订阅页面共享后端重置时间规则；只读取锚点，不推算或改写额度与重置次数。
 // @project-doc docs/domains/payments_and_entitlements.md#subscription_quota_windows
-export function isQuotaWindowEndingAtSubscriptionExpiry(
-  subscription: Pick<UserSubscription, 'starts_at' | 'expires_at' | 'weekly_limit_usd' | 'monthly_limit_usd'>,
+export function getSubscriptionQuotaResetTime(
+  subscription: QuotaSubscription,
   windowStart: string | null,
-  period: SubscriptionQuotaPeriod
+  period: SubscriptionQuotaPeriod,
+  settings?: QuotaTimezone
+): Date | null {
+  if (!windowStart) return null
+  let anchor = new Date(windowStart).getTime()
+  if (!Number.isFinite(anchor)) return null
+  if (period === 'daily') return new Date(quotaDayStart(anchor, 1, settings))
+
+  const startsAt = new Date(subscription.starts_at).getTime()
+  // 仅修正最初激活时被截断到生效当天零点的历史锚点，后续手动重置零点保持权威。
+  if (Number.isFinite(startsAt) && anchor < startsAt && anchor === quotaDayStart(startsAt, 0, settings)) {
+    anchor = startsAt
+  }
+  return new Date(anchor + (period === 'weekly' ? 7 : 30) * ONE_DAY_MS)
+}
+
+// 下一次重置早于订阅到期即有效，不再要求尾段容纳另一个完整周期或配置外层额度。
+export function isQuotaWindowEndingAtSubscriptionExpiry(
+  subscription: QuotaSubscription,
+  windowStart: string | null,
+  period: SubscriptionQuotaPeriod,
+  settings?: QuotaTimezone
 ): boolean {
-  if (!windowStart) return false
-  const start = new Date(windowStart).getTime()
+  const nextReset = getSubscriptionQuotaResetTime(subscription, windowStart, period, settings)
   const expiresAt = new Date(subscription.expires_at).getTime()
-  if (!Number.isFinite(start) || !Number.isFinite(expiresAt)) return false
+  if (!nextReset || !Number.isFinite(expiresAt)) return false
   if (period === 'daily' && isOneTimeDailyQuota(subscription)) return true
-
-  const days = { daily: 1, weekly: 7, monthly: 30 }[period]
-  const windowMs = days * ONE_DAY_MS
-  const nextWindowStart = start + windowMs
-  // 已到订阅有效期终点时，即使存在外层额度也不能展示下一次刷新。
-  if (nextWindowStart >= expiresAt) return true
-  if (nextWindowStart + windowMs <= expiresAt) return false
-
-  const positiveFiniteLimit = (value: number | null) => value != null && Number.isFinite(value) && value > 0
-  if (period === 'daily' && positiveFiniteLimit(subscription.weekly_limit_usd)) return false
-  if (period !== 'monthly' && positiveFiniteLimit(subscription.monthly_limit_usd)) return false
-  return true
+  return nextReset.getTime() >= expiresAt
 }
 
 // ExpirationDateRelation 表示到期时间与当前本地日历日期的关系。

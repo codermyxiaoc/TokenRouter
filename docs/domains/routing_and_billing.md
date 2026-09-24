@@ -104,7 +104,7 @@ DeepSeek 默认价中的 Flash 输入/输出/缓存读取分别为每百万 toke
 
 渠道模型定价可为 token 模式配置 `time_pricing`：使用 IANA 时区和每日重复的左闭右开 `HH:mm`/`HH:mm:ss` 区间，倍率必须有限、至少 `0.01` 且最多两位小数，区间不得重叠；结束时间 `00:00` 表示当天 24:00，跨午夜区间必须拆成两段。该倍率只作用于渠道 token 的输入、图片输入、输出和缓存价格桶，不作用于按次、图片或视频模式，也不复制到分组价卡或账号统计规则。管理员写入时由后端最终校验，存储在 `channel_model_pricing.time_pricing` JSONB；当前 fork 的迁移文件为 `249_channel_model_time_pricing.sql`。普通请求使用结算时刻，OpenAI WebSocket 使用对应 turn 开始时刻；配置损坏或无法加载时安全回退到 `1x`，不改变既有计费。
 
-Token 计费还支持独立的 `max_reasoning_effort_multiplier`。仅最终转发档位为 `max` 时生效；Fable 5.1 沿用本次上游同步的默认 `3x`，渠道可用有限正数覆盖（`1` 表示不加价），未配置时继承模型默认。该规则作用于全部 token 成本桶，并与当前价格、服务层级、区间及分时倍率组合；按次、图片/视频按次和搜索附加费用不乘此倍率。原始请求为 `max` 但策略降档后，按最终档位结算。账号统计使用模型文件默认价时同样应用最终档位；自定义统计价保持独立最终成本，`ApplyPricingToAccountStats` 复用已算出的 `total_cost`，两者均不重复叠加。渠道字段通过 `268_channel_max_reasoning_effort_multiplier.sql` 持久化，账号统计规则不接受此字段。
+Token 计费支持 `reasoning_effort_multipliers` 按 `none / minimal / low / medium / high / xhigh / max` 配置有限正数倍率，优先使用最终转发档位的显式值。未配置该档位时保持旧规则：旧 `max_reasoning_effort_multiplier` 仍有效，Fable 5.1 的 Max 默认 `3x`，其他档位默认 `1x`；显式 `1` 可以取消加价，未指定档位不等同于显式 `none`。这项扩展不会改变已有显式价格、免费价和旧 Max 字段。倍率作用于全部 token 成本桶，并与当前价格、服务层级、区间及分时倍率组合；按次、图片/视频按次和搜索附加费用不乘此倍率。请求经策略降档或协议转换后按实际出站档位结算；Gemini 只读取最终 thinkingLevel，不从预算 token 数推断档位。账号统计使用模型文件默认价时沿用原有最终档位规则，自定义统计价保持独立最终成本，`ApplyPricingToAccountStats` 复用已算出的 `total_cost`，均不重复叠加。旧渠道字段通过迁移 268 持久化，新映射通过 `287_channel_reasoning_effort_multipliers.sql` 增加空 JSON 字段，不批量改写旧价卡或分组 JSON；账号统计规则继续拒绝配置这两种推理倍率。渠道与分组表单可编辑各档位，模型广场展示配置后的有效倍率。
 
 缓存写入可选地拆成 `cache_write_price`（5 分钟）和 `cache_write_1h_price`（1 小时）两档；1h 列为 NULL 时继续把旧列用于两档，保证历史渠道和账号统计规则的结算不变。该字段同时适用于渠道默认价、token 区间和账号统计价，显式 0 仍表示免费；分档用量缺失时按旧聚合 token 数回退。数据库迁移为 `261_channel_cache_write_1h_pricing.sql`。
 
@@ -113,7 +113,7 @@ Grok 媒体、搜索和 Voice 使用独立计价维度。视频按输出秒计�
 <a id="usage_settlement"></a>
 ## 用量结算
 
-`recordUsageCore` 统一归一化供应商用量、确定计费模型、解析订阅和倍率、计算成本并构造 Usage Log。`simple` 运行模式只尽力写日志，不执行资金事务；`standard` 模式必须调用统一结算仓储。
+`recordUsageCore` 统一归一化供应商用量、确定计费模型、解析订阅和倍率、计算成本并构造 Usage Log。`simple` 运行模式不执行资金扣款，默认只尽力写日志；显式开启密钥消费窗口限制后，通过同一持久幂等仓储仅累计密钥 5h/1d/7d 窗口，不动余额、订阅、团队、账号及平台额度。`standard` 模式必须调用统一结算仓储。
 
 标准结算流程为：
 

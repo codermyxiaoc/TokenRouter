@@ -227,17 +227,19 @@ func UpstreamUsageAdapterOptions() []UpstreamUsageAdapterOption {
 
 // UpstreamUsageService 负责 API Key 上游用量查询；结果只在当前请求中存在。
 type UpstreamUsageService struct {
-	accountRepo         AccountRepository
-	httpUpstream        HTTPUpstream
-	cfg                 *config.Config
-	tlsFPProfileService *TLSFingerprintProfileService
-	adapters            map[string]UpstreamUsageAdapter
-	queryFlight         singleflight.Group
-	querySlots          chan struct{}
-	now                 func() time.Time
-	adapterMu           sync.RWMutex
-	metricsMu           sync.Mutex
-	metrics             map[string]int64
+	accountRepo           AccountRepository
+	httpUpstream          HTTPUpstream
+	cfg                   *config.Config
+	tlsFPProfileService   *TLSFingerprintProfileService
+	adapters              map[string]UpstreamUsageAdapter
+	queryFlight           singleflight.Group
+	openCodeSharedMu      sync.Mutex
+	openCodeSharedResults map[string]openCodeSharedUsageEntry
+	querySlots            chan struct{}
+	now                   func() time.Time
+	adapterMu             sync.RWMutex
+	metricsMu             sync.Mutex
+	metrics               map[string]int64
 }
 
 // NewUpstreamUsageService 创建上游用量查询服务。
@@ -515,12 +517,25 @@ func (s *UpstreamUsageService) QueryAccount(ctx context.Context, accountID int64
 	}
 	fingerprint := upstreamUsageContextFingerprint(account, queryConfig)
 	key := fmt.Sprintf("%d:%s", accountID, fingerprint)
+	sharedKey, shared := openCodeGoSharedUsageKey(account, queryConfig)
+	if shared {
+		key = "opencode-go:" + sharedKey
+	}
 	resultCh := s.queryFlight.DoChan(key, func() (any, error) {
 		// 共享操作保留首个调用方的值，但不继承其取消信号；固定截止时间
 		// 则把首次身份读取也计入约 60 秒的总预算。
 		opCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), queryDeadline)
 		defer cancel()
-		return s.queryAccount(opCtx, accountID, account, queryConfig)
+		if shared {
+			if cached := s.loadOpenCodeSharedUsage(sharedKey); cached != nil {
+				return cached, nil
+			}
+		}
+		result, err := s.queryAccount(opCtx, accountID, account, queryConfig)
+		if shared && err == nil {
+			s.storeOpenCodeSharedUsage(sharedKey, result)
+		}
+		return result, err
 	})
 	select {
 	case <-ctx.Done():
@@ -532,6 +547,14 @@ func (s *UpstreamUsageService) QueryAccount(ctx context.Context, accountID int64
 		queryResult, ok := result.Val.(*UpstreamUsageQueryResult)
 		if !ok || queryResult == nil {
 			return nil, ErrUpstreamUsageInvalidResponse
+		}
+		if shared {
+			// 共享网络查询不共享授权结果；每个账号都必须在查询完成后再次核验完整身份。
+			current, err := s.loadQueryAccount(ctx, accountID)
+			if err != nil || !sameUpstreamUsageIdentity(account, current, queryConfig) {
+				return nil, ErrUpstreamUsageIdentityChanged
+			}
+			return cloneOpenCodeGoUsageResult(queryResult, accountID), nil
 		}
 		return queryResult, nil
 	}
@@ -2143,6 +2166,7 @@ func (c *upstreamUsageHTTPClient) getURLWithHeaders(ctx context.Context, endpoin
 	reqCtx := WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI)
 	req = req.WithContext(WithHTTPUpstreamRedirectsDisabled(reqCtx))
 	req.Header.Set("Accept", "application/json")
+	applyOpenCodeUpstreamUserAgent(c.account, req.URL.String(), req.Header)
 	c.account.ApplyHeaderOverrides(req.Header)
 	// 账号级覆写不得改变内置适配器的认证身份。
 	req.Header.Del("Authorization")
@@ -2197,6 +2221,7 @@ func (c *upstreamUsageHTTPClient) getURLWithBearer(ctx context.Context, endpoint
 	reqCtx := WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI)
 	req = req.WithContext(WithHTTPUpstreamRedirectsDisabled(reqCtx))
 	req.Header.Set("Accept", "application/json")
+	applyOpenCodeUpstreamUserAgent(c.account, req.URL.String(), req.Header)
 	c.account.ApplyHeaderOverrides(req.Header)
 	// Header Override 不能改变管理查询实际使用的认证身份。
 	req.Header.Del("Authorization")

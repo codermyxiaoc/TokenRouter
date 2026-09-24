@@ -462,6 +462,12 @@ export default {
         previewHint: '此预览会应用到站内余额、额度、消耗等内部金额展示。'
       },
       claudeCode: {
+        claudeCodeClientVersion: 'Claude Code 客户端版本号',
+        claudeCodeClientVersionHint: '网关伪装为官方 Claude Code CLI 时对上游声明的客户端版本号。填写后固定为该版本。留空时优先保留有效的环境变量 SUB2API_CLAUDE_CLI_VERSION 固定值，其次使用自动同步版本，最后回退内置版本。',
+        claudeCodeVersionAutoSync: '自动同步 Claude Code 版本号',
+        claudeCodeVersionAutoSyncHint: '每小时从官方发布渠道获取最新版本的 Claude Code 客户端版本号，无需为了跟版本而升级本服务。关闭后停止获取新版本，已同步的版本仍可使用；上方手填版本和有效环境固定值始终优先。',
+        claudeCodeVersionSyncedValue: '当前同步到：{version}',
+
         title: 'Claude Code 设置',
         description: '控制 Claude Code 客户端访问要求',
         minVersion: '最低版本号',

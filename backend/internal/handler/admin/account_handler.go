@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -1128,8 +1129,11 @@ type TestAccountRequest struct {
 	ModelID string `json:"model_id"`
 	Prompt  string `json:"prompt"`
 	Mode    string `json:"mode"`
-	// TestType 由管理端明确指定测试文字或图片，避免服务端猜测模型能力。
+	// TestType 由管理端明确指定文字、图片或 Grok 媒体测试，避免服务端猜测模型能力。
 	TestType string `json:"test_type"`
+	// TestEndpoint 只覆盖本次文字测试，不修改账号保存的协议。
+	TestEndpoint string `json:"test_endpoint"`
+	service.AccountTestOptions
 	// TestMode 兼容早期客户端使用的字段名，优先级低于 test_type。
 	TestMode string `json:"test_mode"`
 }
@@ -1158,15 +1162,19 @@ func (h *AccountHandler) Test(c *gin.Context) {
 	}
 
 	var req TestAccountRequest
-	// Allow empty body, model_id is optional
-	_ = c.ShouldBindJSON(&req)
+	// 保留空请求的旧入口；无效或过大的素材请求不能意外触发真实上游测试。
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<20)
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		response.BadRequest(c, "Invalid account test request")
+		return
+	}
 
 	// Use AccountTestService to test the account with SSE streaming
 	testType := req.TestType
 	if testType == "" {
 		testType = req.TestMode
 	}
-	if err := h.accountTestService.TestAccountConnectionWithType(c, accountID, req.ModelID, req.Prompt, testType, req.Mode); err != nil {
+	if err := h.accountTestService.TestAccountConnectionWithOptions(c, accountID, req.ModelID, req.Prompt, testType, req.Mode, req.TestEndpoint, req.AccountTestOptions); err != nil {
 		// Error already sent via SSE, just log
 		return
 	}
@@ -1488,6 +1496,8 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 	}
 
 	// Drop SSO/password residue; re-auth must leave only OAuth tokens on disk.
+	// 重新授权只覆盖新认证字段，保留同处 credentials 的模型映射与账号设置。
+	req.Credentials = service.MergeCredentials(existing.Credentials, req.Credentials)
 	req.Credentials = service.SanitizeStoredCredentials(existing.Platform, req.Credentials)
 	updatedAccount, err := h.adminService.UpdateAccount(ctx, accountID, &service.UpdateAccountInput{
 		Type:        req.Type,

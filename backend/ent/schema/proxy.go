@@ -76,6 +76,9 @@ func (Proxy) Edges() []ent.Edge {
 		edge.To("backup_proxy", Proxy.Type).
 			Field("backup_proxy_id").
 			Unique(),
+		// 单向备用代理允许多个来源复用同一出口，且不反写目标的备用配置。
+		edge.From("fallback_sources", Proxy.Type).
+			Ref("backup_proxy"),
 	}
 }
 

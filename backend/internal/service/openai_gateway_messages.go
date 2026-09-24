@@ -36,6 +36,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
 ) (*OpenAIForwardResult, error) {
 	rememberOpenCodeInboundBody(c, body)
+	// 在协议分流前统一清洗工具定义；保留原始请求副本供智能路由和会话派生使用。
+	if sanitized, changed, err := sanitizeOpenAIResponsesToolSchemasForPlatform(body, account.Platform); err != nil {
+		return nil, err
+	} else if changed {
+		body = sanitized
+	}
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {

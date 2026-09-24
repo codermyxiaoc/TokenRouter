@@ -112,3 +112,21 @@ func TestIsOpenAICodexPlanGatedModelError(t *testing.T) {
 		})
 	}
 }
+
+// 401 模型不存在识别不得把有效 JSON 中的提示词或鉴权错误当成模型冷却。
+func TestOpenAIModelNotFoundBodyAvoidsUnrelatedStructuredText(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{`{"error":{"code":"model_not_found","message":"missing"}}`, true},
+		{`{"error":{"code":"invalid_api_key","message":"model not found"}}`, false},
+		{`{"input":"model not found"}`, false},
+		{`{"error":{"message":"unknown model requested"}}`, true},
+		{`unknown model`, true},
+	} {
+		if got := isOpenAICompatibleModelNotFoundBody([]byte(tc.body)); got != tc.want {
+			t.Fatalf("body=%s got=%v", tc.body, got)
+		}
+	}
+}

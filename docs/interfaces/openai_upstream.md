@@ -12,6 +12,7 @@
 - [大请求内存与语义](#responses_large_body)：修改 Responses 原始 JSON 片段和读体分配时读取。
 - [模型与能力](#模型与能力)：修改模型别名、endpoint capability 或推理参数时读取。
 - [额度与调度](#额度与调度)：修改窗口配额、评分、粘性或自动暂停时读取。
+- [管理员手动重置上游额度](#openai_quota_reset)：修改重置入口、消费结果判定及账号状态恢复时读取。
 - [失败与诊断](#失败与诊断)：修改错误分类、刷新、CAS 状态或 failover 时读取。
 - [流式首输出与恢复观测](#openai_stream_failover_observation)：修改 SSE 前导、心跳、重放资格或失败诊断时读取。
 
@@ -41,17 +42,21 @@ OpenAI 平台拥有以下正式协议族：
 | Chat Completions | API Key 默认保留 Chat 协议原生转发；显式强制时才转换到 Responses；每次 attempt 重建协议状态 |
 | Anthropic Messages | 转换到 OpenAI 请求并把事件、工具、thinking/usage 恢复为 Anthropic 形状 |
 | Embeddings | 仅 OpenAI 分组，账号工作负载能力必须包含 `embeddings` |
-| Images | OpenAI 图片生成/编辑；当前网关保留同步生命周期，批量图片由 Gemini/Vertex 专题定义 |
+| Images | OpenAI 图片生成/编辑；同步接口保留，另提供显式提交与轮询的异步图片接口，批量图片由 Gemini/Vertex 专题定义 |
 | Realtime/Live/sideband、Alpha Search | 仅 OpenAI 分组，并受分组开关、账号类型和 transport capability 限制 |
 
 <a id="codex_native_images"></a>
 ### OAuth 原生 Codex Images
+
+第三方 API Key 客户端可使用 `/v1/images/generations/async`、`/v1/images/edits/async` 提交任务，以 `/v1/images/tasks/:task_id` 轮询。后台仍执行完整同步网关链路和当前 Token/图片结算规则，结果转存 S3 后返回链接；功能默认关闭，不隐式改变同步 SDK 行为。配置、归属、重启与账务边界见[异步图片与任务记录](../domains/media_tasks.md)。
 
 OAuth/Codex 凭据的 Images 请求在最终账号模型映射之后选择通道。精确登记的 `gpt-image-1.5`、`gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst` 以及后两者的 `2026-09-08` 快照使用 `/backend-api/codex/images/generations|edits`；其它已有图片型号保留 Responses 兼容通道，不根据前缀放行未来未知型号。API Key 的 Images 路径保持既有行为。生成/编辑 JSON、multipart 图片与 mask 统一经现有输入校验构造原生载荷，复用 Codex 认证、代理和当前 TLS 路由。
 
 只有原生端点明确返回 404/405 才允许同账号一次 Responses 回退。429/5xx 继续既有故障转移策略，不切到另一种协议重复生成；网络结果不确定、HTTP 200 后读取中断、非法结果或未产出完整图片时记录错误，不盲目重放。JSON/SSE 的实际图片与部分用量继续计入原结算路径，图片尺寸优先按真实输出识别，客户端断连仍按既有媒体排水规则处理。
 
 图片输入缓存是总缓存输入 token 的子集，独立图片缓存价受渠道显式价格、区间缓存倍率和整体价格倍率约束；显式零价不能被兜底价覆盖。日期型号在缺少精确目录价时先匹配基名目录，最后才用内置静态价。统计存储复用已有图片用量字段，无新增迁移，按张渠道计费不切换成 token 计费。
+
+API Key Images 兼容接口还接受 `gemini-*` 且含完整 `-image` 型号段的生图模型。渠道映射后的模型先决定 `images-apikey` 能力，账号映射后的最终模型再次校验；OAuth/Setup Token 不能被调度到这类第三方兼容模型。不会把 Gemini 文本型号开放为图片，也不改变 Gemini 原生生图或当前 Token/张计费选择。明确的结构化 `insufficient_balance` 错误保留原始运维信息并继续故障转移；非池模式且允许自动处理的账号仅对图片能力短暂冷却，不禁用文字模型。全部候选失败后返回明确的图片余额不足原因，管理员显式错误透传规则仍优先。
 
 <a id="images_url_backfill"></a>
 ### 图片结果回填
@@ -158,6 +163,8 @@ Responses 请求降级到 Chat Completions 时，工具结果中的 `input_image
 
 国产供应商的原生 Responses 路径沿用无状态请求约束（`store=false`、移除 `previous_response_id`），并把工具输出中的合法图片提升到后续 user 多模态消息，工具输出本身保留文本及图片归属标记。并行工具回复保持连续，期间插入的 system/developer 通知在整批工具回复及提升图片之后恢复；无图片时不因这一步重编码正文。该处理不扩展到普通 OpenAI/Grok 原生 Responses，也不调整计费模型或账号调度。
 
+DeepSeek 原生 Responses 兼容图片内容里的 `url` 与 `image_url` 别名，出站 `input_image` 同时保留字符串 `image_url` 和 `url`，以适配供应商不同的反序列化约束；对象形式读取内部 `url`，仅有 `file_id` 或没有可用 URL 的项保持原样。该适配限定 DeepSeek 路径，保留其他平台的 Responses 内容及现有工具结果图片归属。
+
 发往 DeepSeek 平台或官方 DeepSeek API host 的 Chat 请求，在桥接器完成真实推理内容回注后，仅给缺少或为空的 assistant `reasoning_content` 补单个空格占位，以兼容历史推理内容缺失的多轮工具会话。真实推理缓存命中或客户端已提供非空内容时保持原值；其它兼容 Chat 上游不使用该占位规则。
 
 OpenAI API Key 账号以 `force_chat_completions` 承接 `/v1/messages` 时，Chat 流中的并行 `tool_calls` 必须按 `tool_calls[].index` 聚合 ID、名称和全部参数分片，在流收尾时再按 index 顺序生成各自连续闭合的 `content_block_start`、`input_json_delta`、`content_block_stop`；参数分片暂存后一次拼接，聚合期间通过 Anthropic `ping` 维持下游活动，文本与 thinking 仍即时流式输出。空工具参数归一为 `{}`，call ID 保持原样，以便下一轮 `tool_result.tool_use_id` 配对。Anthropic `tool_choice.disable_parallel_tool_use=true` 映射为 Chat 顶层 `parallel_tool_calls=false`，字段缺失或为 `false` 时保持默认 `true`；`auto`、`any`、`none` 和具名工具的选择语义不变。
@@ -197,6 +204,8 @@ Responses 的普通无改动路径优先检查必要顶层字段、复用原始�
 
 客户端模型先经过 Key、渠道和账号层映射。OpenAI 内置别名、reasoning effort 归一化、旧版 Compact 端点支持、图像/embedding 能力和传输能力会影响候选账号；模型列表只公开当前分组可请求的结果。
 
+`gpt-6-sol`、`gpt-6-luna` 使用独立模型身份，支持 `none/low/medium/high/xhigh/max`，官方默认 `medium`。原生 Responses 请求中的显式 `none` 在自定义 API Key 上游地址也保持原值；Messages 转换到 Responses 时，两款模型仅在有效档位为 `none` 时保留采样参数。目录和客户端配置扩展不改变旧默认模型，也不改变管理员选择的上游协议。官方要求带工具的 Chat Completions 使用 `reasoning_effort=none`；其余推理档位的工具调用应走 Responses，网关不静默降低推理强度以强行适配 Chat。依据：[Sol 模型说明](https://developers.openai.com/api/docs/models/gpt-6-sol)、[Luna 模型说明](https://developers.openai.com/api/docs/models/gpt-6-luna)。
+
 GPT-5.6 的内置产品仅为 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`。裸 `gpt-5.6` 不作为预设型号或 Sol 别名，OAuth 归一化与用量计费候选也不再自动将它改为 Sol 或旧 GPT；未知名称沿用兼容上游的既有透传边界，不因此保证上游支持。管理员显式 Key、渠道和账号映射仍然有效，历史配置和用量记录不回写。模型目录查询与能力来源见[模型目录与市场](model_catalog_and_marketplace.md#model_catalog_metadata_lookup)。
 
 `gpt-6-astra` 的最终上游请求只接受 `low` 至 `max` 推理档位。网关不为 Astra 硬编码推理档位改写；需要兼容遗留 `minimal` 或 `none` 的分组，应在“推理强度映射”中按请求模型配置目标值（例如分别映射到 `low`）。`none` 仅可用于映射，不能作为最大推理强度，因为它没有可比较的强度排名；未配置映射时，普通转发层不得自行把一个推理档位改成另一个档位，客户端显式值由上游或对应兼容层决定是否接受。GPT-5.6 仍支持 `none`。本地价格目录和代码回退均保留 Astra 的官方标准价，远端价卡尚未同步时也不得退回到其他 GPT 型号计费。
@@ -219,9 +228,22 @@ HTTP Responses 返回响应 ID 后，账号粘性绑定与用户/API Key 所有�
 
 OAuth 账号的 5 小时、7 天等上游窗口和重置时间保存在账号运行状态中，可触发临时限流或自动暂停；API Key 的 Responses 探测事实继续独立于工作负载能力和管理员路由策略。OpenAI 不再采集上游站点声明倍率，也不按该值进行低倍率优先或高级评分。账户本地 `rate_multiplier` 和渠道上游计费模型来源继续用于 TokenRouter 结算，但都不是用户余额、订阅、Key 限额或用户平台额度。
 
-管理 API 的 `GET /admin/openai/accounts/:id/quota` 保持只读；账号列表使用 `POST /admin/openai/accounts/:id/quota/refresh` 查询上游并把重置次数写入 `account.extra.codex_reset_credit_snapshot`。正数次数只有同时取得到期明细时才覆盖快照，前端水合时过滤已过期明细并把次数收敛到仍有效的卡片数量。该 extra 键只用于展示缓存，不触发调度 outbox；Spark 影子账号的查询可解析母账号额度，但快照仍写在被查询的行上，且列表继续只提供查询入口，不提供真实重置按钮。
+<a id="openai_quota_reset"></a>
+### 管理员手动重置上游额度
+
+管理 API 的 `GET /admin/openai/accounts/:id/quota` 保持只读；账号列表使用 `POST /admin/openai/accounts/:id/quota/refresh` 查询上游并把重置次数写入 `account.extra.codex_reset_credit_snapshot`。正数次数只有同时取得到期明细时才覆盖快照，前端水合时过滤已过期明细并把次数收敛到仍有效的卡片数量。该 extra 键只用于展示缓存，不触发调度 outbox；Spark 影子账号的查询可解析母账号额度，但快照仍写在被查询的行上。
+
+OpenAI OAuth 账号的用量单元格提供“次数”“重置”“点数”入口。缓存只用于初始展示，实际查询到正数剩余次数后才可打开重置确认框；提交前明确提示会消耗一次上游重置机会。影子账号必须在母账号操作，API Key 不提供该入口。查询或重置中禁用重复提交，切换账号、卸载组件后不接收旧请求结果。
+
+确认后调用管理员接口 `POST /admin/openai/accounts/:id/reset-quota`，服务生成本次 `redeem_request_id`，通过原账号认证、代理和 TLS 配置调用 `/backend-api/wham/rate-limit-reset-credits/consume`。手动重置不引入自动用卡或后台消费任务，不改变 TokenRouter 用户余额、订阅用量、重置次数及有效期。后端仍独立校验平台、账号类型及影子账号限制，不能只依赖前端禁用按钮。
+
+只有已知成功码 `reset`、`success`、`ok`（忽略大小写及首尾空白）且 `windows_reset>0` 才确认重置成功，随后恢复账号可恢复错误、限流及临时不可调度，回读并缓存新窗口和剩余次数，再返回账号投影；人工调度开关保持不变。`no_credit`、未知结果或零窗口即使 HTTP 为 200 也不清除账号状态、不显示成功。响应保留上游结果码，前端将无法确认的结果视为需要重新查询，不自动再次提交。
+
+重置已成功但状态恢复、快照或账号刷新失败时，沿用 `account_state_recovered`、`cache_refreshed` 和 `warning_code` 表达部分完成，不把已消耗次数显示为普通失败。前端清除不可信旧次数，刷新用量单元格与账号状态；回读失败或网络结果不明确时必须重新查询后再决定下一次操作。真实重置测试会消耗上游机会，自动化回归只使用模拟上游。
 
 ## 失败与诊断
+
+HTTP Responses（原生与透传）及 WS→HTTP 桥接统一把已观测到的非零 token/图片用量或图片结果视为不可重放边界，即使客户端尚未收到正文。此后上游失败、提前 EOF、读取错误、首输出超时或下游写失败，必须保留部分结果交给现有幂等结算路径；不能返回可换号错误并丢弃已产生的成本。失败请求仍按失败上报调度结果，已由内容策略专门结算的请求不重复记账。没有输出和用量的请求继续按现有故障转移规则恢复。
 
 账号状态更新使用凭据快照/CAS，避免较早请求在 token 已刷新后再次封禁账号。401/403、429、endpoint 不支持、内容策略、网络错误和上游 5xx 分别分类；只有可切换且客户端响应未开始的失败才进入下一账号。OpenAI 上游代理或 CDN 返回的 HTML 403 只证明当前链路或端点被阻断：请求仍可按既有规则 failover，但不得递增连续 403 计数、临时停调或永久禁用账号；结构化 JSON 与纯文本 403 继续按账号级策略处理。API Key passthrough 池模式会把 `pool_mode_retry_status_codes` 命中的 HTTP 错误先转换为未提交响应的 failover，在同账号预算耗尽后才换号；未配置时默认覆盖 401、403、429，显式空列表可关闭这类按状态码重试。原生 Responses 上游返回的确定性 `400` 在现有账号策略、池模式重试和错误透传规则均未要求改写或故障转移时，按真实 400 回写，并保留脱敏后的 `message` 与诊断所需 `type`、`code`、`param`；瞬时处理错误和容量类 400 仍保持可重试或通用网关错误语义。图片模型被 Codex 文本端点以 plan-gated `400` 拒绝时属于端点错配：当前尝试仍切号，但不写模型冷却，避免影响同账号后续通过 `/v1/images/*` 正常生图；专用 Images 端点上的同类拒绝仍按真实账号能力缺失冷却，图片模型的 `404 model_not_found` 也不豁免。Responses HTTP 与 WebSocket v2 首次发送时保留加密 reasoning/compaction；若上游明确返回 `invalid_encrypted_content`，同账号恢复最多重试一次，清理账号绑定的加密状态但保留未加密 compaction。
 
@@ -232,9 +254,11 @@ OAuth 账号的 5 小时、7 天等上游窗口和重置时间保存在账号运
 <a id="openai_stream_failover_observation"></a>
 ### 流式首输出与恢复观测
 
-原生 Responses 与透传流在首个需保留的输出前暂存前导，已知纯 `ping`/`heartbeat` 和没有内容的文本、推理或转写 delta 可继续缓冲。判空采用字段和类型白名单；带用量、工具、加密状态、未知字段或未知事件时保守处理，不能将“没有可见文字”直接等同于可重放。显式流错误已经观测到非零上游用量时不再切换账号，仍执行原有账号限流/健康处理；已有正文、工具和状态输出的请求同样保留原禁止重放边界。缺少终态的 EOF、读取错误和首输出超时继续走各自原有处理分支，不因显式流错误的规则调整而改变。
+原生 Responses 与透传流在首个需保留的输出前暂存前导，已知纯 `ping`/`heartbeat`/`keepalive` 和没有内容的文本、推理或转写 delta 可继续缓冲。判空采用字段和类型白名单；带用量、工具、加密状态、未知字段或未知事件时保守处理，不能将“没有可见文字”直接等同于可重放。显式流错误已经观测到非零上游用量时不再切换账号，仍执行原有账号限流/健康处理；已有正文、工具和状态输出的请求同样保留原禁止重放边界。缺少终态的 EOF、读取错误、首输出超时及前导缓冲/扫描上限同样以已观测令牌和完整图片为重放边界；即使尚未写出正文，已有上游消耗也不得再切换账号。原生和透传 HTTP 转发会把失败前的用量、图片及请求/模型/档位元数据交给既有 handler 结算，同时返回失败，不建立成功粘性或刷新成功配额快照。无业务输出、无实际用量的请求仍保留原故障转移资格。
 
 网关生成的排队与保活心跳统一排除在业务输出计数之外，保持真实 HTTP 提交状态。同一响应多次启动保活时保留历史计数，新分组的独立写入器重置计数，详见[智能路由换组边界](../domains/smart_routing_api_keys.md#group_failover)。
+
+WS HTTP bridge 将纯传输心跳及时发送给客户端，不因此冲出暂存的响应前导，也不将其记为首字或业务输出；带 usage、工具数据或未知字段的同名事件仍按有意义输出保护。客户端已断开时不会因为此前只有心跳就重新请求另一个账号，仍保留原排水计费。正常终止事件无需等待上游关闭连接；裸 `error` 后可能跟成功终态的兼容场景继续保留现有恢复判断。读失败产生的 Responses 错误帧同时携带规范顶层 `code/message/param/sequence_number`，只发送一次，并标记响应已提交，避免 handler 再写 JSON 破坏流。
 
 最终流失败或同一上游流内由成功终态恢复的前置错误产生 `openai.stream_attempt_diagnostic`，记录当前尝试的流路径、首个提交事件及原因、阻止重试的原因、结果和客户端断连状态。诊断不保存正文、工具参数或推理密文；它用于区分真实输出、保守提交的结构事件、已有用量和进入转发前已写出的内容，不能把未记录可见内容时间直接解释为没有业务输出。输出前切换账号仍使用已有的尝试错误记录。实际上游失败与恢复记录的归属见[运维信号流水线](../operations/ops_monitoring_and_alerting.md#ops_signal_pipeline)。
 

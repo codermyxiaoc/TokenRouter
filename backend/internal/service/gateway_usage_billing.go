@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -158,6 +159,13 @@ func resolveUsageBillingPayloadFingerprint(ctx context.Context, requestPayloadHa
 	return ""
 }
 
+// 简易模式窗口开关不改变标准模式结算，也不影响没有额度限制的密钥。
+var ErrSimpleModeKeyRateLimitBillingUnavailable = errors.New("simple mode api key rate-limit billing unavailable")
+
+func simpleModeKeyRateLimitBillingEnabled(cfg *config.Config, apiKey *APIKey) bool {
+	return cfg != nil && cfg.RunMode == config.RunModeSimple && cfg.SimpleModeKeyRateLimitEnabled && apiKey != nil && apiKey.HasRateLimits()
+}
+
 func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *usageBillingParams) *UsageBillingCommand {
 	if p == nil || p.Cost == nil || p.APIKey == nil || p.User == nil || p.Account == nil {
 		return nil
@@ -206,6 +214,15 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *usageBill
 		if usageLog.ReasoningEffort != nil {
 			cmd.ReasoningEffort = *usageLog.ReasoningEffort
 		}
+	}
+
+	// 在设置资金分配金额前返回，确保数据库事务只累计密钥额度窗口。
+	if p.SimpleModeKeyRateLimitOnly {
+		if p.Cost.ActualCost > 0 && p.APIKey.HasRateLimits() {
+			cmd.APIKeyRateLimitCost = p.Cost.ActualCost
+		}
+		cmd.Normalize()
+		return cmd
 	}
 
 	if p.Cost.ActualCost > 0 {
@@ -292,6 +309,9 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 	}
 
 	cmd := buildUsageBillingCommand(requestID, usageLog, p)
+	if p.SimpleModeKeyRateLimitOnly && (repo == nil || cmd == nil || cmd.RequestID == "") {
+		return false, ErrSimpleModeKeyRateLimitBillingUnavailable
+	}
 	if repo == nil {
 		return false, fmt.Errorf("usage billing repository is required")
 	}
@@ -435,6 +455,10 @@ func detachStreamUpstreamContext(ctx context.Context, stream bool) (context.Cont
 func detachUpstreamContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		return context.Background(), func() {}
+	}
+	// 异步图片已在入口脱离客户端取消；保留后台任务自身截止时间，普通请求继续原有语义。
+	if backgroundImage, _ := ctx.Value(asyncImageExecutionContextKey{}).(bool); backgroundImage {
+		return ctx, func() {}
 	}
 	return context.WithoutCancel(ctx), func() {}
 }
@@ -707,7 +731,8 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		)
 	}
 
-	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+	simpleModeKeyRateLimitOnly := simpleModeKeyRateLimitBillingEnabled(s.cfg, apiKey)
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple && !simpleModeKeyRateLimitOnly {
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 		logger.LegacyPrintf("service.gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
 		s.deferredService.ScheduleLastUsedUpdate(account.ID)
@@ -723,6 +748,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 	requestID := usageLog.RequestID
 	_, billingErr := applyUsageBilling(ctx, requestID, usageLog, &usageBillingParams{
+		SimpleModeKeyRateLimitOnly:      simpleModeKeyRateLimitOnly,
 		Cost:                            cost,
 		User:                            user,
 		APIKey:                          apiKey,
@@ -880,17 +906,18 @@ func (s *GatewayService) calculateImageCost(
 		}
 		gid := apiKey.Group.ID
 		cost, err := s.billingService.CalculateCostUnified(CostInput{
-			Ctx:            ctx,
-			Model:          resolvedModel,
-			GroupID:        &gid,
-			Group:          apiKey.Group,
-			Tokens:         tokens,
-			RequestCount:   result.ImageCount,
-			SizeTier:       sizeTier,
-			RateMultiplier: multiplier,
-			PricingAt:      pricingAt,
-			Resolver:       s.resolver,
-			Resolved:       resolved,
+			Ctx:             ctx,
+			Model:           resolvedModel,
+			GroupID:         &gid,
+			Group:           apiKey.Group,
+			Tokens:          tokens,
+			RequestCount:    result.ImageCount,
+			ReasoningEffort: stringValueOrEmpty(result.ReasoningEffort),
+			SizeTier:        sizeTier,
+			RateMultiplier:  multiplier,
+			PricingAt:       pricingAt,
+			Resolver:        s.resolver,
+			Resolved:        resolved,
 		})
 		if err != nil {
 			logger.LegacyPrintf("service.gateway", "Calculate image token cost failed: %v", err)

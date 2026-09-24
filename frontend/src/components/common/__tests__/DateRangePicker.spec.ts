@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { ref } from 'vue'
 
@@ -37,7 +37,48 @@ const formatLocalDate = (date: Date): string => {
 
 const waitForTransition = () => new Promise((resolve) => window.setTimeout(resolve, 250))
 
+afterEach(() => vi.useRealTimers())
+
 describe('DateRangePicker', () => {
+  it('跨午夜后今天预设使用新日期，取消草稿不修改已应用范围', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 8, 24, 23, 59, 0))
+    const wrapper = mount(DateRangePicker, {
+      props: { startDate: '2026-09-24', endDate: '2026-09-24' },
+      global: { stubs: { Icon: true, Transition: true } }
+    })
+    await wrapper.get('.date-picker-trigger').trigger('click')
+    await wrapper.findAll('.date-picker-preset').find(node => node.text() === 'Today')!.trigger('click')
+    await wrapper.get('.date-picker-trigger').trigger('click')
+    vi.setSystemTime(new Date(2026, 8, 25, 0, 1, 0))
+    await wrapper.get('.date-picker-trigger').trigger('click')
+    await wrapper.findAll('.date-picker-preset').find(node => node.text() === 'Today')!.trigger('click')
+    expect((wrapper.findAll('input')[0].element as HTMLInputElement).value).toBe('2026-09-25')
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await wrapper.vm.$nextTick()
+    await wrapper.get('.date-picker-trigger').trigger('click')
+    expect((wrapper.findAll('input')[0].element as HTMLInputElement).value).toBe('2026-09-24')
+    expect(wrapper.emitted('change')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('应用自定义日期后使用父组件更新值，不回滚为之前的范围', async () => {
+    const wrapper = mount(DateRangePicker, {
+      props: {
+        startDate: '2026-09-20', endDate: '2026-09-21',
+        'onUpdate:startDate': value => { void wrapper.setProps({ startDate: value }) },
+        'onUpdate:endDate': value => { void wrapper.setProps({ endDate: value }) }
+      },
+      global: { stubs: { Icon: true } }
+    })
+    await wrapper.get('.date-picker-trigger').trigger('click')
+    await wrapper.findAll('input')[0].setValue('2026-09-19')
+    await wrapper.get('.date-picker-apply').trigger('click')
+    await wrapper.get('.date-picker-trigger').trigger('click')
+    expect((wrapper.findAll('input')[0].element as HTMLInputElement).value).toBe('2026-09-19')
+    wrapper.unmount()
+  })
+
   it('uses last 24 hours as the default recognized preset', () => {
     const now = new Date()
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)

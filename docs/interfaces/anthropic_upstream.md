@@ -45,6 +45,8 @@ Responses 工具参数转换为 Anthropic `input_schema` 时，会把根节点�
 
 模型依次经过 Key 重定向、渠道映射和账号映射；可请求列表是分组策略、渠道和当前账号能力的交集，不是默认模型常量的直接输出。Bedrock/Vertex 的供应商模型标识可与客户端 Anthropic 名称不同，计费模型也可以由渠道单独指定。
 
+原生 Anthropic 目录新增 `claude-opus-5-5`（Claude Opus 5.5），不替换 Opus 5 或其他旧模型，也不推断 Antigravity、OpenCode 或 Bedrock 地域路由可用性。该型号始终启用 adaptive thinking、默认 effort 为 `medium`；兼容入口为最终映射目标生成 thinking 时使用 adaptive，缺省 thinking 不能被当成关闭思考而删掉合法历史块。客户端显式 `thinking=disabled/enabled`、强制工具选择等不合法原生字段保留上游校验语义，不偷偷改成其他工具策略。旧思考签名与模型、对话绑定，跨模型历史不能凭模型目录扩展保证复用。官方迁移约束见 [Opus 5.5 迁移指南](https://platform.claude.com/docs/zh-CN/models/opus-5-5/migration-guide)，价格与缓存独立条目见[模型目录与市场](model_catalog_and_marketplace.md)。
+
 Anthropic 请求策略包括：
 
 - beta header 过滤、补充或阻断，避免把账号不允许的实验能力直接发往上游。
@@ -77,6 +79,8 @@ Claude Code-only 约束会在 CLI UA 之后校验必需 Header、metadata 与官
 
 Messages 和 CountTokens 的 OAuth 出站请求中，`x-anthropic-billing-header` 的 `cc_version` 必须匹配最终 User-Agent。启用 Claude Code 伪装时使用运行时 CLI 默认头（包括合法的 CLI 版本环境覆盖），即使没有账号指纹服务或指纹统一被关闭也要同步；普通指纹转发使用账号缓存 UA。三位十六进制指纹后缀包含版本和用户消息信息，版本同步时必须重算，并保持重复处理幂等、用户消息不变；该步骤在最终出站请求体构造前完成。
 
+运行时版本依次使用后台固定版本、有效的启动环境固定值、官方自动同步结果及内置版本。每次请求只获取一次伪装 UA，计费标记与最终出站头复用同一快照，避免并发同步时版本不一致。账号默认指纹在使用时生成，存量低版本指纹会抬升至当前有效版本，保留更高版本及原 ClientID。设置语义见[数据库运行时设置](configuration.md#数据库运行时设置)。
+
 具体启用条件可能来自全局运行设置、分组/渠道和账号 extra。层级边界见[网关策略控制](../domains/gateway_policy_controls.md)。
 
 ## 配额与调度
@@ -88,6 +92,8 @@ API Key/Bedrock 可配置本地账号配额和亲和策略。可用的上游用�
 ## 错误与诊断
 
 凭据临近过期优先刷新；刷新失败会更新账号错误状态并同步调度快照。401/403 需要区分 token 失效、权限或 beta/模型拒绝；429 需要区分账号、模型和共享容量；可重试 5xx/网络错误只在响应未开始时换账号。
+
+Baseten 兼容上游明确返回“启用 reasoning 时必须为最终答案预留超过 1024 token”的特定约束时，复用现有 thinking 预算修复和有界重试。仅识别完整供应商错误特征，普通额度、上下文或泛化的 1024 错误不触发；adaptive thinking 和已满足预算的请求保持原样。
 
 最终错误先经过平台分类，再应用管理员配置的[网关错误响应策略](gateway_error_policy.md)。错误正文、凭据、内部 project/region 和上游标识不得无条件返回客户端。排障应关联 request ID、requested/upstream model、账号 attempt、token refresh、代理/TLS 路由、限流恢复时间和结算记录。
 

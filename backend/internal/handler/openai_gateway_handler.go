@@ -38,6 +38,7 @@ type OpenAIGatewayHandler struct {
 	errorPassthroughService    *service.ErrorPassthroughService
 	contentModerationService   *service.ContentModerationService
 	grokMediaEligibilityProber grokMediaEligibilityProber
+	mediaTaskObserver          service.MediaTaskObserver
 	opsService                 *service.OpsService
 	concurrencyHelper          *ConcurrencyHelper
 	imageLimiter               *imageConcurrencyLimiter
@@ -150,6 +151,25 @@ const maxOpenAIFirstOutputTimeoutSwitches = 1
 // openAIForwardSucceededForScheduling 会排除以失败事件结束的 WebSocket 转发结果。
 func openAIForwardSucceededForScheduling(result *service.OpenAIForwardResult) bool {
 	return result.SucceededForScheduling()
+}
+
+// WS 错误收尾只结算明确观测到的用量；风控已单独结算时不能重复提交。
+// 正常成功响应保留零用量记录，失败响应无论是否产生用量都不能记为调度成功。
+func openAIWSTurnUsagePolicy(result *service.OpenAIForwardResult, turnErr error, cyberPolicyHandled bool) (recordUsage, scheduleSucceeded bool) {
+	if result == nil {
+		return false, false
+	}
+	if turnErr == nil {
+		return true, openAIForwardSucceededForScheduling(result)
+	}
+	if cyberPolicyHandled {
+		return false, false
+	}
+	usage := result.Usage
+	hasUsage := result.ImageCount > 0 || usage.InputTokens > 0 || usage.OutputTokens > 0 ||
+		usage.CacheCreationInputTokens > 0 || usage.CacheReadInputTokens > 0 ||
+		usage.ImageInputTokens > 0 || usage.ImageOutputTokens > 0
+	return hasUsage, false
 }
 
 func openAIAccountScheduleModel(c *gin.Context, account *service.Account, forwardModel string, requireCompact bool, result *service.OpenAIForwardResult) string {
@@ -858,111 +878,111 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					zap.Int("image_count", result.ImageCount),
 					zap.Error(err),
 				)
-			} else {
-				var failoverErr *service.UpstreamFailoverError
-				if errors.As(err, &failoverErr) {
-					if failoverClientGone(c) {
-						reqLog.Info("openai.failover_aborted_client_disconnected",
-							zap.Int64("account_id", account.ID),
-							zap.Int("upstream_status", failoverErr.StatusCode),
-						)
-						return
-					}
-					h.recordOpenAICyberWarning(c, reqLog, apiKey, account, reqModel, failoverErr.StatusCode, failoverErr.ResponseBody, err.Error())
-					if !openAIForwardMayFailover(c, writerSizeBeforeForward, failoverErr) {
-						h.gatewayService.ObserveOpenAIAccountHealthFailure(c.Request.Context(), account, err)
-						h.handleFailoverExhausted(c, failoverErr, true)
-						return
-					}
-					// openAIForwardMayFailover 已确认写出的字节不含语义输出，
-					// 但重试耗尽时仍须按已提交的 SSE 响应返回流内错误。
-					if c.Writer.Written() {
-						streamStarted = true
-					}
-					if failoverErr.ShouldReportAccountScheduleFailure() {
-						h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, nil), false, nil, err)
-					}
-					if !failoverErr.ShouldRetryNextAccount() {
-						h.handleFailoverExhausted(c, failoverErr, streamStarted)
-						return
-					}
-					if openAIFirstOutputFailoverExhausted(failoverErr, &firstOutputTimeoutSwitchCount) {
-						h.handleFailoverExhausted(c, failoverErr, streamStarted)
-						return
-					}
-					// 池模式：同账号重试
-					if failoverErr.RetryableOnSameAccount {
-						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
-						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
-							sameAccountRetryCount[account.ID]++
-							retryDelay := sameAccountRetryDelayFor(failoverErr, sameAccountRetryCount[account.ID])
-							reqLog.Warn("openai.pool_mode_same_account_retry",
-								zap.Int64("account_id", account.ID),
-								zap.Int("upstream_status", failoverErr.StatusCode),
-								zap.Int("retry_limit", retryLimit),
-								zap.Int("retry_count", sameAccountRetryCount[account.ID]),
-								zap.Duration("retry_delay", retryDelay),
-							)
-							select {
-							case <-c.Request.Context().Done():
-								return
-							case <-time.After(retryDelay):
-							}
-							continue
-						}
-					}
-					h.gatewayService.RecordOpenAIAccountSwitchForSelection(selection)
-					failedAccountIDs[account.ID] = struct{}{}
-					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
-						h.handleFailoverExhausted(c, failoverErr, streamStarted)
-						return
-					}
-					switchCount++
-					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
-						h.handleFailoverExhausted(c, failoverErr, streamStarted)
-						return
-					}
-					failoverSwitchFields := []zap.Field{
+			}
+			var failoverErr *service.UpstreamFailoverError
+			// 已生成图片必须结算，但错误收尾仍走失败响应与调度反馈，不能再次生成。
+			if (result == nil || result.ImageCount == 0) && errors.As(err, &failoverErr) {
+				if failoverClientGone(c) {
+					reqLog.Info("openai.failover_aborted_client_disconnected",
 						zap.Int64("account_id", account.ID),
 						zap.Int("upstream_status", failoverErr.StatusCode),
-						zap.Int("switch_count", switchCount),
-						zap.Int("max_switches", maxAccountSwitches),
-					}
-					failoverSwitchFields = appendOpenAIAccountProxyLogFields(failoverSwitchFields, account)
-					reqLog.Warn("openai.upstream_failover_switching", failoverSwitchFields...)
-					continue
-				}
-				statusCode := 0
-				if v, ok := getContextInt64(c, service.OpsUpstreamStatusCodeKey); ok {
-					statusCode = int(v)
-				}
-				recordedWarning := h.recordOpenAIForwardErrorCyberWarning(c, reqLog, apiKey, account, reqModel, statusCode, err)
-				if !recordedWarning {
-					h.recordOpenAICyberWarning(c, reqLog, apiKey, account, reqModel, statusCode, nil, err.Error())
-				}
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, result), false, nil, err)
-				upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
-				wroteFallback := false
-				// cyber warning 场景下，service 层可能已经把上游 response.failed/JSON 错误写给下游。
-				// 此时不再补写第二个 fallback，避免客户端看到重复的终止事件。
-				if !upstreamErrorAlreadyCommunicated && (!recordedWarning || service.OpenAICompactKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward) {
-					wroteFallback = h.ensureOpenAIForwardErrorResponse(c, streamStarted, err)
-				}
-				fields := []zap.Field{
-					zap.Int64("account_id", account.ID),
-					zap.Bool("fallback_error_response_written", wroteFallback),
-					zap.Bool("upstream_error_response_already_written", upstreamErrorAlreadyCommunicated),
-					zap.Error(err),
-				}
-				submitResponsesUsage(result)
-				if shouldLogOpenAIForwardFailureAsWarn(c, wroteFallback) {
-					reqLog.Warn("openai.forward_failed", fields...)
+					)
 					return
 				}
-				reqLog.Error("openai.forward_failed", fields...)
+				h.recordOpenAICyberWarning(c, reqLog, apiKey, account, reqModel, failoverErr.StatusCode, failoverErr.ResponseBody, err.Error())
+				if !openAIForwardMayFailover(c, writerSizeBeforeForward, failoverErr) {
+					h.gatewayService.ObserveOpenAIAccountHealthFailure(c.Request.Context(), account, err)
+					h.handleFailoverExhausted(c, failoverErr, true)
+					return
+				}
+				// openAIForwardMayFailover 已确认写出的字节不含语义输出，
+				// 但重试耗尽时仍须按已提交的 SSE 响应返回流内错误。
+				if c.Writer.Written() {
+					streamStarted = true
+				}
+				if failoverErr.ShouldReportAccountScheduleFailure() {
+					h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, nil), false, nil, err)
+				}
+				if !failoverErr.ShouldRetryNextAccount() {
+					h.handleFailoverExhausted(c, failoverErr, streamStarted)
+					return
+				}
+				if openAIFirstOutputFailoverExhausted(failoverErr, &firstOutputTimeoutSwitchCount) {
+					h.handleFailoverExhausted(c, failoverErr, streamStarted)
+					return
+				}
+				// 池模式：同账号重试
+				if failoverErr.RetryableOnSameAccount {
+					retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
+					if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
+						sameAccountRetryCount[account.ID]++
+						retryDelay := sameAccountRetryDelayFor(failoverErr, sameAccountRetryCount[account.ID])
+						reqLog.Warn("openai.pool_mode_same_account_retry",
+							zap.Int64("account_id", account.ID),
+							zap.Int("upstream_status", failoverErr.StatusCode),
+							zap.Int("retry_limit", retryLimit),
+							zap.Int("retry_count", sameAccountRetryCount[account.ID]),
+							zap.Duration("retry_delay", retryDelay),
+						)
+						select {
+						case <-c.Request.Context().Done():
+							return
+						case <-time.After(retryDelay):
+						}
+						continue
+					}
+				}
+				h.gatewayService.RecordOpenAIAccountSwitchForSelection(selection)
+				failedAccountIDs[account.ID] = struct{}{}
+				lastFailoverErr = failoverErr
+				if switchCount >= maxAccountSwitches {
+					h.handleFailoverExhausted(c, failoverErr, streamStarted)
+					return
+				}
+				switchCount++
+				if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+					h.handleFailoverExhausted(c, failoverErr, streamStarted)
+					return
+				}
+				failoverSwitchFields := []zap.Field{
+					zap.Int64("account_id", account.ID),
+					zap.Int("upstream_status", failoverErr.StatusCode),
+					zap.Int("switch_count", switchCount),
+					zap.Int("max_switches", maxAccountSwitches),
+				}
+				failoverSwitchFields = appendOpenAIAccountProxyLogFields(failoverSwitchFields, account)
+				reqLog.Warn("openai.upstream_failover_switching", failoverSwitchFields...)
+				continue
+			}
+			statusCode := 0
+			if v, ok := getContextInt64(c, service.OpsUpstreamStatusCodeKey); ok {
+				statusCode = int(v)
+			}
+			recordedWarning := h.recordOpenAIForwardErrorCyberWarning(c, reqLog, apiKey, account, reqModel, statusCode, err)
+			if !recordedWarning {
+				h.recordOpenAICyberWarning(c, reqLog, apiKey, account, reqModel, statusCode, nil, err.Error())
+			}
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, result), false, nil, err)
+			upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
+			wroteFallback := false
+			// cyber warning 场景下，service 层可能已经把上游 response.failed/JSON 错误写给下游。
+			// 此时不再补写第二个 fallback，避免客户端看到重复的终止事件。
+			if !upstreamErrorAlreadyCommunicated && (!recordedWarning || service.OpenAICompactKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward) {
+				wroteFallback = h.ensureOpenAIForwardErrorResponse(c, streamStarted, err)
+			}
+			fields := []zap.Field{
+				zap.Int64("account_id", account.ID),
+				zap.Bool("fallback_error_response_written", wroteFallback),
+				zap.Bool("upstream_error_response_already_written", upstreamErrorAlreadyCommunicated),
+				zap.Error(err),
+			}
+			submitResponsesUsage(result)
+			if shouldLogOpenAIForwardFailureAsWarn(c, wroteFallback) {
+				reqLog.Warn("openai.forward_failed", fields...)
 				return
 			}
+			reqLog.Error("openai.forward_failed", fields...)
+			return
 		}
 		if result != nil {
 			// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
@@ -2470,6 +2490,17 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 
+	// 长连接每轮获取槽位后复核简易模式密钥窗口，标准模式不重复增加 RPM。
+	checkSimpleModeTurnBilling := func() error {
+		if h.cfg == nil || h.cfg.RunMode != config.RunModeSimple || !h.cfg.SimpleModeKeyRateLimitEnabled {
+			return nil
+		}
+		if err := h.billingCacheService.CheckBillingEligibility(ctx, apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(ctx, apiKey)); err != nil {
+			return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "billing check failed", err)
+		}
+		return nil
+	}
+
 	sessionHash := h.gatewayService.GenerateSessionHashWithFallback(
 		c,
 		firstMessage,
@@ -2660,6 +2691,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			maxReasoningEffortOverLimit = apiKey.Group.MaxReasoningEffortOverLimit
 			reasoningEffortMappings = apiKey.Group.ReasoningEffortMappings
 		}
+		// 首帧不调用 BeforeTurn，需要在这里执行同一额度检查。
+		if err := checkSimpleModeTurnBilling(); err != nil {
+			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "billing check failed")
+			return
+		}
 		hooks := &service.OpenAIWSIngressHooks{
 			ClientLifecycleContext:      clientLifecycleCtx,
 			InitialRequestModel:         reqModel,
@@ -2796,7 +2832,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				currentUserRelease = wrapReleaseOnDone(ctx, userReleaseFunc)
 				currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
-				return nil
+				return checkSimpleModeTurnBilling()
 			},
 			OnUpstreamError: func(turn int, originalModel string, statusCode int, responseBody []byte, warningText string) {
 				model := strings.TrimSpace(originalModel)
@@ -2836,21 +2872,18 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					cyberBlockedThisConn.Store(true)
 				}
 				defer clearCyberPromptExcerpt(turn)
+				recordUsage, scheduleSucceeded := openAIWSTurnUsagePolicy(result, turnErr, cyberPolicyHandled)
+				if !recordUsage {
+					return
+				}
 				if turnErr != nil {
-					if result == nil || result.ImageCount <= 0 {
-						return
-					}
-					if cyberPolicyHandled {
-						return
-					}
-					reqLog.Warn("openai.websocket_partial_error_with_image_result",
+					reqLog.Warn("openai.websocket_partial_error_with_usage",
 						zap.Int64("account_id", account.ID),
 						zap.Int("image_count", result.ImageCount),
+						zap.Int("input_tokens", result.Usage.InputTokens),
+						zap.Int("output_tokens", result.Usage.OutputTokens),
 						zap.Error(turnErr),
 					)
-				}
-				if result == nil {
-					return
 				}
 				// WS 每个 turn 的渠道映射可能覆盖默认计费模型，统一在记录用量前解析。
 				result.BillingModel = openAIWSTurnBillingModel(result, turnChannelMapping, turnModel, result.UpstreamModel)
@@ -2862,7 +2895,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if scheduleModel == "" {
 					scheduleModel = account.GetMappedModel(turnChannelMapping.MappedModel)
 				}
-				h.gatewayService.ReportOpenAIAccountScheduleResultForSelection(selection, account.ID, scheduleModel, openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
+				h.gatewayService.ReportOpenAIAccountScheduleResultForSelection(selection, account.ID, scheduleModel, scheduleSucceeded, result.FirstTokenMs)
 				inboundEndpoint := GetInboundEndpoint(c)
 				upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)
 				turnRequestBody := capture.RequestBody
@@ -3280,6 +3313,13 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 			h.handleStreamingAwareError(c, respCode, "upstream_error", msg, streamStarted)
 			return
 		}
+	}
+
+	// 保留显式透传规则的优先级；切换耗尽后再呈现图片余额不足原因。
+	if failoverErr.Reason == service.OpenAIImagesInsufficientBalanceReason {
+		service.SetOpsUpstreamError(c, statusCode, service.ExtractUpstreamErrorMessage(responseBody), "")
+		h.handleStreamingAwareErrorWithCode(c, http.StatusPaymentRequired, "upstream_error", service.OpenAIImagesInsufficientBalanceCode, service.OpenAIImagesInsufficientBalanceMessage, streamStarted, false)
+		return
 	}
 
 	// 记录原始上游状态码，以便 ops 错误日志捕获真实的上游错误

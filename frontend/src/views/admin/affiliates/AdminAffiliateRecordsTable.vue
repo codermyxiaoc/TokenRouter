@@ -13,6 +13,7 @@
               v-model:end-date="dateRangeEnd"
               @change="handleDateRangeChange"
             />
+            <button v-if="props.type === 'transfers'" type="button" class="btn btn-primary" data-test="affiliate-withdraw-open" @click="withdrawDialog = true">{{ t('admin.affiliates.withdraw.button') }}</button>
             <button class="btn btn-secondary h-9 w-9 shrink-0 p-0" :disabled="loading" :title="t('common.refresh')" @click="loadRecords">
               <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
             </button>
@@ -49,6 +50,7 @@
               @open="openUserOverview"
             />
           </template>
+          <template #cell-action="{ row }">{{ t('admin.affiliates.outflowTypes.' + row.action) }}</template>
           <template #cell-user="{ row }">
             <UserCell
               :id="row.user_id"
@@ -143,10 +145,12 @@
         </div>
       </div>
     </BaseDialog>
+    <AffiliateOfflineWithdrawDialog :show="withdrawDialog" @close="withdrawDialog = false" @success="loadRecords" />
   </AppLayout>
 </template>
 
 <script setup lang="ts">
+import AffiliateOfflineWithdrawDialog from './AffiliateOfflineWithdrawDialog.vue'
 import { computed, defineComponent, h, onMounted, reactive, ref, type PropType } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -182,6 +186,7 @@ const filters = reactive({ search: '', start_at: '', end_at: '' })
 const dateRangeStart = ref('')
 const dateRangeEnd = ref('')
 const pagination = reactive({ page: 1, page_size: 20, total: 0 })
+const withdrawDialog = ref(false)
 const overviewDialog = ref(false)
 const overviewLoading = ref(false)
 const selectedOverview = ref<AffiliateUserOverview | null>(null)
@@ -211,6 +216,7 @@ const columns = computed<Column[]>(() => {
     ]
   }
   return [
+    { key: 'action', label: t('admin.affiliates.records.outflowType'), sortable: true },
     { key: 'user', label: t('admin.affiliates.records.user'), sortable: true },
     { key: 'amount', label: t('admin.affiliates.records.transferAmount', { unitName: balanceUnitName.value }), sortable: true },
     { key: 'balance_after', label: t('admin.affiliates.records.balanceAfter', { unitName: balanceUnitName.value }), sortable: true },

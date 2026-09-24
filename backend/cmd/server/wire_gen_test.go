@@ -69,14 +69,16 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		schedulerSnapshotSvc,
 		tokenRefreshSvc,
 		accountExpirySvc,
+		service.NewClaudeCodeVersionSyncService(nil, nil, nil, time.Second),
 		proxyExpirySvc,
 		subscriptionExpirySvc,
 		announcementExpirySvc,
 		&service.UsageCleanupService{},
 		idempotencyCleanupSvc,
 		&service.BatchImageCleanupService{},
-		nil, // batchImageWorker
-		nil, // creativeWorker
+		nil,                              // batchImageWorker
+		nil,                              // creativeWorker
+		service.NewImageTaskService(nil), // 异步图片租约与补偿循环
 		pricingSvc,
 		emailQueueSvc,
 		billingCacheSvc,

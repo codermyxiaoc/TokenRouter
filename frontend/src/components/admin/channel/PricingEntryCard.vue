@@ -69,12 +69,15 @@
         >
           Flex {{ entry.flex_multiplier }}x
         </span>
-        <span
-          v-if="props.enableTierMultipliers && entry.billing_mode === 'token' && entry.max_reasoning_effort_multiplier !== null && entry.max_reasoning_effort_multiplier !== undefined && entry.max_reasoning_effort_multiplier !== ''"
-          class="flex-shrink-0 rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-        >
-          Max {{ entry.max_reasoning_effort_multiplier }}x
-        </span>
+        <template v-if="props.enableTierMultipliers && entry.billing_mode === 'token'">
+          <span
+            v-for="(multiplier, effort) in displayedReasoningMultipliers"
+            :key="effort"
+            class="flex-shrink-0 rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+          >
+            {{ effort }} {{ multiplier }}x
+          </span>
+        </template>
       </div>
 
       <!-- Expanded: show the label "Pricing Entry" or similar -->
@@ -240,8 +243,8 @@
                 {{ t('admin.channels.form.maxReasoningEffortMultiplier', 'Max 推理倍率') }}
               </label>
               <input
-                :value="entry.max_reasoning_effort_multiplier"
-                @input="emitField('max_reasoning_effort_multiplier', ($event.target as HTMLInputElement).value)"
+                :value="entry.reasoning_effort_multipliers?.max ?? entry.max_reasoning_effort_multiplier"
+                @input="updateReasoningEffort('max', ($event.target as HTMLInputElement).value)"
                 type="number"
                 step="any"
                 min="0.000001"
@@ -249,6 +252,22 @@
                 data-testid="max-reasoning-effort-multiplier"
                 :placeholder="maxReasoningEffortMultiplierPlaceholder"
               />
+            </div>
+          </div>
+
+          <div v-if="props.enableTierMultipliers" class="mt-3">
+            <p class="text-xs text-gray-400">{{ t('admin.channels.form.reasoningEffortMultipliersHint') }}</p>
+            <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <div v-for="effort in otherReasoningEfforts" :key="effort">
+                <label class="text-xs text-gray-400">{{ t('admin.channels.form.reasoningEffortMultiplier', { effort }) }}</label>
+                <input
+                  :value="entry.reasoning_effort_multipliers?.[effort]"
+                  @input="updateReasoningEffort(effort, ($event.target as HTMLInputElement).value)"
+                  type="number" step="any" min="0.000001" class="input mt-0.5 text-sm"
+                  :data-testid="`reasoning-multiplier-${effort}`"
+                  :placeholder="t('admin.channels.form.multiplierPlaceholder', '沿用默认')"
+                />
+              </div>
             </div>
           </div>
 
@@ -369,7 +388,7 @@ import IntervalRow from './IntervalRow.vue'
 import ModelTagInput from './ModelTagInput.vue'
 import TimePricingSection from './TimePricingSection.vue'
 import type { PricingFormEntry, IntervalFormEntry } from './types'
-import { perTokenToMTok, getPlatformTagClass } from './types'
+import { perTokenToMTok, getPlatformTagClass, REASONING_EFFORT_LEVELS } from './types'
 import type { BillingMode } from '@/api/admin/channels'
 import channelsAPI from '@/api/admin/channels'
 
@@ -415,6 +434,28 @@ const maxReasoningEffortMultiplierPlaceholder = computed(() =>
     : t('admin.channels.form.multiplierPlaceholder', '沿用默认'),
 )
 
+const otherReasoningEfforts = REASONING_EFFORT_LEVELS.filter(effort => effort !== 'max')
+
+// 摘要同时展示新档位与未迁移的旧 Max，避免已保存配置被折叠状态隐藏。
+const displayedReasoningMultipliers = computed(() => {
+  const multipliers = { ...props.entry.reasoning_effort_multipliers }
+  const legacyMax = props.entry.max_reasoning_effort_multiplier
+  if (multipliers.max == null && legacyMax != null && legacyMax !== '') multipliers.max = legacyMax
+  return Object.fromEntries(Object.entries(multipliers).filter(([, value]) => value != null && value !== ''))
+})
+
+// Max 编辑同时清除旧字段，保证清空后不会被旧值再次覆盖；未编辑的旧价卡保持原样。
+function updateReasoningEffort(effort: string, value: string) {
+  const multipliers = { ...props.entry.reasoning_effort_multipliers }
+  if (value === '') delete multipliers[effort]
+  else multipliers[effort] = value
+  emit('update', {
+    ...props.entry,
+    reasoning_effort_multipliers: multipliers,
+    max_reasoning_effort_multiplier: effort === 'max' ? null : props.entry.max_reasoning_effort_multiplier,
+  })
+}
+
 function emitField(field: keyof PricingFormEntry, value: string) {
   emit('update', { ...props.entry, [field]: value === '' ? null : value })
 }
@@ -428,6 +469,7 @@ function onBillingModeUpdate(billingMode: BillingMode) {
     fast_multiplier: billingMode === 'token' ? props.entry.fast_multiplier : null,
     flex_multiplier: billingMode === 'token' ? props.entry.flex_multiplier : null,
     max_reasoning_effort_multiplier: billingMode === 'token' ? props.entry.max_reasoning_effort_multiplier : null,
+    reasoning_effort_multipliers: billingMode === 'token' ? { ...props.entry.reasoning_effort_multipliers } : {},
     intervals: [],
     time_pricing: billingMode === 'token'
       ? props.entry.time_pricing

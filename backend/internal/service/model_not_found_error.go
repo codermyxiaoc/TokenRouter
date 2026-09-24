@@ -3,9 +3,26 @@ package service
 import (
 	"net/http"
 	"strings"
+
+	"github.com/tidwall/gjson"
 )
 
 var upstreamModelNotFoundKeywords = []string{"model not found", "unknown model", "not found"}
+
+// 兼容上游可能用 401 表示模型不存在；显式认证错误码必须优先，不能被正文关键词掩盖。
+func isOpenAICompatibleModelNotFoundBody(body []byte) bool {
+	if code := strings.TrimSpace(extractUpstreamErrorCode(body)); code != "" {
+		return strings.EqualFold(code, "model_not_found")
+	}
+	message := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(body)))
+	if message == "" && !gjson.ValidBytes(body) {
+		message = strings.ToLower(strings.TrimSpace(string(body)))
+	}
+	return strings.Contains(message, "unknown provider for model") ||
+		strings.Contains(message, "unknown model") ||
+		strings.Contains(message, "model not found") ||
+		strings.Contains(message, "model is not supported")
+}
 
 func isUpstreamModelNotFoundError(statusCode int, body []byte) bool {
 	if statusCode != http.StatusNotFound {

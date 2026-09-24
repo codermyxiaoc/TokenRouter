@@ -583,6 +583,7 @@ const userNavItems = computed((): NavItem[] => {
     { path: '/team', label: t('nav.team'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagTeamAccess },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/creative', label: t('nav.creative'), icon: CreativeIcon, hideInSimpleMode: true, featureFlag: flagCreativeStudioAccess },
+    { path: '/media-tasks', label: t('nav.mediaTasks'), icon: BatchImageIcon },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     ...(appStore.cachedPublicSettings?.payment_enabled
@@ -639,6 +640,7 @@ const personalNavItems = computed((): NavItem[] => {
     { path: '/team', label: t('nav.team'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagTeamAccess },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/creative', label: t('nav.creative'), icon: CreativeIcon, hideInSimpleMode: true, featureFlag: flagCreativeStudioAccess },
+    { path: '/media-tasks', label: t('nav.mediaTasks'), icon: BatchImageIcon },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     ...(appStore.cachedPublicSettings?.payment_enabled
@@ -712,6 +714,7 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/channels', label: t('nav.channels', '渠道管理'), icon: ChannelIcon, hideInSimpleMode: true },
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
+    { path: '/admin/media-tasks', label: t('nav.mediaTasks'), icon: BatchImageIcon },
     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
     { path: '/admin/tickets', label: t('nav.ticketManagement'), icon: TicketIcon, featureFlag: flagTicketAccess },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },

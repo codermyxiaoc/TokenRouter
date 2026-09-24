@@ -85,15 +85,16 @@ func TestReserveUsageBillingBatchImageBilling_UsesBalanceRateAfterPartialSubscri
 			"id", "plan_id", "starts_at", "expires_at",
 			"daily_window_start", "weekly_window_start", "monthly_window_start",
 			"daily_limit_usd", "weekly_limit_usd", "monthly_limit_usd",
-			"daily_usage_usd", "weekly_usage_usd", "monthly_usage_usd", "group_rates",
+			"daily_usage_usd", "weekly_usage_usd", "monthly_usage_usd", "daily_reset_count", "weekly_reset_count", "monthly_reset_count", "reset_counted_at", "group_rates",
 		}).AddRow(
 			int64(11), int64(22), now.Add(-24*time.Hour), now.Add(30*24*time.Hour),
 			windowStart, windowStart, windowStart,
 			1.0, 1.0, 1.0,
-			0.8, 0.8, 0.8, `{"7":0.5}`,
+			0.8, 0.8, 0.8, int64(3), int64(2), int64(1), now, `{"7":0.5}`,
 		))
+	// 尚未到下一个重置点，原有日/周/月次数应随扣费原样保存，只有计数水位前进。
 	mock.ExpectExec(`(?s)UPDATE user_subscriptions\s+SET.*WHERE id = \$7`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 1.0, 1.0, 1.0, int64(11)).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 1.0, 1.0, 1.0, int64(11), int64(3), int64(2), int64(1), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(reserveBatchImageHoldSQL).
 		WithArgs(sqlmock.AnyArg(), int64(42)).
@@ -146,16 +147,17 @@ func TestReserveUsageBillingBatchImageBilling_StrictSubscriptionRejectsPartialHo
 			"id", "plan_id", "starts_at", "expires_at",
 			"daily_window_start", "weekly_window_start", "monthly_window_start",
 			"daily_limit_usd", "weekly_limit_usd", "monthly_limit_usd",
-			"daily_usage_usd", "weekly_usage_usd", "monthly_usage_usd", "group_rates",
+			"daily_usage_usd", "weekly_usage_usd", "monthly_usage_usd", "daily_reset_count", "weekly_reset_count", "monthly_reset_count", "reset_counted_at", "group_rates",
 		}).AddRow(
 			preferredID, int64(22), now.Add(-24*time.Hour), now.Add(30*24*time.Hour),
 			windowStart, windowStart, windowStart,
 			1.0, 1.0, 1.0,
-			0.8, 0.8, 0.8, `{}`,
+			0.8, 0.8, 0.8, int64(3), int64(2), int64(1), now, `{}`,
 		))
 	// 批量任务尚未提交上游，只能预占剩余额度，不能沿用普通请求的溢出欠费结算语义。
+	// 尚未到下一个重置点，原有日/周/月次数应随扣费原样保存，只有计数水位前进。
 	mock.ExpectExec(`(?s)UPDATE user_subscriptions\s+SET.*WHERE id = \$7`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 1.0, 1.0, 1.0, preferredID).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 1.0, 1.0, 1.0, preferredID, int64(3), int64(2), int64(1), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectRollback()
 
@@ -190,16 +192,17 @@ func TestApplyUsageBillingEffects_StrictSubscriptionChargesOverflowToBalance(t *
 			"id", "plan_id", "starts_at", "expires_at",
 			"daily_window_start", "weekly_window_start", "monthly_window_start",
 			"daily_limit_usd", "weekly_limit_usd", "monthly_limit_usd",
-			"daily_usage_usd", "weekly_usage_usd", "monthly_usage_usd", "group_rates",
+			"daily_usage_usd", "weekly_usage_usd", "monthly_usage_usd", "daily_reset_count", "weekly_reset_count", "monthly_reset_count", "reset_counted_at", "group_rates",
 		}).AddRow(
 			preferredID, int64(22), now.Add(-24*time.Hour), now.Add(30*24*time.Hour),
 			windowStart, windowStart, windowStart,
 			1.0, 1.0, 1.0,
-			0.8, 0.8, 0.8, `{}`,
+			0.8, 0.8, 0.8, int64(3), int64(2), int64(1), now, `{}`,
 		))
 	// 指定订阅只扣到额度上限，剩余基础用量按余额倍率形成欠费。
+	// 尚未到下一个重置点，原有日/周/月次数应随扣费原样保存，只有计数水位前进。
 	mock.ExpectExec(`(?s)UPDATE user_subscriptions\s+SET.*WHERE id = \$7`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 1.0, 1.0, 1.0, preferredID).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 1.0, 1.0, 1.0, preferredID, int64(3), int64(2), int64(1), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`(?s)WITH locked_user AS \(.*SELECT updated.balance, \$1::numeric AS deducted_amount`).
 		WithArgs(1.2, int64(42)).
@@ -251,7 +254,7 @@ func TestApplyUsageBillingEffects_StrictSubscriptionWithoutGroupFiltersRestricte
 			"id", "plan_id", "starts_at", "expires_at",
 			"daily_window_start", "weekly_window_start", "monthly_window_start",
 			"daily_limit_usd", "weekly_limit_usd", "monthly_limit_usd",
-			"daily_usage_usd", "weekly_usage_usd", "monthly_usage_usd", "group_rates",
+			"daily_usage_usd", "weekly_usage_usd", "monthly_usage_usd", "daily_reset_count", "weekly_reset_count", "monthly_reset_count", "reset_counted_at", "group_rates",
 		}))
 	mock.ExpectRollback()
 

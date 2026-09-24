@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/lib/pq"
 )
@@ -17,6 +18,72 @@ type groupAvailabilityProbeRepository struct {
 
 func NewGroupAvailabilityProbeRepository(db *sql.DB) service.GroupAvailabilityProbeRepository {
 	return &groupAvailabilityProbeRepository{db: db}
+}
+
+// ClaimGroup 原子保存探测配置并领取租约，失败请求不会覆盖获胜请求或其它分组设置。
+func (r *groupAvailabilityProbeRepository) ClaimGroup(ctx context.Context, groupID int64, config service.GroupAvailabilityProbeConfig, now time.Time, lockUntil time.Time, lockedBy string) (*service.GroupAvailabilityProbeDueGroup, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("availability probe database is not configured")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var group service.GroupAvailabilityProbeDueGroup
+	// 锁定平台快照，同时允许外键检查；不把网络探测放入数据库事务。
+	err = tx.QueryRowContext(ctx, `SELECT id, name, platform FROM groups
+		WHERE id = $1 AND deleted_at IS NULL AND status = 'active'
+		FOR NO KEY UPDATE`, groupID).Scan(&group.GroupID, &group.Name, &group.Platform)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !config.Enabled {
+		return nil, infraerrors.BadRequest("INVALID_AVAILABILITY_PROBE_CONFIG", "Enable availability probing before testing")
+	}
+	if err := service.ValidateGroupAvailabilityProbeProtocol(group.Platform, config.Protocol); err != nil {
+		return nil, infraerrors.BadRequest("INVALID_AVAILABILITY_PROBE_CONFIG", err.Error())
+	}
+	// 新开启的分组可能尚未被 cron 扫描；只补建状态，绝不覆盖正在运行的租约。
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO group_availability_probe_states (group_id, next_run_at, created_at, updated_at)
+		VALUES ($1, $2, NOW(), NOW())
+		ON CONFLICT (group_id) DO NOTHING
+	`, groupID, now); err != nil {
+		return nil, err
+	}
+	var claimedID int64
+	err = tx.QueryRowContext(ctx, `
+		UPDATE group_availability_probe_states
+		SET locked_until = $3, locked_by = $4, updated_at = NOW()
+		WHERE group_id = $1 AND (locked_until IS NULL OR locked_until <= $2)
+		RETURNING group_id
+	`, groupID, now, lockUntil, lockedBy).Scan(&claimedID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rawConfig, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	// 只更新探测 JSON，避免管理服务整行写回覆盖并发修改的倍率、定价或路由。
+	if _, err = tx.ExecContext(ctx, `UPDATE groups SET availability_probe_config=$2::jsonb, updated_at=NOW() WHERE id=$1`, groupID, string(rawConfig)); err != nil {
+		return nil, err
+	}
+	if err = enqueueSchedulerOutbox(ctx, tx, service.SchedulerOutboxEventGroupChanged, nil, &groupID, nil); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	group.Config = config
+	return &group, nil
 }
 
 func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now time.Time, lockUntil time.Time, lockedBy string, limit int) ([]service.GroupAvailabilityProbeDueGroup, error) {
@@ -50,7 +117,7 @@ func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now tim
 
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM group_availability_probe_states s
-		WHERE NOT EXISTS (
+		WHERE (s.locked_until IS NULL OR s.locked_until <= $1) AND NOT EXISTS (
 			SELECT 1
 			FROM groups g
 			WHERE g.id = s.group_id
@@ -58,7 +125,7 @@ func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now tim
 			  AND g.status = 'active'
 			  AND g.availability_probe_config @> '{"enabled": true}'::jsonb
 		)
-	`); err != nil {
+	`, now); err != nil {
 		return nil, err
 	}
 

@@ -637,6 +637,7 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import { adminAPI } from '@/api/admin'
 import type { Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest, AccountStatsPricingRule } from '@/api/admin/channels'
 import type { PricingFormEntry } from '@/components/admin/channel/types'
+import { reasoningEffortMultipliersToAPI, isValidReasoningEffortMultipliers } from '@/components/admin/channel/types'
 import { apiIntervalsToForm, apiTimePricingToForm, createDefaultTimePricingForm, findModelConflict, formIntervalsToAPI, formTimePricingToAPI, hasExplicitPricing, isValidPositiveMultiplier, mTokToPerToken, perTokenToMTok, toNullableNumber, validateIntervals, validateTimePricing } from '@/components/admin/channel/types'
 import type { AdminGroup, GroupPlatform } from '@/types'
 import type { Column } from '@/components/common/types'
@@ -904,7 +905,7 @@ async function syncLatestModels(sectionIdx: number) {
       appStore.showSuccess(t('admin.channels.form.syncModelsAlreadyUpToDate'))
       return
     }
-    let defaultPricing: Pick<PricingFormEntry, 'input_price' | 'output_price' | 'cache_write_price' | 'cache_write_1h_price' | 'cache_read_price' | 'image_input_price' | 'image_output_price' | 'max_reasoning_effort_multiplier'> = {
+    let defaultPricing: Pick<PricingFormEntry, 'input_price' | 'output_price' | 'cache_write_price' | 'cache_write_1h_price' | 'cache_read_price' | 'image_input_price' | 'image_output_price' | 'max_reasoning_effort_multiplier' | 'reasoning_effort_multipliers'> = {
       input_price: null,
       output_price: null,
       cache_write_price: null,
@@ -926,7 +927,8 @@ async function syncLatestModels(sectionIdx: number) {
             cache_read_price: perTokenToMTok(pricing.cache_read_price ?? null),
             image_input_price: perTokenToMTok(pricing.image_input_price ?? null),
             image_output_price: perTokenToMTok(pricing.image_output_price ?? null),
-            max_reasoning_effort_multiplier: pricing.max_reasoning_effort_multiplier ?? null
+            max_reasoning_effort_multiplier: pricing.max_reasoning_effort_multiplier ?? null,
+            reasoning_effort_multipliers: { ...pricing.reasoning_effort_multipliers },
           }
         }
       } catch {
@@ -942,6 +944,7 @@ async function syncLatestModels(sectionIdx: number) {
       fast_multiplier: null,
       flex_multiplier: null,
       max_reasoning_effort_multiplier: defaultPricing.max_reasoning_effort_multiplier ?? null,
+      reasoning_effort_multipliers: { ...defaultPricing.reasoning_effort_multipliers },
       input_price: defaultPricing.input_price,
       output_price: defaultPricing.output_price,
       cache_write_price: defaultPricing.cache_write_price,
@@ -1185,6 +1188,7 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
         fast_multiplier: toNullableNumber(entry.fast_multiplier),
         flex_multiplier: toNullableNumber(entry.flex_multiplier),
         max_reasoning_effort_multiplier: toNullableNumber(entry.max_reasoning_effort_multiplier),
+        reasoning_effort_multipliers: reasoningEffortMultipliersToAPI(entry.reasoning_effort_multipliers),
         input_price: mTokToPerToken(entry.input_price),
         output_price: mTokToPerToken(entry.output_price),
         cache_write_price: mTokToPerToken(entry.cache_write_price),
@@ -1282,6 +1286,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
         fast_multiplier: p.fast_multiplier ?? p.fast_mode_multiplier ?? null,
         flex_multiplier: p.flex_multiplier ?? null,
         max_reasoning_effort_multiplier: p.max_reasoning_effort_multiplier ?? null,
+        reasoning_effort_multipliers: { ...p.reasoning_effort_multipliers },
         input_price: perTokenToMTok(p.input_price),
         output_price: perTokenToMTok(p.output_price),
         cache_write_price: perTokenToMTok(p.cache_write_price),
@@ -1640,7 +1645,8 @@ async function handleSubmit() {
     for (const entry of section.model_pricing) {
       if (isValidPositiveMultiplier(entry.fast_multiplier) &&
           isValidPositiveMultiplier(entry.flex_multiplier) &&
-          isValidPositiveMultiplier(entry.max_reasoning_effort_multiplier)) continue
+          isValidPositiveMultiplier(entry.max_reasoning_effort_multiplier) &&
+          isValidReasoningEffortMultipliers(entry.reasoning_effort_multipliers)) continue
       const models = entry.models.join(', ')
       appStore.showError(t(
         'admin.channels.form.tierMultiplierMustBePositive',

@@ -163,6 +163,9 @@ func ProvideHandlers(
 	passkeyHandler *PasskeyHandler,
 	paymentHandler *PaymentHandler,
 	paymentWebhookHandler *PaymentWebhookHandler,
+	mediaTaskHandler *MediaTaskHandler,
+	mediaTaskService *service.MediaTaskService,
+	asyncImageHandler *AsyncImageHandler,
 	batchImageHandler *BatchImageHandler,
 	creativeHandler *CreativeHandler,
 	teamHandler *TeamHandler,
@@ -170,6 +173,8 @@ func ProvideHandlers(
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
+	asyncImageHandler.SetMediaTaskObserver(mediaTaskService)
+	openaiGatewayHandler.SetMediaTaskObserver(mediaTaskService)
 	return &Handlers{
 		Auth:             authHandler,
 		User:             userHandler,
@@ -188,6 +193,8 @@ func ProvideHandlers(
 		Passkey:          passkeyHandler,
 		Payment:          paymentHandler,
 		PaymentWebhook:   paymentWebhookHandler,
+		MediaTask:        mediaTaskHandler,
+		AsyncImage:       asyncImageHandler,
 		BatchImage:       batchImageHandler,
 		Creative:         creativeHandler,
 		Team:             teamHandler,
@@ -214,6 +221,8 @@ var ProviderSet = wire.NewSet(
 	ProvideSettingHandler,
 	NewPaymentHandler,
 	NewPaymentWebhookHandler,
+	NewAsyncImageHandler,
+	NewMediaTaskHandler,
 	NewBatchImageHandler,
 	NewCreativeHandler,
 	NewTeamHandler,

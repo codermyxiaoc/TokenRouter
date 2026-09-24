@@ -108,7 +108,7 @@ func configuredRequestModelsFromAccounts(accounts []Account, platform string) []
 	hasConfiguredModels := false
 	for i := range accounts {
 		account := &accounts[i]
-		if platform != "" && account.Platform != platform {
+		if platform != "" && !accountMatchesModelListPlatform(account, platform) {
 			continue
 		}
 		requestModels := account.GetConfiguredRequestModels()
@@ -117,6 +117,9 @@ func configuredRequestModelsFromAccounts(accounts []Account, platform string) []
 		}
 		hasConfiguredModels = true
 		for _, model := range requestModels {
+			if !mixedAccountModelVisible(account, platform, model) {
+				continue
+			}
 			modelSet[model] = struct{}{}
 		}
 	}
@@ -194,7 +197,11 @@ func mergeRequestableModelCandidates(baseModels []string, accounts []Account, ch
 	hasUnrestrictedQoderCN := false
 	for i := range accounts {
 		account := &accounts[i]
-		appendModels(sortedModelMappingSources(account.GetModelMapping())...)
+		for _, model := range sortedModelMappingSources(account.GetModelMapping()) {
+			if mixedAccountModelVisible(account, platform, model) {
+				appendModels(model)
+			}
+		}
 		if accountHasUnrestrictedModelScope(account) {
 			hasUnrestrictedAccount = true
 			if platform == PlatformQoder && account.Platform == PlatformQoder {
@@ -408,4 +415,9 @@ func RequestableModelIDs(models []RequestableModel) []string {
 		ids = append(ids, model.ID)
 	}
 	return ids
+}
+
+// mixedAccountModelVisible 只限制 Gemini 混合账号的目录，避免混入 Claude 模型；原生账号别名不受影响。
+func mixedAccountModelVisible(account *Account, platform, model string) bool {
+	return platform != PlatformGemini || account.Platform != PlatformAntigravity || strings.HasPrefix(strings.ToLower(strings.TrimPrefix(model, "models/")), "gemini-")
 }

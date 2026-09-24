@@ -57,9 +57,21 @@ describe('ccswitchImport utils', () => {
 
     expect(params.get('resource')).toBe('provider')
     expect(params.get('app')).toBe('codex')
-    expect(params.get('endpoint')).toBe(baseInput.baseUrl)
+    expect(params.get('endpoint')).toBe(`${baseInput.baseUrl}/v1`)
     expect(params.get('model')).toBe('gpt-5.6-sol')
     expect(decodeBase64Utf8(params.get('usageScript') || '')).toBe(baseInput.usageScript)
+  })
+
+  it.each([
+    'https://api.example.com',
+    'https://api.example.com/',
+    'https://api.example.com/v1',
+    'https://api.example.com/v1/'
+  ])('旧 OpenAI 导入仍生成单个 /v1 后缀：%s', (baseUrl) => {
+    const params = paramsFromDeeplink(buildCcSwitchImportDeeplink({
+      ...baseInput, baseUrl, platform: 'openai'
+    }))
+    expect(params.get('endpoint')).toBe('https://api.example.com/v1')
   })
 
   it.each([

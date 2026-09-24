@@ -14,6 +14,8 @@ import (
 const (
 	openCodeSessionHeader         = "X-OpenCode-Session"
 	openCodeInboundBodyContextKey = "opencode_inbound_body"
+	// 官方边缘网关要求可识别的客户端身份，账号显式覆写仍优先。
+	openCodeUpstreamUserAgent = "opencode/1.0.0"
 )
 
 // rememberOpenCodeInboundBody 保存最初入站请求，避免协议转换丢失会话字段。
@@ -96,6 +98,34 @@ func isOfficialOpenCodeHost(targetURL string) bool {
 		return false
 	}
 	return strings.EqualFold(parsed.Scheme, "https") && strings.EqualFold(parsed.Hostname(), "opencode.ai")
+}
+
+// 只识别官方 HTTPS 主机，避免主机后缀或用户信息伪装命中。
+func isOfficialCommandCodeHost(targetURL string) bool {
+	parsed, err := url.Parse(targetURL)
+	return err == nil && strings.EqualFold(parsed.Scheme, "https") && strings.EqualFold(parsed.Hostname(), "api.commandcode.ai")
+}
+
+// 在账号请求头覆写之前调用，避免客户端 UA 触发 Cloudflare 1010。
+func applyOpenCodeUpstreamUserAgent(account *Account, targetURL string, headers http.Header) {
+	if headers == nil {
+		return
+	}
+	userAgent := ""
+	switch {
+	case isOfficialCommandCodeHost(targetURL):
+		userAgent = CodexCanonicalUserAgent()
+	case account != nil && account.IsOpenCodeGo(), isOfficialOpenCodeHost(targetURL):
+		userAgent = openCodeUpstreamUserAgent
+	default:
+		return
+	}
+	for key := range headers {
+		if strings.EqualFold(key, "User-Agent") {
+			delete(headers, key)
+		}
+	}
+	headers.Set("User-Agent", userAgent)
 }
 
 func resolveOpenCodeSessionID(c *gin.Context, headers http.Header, generate bool, bodies ...[]byte) string {

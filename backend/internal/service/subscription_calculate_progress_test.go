@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -128,11 +129,11 @@ func TestCalculateProgress_MonthlyUsage(t *testing.T) {
 	assert.Equal(t, 80.0, progress.Monthly.Percentage)
 }
 
-func TestCalculateProgress_MonthlyTailWindowUsesExpiryAsResetTime(t *testing.T) {
+func TestCalculateProgress_MonthlyTailWindowUsesNextScheduledResetTime(t *testing.T) {
 	svc := newTestSubscriptionService()
-	startsAt := time.Date(2026, 4, 30, 8, 0, 0, 0, time.UTC)
-	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, time.UTC)
-	monthlyStart := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)
+	startsAt := time.Date(2026, 3, 30, 8, 0, 0, 0, timezone.Location())
+	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, timezone.Location())
+	monthlyStart := time.Date(2026, 4, 30, 0, 0, 0, 0, timezone.Location())
 
 	sub := &UserSubscription{
 		ID:                 1,
@@ -146,14 +147,14 @@ func TestCalculateProgress_MonthlyTailWindowUsesExpiryAsResetTime(t *testing.T) 
 	progress := svc.calculateProgress(sub)
 
 	require.NotNil(t, progress.Monthly, "月限额尾段仍应返回进度")
-	assert.Equal(t, expiresAt, progress.Monthly.ResetsAt, "到期尾段月额度结束时间应显示订阅过期时间")
+	assert.Equal(t, monthlyStart.Add(subscriptionMonthlyWindow), progress.Monthly.ResetsAt, "月重置点早于到期时继续展示，不要求完整剩余周期")
 }
 
 func TestCalculateProgress_DailyTailWithMonthlyLimitUsesDailyResetTime(t *testing.T) {
 	svc := newTestSubscriptionService()
-	startsAt := time.Date(2026, 4, 30, 8, 0, 0, 0, time.UTC)
-	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, time.UTC)
-	dailyStart := time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
+	startsAt := time.Date(2026, 4, 30, 8, 0, 0, 0, timezone.Location())
+	expiresAt := time.Date(2026, 5, 30, 8, 0, 0, 0, timezone.Location())
+	dailyStart := time.Date(2026, 5, 29, 0, 0, 0, 0, timezone.Location())
 
 	sub := &UserSubscription{
 		ID:               1,
@@ -167,7 +168,7 @@ func TestCalculateProgress_DailyTailWithMonthlyLimitUsesDailyResetTime(t *testin
 
 	progress := svc.calculateProgress(sub)
 
-	require.NotNil(t, progress.Daily, "有限月额度保护下仍应返回日额度进度")
+	require.NotNil(t, progress.Daily, "同时配置月额度时仍应返回日额度进度")
 	assert.Equal(t, dailyStart.Add(subscriptionDailyWindow), progress.Daily.ResetsAt, "尾段日额度应显示实际刷新时间")
 }
 

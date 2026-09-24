@@ -218,7 +218,7 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	if req != nil {
 		req = req.WithContext(servertiming.BeginHTTPTrace(req.Context()))
 	}
-	resp, err := servertiming.Do(client, req)
+	resp, err := doUpstreamRequest(client, req)
 	if err != nil {
 		s.recordOpenAIHTTP2Failure(profile, entry.protocolMode, entry.proxyKey, err)
 		// 请求失败，立即减少计数
@@ -227,9 +227,6 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 		return nil, err
 	}
 	s.recordOpenAIHTTP2Success(profile, entry.protocolMode, entry.proxyKey)
-
-	// 如果上游返回了压缩内容，解压后再交给业务层
-	decompressResponseBody(resp)
 
 	// 包装响应体，在关闭时自动减少计数并更新时间戳
 	// 这确保了流式响应（如 SSE）在完全读取前不会被淘汰
@@ -285,7 +282,7 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	if req != nil {
 		req = req.WithContext(servertiming.BeginHTTPTrace(req.Context()))
 	}
-	resp, err := servertiming.Do(client, req)
+	resp, err := doUpstreamRequest(client, req)
 	if err != nil {
 		s.recordOpenAIHTTP2Failure(upstreamProfile, entry.protocolMode, entry.proxyKey, err)
 		atomic.AddInt64(&entry.inFlight, -1)
@@ -295,14 +292,56 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	}
 	s.recordOpenAIHTTP2Success(upstreamProfile, entry.protocolMode, entry.proxyKey)
 
-	decompressResponseBody(resp)
-
 	resp.Body = wrapTrackedBody(resp.Body, func() {
 		atomic.AddInt64(&entry.inFlight, -1)
 		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
 	})
 
 	return resp, nil
+}
+
+// doUpstreamRequest 只取消当前上游尝试，保留调用方的排水结算与后续重试上下文。
+func doUpstreamRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+	ctx, cancel := context.WithCancel(req.Context())
+	resp, err := servertiming.Do(client, req.WithContext(ctx))
+	if err != nil {
+		cancel()
+		return resp, err
+	}
+	decompressResponseBody(resp)
+	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+	err    error
+	readMu sync.Mutex
+	closed bool
+}
+
+func (b *cancelOnCloseBody) Read(p []byte) (int, error) {
+	b.readMu.Lock()
+	defer b.readMu.Unlock()
+	if b.closed {
+		return 0, http.ErrBodyReadAfterClose
+	}
+	return b.ReadCloser.Read(p)
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	b.once.Do(func() {
+		// 先取消阻塞中的读，再串行关闭解压器，避免提前关闭复用连接留下 EOF 等待者。
+		// 已读完的响应已释放 transport 请求，取消不会破坏正常 keep-alive 复用。
+		b.cancel()
+		b.readMu.Lock()
+		defer b.readMu.Unlock()
+		b.closed = true
+		b.err = b.ReadCloser.Close()
+	})
+	return b.err
 }
 
 // httpClientForUpstreamRequest 按请求标记派生客户端，避免修改共享连接池客户端。

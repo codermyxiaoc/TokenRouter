@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import OpsSystemLogTable from '../OpsSystemLogTable.vue'
+import LogRetentionSelect from '../LogRetentionSelect.vue'
 import enLocale from '@/i18n/locales/en'
 import zhLocale from '@/i18n/locales/zh'
 
@@ -9,6 +10,7 @@ const mockListSystemLogs = vi.fn()
 const mockCleanupSystemLogs = vi.fn()
 const mockGetSystemLogSinkHealth = vi.fn()
 const mockGetRuntimeLogConfig = vi.fn()
+const mockUpdateRuntimeLogConfig = vi.fn()
 const mockShowError = vi.fn()
 const mockShowSuccess = vi.fn()
 
@@ -18,6 +20,7 @@ vi.mock('@/api/admin/ops', () => ({
     cleanupSystemLogs: (...args: any[]) => mockCleanupSystemLogs(...args),
     getSystemLogSinkHealth: (...args: any[]) => mockGetSystemLogSinkHealth(...args),
     getRuntimeLogConfig: (...args: any[]) => mockGetRuntimeLogConfig(...args),
+    updateRuntimeLogConfig: (...args: any[]) => mockUpdateRuntimeLogConfig(...args),
   },
 }))
 
@@ -61,6 +64,7 @@ const runtimeConfig = {
   caller: true,
   stacktrace_level: 'error',
   retention_days: 30,
+  request_retention_days: 90,
 }
 
 const sinkHealth = {
@@ -156,5 +160,61 @@ describe('OpsSystemLogTable host support', () => {
     ['en', enLocale],
   ])('defines the Host translation for %s', (_name, locale) => {
     expect(locale.admin.ops.systemLogs.host).toBe('Host')
+  })
+})
+
+describe('rolling log retention settings', () => {
+  const mountTable = () => mount(OpsSystemLogTable, {
+    global: { stubs: { Select: SelectStub, Pagination: PaginationStub } }
+  })
+  const saveButton = (wrapper: ReturnType<typeof mountTable>) => wrapper.findAll('button').find(button => button.text() === '保存并生效')!
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockListSystemLogs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
+    mockGetSystemLogSinkHealth.mockResolvedValue(sinkHealth)
+    mockGetRuntimeLogConfig.mockResolvedValue(runtimeConfig)
+    mockUpdateRuntimeLogConfig.mockImplementation(async config => config)
+  })
+
+  it('loads and saves separate operations and request retention windows', async () => {
+    const wrapper = mountTable()
+    await flushPromises()
+    const fields = wrapper.findAllComponents(LogRetentionSelect)
+    expect(fields.map(field => field.props('modelValue'))).toEqual([30, 90])
+    fields[0]!.vm.$emit('update:modelValue', 7)
+    fields[1]!.vm.$emit('update:modelValue', 180)
+    await saveButton(wrapper).trigger('click')
+    await flushPromises()
+    expect(mockUpdateRuntimeLogConfig).toHaveBeenCalledWith(expect.objectContaining({ retention_days: 7, request_retention_days: 180 }))
+    wrapper.unmount()
+  })
+
+  it('supports forever and rejects fractional or empty custom days', async () => {
+    const wrapper = mountTable()
+    await flushPromises()
+    const requestField = wrapper.findAllComponents(LogRetentionSelect)[1]!
+    requestField.vm.$emit('update:modelValue', 0)
+    await saveButton(wrapper).trigger('click')
+    await flushPromises()
+    expect(mockUpdateRuntimeLogConfig).toHaveBeenCalledWith(expect.objectContaining({ request_retention_days: 0 }))
+    mockUpdateRuntimeLogConfig.mockClear()
+    for (const value of [1.5, Number.NaN, -1, 3651]) {
+      requestField.vm.$emit('update:modelValue', value)
+      await saveButton(wrapper).trigger('click')
+    }
+    expect(mockUpdateRuntimeLogConfig).not.toHaveBeenCalled()
+    expect(mockShowError).toHaveBeenCalledWith('admin.ops.systemLogs.retentionDaysInvalid')
+    wrapper.unmount()
+  })
+
+  it('does not overwrite saved retention with defaults after a load failure', async () => {
+    mockGetRuntimeLogConfig.mockRejectedValue(new Error('unavailable'))
+    const wrapper = mountTable()
+    await flushPromises()
+    expect(saveButton(wrapper).attributes('disabled')).toBeDefined()
+    await saveButton(wrapper).trigger('click')
+    expect(mockUpdateRuntimeLogConfig).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 })

@@ -136,13 +136,14 @@ function emitField(field: keyof IntervalFormEntry, value: string | number | null
 }
 
 function toInt(val: string): number {
-  const n = parseInt(val, 10)
+  // Number 支持浏览器数字输入的科学计数法，parseInt 会将 1e6 截成 1。
+  const n = Math.trunc(Number(val))
   return isNaN(n) ? 0 : n
 }
 
 function toIntOrNull(val: string): number | null {
   if (val === '') return null
-  const n = parseInt(val, 10)
+  const n = Math.trunc(Number(val))
   return isNaN(n) ? null : n
 }
 </script>

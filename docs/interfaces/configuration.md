@@ -45,6 +45,8 @@ Compose 的 `.env` 还包含只供部署工具插值的变量：`SUB2API_IMAGE` 
 
 环境变量把点分键转成大写下划线，例如 `database.host` 对应 `DATABASE_HOST`，`gateway.max_body_size` 对应 `GATEWAY_MAX_BODY_SIZE`。`setDefaults` 还负责把所有 struct 键注册进 Viper，使纯环境变量部署能被 `Unmarshal` 看到；新增字段不能只加 `mapstructure` tag 而不注册默认/可达键。定价进程配置中的 `pricing.override_file` 是可选本地 JSON 补丁，按字段浅合并覆盖远程目录和回退文件，修改后在重启或下一次目录下载时生效；文件缺失/非法只记录告警并保留原目录。少量变量有显式绑定或专用解析：`ENABLE_SERVER_TIMING`，逗号分隔的 `SERVER_TRUSTED_PROXIES` 和 `SECURITY_FORWARDED_CLIENT_IP_HEADERS`，以及受兼容条件约束的旧 WeChat 变量。
 
+简易模式新增两个显式进程开关：`simple_mode.auto_create_default_groups`（环境变量 `SIMPLE_MODE_AUTO_CREATE_DEFAULT_GROUPS`）默认 `true`，关闭仅停止启动补齐默认分组，管理员并发初始化仍执行；`simple_mode_key_rate_limit_enabled`（`SIMPLE_MODE_KEY_RATE_LIMIT_ENABLED`）默认 `false`，开启后只对设有限额的 API Key 执行 5h/1d/7d 消费窗口预检查与累计，不启用余额、套餐、团队成员、账号额度或平台额度扣费。窗口预检查直接读取数据库，失败时拒绝放行；后扣复用持久请求去重事务，不能退回无幂等的缓存累计。WebSocket 每轮获取槽位后复核窗口，标准模式不增加重复 RPM 检查。窗口是已完成请求的费用累计，不能据此承诺在途并发请求绝不超出阈值。标准模式的混合结算规则保持不变。
+
 国产供应商周期用量监控属于启动时进程配置 `gateway.cn_providers`。`monitor_enabled` 默认关闭；开启后默认每 10 分钟运行一次、并发 4、单账号探测超时 20 秒、整轮预算 300 秒，余额临时停调阈值 `balance_threshold` 默认 `0.5`。对应键为 `interval_minutes`、`concurrency`、`probe_timeout_seconds` 和 `round_timeout_seconds`，修改后需要重启。该监控也覆盖 OpenCode GO 三窗口，Zen 不执行未接入的余额查询。管理员手动查询不受监控开关影响；自定义中继的自动监控还要求启用并命中 `security.url_allowlist.upstream_hosts`。
 
 时区的优先级是标准 `TZ`、兼容 `TIMEZONE`、配置文件、默认 `Asia/Shanghai`。`TZ` 非空时必须显式覆盖 `TIMEZONE`，使容器运行时、应用本地日统计和 PostgreSQL 连接时区使用同一部署者选择；无效 IANA 名称仍在启动校验中失败。
@@ -70,6 +72,10 @@ setup 使用 `DATA_DIR > 可写 /app/data > 当前目录` 选择 `config.yaml` �
 主服务使用 `LoadForBootstrap`，只在引导阶段允许 `jwt.secret` 暂时为空。数据库 repository 初始化会从 `security_secrets` 读取既有 JWT secret，或原子生成并持久化一个新 secret，然后重新执行完整配置校验。多个实例不能各自使用临时随机 JWT key；显式配置与数据库已有 secret 不一致时，以已持久化的安全边界处理，避免滚动部署让会话随机失效。
 
 ## 数据库运行时设置
+
+Claude Code 出站版本使用三个运行时键：`claude_code_client_version` 是管理员固定版本，`claude_code_client_version_synced` 仅由后台同步任务写入，`claude_code_version_auto_sync_enabled` 缺失时默认开启。有效版本按管理员值、启动时有效的 `SUB2API_CLAUDE_CLI_VERSION` 环境固定值、同步值、内置基线依次选择，每层均校验稳定三段版本且不低于基线；升级保留现有环境配置的手工固定语义，自动同步不得覆盖该值。同步每小时读取 `anthropics/claude-code` 官方最新稳定 release，主路径失败后扫描最近 release，排除草稿及预发布，仅向更高版本推进；获取或读取已保存版本失败时不覆盖已有同步值。关闭开关只停止新拉取，保留已有同步结果；清空手动字段恢复跟随。设置保存和同步成功后失效本实例缓存，其它实例最多约 60 秒刷新。不需要数据库迁移，不影响入站客户端最低/最高版本限制。
+
+异步图片存储采用 `image_storage_config` 运行时设置，管理端备份页面单独维护；从未保存过时使用进程 `image_storage.*` 配置（`enabled` 默认关闭），后台保存后接管配置。本实例立即失效缓存，其它实例最多约 30 秒刷新；`reuse_backup_s3` 可复用备份连接与凭据，密钥加密存储且不明文返回。提交时固定存储快照，后续关闭只禁止新任务，不取消已接受任务或阻止结果查询。PostgreSQL 短期结果、Redis 镜像 TTL、签名 URL 与对象生命周期边界见[异步图片与任务记录](../domains/media_tasks.md)。
 
 `plugin_management_enabled` 默认关闭，只控制管理员侧栏中的插件菜单，不能用来停止已启用的插件。安装运行的进程参数属于 `plugins.*` 启动配置，受信发布者、目录和上传上限变更需要重启；具体默认值及权限边界见[本地插件与宿主服务](local_plugins.md)。
 

@@ -105,6 +105,8 @@ type TestEvent struct {
 	Status   string `json:"status,omitempty"`
 	Code     string `json:"code,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
+	VideoURL string `json:"video_url,omitempty"`
+	AudioURL string `json:"audio_url,omitempty"`
 	MimeType string `json:"mime_type,omitempty"`
 	Data     any    `json:"data,omitempty"`
 	Success  bool   `json:"success,omitempty"`
@@ -335,7 +337,7 @@ func (s *AccountTestService) validateUpstreamBaseURL(raw string) (string, error)
 }
 
 // generateSessionString generates a Claude Code style session string.
-// The output format is determined by the UA version in claude.DefaultHeaders,
+// The output format is determined by the UA version in claude.DefaultHeaders(),
 // ensuring consistency between the user_id format and the UA sent to upstream.
 func generateSessionString() (string, error) {
 	b := make([]byte, 32)
@@ -344,7 +346,7 @@ func generateSessionString() (string, error) {
 	}
 	hex64 := hex.EncodeToString(b)
 	sessionUUID := uuid.New().String()
-	uaVersion := ExtractCLIVersion(claude.DefaultHeaders["User-Agent"])
+	uaVersion := ExtractCLIVersion(claude.DefaultHeaders()["User-Agent"])
 	return FormatMetadataUserID(hex64, "", sessionUUID, uaVersion), nil
 }
 
@@ -549,6 +551,10 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 		apiURL = buildOpenAIResponsesURLForPlatform(account.Platform, baseURL)
 		responsesPayload := createOpenAITestPayload(testModelID, prompt, false)
 		responsesPayload["store"] = false
+		if account.IsCNProvider() && c.GetBool(accountTestExplicitProbeProtocolContextKey) {
+			// 渠道探测沿用自适应原生 Responses 的轻量载荷，不附加 Codex 合成指令。
+			delete(responsesPayload, "instructions")
+		}
 		payload = responsesPayload
 	default:
 		baseURL, err := s.validateUpstreamBaseURL(account.GetOpenAIBaseURL())
@@ -583,6 +589,8 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 	} else {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
+	applyAccountTestUserAgent(req)
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
 
@@ -604,7 +612,9 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
-		if (protocol == APIProtocolAnthropic && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden)) && s.accountRepo != nil {
+		// 显式渠道探测的协议权限不足不能把仍能服务其它协议的整个账号设为错误。
+		markForbidden := resp.StatusCode == http.StatusForbidden && !c.GetBool(accountTestExplicitProbeProtocolContextKey)
+		if (protocol == APIProtocolAnthropic && (resp.StatusCode == http.StatusUnauthorized || markForbidden)) && s.accountRepo != nil {
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
 		return s.sendErrorAndEnd(c, errMsg)
@@ -648,6 +658,7 @@ func (s *AccountTestService) testOpenCodeSystemOneConnection(c *gin.Context, acc
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(apiKey))
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -768,7 +779,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	req.Header.Set("anthropic-version", "2023-06-01")
 
 	// Apply Claude Code client headers
-	for key, value := range claude.DefaultHeaders {
+	for key, value := range claude.DefaultHeaders() {
 		req.Header.Set(key, value)
 	}
 
@@ -783,6 +794,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	applyAccountTestUserAgent(req)
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 
 	// Get proxy URL
@@ -1140,6 +1152,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
+	applyOpenCodeUpstreamUserAgent(credentialAccount, req.URL.String(), req.Header)
 	credentialAccount.ApplyHeaderOverrides(req.Header)
 
 	// Get proxy URL
@@ -1276,7 +1289,9 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	if account.IsGrokOAuth() && isGrokCLIProxyTarget(apiURL) {
 		applyGrokCLIHeaders(req.Header)
 	}
+	applyAccountTestUserAgent(req)
 	// 连通性测试与真实转发保持同一套账号级请求头覆写。
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 
 	proxyURL := ""
@@ -1371,6 +1386,7 @@ func (s *AccountTestService) testGrokImageGeneration(c *gin.Context, ctx context
 	if account.IsGrokOAuth() && isGrokCLIProxyTarget(apiURL) {
 		applyGrokCLIHeaders(req.Header)
 	}
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 
 	proxyURL := ""
@@ -1475,6 +1491,7 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	s.applyOpenAIAccountTestRouting(c, account, req, false)
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 
 	proxyURL := ""
@@ -1603,6 +1620,7 @@ func (s *AccountTestService) testOpenAINativeCompactionV2Connection(c *gin.Conte
 	}
 
 	// 账号覆盖先执行，再补 V2 协商头，保证探测和真实转发有相同的协议契约。
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 	ensureOpenAIRemoteCompactionV2BetaFeature(req.Header)
 
@@ -1759,6 +1777,7 @@ func (s *AccountTestService) testOpenAILegacyCompactConnection(c *gin.Context, a
 	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 
 	proxyURL := ""
@@ -2725,6 +2744,7 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 	s.applyOpenAIAccountTestRouting(c, account, req, false)
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 
 	proxyURL := ""
@@ -2973,6 +2993,12 @@ func (s *AccountTestService) RunTestBackgroundWithPrompt(ctx context.Context, ac
 
 // RunTestBackgroundWithPromptAndUserAgent 在后台执行账号测试，并允许主动探测覆盖 User-Agent。
 func (s *AccountTestService) RunTestBackgroundWithPromptAndUserAgent(ctx context.Context, accountID int64, modelID string, prompt string, userAgent string) (*ScheduledTestResult, error) {
+	return s.RunTestBackgroundWithPromptAndUserAgentAndProtocol(ctx, accountID, modelID, prompt, userAgent, GroupAvailabilityProbeProtocolAuto)
+}
+
+// RunTestBackgroundWithPromptAndUserAgentAndProtocol 为渠道探测提供独立的协议选择入口。
+// 自动模式完全保留历史测试行为，显式协议只测试对应原生端点。
+func (s *AccountTestService) RunTestBackgroundWithPromptAndUserAgentAndProtocol(ctx context.Context, accountID int64, modelID string, prompt string, userAgent string, protocol string) (*ScheduledTestResult, error) {
 	startedAt := time.Now()
 	ctx = withAccountTestUserAgent(ctx, userAgent)
 
@@ -2980,7 +3006,14 @@ func (s *AccountTestService) RunTestBackgroundWithPromptAndUserAgent(ctx context
 	ginCtx, _ := gin.CreateTestContext(w)
 	ginCtx.Request = (&http.Request{}).WithContext(ctx)
 
-	testErr := s.TestAccountConnection(ginCtx, accountID, modelID, prompt, AccountTestModeDefault)
+	normalizedProtocol, testErr := normalizeGroupAvailabilityProbeProtocol(protocol)
+	if testErr == nil {
+		if normalizedProtocol == GroupAvailabilityProbeProtocolAuto {
+			testErr = s.TestAccountConnection(ginCtx, accountID, modelID, prompt, AccountTestModeDefault)
+		} else {
+			testErr = s.testAccountConnectionForProbeProtocol(ginCtx, accountID, modelID, prompt, normalizedProtocol)
+		}
+	}
 
 	finishedAt := time.Now()
 	body := w.Body.String()

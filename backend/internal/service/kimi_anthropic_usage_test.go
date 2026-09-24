@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/apicompat"
@@ -224,6 +226,7 @@ func TestCNProviderAnthropicUsageBillsUncachedInput(t *testing.T) {
 	}
 
 	billing := NewBillingService(&config.Config{}, nil)
+	resolver := NewModelPricingResolver(nil, billing)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			claudeUsage := parseClaudeUsageFromResponseBody([]byte(tt.body))
@@ -231,18 +234,31 @@ func TestCNProviderAnthropicUsageBillsUncachedInput(t *testing.T) {
 			uncachedInput := max(openAIUsage.InputTokens-openAIUsage.CacheReadInputTokens-openAIUsage.CacheCreationInputTokens, 0)
 			require.Equal(t, tt.wantInput, uncachedInput)
 
-			cost, err := billing.CalculateCost(tt.model, UsageTokens{
-				InputTokens:         uncachedInput,
-				OutputTokens:        openAIUsage.OutputTokens,
-				CacheCreationTokens: openAIUsage.CacheCreationInputTokens,
-				CacheReadTokens:     openAIUsage.CacheReadInputTokens,
-			}, 1)
-			require.NoError(t, err)
-			require.Positive(t, cost.InputCost, "uncached input must contribute to the final charge")
-
 			pricing, err := billing.GetModelPricing(tt.model)
 			require.NoError(t, err)
-			require.InDelta(t, float64(tt.wantInput)*pricing.InputPricePerToken, cost.InputCost, 1e-12)
+			// 固定工作日峰谷时刻，避免测试运行时钟改变 DeepSeek 官方倍率；未缓存桶的语义保持一致。
+			for _, period := range []struct {
+				name               string
+				hour               int
+				deepseekMultiplier float64
+			}{{"off_peak", 12, 1}, {"peak", 2, 2}} {
+				t.Run(period.name, func(t *testing.T) {
+					cost, err := billing.CalculateCostUnified(CostInput{
+						Ctx: context.Background(), Model: tt.model, RateMultiplier: 1, Resolver: resolver,
+						PricingAt: time.Date(2026, 8, 24, period.hour, 0, 0, 0, time.UTC),
+						Tokens: UsageTokens{InputTokens: uncachedInput, OutputTokens: openAIUsage.OutputTokens,
+							CacheCreationTokens: openAIUsage.CacheCreationInputTokens, CacheReadTokens: openAIUsage.CacheReadInputTokens},
+					})
+					require.NoError(t, err)
+					require.Positive(t, cost.InputCost, "uncached input must contribute to the final charge")
+					factor := 1.0
+					if tt.name == "DeepSeek" {
+						factor = period.deepseekMultiplier
+					}
+					require.InDelta(t, float64(tt.wantInput)*pricing.InputPricePerToken*factor, cost.InputCost, 1e-12)
+					require.InDelta(t, float64(openAIUsage.CacheReadInputTokens)*pricing.CacheReadPricePerToken*factor, cost.CacheReadCost, 1e-12)
+				})
+			}
 		})
 	}
 }

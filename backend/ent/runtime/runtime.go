@@ -2893,8 +2893,30 @@ func init() {
 	usersubscriptionDescMonthlyUsageUsd := usersubscriptionFields[13].Descriptor()
 	// usersubscription.DefaultMonthlyUsageUsd holds the default value on creation for the monthly_usage_usd field.
 	usersubscription.DefaultMonthlyUsageUsd = usersubscriptionDescMonthlyUsageUsd.Default.(float64)
+	// usersubscriptionDescDailyResetCount is the schema descriptor for daily_reset_count field.
+	usersubscriptionDescDailyResetCount := usersubscriptionFields[14].Descriptor()
+	// usersubscription.DefaultDailyResetCount holds the default value on creation for the daily_reset_count field.
+	usersubscription.DefaultDailyResetCount = usersubscriptionDescDailyResetCount.Default.(int64)
+	// usersubscription.DailyResetCountValidator is a validator for the "daily_reset_count" field. It is called by the builders before save.
+	usersubscription.DailyResetCountValidator = usersubscriptionDescDailyResetCount.Validators[0].(func(int64) error)
+	// usersubscriptionDescWeeklyResetCount is the schema descriptor for weekly_reset_count field.
+	usersubscriptionDescWeeklyResetCount := usersubscriptionFields[15].Descriptor()
+	// usersubscription.DefaultWeeklyResetCount holds the default value on creation for the weekly_reset_count field.
+	usersubscription.DefaultWeeklyResetCount = usersubscriptionDescWeeklyResetCount.Default.(int64)
+	// usersubscription.WeeklyResetCountValidator is a validator for the "weekly_reset_count" field. It is called by the builders before save.
+	usersubscription.WeeklyResetCountValidator = usersubscriptionDescWeeklyResetCount.Validators[0].(func(int64) error)
+	// usersubscriptionDescMonthlyResetCount is the schema descriptor for monthly_reset_count field.
+	usersubscriptionDescMonthlyResetCount := usersubscriptionFields[16].Descriptor()
+	// usersubscription.DefaultMonthlyResetCount holds the default value on creation for the monthly_reset_count field.
+	usersubscription.DefaultMonthlyResetCount = usersubscriptionDescMonthlyResetCount.Default.(int64)
+	// usersubscription.MonthlyResetCountValidator is a validator for the "monthly_reset_count" field. It is called by the builders before save.
+	usersubscription.MonthlyResetCountValidator = usersubscriptionDescMonthlyResetCount.Validators[0].(func(int64) error)
+	// usersubscriptionDescResetCountedAt is the schema descriptor for reset_counted_at field.
+	usersubscriptionDescResetCountedAt := usersubscriptionFields[17].Descriptor()
+	// usersubscription.DefaultResetCountedAt holds the default value on creation for the reset_counted_at field.
+	usersubscription.DefaultResetCountedAt = usersubscriptionDescResetCountedAt.Default.(func() time.Time)
 	// usersubscriptionDescAssignedAt is the schema descriptor for assigned_at field.
-	usersubscriptionDescAssignedAt := usersubscriptionFields[15].Descriptor()
+	usersubscriptionDescAssignedAt := usersubscriptionFields[19].Descriptor()
 	// usersubscription.DefaultAssignedAt holds the default value on creation for the assigned_at field.
 	usersubscription.DefaultAssignedAt = usersubscriptionDescAssignedAt.Default.(func() time.Time)
 }

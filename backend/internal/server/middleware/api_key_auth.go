@@ -204,6 +204,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		applyAPIKeyModelRedirect(c, apiKey)
 		// 批任务管理只读取已有数据或释放冻结；即使任务耗尽额度，结果仍应可取回或取消。
 		skipBilling := isAPIKeyUsageRequest(c.Request.Method, c.Request.URL.Path) ||
+			isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path) ||
 			isSeedanceTaskManagementRequest(c.Request.Method, c.Request.URL.Path) ||
 			isBatchImageBillingBypassRequest(c.Request.Method, c.Request.URL.Path) ||
 			((apiKey.IsComposite || apiKey.SmartRouting) && isGrokVideoTaskRead(c.Request.Method, c.Request.URL.Path))
@@ -400,7 +401,7 @@ func isBatchImageBillingBypassRequest(method, path string) bool {
 // 未知路径默认视为会产生消费，避免新增路由自动绕过团队限额。
 func isAPIKeyNonConsumingRequest(method, path string) bool {
 	path = strings.TrimRight(path, "/")
-	if isSeedanceTaskManagementRequest(method, path) {
+	if isAsyncImageTaskRead(method, path) || isSeedanceTaskManagementRequest(method, path) {
 		return true
 	}
 	if isAPIKeyUsageRequest(method, path) {
@@ -574,4 +575,18 @@ func validateAPIKeyGroupAvailable(apiKey *service.APIKey) (string, string, bool)
 		return "GROUP_DISABLED", "API Key 所属分组已停用", false
 	}
 	return "", "", true
+}
+
+// isAsyncImageTaskRead 只豁免已有图片任务查询的余额和额度门禁，基础认证与所有权仍验证。
+func isAsyncImageTaskRead(method, path string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	for _, prefix := range []string{"/v1/images/tasks/", "/images/tasks/"} {
+		if strings.HasPrefix(path, prefix) {
+			id := strings.TrimPrefix(path, prefix)
+			return id != "" && !strings.Contains(id, "/")
+		}
+	}
+	return false
 }

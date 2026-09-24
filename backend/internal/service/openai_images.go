@@ -46,6 +46,7 @@ const (
 type OpenAIImagesCapability string
 
 const (
+	OpenAIImagesCapabilityAPIKey OpenAIImagesCapability = "images-apikey"
 	OpenAIImagesCapabilityBasic  OpenAIImagesCapability = "images-basic"
 	OpenAIImagesCapabilityNative OpenAIImagesCapability = "images-native"
 )
@@ -239,7 +240,7 @@ func (s *OpenAIGatewayService) parseOpenAIImagesRequest(c *gin.Context, body []b
 
 // ValidateRoutingModel 使用渠道映射后的模型 C 校验 Images 端点，并同步账号选择所需的图片能力。
 func (r *OpenAIImagesRequest) ValidateRoutingModel(routingModel string) error {
-	if err := validateOpenAIImagesModel(routingModel); err != nil {
+	if err := validateCompatibleImagesModel(routingModel); err != nil {
 		return err
 	}
 	if r == nil {
@@ -499,6 +500,19 @@ func isGrokImageGenerationModel(model string) bool {
 		strings.HasPrefix(model, "grok-imagine-image")
 }
 
+// isGeminiCompatibleImageModel 仅开放第三方 Images 兼容模型，不改变原生 OAuth 能力。
+func isGeminiCompatibleImageModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(model, "gemini-") && (strings.HasSuffix(model, "-image") || strings.Contains(model, "-image-"))
+}
+
+func validateCompatibleImagesModel(model string) error {
+	if isGeminiCompatibleImageModel(model) {
+		return nil
+	}
+	return validateOpenAIImagesModel(model)
+}
+
 func validateOpenAIImagesModel(model string) error {
 	model = strings.TrimSpace(model)
 	if isOpenAIImageGenerationModel(model) {
@@ -525,6 +539,9 @@ func normalizeOpenAIImagesEndpointPath(path string) string {
 func classifyOpenAIImagesCapability(req *OpenAIImagesRequest) OpenAIImagesCapability {
 	if req == nil {
 		return OpenAIImagesCapabilityNative
+	}
+	if isGeminiCompatibleImageModel(req.Model) {
+		return OpenAIImagesCapabilityAPIKey
 	}
 	if req.ExplicitModel || req.ExplicitSize {
 		return OpenAIImagesCapabilityNative
@@ -613,11 +630,11 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	if mapped := strings.TrimSpace(channelMappedModel); mapped != "" {
 		requestModel = mapped
 	}
-	if err := validateOpenAIImagesModel(requestModel); err != nil {
+	if err := validateCompatibleImagesModel(requestModel); err != nil {
 		return nil, err
 	}
 	upstreamModel := resolveOpenAIAccountUpstreamModelForRequest(account, requestModel, false, false)
-	if err := validateOpenAIImagesModel(upstreamModel); err != nil {
+	if err := validateCompatibleImagesModel(upstreamModel); err != nil {
 		return nil, err
 	}
 	SetOpsUpstreamModel(c, upstreamModel)
@@ -678,6 +695,18 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+		// 余额不足保留原始错误并尝试下一个账号，由现有路由决定最终响应。
+		if isOpenAIImagesInsufficientBalance(respBody) {
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+				UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
+				UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()), Kind: "failover", Message: upstreamMsg,
+			})
+			if !account.IsPoolMode() && account.ShouldHandleErrorCode(resp.StatusCode) {
+				s.coolOpenAIImagesInsufficientBalance(upstreamCtx, account)
+			}
+			return nil, newOpenAIImagesInsufficientBalanceFailoverError(resp.StatusCode, resp.Header, respBody)
+		}
 		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody) {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,

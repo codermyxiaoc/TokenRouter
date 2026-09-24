@@ -230,6 +230,7 @@ func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context,
 			}
 		}
 	}
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 	return req, nil
 }
@@ -287,7 +288,7 @@ func (s *AccountTestService) buildAnthropicUpstreamModelsRequest(ctx context.Con
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid Anthropic model list URL", err)
 	}
-	for key, value := range claude.DefaultHeaders {
+	for key, value := range claude.DefaultHeaders() {
 		req.Header.Set(key, value)
 	}
 	req.Header.Set("Accept", "application/json")
@@ -299,6 +300,7 @@ func (s *AccountTestService) buildAnthropicUpstreamModelsRequest(ctx context.Con
 		setAnthropicAPIKeyAuthHeader(req.Header, account, apiKeyAuthToken)
 	}
 	// 账号级请求头覆写：模型列表探测与真实转发保持一致的最终头
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 	return req, nil
 }
@@ -333,7 +335,7 @@ func (s *AccountTestService) buildAntigravityAPIKeyModelsRequest(ctx context.Con
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid Antigravity model list URL", err)
 	}
-	for key, value := range claude.DefaultHeaders {
+	for key, value := range claude.DefaultHeaders() {
 		req.Header.Set(key, value)
 	}
 	req.Header.Set("Accept", "application/json")
@@ -375,6 +377,7 @@ func (s *AccountTestService) buildOpenAIUpstreamModelsRequest(ctx context.Contex
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	// 账号级请求头覆写：模型列表探测与真实转发保持一致的最终头
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 	return req, nil
 }
@@ -439,6 +442,7 @@ func (s *AccountTestService) buildOpenAIOAuthUpstreamModelsRequest(ctx context.C
 	req.Header.Set("User-Agent", identity.userAgent)
 	req.Header.Set("Version", identity.version)
 	setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
+	applyOpenCodeUpstreamUserAgent(credentialAccount, req.URL.String(), req.Header)
 	credentialAccount.ApplyHeaderOverrides(req.Header)
 	enforceCodexIdentityHeadersWithUA(req.Header, credentialAccount.GetOpenAIUserAgent())
 	return req, nil

@@ -23,7 +23,16 @@ const CLIVersionEnv = "SUB2API_CLAUDE_CLI_VERSION"
 // User-Agent 头与请求体 billing attribution 块里的 cc_version 由不同代码路径写入，
 // 若两次读到不同的值（例如进程运行中有人改了环境变量），同一个请求就会自相矛盾，
 // 被上游判为非正版客户端。
-var resolvedCLIVersion = resolveCLIVersion(os.Getenv(CLIVersionEnv))
+var configuredCLIVersionOverride = strings.TrimSpace(os.Getenv(CLIVersionEnv))
+var resolvedCLIVersion = resolveCLIVersion(configuredCLIVersionOverride)
+
+// CLIEnvironmentOverride 返回启动时有效的显式环境配置；自动同步不得覆盖已有运维固定值。
+func CLIEnvironmentOverride() string {
+	if IsSupportedCLIVersion(configuredCLIVersionOverride) {
+		return configuredCLIVersionOverride
+	}
+	return ""
+}
 
 // CLIVersion 返回对外伪装的 Claude Code CLI 版本号（三段 semver）。
 //

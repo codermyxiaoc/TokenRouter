@@ -342,6 +342,7 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 		if chPricing.MaxReasoningEffortMultiplier != nil {
 			resolved.BasePricing.MaxReasoningEffortMultiplier = chPricing.MaxReasoningEffortMultiplier
 		}
+		resolved.BasePricing.ReasoningEffortMultipliers = cloneReasoningEffortMultipliers(chPricing.ReasoningEffortMultipliers)
 		return
 	}
 
@@ -371,6 +372,7 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 	if chPricing.MaxReasoningEffortMultiplier != nil {
 		resolved.BasePricing.MaxReasoningEffortMultiplier = chPricing.MaxReasoningEffortMultiplier
 	}
+	resolved.BasePricing.ReasoningEffortMultipliers = cloneReasoningEffortMultipliers(chPricing.ReasoningEffortMultipliers)
 }
 
 // applyChannelImageInputPrice 应用渠道图片输入价：显式配置则用配置值；

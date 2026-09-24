@@ -198,3 +198,31 @@ func TestIsHTMLResponse(t *testing.T) {
 		})
 	}
 }
+
+const openAI403Cloudflare1010Body = "error code: 1010\n"
+
+func TestHandleUpstreamError_OpenAICloudflare1010DoesNotPenalizeAccount(t *testing.T) {
+	for _, platform := range []string{PlatformOpenAI, PlatformOpenCodeGo} {
+		t.Run(platform, func(t *testing.T) {
+			repo := &rateLimitAccountRepoStub{}
+			counter := &countingOpenAI403CounterCache{
+				openAI403CounterCacheStub: openAI403CounterCacheStub{counts: []int64{int64(openAI403DisableThresholdDefault)}},
+			}
+			blocker := &runtimeBlockRecorder{}
+			svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+			svc.SetOpenAI403CounterCache(counter)
+			svc.SetAccountRuntimeBlocker(blocker)
+			account := &Account{ID: 601, Platform: platform, Type: AccountTypeAPIKey}
+
+			shouldDisable := svc.HandleUpstreamError(
+				context.Background(), account, http.StatusForbidden, http.Header{}, []byte(openAI403Cloudflare1010Body),
+			)
+
+			require.False(t, shouldDisable, "Cloudflare 1010 不得判定账号应下线")
+			require.Equal(t, 0, counter.increments, "Cloudflare 1010 不得递增账号 403 计数")
+			require.Equal(t, 0, repo.setErrorCalls)
+			require.Equal(t, 0, repo.tempCalls)
+			require.Empty(t, blocker.accounts)
+		})
+	}
+}

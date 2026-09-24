@@ -1124,6 +1124,11 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 }
 
 func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
+	// CF 1010 是边缘客户端身份拦截，不能消耗健康账号的凭据错误次数。
+	if isCloudflareBotBlockResponse(responseBody) {
+		slog.Warn("openai_403_cloudflare_bot_block_skips_account_penalty", "account_id", account.ID, "platform", account.Platform)
+		return false
+	}
 	// 上游代理或 CDN 在请求到达 OpenAI API 前拦截时，可能返回 HTML 403，
 	// 这只能证明当前链路或端点被阻断，不能证明账号凭据或权限失效。
 	// 若继续计数或写账号状态，同一个错误请求会在 failover 中逐个处罚账号，
@@ -1236,6 +1241,11 @@ func (s *RateLimitService) getOpenAI403CooldownSettings(ctx context.Context, acc
 		loaded.CooldownMinutes = settings.CooldownMinutes
 	}
 	return loaded
+}
+
+// isCloudflareBotBlockResponse 识别边缘机器人拦截，避免把出口或客户端身份问题计为账号封禁。
+func isCloudflareBotBlockResponse(body []byte) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(string(body))), "error code: 1010")
 }
 
 // handleAntigravity403 处理 Antigravity 平台的 403 错误
@@ -2567,6 +2577,7 @@ func parseOpenAIImageTryAgainCooldown(body []byte) time.Duration {
 
 const upstreamModelNotFoundCooldown = 30 * time.Minute
 const upstreamModelNotFoundReason = "upstream_404_model_not_found"
+const upstreamModelNotFound401Reason = "upstream_401_model_not_found"
 const upstreamCodexPlanGatedModelCooldown = 30 * time.Minute
 const upstreamCodexPlanGatedModelReason = "upstream_400_codex_plan_gated_model"
 const tempUnschedBodyMaxBytes = 64 << 10
@@ -2591,6 +2602,8 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 	switch {
 	case isUpstreamModelNotFoundError(statusCode, responseBody):
 		cooldown, reason = upstreamModelNotFoundCooldown, upstreamModelNotFoundReason
+	case statusCode == http.StatusUnauthorized && account.Type == AccountTypeAPIKey && account.IsOpenAICompatible() && isOpenAICompatibleModelNotFoundBody(responseBody):
+		cooldown, reason = upstreamModelNotFoundCooldown, upstreamModelNotFound401Reason
 	case isOpenAIOAuthAccount(account) && isOpenAICodexPlanGatedModelError(statusCode, responseBody):
 		cooldown, reason = upstreamCodexPlanGatedModelCooldown, upstreamCodexPlanGatedModelReason
 	default:

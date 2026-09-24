@@ -133,6 +133,13 @@ func TestOpenCodeGoUsageMonitorPreservesFailuresAndSkipsZen(t *testing.T) {
 	first := *repo.writes[0]
 	account.Extra[CNUsageMonitorSnapshotExtraKey] = &first
 	upstream.status = http.StatusBadGateway
+	// 模拟下一监控轮已超过共享成功快照的有效期，再验证本轮失败保留旧观测。
+	service.usageService.openCodeSharedMu.Lock()
+	for key, entry := range service.usageService.openCodeSharedResults {
+		entry.expiresAt = time.Now().Add(-time.Second)
+		service.usageService.openCodeSharedResults[key] = entry
+	}
+	service.usageService.openCodeSharedMu.Unlock()
 	service.runOnce(context.Background())
 	require.Len(t, repo.writes, 2)
 	last := repo.writes[1]

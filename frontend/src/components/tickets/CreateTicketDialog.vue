@@ -1,9 +1,9 @@
 <template>
   <BaseDialog :show="show" :title="t('tickets.create')" @close="!saving && emit('close')">
     <p v-if="disabled || !settings.enabled" role="status" class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">{{ t('tickets.disabled') }}</p>
-    <form v-else id="create-ticket-form" class="space-y-5" @submit.prevent="submit">
+    <form v-else id="create-ticket-form" class="min-w-0 space-y-4 sm:space-y-5" @submit.prevent="submit">
       <p class="rounded-lg bg-primary-50 p-3 text-sm text-primary-700 dark:bg-primary-900/20 dark:text-primary-300">{{ t('tickets.openLimit', { count: settings.max_open_tickets }) }}</p>
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div class="grid min-w-0 grid-cols-2 gap-3 sm:gap-4">
         <div><label class="input-label" for="ticket-type">{{ t('tickets.type') }}</label><Select id="ticket-type" v-model="form.type" :options="typeOptions" :disabled="saving" /></div>
         <div><label class="input-label" for="ticket-priority">{{ t('tickets.priority') }}</label><Select id="ticket-priority" v-model="form.priority" :options="priorityOptions" :disabled="saving" /></div>
       </div>
@@ -21,12 +21,13 @@
         <div class="mt-1 flex justify-between gap-3 text-xs" :class="titleTooLong ? 'text-red-600' : 'text-gray-500'"><p id="ticket-title-hint">{{ t('tickets.titleLimit', { max: ticketTitleMaxLength }) }}</p><span id="ticket-title-count" class="shrink-0 tabular-nums">{{ titleLength }} / {{ ticketTitleMaxLength }}</span></div>
         <p v-if="titleTooLong" role="alert" class="mt-1 text-sm text-red-600">{{ t('tickets.errors.TICKET_TITLE_TOO_LONG', { max: ticketTitleMaxLength }) }}</p>
       </div>
-      <div><label class="input-label" for="ticket-content">{{ t('tickets.content') }}</label><textarea id="ticket-content" v-model="form.content" required maxlength="20000" rows="6" :disabled="saving" class="input w-full" :placeholder="t('tickets.contentPlaceholder')" /></div>
+      <div><label class="input-label" for="ticket-content">{{ t('tickets.content') }}</label><textarea id="ticket-content" v-model="form.content" required maxlength="20000" rows="6" :disabled="saving" class="input block w-full resize-y" :placeholder="t('tickets.contentPlaceholder')" /></div>
       <TicketAttachments v-model="files" :settings="settings" :disabled="saving" />
       <p v-if="error" role="alert" class="text-sm text-red-600">{{ error }}</p>
     </form>
     <template #footer>
-      <div class="flex justify-end gap-3"><button type="button" class="btn btn-secondary" :disabled="saving" @click="emit('close')">{{ t('common.cancel') }}</button><button type="submit" form="create-ticket-form" class="btn btn-primary" :disabled="saving || disabled || !settings.enabled || titleComposing || titleTooLong || !form.title.trim() || !form.content.trim()">{{ saving ? t('common.processing') : t('tickets.create') }}</button></div>
+      <!-- 手机底部操作均分可触达宽度，桌面保持原有右对齐。 -->
+      <div class="grid grid-cols-2 gap-3 sm:flex sm:justify-end"><button type="button" class="btn btn-secondary" :disabled="saving" @click="emit('close')">{{ t('common.cancel') }}</button><button type="submit" form="create-ticket-form" class="btn btn-primary" :disabled="saving || disabled || !settings.enabled || titleComposing || titleTooLong || !form.title.trim() || !form.content.trim()">{{ saving ? t('common.processing') : t('tickets.create') }}</button></div>
     </template>
   </BaseDialog>
 </template>

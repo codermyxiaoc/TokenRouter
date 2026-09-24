@@ -122,6 +122,21 @@ beforeEach(() => {
 })
 
 describe('UserApiKeysModal', () => {
+  it('切换用户后忽略旧用户迟到的 Key 列表', async () => {
+    let resolveOld!: (value: unknown) => void
+    apiMocks.getUserApiKeys.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve }))
+    const wrapper = await mountAndOpen()
+    apiMocks.getUserApiKeys.mockResolvedValueOnce({ items: [createApiKey({ id: 2, name: '新用户密钥' })] })
+    await wrapper.setProps({ user: { ...user, id: 100 } })
+    await flushPromises()
+    expect(apiMocks.getUserApiKeys).toHaveBeenLastCalledWith(100)
+    resolveOld({ items: [createApiKey({ name: '旧用户密钥' })] })
+    await flushPromises()
+    expect(wrapper.text()).toContain('新用户密钥')
+    expect(wrapper.text()).not.toContain('旧用户密钥')
+    wrapper.unmount()
+  })
+
   it('展示复合 Key 的全部前缀分组映射且不提供普通换组入口', async () => {
     apiMocks.getUserApiKeys.mockResolvedValue({
       items: [

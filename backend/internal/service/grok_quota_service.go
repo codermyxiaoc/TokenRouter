@@ -498,7 +498,8 @@ func (s *GrokQuotaService) prepareProbe(ctx context.Context, accountID int64) (*
 	}
 	proxyURL := s.resolveProxyURL(ctx, account)
 
-	token, err := s.tokenProvider.GetAccessToken(ctx, account)
+	// 冷却期间仍允许管理员诊断额度；保留认证校验和刷新流程，只跳过模型调度门禁。
+	token, err := s.tokenProvider.GetAccessTokenForManualTest(ctx, account)
 	if err != nil {
 		return nil, "", "", infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_TOKEN_UNAVAILABLE", "failed to acquire access token: %v", err)
 	}

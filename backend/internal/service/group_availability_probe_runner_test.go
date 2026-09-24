@@ -40,6 +40,10 @@ func (r *groupAvailabilityProbeRunnerRepoStub) SaveResultAndScheduleNext(context
 	return nil
 }
 
+func (r *groupAvailabilityProbeRunnerRepoStub) ClaimGroup(context.Context, int64, GroupAvailabilityProbeConfig, time.Time, time.Time, string) (*GroupAvailabilityProbeDueGroup, error) {
+	return nil, nil
+}
+
 func (r *groupAvailabilityProbeRunnerRepoStub) GetSummaryByGroupIDs(context.Context, []int64, int, int, string, time.Time) (map[int64]*GroupAvailabilitySummary, error) {
 	return nil, nil
 }

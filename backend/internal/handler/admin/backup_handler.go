@@ -14,12 +14,14 @@ import (
 type BackupHandler struct {
 	backupService *service.BackupService
 	userService   *service.UserService
+	imageStorage  *service.ImageStorageSettingService
 }
 
-func NewBackupHandler(backupService *service.BackupService, userService *service.UserService) *BackupHandler {
+func NewBackupHandler(backupService *service.BackupService, userService *service.UserService, imageStorage *service.ImageStorageSettingService) *BackupHandler {
 	return &BackupHandler{
 		backupService: backupService,
 		userService:   userService,
+		imageStorage:  imageStorage,
 	}
 }
 
@@ -206,7 +208,13 @@ func (h *BackupHandler) DeleteBackup(c *gin.Context) {
 		response.BadRequest(c, "backup ID is required")
 		return
 	}
-	if err := h.backupService.DeleteBackup(c.Request.Context(), backupID); err != nil {
+	var err error
+	if c.Query("delete_archived") == "true" {
+		err = h.backupService.DeleteArchivedBackup(c.Request.Context(), backupID)
+	} else {
+		err = h.backupService.DeleteBackup(c.Request.Context(), backupID)
+	}
+	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -300,4 +308,47 @@ func (h *BackupHandler) RestoreBackup(c *gin.Context) {
 		return
 	}
 	response.Accepted(c, record)
+}
+
+// GetImageStorageConfig 返回异步图片存储配置，凭据只返回是否已配置。
+func (h *BackupHandler) GetImageStorageConfig(c *gin.Context) {
+	ctx := c.Request.Context()
+	cfg, err := h.imageStorage.Get(ctx)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{
+		"config":            cfg,
+		"secret_configured": h.imageStorage.SecretConfigured(ctx),
+	})
+}
+
+// UpdateImageStorageConfig 保存后使新提交任务使用最新存储配置。
+func (h *BackupHandler) UpdateImageStorageConfig(c *gin.Context) {
+	var req service.ImageStorageSettings
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	cfg, err := h.imageStorage.Update(c.Request.Context(), req)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, cfg)
+}
+
+// TestImageStorageConnection 复用已保存密钥测试对象存储可达性。
+func (h *BackupHandler) TestImageStorageConnection(c *gin.Context) {
+	var req service.ImageStorageSettings
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if err := h.imageStorage.TestConnection(c.Request.Context(), req); err != nil {
+		response.Success(c, gin.H{"ok": false, "message": err.Error()})
+		return
+	}
+	response.Success(c, gin.H{"ok": true, "message": "connection successful"})
 }

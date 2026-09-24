@@ -14,9 +14,8 @@ const compatPromptCacheKeyPrefix = "compat_cc_"
 func shouldAutoInjectPromptCacheKeyForCompat(model string) bool {
 	trimmed := strings.TrimSpace(strings.ToLower(model))
 	canonical := canonicalizeOpenAIModelAliasSpelling(trimmed)
-	// 仅对完整的 GPT-6 Astra 名称开启此兼容状态，避免把其他 GPT-6
-	// 系列或未公开别名误当成同一缓存身份。
-	if canonical == "gpt-6-astra" {
+	// 仅对已公布的完整 GPT-6 产品名开启兼容缓存身份，未知变体保持原行为。
+	if canonical == "gpt-6-astra" || canonical == "gpt-6-sol" || canonical == "gpt-6-luna" {
 		return true
 	}
 	// 仅对 Responses 兼容路径支持的 GPT-5 族开启自动注入，避免 normalizeCodexModel

@@ -1668,7 +1668,7 @@ func (s *OpenAIGatewayService) groupUsesAdvancedScheduler(ctx context.Context, g
 	if s.schedulerSnapshot == nil {
 		return false
 	}
-	group, err := s.schedulerSnapshot.GetGroupByID(ctx, *groupID)
+	group, err := s.schedulerSnapshot.GetGroupByIDLite(ctx, *groupID)
 	return err == nil && group != nil && group.UsesAdvancedScheduler()
 }
 
@@ -1889,7 +1889,7 @@ func (s *OpenAIGatewayService) resolveOpenAISchedulerGroup(ctx context.Context, 
 		if contextual, ok := ctx.Value(ctxkey.Group).(*Group); ok && IsGroupContextValid(contextual) && contextual.ID == currentID {
 			group = contextual
 		} else if s != nil && s.schedulerSnapshot != nil {
-			resolved, err := s.schedulerSnapshot.GetGroupByID(ctx, currentID)
+			resolved, err := s.schedulerSnapshot.GetGroupByIDLite(ctx, currentID)
 			if err != nil {
 				return ctx, nil, err
 			}
@@ -1936,12 +1936,53 @@ func (s *OpenAIGatewayService) loadOpenAIGroupRequiresPrivacySet(ctx context.Con
 	if s == nil || groupID == nil || s.schedulerSnapshot == nil {
 		return false
 	}
-	group, err := s.schedulerSnapshot.GetGroupByID(ctx, *groupID)
+	group, err := s.schedulerSnapshot.GetGroupByIDLite(ctx, *groupID)
 	if err != nil {
 		// 隐私资格查询失败时收紧当前请求，避免错误地把未确认账号用于审查任务。
 		return true
 	}
 	return group != nil && group.RequirePrivacySet
+}
+
+// selectLegacyAccountByPreviousResponse 在基础调度中复用高级调度的续接资格检查。
+// 请求模型用于渠道准入，账号层模型用于续接匹配，不跨越智能路由已选定的分组。
+func (s *OpenAIGatewayService) selectLegacyAccountByPreviousResponse(ctx context.Context, req OpenAIAccountScheduleRequest) (*AccountSelectionResult, error) {
+	if strings.TrimSpace(req.PreviousResponseID) == "" || NormalizeOpenAICompatiblePlatform(req.Platform) != PlatformOpenAI {
+		return nil, nil
+	}
+	if s.checkChannelPricingRestriction(ctx, req.GroupID, req.RequestedModel) {
+		return nil, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, req.RequestedModel)
+	}
+	selection, err := s.selectAccountByPreviousResponseIDForCapability(ctx, req.GroupID, req.PreviousResponseID, req.routingModel(), req.ExcludedIDs, req.RequiredCapability, req.RequireCompact)
+	if err != nil || selection == nil || selection.Account == nil {
+		return selection, err
+	}
+	scheduler := &defaultOpenAIAccountScheduler{service: s, stats: newOpenAIAccountRuntimeStats()}
+	compatible, _ := scheduler.isAccountRequestCompatibleReason(ctx, selection.Account, req)
+	groupCompatible := (!isSmartRoutingScoped(ctx) && !hasOpenAIAccountGroupMetadata(selection.Account)) || s.openAIAccountMatchesSchedulingGroup(ctx, selection.Account, req.GroupID)
+	if !groupCompatible || !compatible || !scheduler.isAccountTransportCompatible(selection.Account, req.RequiredTransport) {
+		if selection.ReleaseFunc != nil {
+			selection.ReleaseFunc()
+		}
+		return nil, nil
+	}
+	if req.SessionHash != "" {
+		_ = s.BindStickySession(ctx, req.GroupID, req.SessionHash, selection.Account.ID)
+	}
+	return selection, nil
+}
+
+// applyLegacySelectionDecision 补齐基础调度的最终账号与粘性命中标签。
+func applyLegacySelectionDecision(decision *OpenAIAccountScheduleDecision, selection *AccountSelectionResult) {
+	if decision == nil || selection == nil || selection.Account == nil {
+		return
+	}
+	decision.SelectedAccountID = selection.Account.ID
+	decision.SelectedAccountType = selection.Account.Type
+	if selection.stickySessionHit {
+		decision.Layer = openAIAccountScheduleLayerSessionSticky
+		decision.StickySessionHit = true
+	}
 }
 
 func (s *OpenAIGatewayService) selectAccountWithSchedulerForRoutingOnce(
@@ -1971,6 +2012,22 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerForRoutingOnce(
 	scheduler := s.getOpenAIAccountScheduler(ctx, groupID)
 	if scheduler == nil {
 		decision.Layer = openAIAccountScheduleLayerLoadBalance
+		selection, err := s.selectLegacyAccountByPreviousResponse(ctx, OpenAIAccountScheduleRequest{
+			GroupID: groupID, Platform: platform, PreviousResponseID: previousResponseID,
+			SessionHash: sessionHash, RequestedModel: requestedModel, RoutingModel: routingModel,
+			ExcludedIDs: excludedIDs, RequiredTransport: requiredTransport,
+			RequiredCapability: requiredCapability, RequiredImageCapability: requiredImageCapability,
+			RequireCompact: requireCompact, RequirePrivacySet: s.openAIGroupRequiresPrivacySet(ctx, groupID),
+		})
+		if err != nil {
+			return nil, decision, err
+		}
+		if selection != nil && selection.Account != nil {
+			applyLegacySelectionDecision(&decision, selection)
+			decision.Layer = openAIAccountScheduleLayerPreviousResponse
+			decision.StickyPreviousHit = true
+			return selection, decision, nil
+		}
 		if guardianParentAccountID > 0 {
 			fallbackScheduler := &defaultOpenAIAccountScheduler{service: s, stats: newOpenAIAccountRuntimeStats()}
 			selection, _, err := fallbackScheduler.selectBySessionHash(ctx, OpenAIAccountScheduleRequest{
@@ -2014,6 +2071,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerForRoutingOnce(
 					return selection, decision, nil
 				}
 				if accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) {
+					applyLegacySelectionDecision(&decision, selection)
 					return selection, decision, nil
 				}
 				if selection.ReleaseFunc != nil {
@@ -2040,6 +2098,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerForRoutingOnce(
 			}
 			if s.isOpenAIAccountTransportCompatible(selection.Account, requiredTransport) &&
 				accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) {
+				applyLegacySelectionDecision(&decision, selection)
 				return selection, decision, nil
 			}
 			if selection.ReleaseFunc != nil {

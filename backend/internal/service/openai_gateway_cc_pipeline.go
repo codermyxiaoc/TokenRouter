@@ -219,6 +219,7 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 			}
 		}
 	}
+	applyOpenCodeUpstreamUserAgent(account, upstreamReq.URL.String(), upstreamReq.Header)
 	if len(tlsRouterMatch) == 0 {
 		tlsRouterMatch = []TLSFingerprintRouterMatchResult{s.matchTLSFingerprintRouter(c, account)}
 	}

@@ -89,8 +89,10 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		}
 	}
 
+	// 同一次请求固定 UA 快照，避免同步版本切换时计费标记与最终出站头不一致。
+	mimicUserAgent := claude.DefaultUserAgent()
 	// 后续伪装会覆盖缓存 UA；即使没有账号指纹，也按最终出站 UA 同步计费标记。
-	if billingUA := effectiveBillingUserAgent(tokenType, mimicClaudeCode, fingerprint); billingUA != "" {
+	if billingUA := effectiveBillingUserAgent(mimicUserAgent, tokenType, mimicClaudeCode, fingerprint); billingUA != "" {
 		body = syncBillingHeaderVersion(body, billingUA)
 	}
 
@@ -173,7 +175,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// OAuth + mimic Claude Code：强制注入 CLI 指纹相关 header
 	// （user-agent/x-stainless-*/x-app/Accept/x-stainless-helper-method/x-client-request-id）
 	if tokenType == "oauth" && mimicClaudeCode {
-		applyClaudeCodeMimicHeaders(req, reqStream)
+		applyClaudeCodeMimicHeaders(req, reqStream, mimicUserAgent)
 	}
 
 	// 写入最终 anthropic-beta header
@@ -195,6 +197,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 
 	// 账号级请求头覆写（仅 anthropic/openai api_key 账号启用时生效；OAuth 路径 no-op）。
 	// 放在所有 header 逻辑之后，确保配置值对同名头拥有最终决定权。
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 
 	// === DEBUG: 打印上游转发请求（headers + body 摘要），与 CLIENT_ORIGINAL 对比 ===
@@ -418,7 +421,7 @@ func applyClaudeOAuthHeaderDefaults(req *http.Request) {
 	if getHeaderRaw(req.Header, "Accept") == "" {
 		setHeaderRaw(req.Header, "Accept", "application/json")
 	}
-	for key, value := range claude.DefaultHeaders {
+	for key, value := range claude.DefaultHeaders() {
 		if value == "" {
 			continue
 		}
@@ -855,7 +858,9 @@ var defaultDroppedBetasSet = buildBetaTokenSet(claude.DroppedBetas)
 // applyClaudeCodeMimicHeaders forces "Claude Code-like" request headers.
 // This mirrors opencode-anthropic-auth behavior: do not trust downstream
 // headers when using Claude Code-scoped OAuth credentials.
-func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool) {
+// mimicUserAgent 由调用方在同一请求内取一次传入，保证出站 User-Agent 头与
+// 请求体 billing attribution 的 cc_version 版本号严格一致。
+func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool, mimicUserAgent string) {
 	if req == nil {
 		return
 	}
@@ -863,9 +868,13 @@ func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool) {
 	applyClaudeOAuthHeaderDefaults(req)
 	// Then force key headers to match Claude Code fingerprint regardless of what the client sent.
 	// 使用 resolveWireCasing 确保 key 与真实 wire format 一致（如 "x-app" 而非 "X-App"）
-	for key, value := range claude.DefaultHeaders {
+	for key, value := range claude.DefaultHeaders() {
 		if value == "" {
 			continue
+		}
+		if key == "User-Agent" {
+			// 版本号与 billing 路径共用同一字符串（见 mimicUserAgent 注释）。
+			value = mimicUserAgent
 		}
 		setHeaderRaw(req.Header, resolveWireCasing(key), value)
 	}

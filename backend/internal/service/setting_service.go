@@ -206,6 +206,8 @@ type SettingService struct {
 	antigravityUAVersionCache    atomic.Value // *cachedAntigravityUserAgentVersion
 	antigravityUAVersionSF       singleflight.Group
 	openAICodexUACache           atomic.Value // *cachedOpenAICodexUserAgent
+	claudeCodeVersionCache       atomic.Value // Claude Code 出站版本的运行时缓存
+	claudeCodeVersionSF          singleflight.Group
 	openAICodexUASF              singleflight.Group
 	openAIAllowCodexPluginCache  atomic.Value // *cachedOpenAIAllowCodexPlugin
 	openAIAllowCodexPluginSF     singleflight.Group

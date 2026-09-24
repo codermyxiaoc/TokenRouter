@@ -652,7 +652,7 @@ func (r *proxyRepository) SweepExpiredProxies(ctx context.Context, now time.Time
 			logger.LegacyPrintf("repository.proxy", "[ProxyExpiry] proxy %d expired but fallback chain unresolved (cycle/all-expired); accounts kept", p.ID)
 		}
 
-		changedAccountIDs, sweepErr := r.sweepOneExpiredProxy(ctx, p.ID, target, change)
+		changedAccountIDs, sweepErr := r.sweepOneExpiredProxy(ctx, p, now, target, change)
 		if sweepErr != nil {
 			return totalChanged, sweepErr
 		}
@@ -690,7 +690,7 @@ func sortedUniqueAccountIDs(accountIDs []int64) []int64 {
 
 // sweepOneExpiredProxy 在单事务内原子执行：标记代理 expired + 改投绑定账号。
 // 若 r.client 已绑定事务（测试注入场景），直接在 r.sql 上执行，由外层事务保证原子性。
-func (r *proxyRepository) sweepOneExpiredProxy(ctx context.Context, proxyID int64, target *int64, change bool) ([]int64, error) {
+func (r *proxyRepository) sweepOneExpiredProxy(ctx context.Context, snapshot service.Proxy, now time.Time, target *int64, change bool) ([]int64, error) {
 	// 尝试开启子事务；若 r.client 已是事务 client，则返回 ErrTxStarted，退回使用 r.sql。
 	tx, txErr := r.client.Tx(ctx)
 	if txErr != nil {
@@ -698,13 +698,13 @@ func (r *proxyRepository) sweepOneExpiredProxy(ctx context.Context, proxyID int6
 			return nil, txErr
 		}
 		// 已在外层事务中（集成测试场景），直接用 r.sql 执行
-		return r.sweepOneExpiredProxyOnExec(ctx, r.sql, proxyID, target, change)
+		return r.sweepOneExpiredProxyOnExec(ctx, r.sql, snapshot, now, target, change)
 	}
 
 	// 使用新事务执行
 	var accountIDs []int64
 	var err error
-	accountIDs, err = r.sweepOneExpiredProxyOnExec(ctx, tx, proxyID, target, change)
+	accountIDs, err = r.sweepOneExpiredProxyOnExec(ctx, tx, snapshot, now, target, change)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, err
@@ -716,11 +716,22 @@ func (r *proxyRepository) sweepOneExpiredProxy(ctx context.Context, proxyID int6
 }
 
 // sweepOneExpiredProxyOnExec 在给定的 sqlExecutor 上执行：标记 expired + 改投账号。
-func (r *proxyRepository) sweepOneExpiredProxyOnExec(ctx context.Context, exec sqlExecutor, proxyID int64, target *int64, change bool) ([]int64, error) {
-	if _, err := exec.ExecContext(ctx,
-		`UPDATE proxies SET status=$1, updated_at=NOW() WHERE id=$2 AND deleted_at IS NULL`,
-		service.StatusExpired, proxyID); err != nil {
+func (r *proxyRepository) sweepOneExpiredProxyOnExec(ctx context.Context, exec sqlExecutor, snapshot service.Proxy, now time.Time, target *int64, change bool) ([]int64, error) {
+	proxyID := snapshot.ID
+	// 事务内重新验证快照，管理员并发续期、停用或更改回退策略后不得误改账号出口。
+	result, err := exec.ExecContext(ctx, `UPDATE proxies SET status=$1, updated_at=NOW()
+		WHERE id=$2 AND deleted_at IS NULL AND status=$3 AND expires_at <= $4 AND expires_at=$5
+		AND fallback_mode=$6 AND backup_proxy_id IS NOT DISTINCT FROM $7`,
+		service.StatusExpired, proxyID, service.StatusActive, now, snapshot.ExpiresAt, snapshot.FallbackMode, snapshot.BackupProxyID)
+	if err != nil {
 		return nil, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if changed == 0 {
+		return nil, nil
 	}
 	if !change {
 		accountIDs, err := invalidateProxyOllamaSnapshots(ctx, exec, proxyID)
@@ -732,31 +743,29 @@ func (r *proxyRepository) sweepOneExpiredProxyOnExec(ctx context.Context, exec s
 		}
 		return nil, nil
 	}
-	var (
-		rows *sql.Rows
-		err  error
-	)
+	var rows *sql.Rows
+	// 后续备用代理也可能到期；按当前代理继续改投，保留首次绑定供人工恢复。
 	if target == nil {
 		rows, err = exec.QueryContext(ctx, `
-			UPDATE accounts SET proxy_id=NULL, proxy_fallback_origin_id=$1,
+			UPDATE accounts SET proxy_id=NULL, proxy_fallback_origin_id=COALESCE(proxy_fallback_origin_id,$1),
 				extra=(CASE
 					WHEN platform IN ('openai', 'anthropic') AND type='apikey'
 					THEN COALESCE(extra, '{}'::jsonb) - 'ollama_cloud_usage_snapshot'
 					ELSE COALESCE(extra, '{}'::jsonb)
 				END) - 'upstream_billing_probe' - 'upstream_billing_probe_enabled',
 				updated_at=NOW()
-			WHERE proxy_id=$1 AND proxy_fallback_origin_id IS NULL AND deleted_at IS NULL
+			WHERE proxy_id=$1 AND deleted_at IS NULL
 			RETURNING id`, proxyID)
 	} else {
 		rows, err = exec.QueryContext(ctx, `
-			UPDATE accounts SET proxy_id=$2, proxy_fallback_origin_id=$1,
+			UPDATE accounts SET proxy_id=$2, proxy_fallback_origin_id=COALESCE(proxy_fallback_origin_id,$1),
 				extra=(CASE
 					WHEN platform IN ('openai', 'anthropic') AND type='apikey'
 					THEN COALESCE(extra, '{}'::jsonb) - 'ollama_cloud_usage_snapshot'
 					ELSE COALESCE(extra, '{}'::jsonb)
 				END) - 'upstream_billing_probe' - 'upstream_billing_probe_enabled',
 				updated_at=NOW()
-			WHERE proxy_id=$1 AND proxy_fallback_origin_id IS NULL AND deleted_at IS NULL
+			WHERE proxy_id=$1 AND deleted_at IS NULL
 			RETURNING id`, proxyID, *target)
 	}
 	if err != nil {

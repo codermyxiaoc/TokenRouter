@@ -1,7 +1,7 @@
 // OpenCode 平台的内置模型快照；实际可用目录仍由账号同步结果决定。
 export const OPENCODE_DEFAULT_MODEL = 'gpt-5.6-luna'
 export const OPENCODE_MODELS = [
-  'grok-4.6', 'gpt-5.6-luna',
+  'grok-4.7', 'grok-4.6', 'gpt-5.6-luna',
   // Zen System One 结构化决策模型；GO 账号由后端能力校验决定是否可用。
   'jev-1.13', 'jev-1.13-free',
   'glm-5.3-flash', 'glm-5.3', 'glm-5.2', 'glm-5.1',

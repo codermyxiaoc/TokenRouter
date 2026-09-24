@@ -68,6 +68,7 @@ export interface AffiliateRebateRecord {
 }
 
 export interface AffiliateTransferRecord {
+ action: 'transfer' | 'withdraw'
   ledger_id: number
   user_id: number
   user_email: string
@@ -229,6 +230,43 @@ export const affiliatesAPI = {
   listRebateRecords,
   listTransferRecords,
   getUserOverview,
+  withdrawUserQuota,
 }
 
 export default affiliatesAPI
+
+export interface AffiliateWithdrawResult {
+  ledger_id: number
+  user_id: number
+  amount: number
+  available_quota_after: number
+  frozen_quota_after: number
+  history_quota_after: number
+}
+
+export interface WithdrawAffiliateQuotaRequest {
+  /** 已在线下支付给用户的金额（美元）。 */
+  amount: number
+}
+
+export interface AffiliateWithdrawResponse {
+  result: AffiliateWithdrawResult
+  /** 命中既有登记并未再次扣款时为真。 */
+  replayed: boolean
+}
+
+export async function withdrawUserQuota(
+  userId: number,
+  payload: WithdrawAffiliateQuotaRequest,
+  idempotencyKey: string,
+): Promise<AffiliateWithdrawResponse> {
+  const response = await apiClient.post<AffiliateWithdrawResult>(
+    `/admin/affiliates/users/${userId}/withdraw`,
+    payload,
+    { headers: { 'Idempotency-Key': idempotencyKey } },
+  )
+  return {
+    result: response.data,
+    replayed: response.headers?.['x-idempotency-replayed'] === 'true',
+  }
+}

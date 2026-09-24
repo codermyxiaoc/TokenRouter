@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/service"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,41 +13,72 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAdminImageStorageRoutesAreRemoved 验证异步图片存储配置下线且备份配置仍可用。
-func TestAdminImageStorageRoutesAreRemoved(t *testing.T) {
+// TestAdminGroupAvailabilityProbeRoute 验证立即测试仅挂载在管理员分组路由，并继承认证中间件。
+func TestAdminGroupAvailabilityProbeRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	admin := router.Group("/api/v1/admin")
-	h := &handler.Handlers{
-		Admin: &handler.AdminHandlers{
-			Backup: adminhandler.NewBackupHandler(nil, nil),
-		},
-	}
-	registerBackupRoutes(admin, h, func(c *gin.Context) { c.Next() })
+	admin := router.Group("/api/v1/admin", func(c *gin.Context) { c.AbortWithStatus(http.StatusUnauthorized) })
+	h := &handler.Handlers{Admin: &handler.AdminHandlers{Group: adminhandler.NewGroupHandler(nil, nil, nil, nil)}}
+	registerGroupRoutes(admin, h)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/admin/groups/42/availability-probe/test", nil))
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/groups/42/availability-probe/test", nil))
+	require.Equal(t, http.StatusNotFound, w.Code)
+}
 
+// TestAdminImageStorageRoutesRequireAdminAndStepUp 锁定已恢复的异步图片配置入口及权限边界。
+func TestAdminImageStorageRoutesRequireAdminAndStepUp(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	authorized := false
+	admin := router.Group("/api/v1/admin", func(c *gin.Context) {
+		if !authorized {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		c.Next()
+	})
+	storage := service.NewImageStorageSettingService(nil, nil, nil, nil, config.ImageStorageConfig{Bucket: "test-images", SecretAccessKey: "must-not-expose"})
+	h := &handler.Handlers{Admin: &handler.AdminHandlers{Backup: adminhandler.NewBackupHandler(nil, nil, storage)}}
+	stepUpCalls := 0
+	registerBackupRoutes(admin, h, func(c *gin.Context) { stepUpCalls++; c.AbortWithStatus(http.StatusForbidden) })
 	registered := make(map[string]bool)
 	for _, route := range router.Routes() {
 		registered[route.Method+" "+route.Path] = true
 	}
-
-	removed := []struct {
-		method string
-		path   string
-	}{
-		{method: http.MethodGet, path: "/api/v1/admin/backups/image-storage"},
-		{method: http.MethodPut, path: "/api/v1/admin/backups/image-storage"},
-		{method: http.MethodPost, path: "/api/v1/admin/backups/image-storage/test"},
+	imageRoutes := []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/admin/backups/image-storage"},
+		{http.MethodPut, "/api/v1/admin/backups/image-storage"},
+		{http.MethodPost, "/api/v1/admin/backups/image-storage/test"},
 	}
-	for _, route := range removed {
-		routeKey := route.method + " " + route.path
-		require.False(t, registered[routeKey], "%s should not be registered", routeKey)
-
+	for _, route := range imageRoutes {
+		require.True(t, registered[route.method+" "+route.path])
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(route.method, route.path, nil)
-		router.ServeHTTP(w, req)
-		require.Equal(t, http.StatusNotFound, w.Code, "method=%s path=%s", route.method, route.path)
+		router.ServeHTTP(w, httptest.NewRequest(route.method, route.path, nil))
+		require.Equal(t, http.StatusUnauthorized, w.Code)
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(route.method, "/api/v1"+route.path[len("/api/v1/admin"):], nil))
+		require.Equal(t, http.StatusNotFound, w.Code, "用户路径不能读取或修改图片存储凭据")
 	}
-
+	require.Zero(t, stepUpCalls, "管理员身份校验应先于敏感操作验证")
+	authorized = true
+	for _, route := range imageRoutes {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(route.method, route.path, nil))
+		if route.method == http.MethodGet {
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Contains(t, w.Body.String(), "test-images")
+			require.Contains(t, w.Body.String(), `"secret_configured":true`)
+			require.NotContains(t, w.Body.String(), "must-not-expose")
+			require.Zero(t, stepUpCalls, "管理员只读设置无需二次验证")
+		} else {
+			require.Equal(t, http.StatusForbidden, w.Code, "修改配置与连接测试必须先通过二次验证")
+		}
+	}
+	require.Equal(t, 2, stepUpCalls)
+	// 图片存储配置与数据库备份并存，恢复入口不能覆盖原有备份路由。
 	for _, route := range []string{
 		"GET /api/v1/admin/backups/storage-config",
 		"PUT /api/v1/admin/backups/storage-config",
@@ -58,7 +91,7 @@ func TestAdminImageStorageRoutesAreRemoved(t *testing.T) {
 		"GET /api/v1/admin/backups/schedule",
 		"PUT /api/v1/admin/backups/schedule",
 	} {
-		require.True(t, registered[route], "%s should remain registered", route)
+		require.True(t, registered[route], "%s 应保持注册", route)
 	}
 }
 
@@ -133,7 +166,7 @@ func TestCanonicalBackupIDRouteGuard(t *testing.T) {
 		wantStatus int
 	}{
 		{name: "canonical", id: "0a1b2c3d", wantStatus: http.StatusNoContent},
-		{name: "removed fixed path", id: "image-storage", wantStatus: http.StatusNotFound},
+		{name: "named segment is not a backup ID", id: "image-storage", wantStatus: http.StatusNotFound},
 		{name: "uppercase", id: "0A1B2C3D", wantStatus: http.StatusNotFound},
 		{name: "invalid character", id: "0a1b2c3g", wantStatus: http.StatusNotFound},
 		{name: "wrong length", id: "0a1b2c3", wantStatus: http.StatusNotFound},

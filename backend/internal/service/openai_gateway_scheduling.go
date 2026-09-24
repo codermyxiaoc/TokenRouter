@@ -893,39 +893,45 @@ func (s *OpenAIGatewayService) selectAccountForModelWithExclusions(ctx context.C
 
 // selectAccountForModelWithExclusionsForRouting 使用已解析的账号层模型执行旧版调度。
 func (s *OpenAIGatewayService) selectAccountForModelWithExclusionsForRouting(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, routingModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyAccountID int64, requiredCapability OpenAIEndpointCapability) (*Account, error) {
+	account, _, err := s.selectAccountForModelWithExclusionsStickyHit(ctx, groupID, platform, sessionHash, requestedModel, routingModel, excludedIDs, requireCompact, stickyAccountID, requiredCapability)
+	return account, err
+}
+
+// selectAccountForModelWithExclusionsStickyHit 额外返回实际粘性命中事实，不推断新建的绑定。
+func (s *OpenAIGatewayService) selectAccountForModelWithExclusionsStickyHit(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, routingModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyAccountID int64, requiredCapability OpenAIEndpointCapability) (*Account, bool, error) {
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
 		slog.Warn("channel pricing restriction blocked request",
 			"group_id", derefGroupID(groupID),
 			"model", requestedModel)
-		return nil, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
+		return nil, false, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
 	}
 
 	if account := s.tryStickySessionHit(ctx, groupID, platform, sessionHash, requestedModel, routingModel, excludedIDs, requireCompact, stickyAccountID, requiredCapability); account != nil {
-		return account, nil
+		return account, true, nil
 	}
 
 	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
 	if err != nil {
-		return nil, fmt.Errorf("query accounts failed: %w", err)
+		return nil, false, fmt.Errorf("query accounts failed: %w", err)
 	}
 
 	selected, compactBlocked := s.selectBestAccount(ctx, groupID, platform, accounts, requestedModel, routingModel, excludedIDs, requireCompact, requiredCapability)
 
 	if selected == nil {
-		return nil, noAvailableOpenAISelectionErrorForRouting(ctx, requestedModel, routingModel, compactBlocked, accounts)
+		return nil, false, noAvailableOpenAISelectionErrorForRouting(ctx, requestedModel, routingModel, compactBlocked, accounts)
 	}
 
 	hydrated, err := s.hydrateSelectedAccount(ctx, selected)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	if sessionHash != "" {
 		_ = s.setStickySessionAccountID(ctx, groupID, sessionHash, selected.ID, openaiStickySessionTTL)
 	}
 
-	return hydrated, nil
+	return hydrated, false, nil
 }
 
 // tryStickySessionHit 尝试从粘性会话获取账号。
@@ -1122,7 +1128,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForRouting(ctx cont
 		}
 	}
 	if s.concurrencyService == nil || !cfg.LoadBatchEnabled {
-		account, err := s.selectAccountForModelWithExclusionsForRouting(ctx, groupID, platform, sessionHash, requestedModel, routingModel, excludedIDs, requireCompact, stickyAccountID, requiredCapability)
+		account, stickyHit, err := s.selectAccountForModelWithExclusionsStickyHit(ctx, groupID, platform, sessionHash, requestedModel, routingModel, excludedIDs, requireCompact, stickyAccountID, requiredCapability)
 		if err != nil {
 			return nil, err
 		}
@@ -1131,25 +1137,28 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForRouting(ctx cont
 		}
 		result, err := s.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
 		if err == nil && result != nil && result.Acquired {
-			return s.newAcquiredSelectionResult(ctx, account, result.ReleaseFunc)
+			selection, selectErr := s.newAcquiredSelectionResult(ctx, account, result.ReleaseFunc)
+			return markStickySessionHit(selection, stickyHit), selectErr
 		}
 		if stickyAccountID > 0 && stickyAccountID == account.ID && s.concurrencyService != nil {
 			waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, account.ID)
 			if waitingCount < cfg.StickySessionMaxWaiting {
-				return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
+				selection, selectErr := s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
 					AccountID:      account.ID,
 					MaxConcurrency: account.Concurrency,
 					Timeout:        cfg.StickySessionWaitTimeout,
 					MaxWaiting:     cfg.StickySessionMaxWaiting,
 				})
+				return markStickySessionHit(selection, stickyHit), selectErr
 			}
 		}
-		return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
+		selection, selectErr := s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
 			AccountID:      account.ID,
 			MaxConcurrency: account.Concurrency,
 			Timeout:        cfg.FallbackWaitTimeout,
 			MaxWaiting:     cfg.FallbackMaxWaiting,
 		})
+		return markStickySessionHit(selection, stickyHit), selectErr
 	}
 
 	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
@@ -1207,17 +1216,18 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForRouting(ctx cont
 								return nil, selectErr
 							}
 							_ = s.refreshStickySessionTTL(ctx, groupID, sessionHash, openaiStickySessionTTL)
-							return selection, nil
+							return markStickySessionHit(selection, true), nil
 						}
 
 						waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, accountID)
 						if waitingCount < cfg.StickySessionMaxWaiting {
-							return s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
+							selection, selectErr := s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
 								AccountID:      accountID,
 								MaxConcurrency: account.Concurrency,
 								Timeout:        cfg.StickySessionWaitTimeout,
 								MaxWaiting:     cfg.StickySessionMaxWaiting,
 							})
+							return markStickySessionHit(selection, true), selectErr
 						}
 						stickySpillover = true
 					}
@@ -1711,4 +1721,12 @@ func (s *OpenAIGatewayService) schedulingConfig() config.GatewaySchedulingConfig
 		LoadBatchEnabled:         true,
 		SlotCleanupInterval:      30 * time.Second,
 	}
+}
+
+// markStickySessionHit 只记录当前选号链已经确认的粘性命中。
+func markStickySessionHit(selection *AccountSelectionResult, hit bool) *AccountSelectionResult {
+	if selection != nil && hit {
+		selection.stickySessionHit = true
+	}
+	return selection
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -56,6 +57,9 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 	}
 	clientStream := ccReq.Stream
 	includeUsage := ccReq.StreamOptions != nil && ccReq.StreamOptions.IncludeUsage
+	// 转换器必须读取最终型号，不能把客户端别名的能力套到映射目标上。
+	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
+	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 
 	// 2. 按 CC → Responses → Anthropic 做链式转换。
 	responsesReq, err := apicompat.ChatCompletionsToResponses(&ccReq)
@@ -63,15 +67,13 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", "Failed to convert request")
 		return nil, fmt.Errorf("convert chat completions to responses: %w", err)
 	}
-	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(responsesReq)
+	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(responsesReq, upstreamModel)
 	if err != nil {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", "Failed to convert request")
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
 	}
 
 	// 3. Model mapping（OpenAI 网关统一入口的映射语义）
-	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
-	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	anthropicReq.Model = upstreamModel
 
 	// 4. Force upstream streaming（客户端原始终决定响应格式；
@@ -112,7 +114,7 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 	}
 
 	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
-	upstreamReq, _, err := s.buildNativeAnthropicUpstreamRequest(upstreamCtx, c, account, anthropicBody, apiKey, targetURL, tlsRouterMatch...)
+	upstreamReq, forwardedBody, err := s.buildNativeAnthropicUpstreamRequest(upstreamCtx, c, account, anthropicBody, apiKey, targetURL, tlsRouterMatch...)
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
@@ -133,8 +135,9 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 		return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
 	}
 
-	reasoningEffort := extractCCReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
-	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
+	// 原生 Anthropic 桥接必须使用最终发送的 output_config.effort。
+	reasoningEffort := NormalizeClaudeOutputEffort(gjson.GetBytes(forwardedBody, "output_config.effort").String())
+	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, forwardedBody, upstreamModel)
 
 	if account.IsOpenCodeGo() {
 		return s.handleOpenCodeNativeAnthropicResponse(resp, c, account, APIProtocolChatCompletions, clientStream, originalModel, billingModel, upstreamModel, reasoningEffort, startTime, apicompat.ResponsesClientToolMapping{}, includeUsage)

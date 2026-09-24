@@ -282,3 +282,33 @@ func parseAffiliateRecordEndTime(raw string, userTZ string) *time.Time {
 	}
 	return nil
 }
+
+// WithdrawQuotaRequest 金额使用返利账本的八位小数精度。
+type WithdrawQuotaRequest struct {
+	Amount float64 `json:"amount"`
+}
+
+// WithdrawQuota 登记已经完成的线下打款，重试返回原流水，不调用任何支付平台。
+func (h *AffiliateHandler) WithdrawQuota(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("user_id"), 10, 64)
+	if err != nil || userID <= 0 {
+		response.BadRequest(c, "Invalid user_id")
+		return
+	}
+
+	var req WithdrawQuotaRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	result, err := h.affiliateService.AdminWithdrawQuota(c.Request.Context(), userID, req.Amount, c.GetHeader("Idempotency-Key"))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if result != nil && result.Replayed {
+		c.Header("X-Idempotency-Replayed", "true")
+	}
+	response.Success(c, result)
+}

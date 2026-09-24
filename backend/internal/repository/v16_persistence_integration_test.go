@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 )
 
@@ -36,7 +37,7 @@ func TestSubscriptionExtensionPersistsWindowRecovery(t *testing.T) {
 			client := testEntClient(t)
 			user := mustCreateUser(t, client, &service.User{Email: "extend-" + uuid.NewString() + "@example.com"})
 			plan := mustCreatePlan(t, client, &service.SubscriptionPlan{Name: "延期持久化", Price: 10, ValidityDays: 30, ValidityUnit: "day"})
-			now := time.Now()
+			now := time.Now().Truncate(time.Microsecond)
 			expiry := now.Add(12 * time.Hour)
 			if tc.expired {
 				expiry = now.Add(-time.Hour)
@@ -54,24 +55,37 @@ func TestSubscriptionExtensionPersistsWindowRecovery(t *testing.T) {
 				sub.DailyWindowStart, sub.WeeklyWindowStart, sub.MonthlyWindowStart = &old, &old, &old
 			}
 			mustCreateSubscription(t, client, sub)
+			// 管理员延期必须保留本期累计次数；水位设为测试开始时刻，避免补算历史混淆断言。
+			_, err := integrationDB.ExecContext(ctx, `UPDATE user_subscriptions SET daily_reset_count=5, weekly_reset_count=3, monthly_reset_count=1, reset_counted_at=$1 WHERE id=$2`, now, sub.ID)
+			require.NoError(t, err)
 			repo := NewUserSubscriptionRepository(client)
 			svc := service.NewSubscriptionService(nil, repo, nil, client, nil)
-			var err error
+			mutationStarted := time.Now()
 			if tc.setDays {
 				_, err = svc.SetSubscriptionValidityDays(ctx, sub.ID, 35)
 			} else {
 				_, err = svc.ExtendSubscription(ctx, sub.ID, 35)
 			}
 			require.NoError(t, err)
+			mutationFinished := time.Now()
 			persisted, err := repo.GetByID(ctx, sub.ID)
 			require.NoError(t, err)
 			require.Equal(t, service.SubscriptionStatusActive, persisted.Status)
-			for _, window := range []*time.Time{persisted.DailyWindowStart, persisted.WeeklyWindowStart, persisted.MonthlyWindowStart} {
+			require.Equal(t, plan.ID, persisted.PlanID)
+			require.Equal(t, []int64{5, 3, 1}, resetCountValues(persisted))
+			require.NotNil(t, persisted.DailyWindowStart)
+			require.True(t, timezone.StartOfDay(mutationFinished).Equal(*persisted.DailyWindowStart), "日窗口仍按项目时区零点")
+			for _, window := range []*time.Time{persisted.WeeklyWindowStart, persisted.MonthlyWindowStart} {
 				require.NotNil(t, window)
-				require.Equal(t, 0, window.Hour())
-				require.WithinDuration(t, now, *window, 24*time.Hour)
+				if !tc.oldWindows {
+					require.False(t, window.Before(mutationStarted.Add(-time.Microsecond)))
+					require.False(t, window.After(mutationFinished.Add(time.Microsecond)), "缺失的周/月窗口按实际激活时刻建立")
+				}
 			}
 			if tc.oldWindows {
+				// 35 天前的旧窗口应按 7/30 日整数周期推进，月窗口仍保留 5 天前的锚点。
+				require.True(t, now.Equal(*persisted.WeeklyWindowStart))
+				require.True(t, now.AddDate(0, 0, -5).Equal(*persisted.MonthlyWindowStart))
 				require.Zero(t, persisted.DailyUsageUSD)
 				require.Zero(t, persisted.WeeklyUsageUSD)
 				require.Zero(t, persisted.MonthlyUsageUSD)

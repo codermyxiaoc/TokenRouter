@@ -49,6 +49,14 @@ const (
 	FieldWeeklyUsageUsd = "weekly_usage_usd"
 	// FieldMonthlyUsageUsd holds the string denoting the monthly_usage_usd field in the database.
 	FieldMonthlyUsageUsd = "monthly_usage_usd"
+	// FieldDailyResetCount holds the string denoting the daily_reset_count field in the database.
+	FieldDailyResetCount = "daily_reset_count"
+	// FieldWeeklyResetCount holds the string denoting the weekly_reset_count field in the database.
+	FieldWeeklyResetCount = "weekly_reset_count"
+	// FieldMonthlyResetCount holds the string denoting the monthly_reset_count field in the database.
+	FieldMonthlyResetCount = "monthly_reset_count"
+	// FieldResetCountedAt holds the string denoting the reset_counted_at field in the database.
+	FieldResetCountedAt = "reset_counted_at"
 	// FieldAssignedBy holds the string denoting the assigned_by field in the database.
 	FieldAssignedBy = "assigned_by"
 	// FieldAssignedAt holds the string denoting the assigned_at field in the database.
@@ -117,6 +125,10 @@ var Columns = []string{
 	FieldDailyUsageUsd,
 	FieldWeeklyUsageUsd,
 	FieldMonthlyUsageUsd,
+	FieldDailyResetCount,
+	FieldWeeklyResetCount,
+	FieldMonthlyResetCount,
+	FieldResetCountedAt,
 	FieldAssignedBy,
 	FieldAssignedAt,
 	FieldSourceOrderID,
@@ -157,6 +169,20 @@ var (
 	DefaultWeeklyUsageUsd float64
 	// DefaultMonthlyUsageUsd holds the default value on creation for the "monthly_usage_usd" field.
 	DefaultMonthlyUsageUsd float64
+	// DefaultDailyResetCount holds the default value on creation for the "daily_reset_count" field.
+	DefaultDailyResetCount int64
+	// DailyResetCountValidator is a validator for the "daily_reset_count" field. It is called by the builders before save.
+	DailyResetCountValidator func(int64) error
+	// DefaultWeeklyResetCount holds the default value on creation for the "weekly_reset_count" field.
+	DefaultWeeklyResetCount int64
+	// WeeklyResetCountValidator is a validator for the "weekly_reset_count" field. It is called by the builders before save.
+	WeeklyResetCountValidator func(int64) error
+	// DefaultMonthlyResetCount holds the default value on creation for the "monthly_reset_count" field.
+	DefaultMonthlyResetCount int64
+	// MonthlyResetCountValidator is a validator for the "monthly_reset_count" field. It is called by the builders before save.
+	MonthlyResetCountValidator func(int64) error
+	// DefaultResetCountedAt holds the default value on creation for the "reset_counted_at" field.
+	DefaultResetCountedAt func() time.Time
 	// DefaultAssignedAt holds the default value on creation for the "assigned_at" field.
 	DefaultAssignedAt func() time.Time
 )
@@ -252,6 +278,26 @@ func ByWeeklyUsageUsd(opts ...sql.OrderTermOption) OrderOption {
 // ByMonthlyUsageUsd orders the results by the monthly_usage_usd field.
 func ByMonthlyUsageUsd(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldMonthlyUsageUsd, opts...).ToFunc()
+}
+
+// ByDailyResetCount orders the results by the daily_reset_count field.
+func ByDailyResetCount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDailyResetCount, opts...).ToFunc()
+}
+
+// ByWeeklyResetCount orders the results by the weekly_reset_count field.
+func ByWeeklyResetCount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWeeklyResetCount, opts...).ToFunc()
+}
+
+// ByMonthlyResetCount orders the results by the monthly_reset_count field.
+func ByMonthlyResetCount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldMonthlyResetCount, opts...).ToFunc()
+}
+
+// ByResetCountedAt orders the results by the reset_counted_at field.
+func ByResetCountedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldResetCountedAt, opts...).ToFunc()
 }
 
 // ByAssignedBy orders the results by the assigned_by field.

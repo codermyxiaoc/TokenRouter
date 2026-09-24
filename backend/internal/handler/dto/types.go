@@ -748,6 +748,11 @@ type UserSubscription struct {
 	WeeklyUsageUSD  float64 `json:"weekly_usage_usd"`
 	MonthlyUsageUSD float64 `json:"monthly_usage_usd"`
 
+	// 只累计本期订阅的自动额度刷新，管理员调整不会清空这些计数。
+	DailyResetCount   int64 `json:"daily_reset_count"`
+	WeeklyResetCount  int64 `json:"weekly_reset_count"`
+	MonthlyResetCount int64 `json:"monthly_reset_count"`
+
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`

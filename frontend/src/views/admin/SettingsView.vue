@@ -4584,6 +4584,22 @@
                   {{ t("admin.settings.claudeCode.maxVersionHint") }}
                 </p>
               </div>
+              <!-- 出站版本与入站最低版本限制独立，管理员可固定或跟随官方同步。 -->
+              <div class="mt-6 border-t border-gray-100 pt-4 dark:border-dark-700">
+                <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('admin.settings.claudeCode.claudeCodeClientVersion') }}
+                </label>
+                <input v-model="form.claude_code_client_version" type="text" class="input max-w-xs font-mono text-sm" placeholder="2.1.280" />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.claudeCode.claudeCodeClientVersionHint') }}</p>
+                <div class="mt-4 flex items-center justify-between gap-4">
+                  <div>
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.settings.claudeCode.claudeCodeVersionAutoSync') }}</label>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.claudeCode.claudeCodeVersionAutoSyncHint') }}</p>
+                    <p v-if="form.claude_code_client_version_synced" class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.claudeCode.claudeCodeVersionSyncedValue', { version: form.claude_code_client_version_synced }) }}</p>
+                  </div>
+                  <Toggle v-model="form.claude_code_version_auto_sync_enabled" />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -10005,6 +10021,9 @@ const form = reactive<SettingsForm>({
   ops_realtime_monitoring_enabled: true,
   ops_metrics_interval_seconds: 60,
   // Claude Code version check
+  claude_code_client_version: "",
+  claude_code_client_version_synced: "",
+  claude_code_version_auto_sync_enabled: true,
   min_claude_code_version: "",
   max_claude_code_version: "",
   // 分组隔离
@@ -12146,6 +12165,8 @@ async function saveSettings() {
       grok_default_base_url_mode: form.grok_default_base_url_mode,
       enable_identity_patch: form.enable_identity_patch,
       identity_patch_prompt: form.identity_patch_prompt,
+      claude_code_client_version: form.claude_code_client_version,
+      claude_code_version_auto_sync_enabled: form.claude_code_version_auto_sync_enabled,
       min_claude_code_version: form.min_claude_code_version,
       max_claude_code_version: form.max_claude_code_version,
       allow_ungrouped_key_scheduling: form.allow_ungrouped_key_scheduling,

@@ -95,6 +95,7 @@ func provideCleanup(
 	schedulerSnapshot *service.SchedulerSnapshotService,
 	tokenRefresh *service.TokenRefreshService,
 	accountExpiry *service.AccountExpiryService,
+	claudeCodeVersionSync *service.ClaudeCodeVersionSyncService,
 	proxyExpiry *service.ProxyExpiryService,
 	subscriptionExpiry *service.SubscriptionExpiryService,
 	announcementExpiry *service.AnnouncementExpiryService,
@@ -103,6 +104,7 @@ func provideCleanup(
 	batchImageCleanup *service.BatchImageCleanupService,
 	batchImageWorker *service.BatchImageWorkerRuntime,
 	creativeWorker *service.CreativeWorkerRuntime,
+	imageTasks *service.ImageTaskService,
 	pricing *service.PricingService,
 	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
@@ -140,6 +142,12 @@ func provideCleanup(
 
 		// 应用层清理步骤可并行执行；持久化刷写服务在基础设施关闭前按顺序停止。
 		parallelSteps := []cleanupStep{
+			{"ImageTaskService", func() error {
+				if imageTasks != nil {
+					imageTasks.Stop()
+				}
+				return nil
+			}},
 			{"PluginManager", func() error {
 				// 插件依赖尚未装配时仍允许执行统一清理，避免退出阶段空指针崩溃。
 				if pluginManager != nil {
@@ -267,6 +275,10 @@ func provideCleanup(
 			}},
 			{"AccountExpiryService", func() error {
 				accountExpiry.Stop()
+				return nil
+			}},
+			{"ClaudeCodeVersionSyncService", func() error {
+				claudeCodeVersionSync.Stop()
 				return nil
 			}},
 			{"ProxyExpiryService", func() error {

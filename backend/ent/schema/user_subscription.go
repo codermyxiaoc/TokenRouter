@@ -82,6 +82,15 @@ func (UserSubscription) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}).
 			Default(0),
 
+		// 仅累计本期自动刷新，历史记录和新一期均从零开始，不推算迁移前次数。
+		field.Int64("daily_reset_count").NonNegative().Default(0),
+		field.Int64("weekly_reset_count").NonNegative().Default(0),
+		field.Int64("monthly_reset_count").NonNegative().Default(0),
+		// 计数水位与额度窗口独立，按旧时间表结清后再允许修改额度生命周期。
+		field.Time("reset_counted_at").
+			Default(time.Now).
+			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
+
 		field.Int64("assigned_by").
 			Optional().
 			Nillable(),

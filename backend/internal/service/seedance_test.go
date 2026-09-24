@@ -30,6 +30,9 @@ func TestSeedanceNativeForwarding(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `{"id":"task-1"}`, w.Body.String())
 	require.Equal(t, "seedance:task-1", result.ResponseID)
+	require.NotNil(t, result.MediaTaskObservation)
+	require.Equal(t, "seedance_video", result.MediaTaskObservation.Source)
+	require.Equal(t, "queued", result.MediaTaskObservation.Status)
 	require.Zero(t, result.Usage.OutputTokens)
 	require.Equal(t, "video", result.BillingModel)
 	require.Equal(t, "ep-seedance", result.UpstreamModel)
@@ -54,6 +57,10 @@ func TestSeedanceStatusAndDelete(t *testing.T) {
 			require.NoError(t, err)
 			require.JSONEq(t, body, w.Body.String())
 			require.Equal(t, "/api/v3/contents/generations/tasks/task-1", upstream.request.URL.Path)
+			require.NotNil(t, result.MediaTaskObservation)
+			require.Equal(t, status, result.MediaTaskObservation.UpstreamStatus)
+			expectedStatus := map[string]string{"queued": "queued", "running": "processing", "failed": "failed", "cancelled": "cancelled", "expired": "expired", "succeeded": "completed"}[status]
+			require.Equal(t, expectedStatus, result.MediaTaskObservation.Status)
 			if status == "succeeded" {
 				require.Equal(t, 12345, result.Usage.OutputTokens)
 			} else {
@@ -66,8 +73,9 @@ func TestSeedanceStatusAndDelete(t *testing.T) {
 	upstream.response.StatusCode = http.StatusNoContent
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
 	c, w := grokMediaContentTestContext(http.MethodDelete, "/api/v3/contents/generations/tasks/task-1", nil)
-	_, err := svc.ForwardSeedance(context.Background(), c, seedanceTestAccount(), SeedanceEndpointDelete, "seedance:task-1", nil)
+	result, err := svc.ForwardSeedance(context.Background(), c, seedanceTestAccount(), SeedanceEndpointDelete, "seedance:task-1", nil)
 	require.NoError(t, err)
+	require.Equal(t, "cancelled", result.MediaTaskObservation.Status)
 	require.Equal(t, http.MethodDelete, upstream.request.Method)
 	require.Equal(t, http.StatusNoContent, w.Code)
 }

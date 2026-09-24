@@ -285,7 +285,7 @@ func smartRoutingModelEndpoint(c *gin.Context) bool {
 	}
 	switch path {
 	case "/messages", "/messages/count_tokens", "/chat/completions", "/responses", "/responses/compact", "/responses/input_tokens",
-		"/embeddings", "/images/generations", "/images/edits", "/images/batches", "/videos", "/videos/generations", "/videos/edits", "/videos/extensions", "/alpha/search":
+		"/embeddings", "/images/generations", "/images/edits", "/images/generations/async", "/images/edits/async", "/images/batches", "/videos", "/videos/generations", "/videos/edits", "/videos/extensions", "/alpha/search":
 		return true
 	default:
 		return false

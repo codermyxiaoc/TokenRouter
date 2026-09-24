@@ -149,11 +149,10 @@ describe('订阅延期提交与重置时间刷新交互', () => {
       } finally { admin.unmount(); user?.unmount() }
     })
 
-    for (const period of ['daily', 'weekly'] as const) {
-      it(`${mode} 延期后有限外层额度允许 ${period} 尾段显示下一次重置`, async () => {
-        const days = period === 'daily' ? 1 : 8
+    for (const period of periods) {
+      it(`${mode} 延期后 ${period} 尾段无需完整周期和外层额度即可显示下一次重置`, async () => {
+        const days = period === 'daily' ? 1 : period === 'weekly' ? 8 : 31
         const before = row(period, null)
-        before.monthly_limit_usd = 100
         const after = { ...before, expires_at: at(days * day + (mode === 'bulk' ? day / 24 : 0)), [`${period}_window_start`]: starts[period] }
         const complete = deferredMutation(before, after, mode)
         const admin = mount(AdminSubscriptionsView, { global: { stubs } })
@@ -167,7 +166,7 @@ describe('订阅延期提交与重置时间刷新交互', () => {
           expect(admin.get('.reset-info').text()).not.toContain('admin.subscriptions.quotaEndsIn')
           user = mount(UserSubscriptionsView, { global: { stubs } })
           await flushPromises()
-          expect(user.text()).toContain(`"time":"${period === 'daily' ? '12h 0m' : '7d 0h'}"`)
+          expect(user.text()).toContain(`"time":"${period === 'daily' ? '12h 0m' : period === 'weekly' ? '7d 0h' : '30d 0h'}"`)
         } finally { admin.unmount(); user?.unmount() }
       })
     }

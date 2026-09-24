@@ -575,7 +575,11 @@ const (
 	// =========================
 
 	// SettingKeyMinClaudeCodeVersion 最低 Claude Code 版本号要求 (semver, 如 "2.1.0"，空值=不检查)
-	SettingKeyMinClaudeCodeVersion = "min_claude_code_version"
+	// Claude Code 出站版本：管理员值优先，其次环境固定值、同步值和内置基线。
+	SettingKeyClaudeCodeClientVersion          = "claude_code_client_version"
+	SettingKeyClaudeCodeClientVersionSynced    = "claude_code_client_version_synced"
+	SettingKeyClaudeCodeVersionAutoSyncEnabled = "claude_code_version_auto_sync_enabled"
+	SettingKeyMinClaudeCodeVersion             = "min_claude_code_version"
 
 	// SettingKeyMaxClaudeCodeVersion 最高 Claude Code 版本号限制 (semver, 如 "3.0.0"，空值=不检查)
 	SettingKeyMaxClaudeCodeVersion = "max_claude_code_version"

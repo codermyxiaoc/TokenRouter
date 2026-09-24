@@ -295,6 +295,14 @@ func (s *SchedulerSnapshotService) GetGroupByID(ctx context.Context, groupID int
 	return s.groupRepo.GetByID(ctx, groupID)
 }
 
+// GetGroupByIDLite 供选号读取策略配置，不附带管理列表使用的账号数量聚合。
+func (s *SchedulerSnapshotService) GetGroupByIDLite(ctx context.Context, groupID int64) (*Group, error) {
+	if s.groupRepo == nil {
+		return nil, nil
+	}
+	return s.groupRepo.GetByIDLite(ctx, groupID)
+}
+
 // UpdateAccountInCache 立即更新 Redis 中单个账号的数据（用于模型限流后立即生效）
 func (s *SchedulerSnapshotService) UpdateAccountInCache(ctx context.Context, account *Account) error {
 	if s.cache == nil || account == nil {

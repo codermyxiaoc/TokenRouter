@@ -14,7 +14,7 @@
 
 `frontend/src/utils/ccswitchImport.ts` 的显式 `app` 优先于历史平台推导。`name` 来自用户填写的配置名称，主模型写入 `model`；Claude 分档分别写入 `haikuModel`、`sonnetModel`、`opusModel`，空字段省略，其他应用不携带这些参数。参数名与 [CC Switch v3.20.3 官方解析器](https://github.com/farion1231/cc-switch/blob/v3.20.3/src-tauri/src/deeplink/parser.rs) 及[配置生成器](https://github.com/farion1231/cc-switch/blob/v3.20.3/src-tauri/src/deeplink/provider.rs)一致。Claude 未填分档模型时，由 CC Switch 自己执行继承或默认规则。
 
-Codex 使用恰好一个 `/v1` 后缀；Claude/Gemini 使用去除末尾 `/v1` 的基础地址。普通 Antigravity Key 的 Claude/Gemini 导入沿用 `/antigravity` 专用入口；智能路由和复合 Key 使用公共入口，由网关解析候选或前缀。保留历史未指定 `app` 的调用兼容及 Grok Build 映射。
+Codex 使用恰好一个 `/v1` 后缀；Claude/Gemini 使用去除末尾 `/v1` 的基础地址。普通 Antigravity Key 的 Claude/Gemini 导入沿用 `/antigravity` 专用入口；智能路由和复合 Key 使用公共入口，由网关解析候选或前缀。保留历史未指定 `app` 的调用兼容及 Grok Build 映射：旧 OpenAI 入口同样规范为单个 `/v1`，旧 Antigravity 入口在追加专用路径前去掉尾斜杠。
 
 导入沿用 `ccswitch://v1/import`、`apiKey`、站点地址及 Base64 UTF-8 用量脚本参数；用量脚本固定读取 API Origin 的 `/v1/usage`。深链接中包含用户确认导出的 Key，不将它写入浏览器持久化、日志或分析事件。网页拉起协议处理器不代表 CC Switch 已保存配置，最终结果以客户端为准。
 

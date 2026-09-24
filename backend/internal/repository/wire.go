@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 
@@ -69,6 +70,7 @@ func ProvideCreativeManagedKeyRepository(client *ent.Client, sqlDB *sql.DB) serv
 
 // ProviderSet is the Wire provider set for all repositories
 var ProviderSet = wire.NewSet(
+	NewOpenAIReferralClient,
 	NewUserRepository,
 	NewTeamRepository,
 	NewTicketRepository,
@@ -88,6 +90,9 @@ var ProviderSet = wire.NewSet(
 	NewAnnouncementReadRepository,
 	NewUsageLogRepository,
 	NewUsageBillingRepository,
+	NewMediaTaskRepository,
+	NewDurableImageTaskStore,
+	ProvideImageStorageFactory,
 	NewBatchImageRepository,
 	NewCreativeRunRepository,
 	NewCreativeRunOutboxRepository,
@@ -226,4 +231,11 @@ func ProvideSQLDB(client *ent.Client) (*sql.DB, error) {
 // 提供：*redis.Client
 func ProvideRedis(cfg *config.Config) *redis.Client {
 	return InitRedis(cfg)
+}
+
+// ProvideImageStorageFactory 按管理员配置创建图片对象存储客户端。
+func ProvideImageStorageFactory() service.ImageStorageFactory {
+	return func(ctx context.Context, cfg *config.ImageStorageConfig) (service.ImageStorage, error) {
+		return NewS3ImageStorage(ctx, cfg)
+	}
 }

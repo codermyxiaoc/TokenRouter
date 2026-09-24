@@ -13,9 +13,9 @@ import (
 // 只把字段集合已知、没有内容与副作用的事件当作前导；未知字段继续保守提交。
 // @project-doc docs/interfaces/openai_upstream.md#openai_stream_failover_observation
 func openAIStreamSafeEmptyEvent(payload string, eventType string) bool {
-	heartbeat := eventType == "ping" || eventType == "heartbeat"
+	heartbeat := eventType == "ping" || eventType == "heartbeat" || eventType == "keepalive"
 	switch eventType {
-	case "ping", "heartbeat":
+	case "ping", "heartbeat", "keepalive":
 	case "response.output_text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta", "response.audio_transcript.delta":
 	default:
 		return false

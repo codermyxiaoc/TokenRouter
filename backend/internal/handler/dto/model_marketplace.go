@@ -13,6 +13,7 @@ type ModelMarketplaceStats struct {
 }
 
 type ModelMarketplacePricing struct {
+	ReasoningEffortMultipliers    map[string]float64                `json:"reasoning_effort_multipliers,omitempty"`
 	PricingMode                   string                            `json:"pricing_mode"`
 	PriceStatus                   string                            `json:"price_status"`
 	InputPricePerToken            float64                           `json:"input_price_per_token,omitempty"`
@@ -222,6 +223,7 @@ func modelMarketplacePricingFromService(pricing service.ModelDisplayPricing) Mod
 	}
 
 	return ModelMarketplacePricing{
+		ReasoningEffortMultipliers:    pricing.ReasoningEffortMultipliers,
 		PricingMode:                   pricing.PricingMode,
 		PriceStatus:                   pricing.PriceStatus,
 		InputPricePerToken:            pricing.InputPricePerToken,

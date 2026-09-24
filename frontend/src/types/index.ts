@@ -622,6 +622,7 @@ export interface MarketplacePricingInterval {
 }
 
 export interface MarketplaceModelPricing {
+  reasoning_effort_multipliers?: Record<string, number>
   pricing_mode: MarketplacePricingMode
   price_status: MarketplacePriceStatus
   input_price_per_token?: number
@@ -722,8 +723,12 @@ export interface OpenAIMessagesDispatchModelConfig {
   exact_model_mappings?: Record<string, string>
 }
 
+export type GroupAvailabilityProbeProtocol = 'auto' | 'chat_completions' | 'responses' | 'anthropic' | 'gemini'
+
 export interface GroupAvailabilityProbeConfig {
   enabled: boolean
+  // auto 保留原账号测试策略；显式选择时只探测对应的上游协议。
+  protocol?: GroupAvailabilityProbeProtocol
   interval_minutes?: number
   model_id?: string
   prompt?: string
@@ -731,6 +736,19 @@ export interface GroupAvailabilityProbeConfig {
   // 首次探测失败后允许重试的最大次数，缺失时由服务端使用默认值。
   max_retries?: number
   user_agent?: string
+}
+
+export interface GroupAvailabilityProbeResult {
+  group_id: number
+  account_id?: number | null
+  model_id: string
+  protocol: GroupAvailabilityProbeProtocol
+  status: 'success' | 'failed'
+  success: boolean
+  latency_ms: number
+  error_message?: string
+  started_at: string
+  finished_at: string
 }
 export type ReasoningEffortMatchType = 'exact' | 'prefix' | 'suffix'
 
@@ -1311,6 +1329,9 @@ export interface Account {
   extra?: (CodexUsageSnapshot & OpenAITextProtocolState & OpenAICompactState & OpenAINativeCompactionV2State & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
+    // 管理端只读积分与邀请资格快照，不参与本地计费。
+    codex_credits_snapshot?: { credits: import('@/api/admin/accounts').OpenAICredits | null; fetched_at: number }
+    codex_referral_snapshot?: import('./openaiReferrals').OpenAIReferralEligibility | null
     codex_reset_credit_snapshot?: {
       available_count?: number
       credits?: { expires_at?: string }[]
@@ -2364,6 +2385,10 @@ export interface UserSubscription {
   daily_window_start: string | null
   weekly_window_start: string | null
   monthly_window_start: string | null
+  // 本期自动额度刷新次数；旧版接口缺省时按零展示，不从时间窗口推算历史。
+  daily_reset_count?: number
+  weekly_reset_count?: number
+  monthly_reset_count?: number
   created_at: string
   updated_at: string
   revoked_at?: string | null

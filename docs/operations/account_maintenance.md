@@ -17,6 +17,8 @@
 
 刷新成功后要原子更新凭据/过期时间，清理可恢复错误，并同步账号缓存与调度快照。OpenAI/Antigravity 还可在刷新后确保 privacy 状态。刷新失败按失败阈值记录，不立即把一次瞬时网络错误等同于永久禁用；凭据明确撤销或账号归属失效时才进入需要重新授权的状态。
 
+管理员重新授权合并新认证字段与已有 credentials 后再清理敏感废弃字段，保留模型映射和账号设置。OpenAI 用量查询可能命中缓存，因此查询成功不得清除刷新令牌失效错误；恢复由真实认证或凭据刷新流程确认。
+
 请求路径 token provider 仍会在使用前检查过期偏移，并用账号级锁避免并发刷新。后台刷新降低热路径延迟，但不是唯一正确性来源；两条路径必须使用相同的凭据版本/CAS 保护，避免旧请求覆盖新 token。
 
 ## 状态与临时不可调度
@@ -40,13 +42,19 @@ Kimi、Zhipu、DeepSeek 的连接测试按账号 `api_protocol` 选择原生 Ant
 
 MiniMax 复用上述连接测试边界，默认测试模型为 `MiniMax-M2.7`；固定协议只测试指定端点，`adaptive` 模式分别测试 Chat、Messages 和 Responses 三个原生端点。缺省测试模型不能回退成 GPT 模型。
 
-管理端连接测试请求必须显式选择 `test_type=text|image` 并传入同一字段的自定义 `prompt`。文字测试不再因为模型名称包含图片标记而切换端点；图片测试也不再依赖模型名称命中规则，而是由 OpenAI、Gemini 或 Grok 账号的平台图片端点执行。OpenAI 的 `compact` 与 `legacy_compact` 仅执行固定载荷的能力探测，不显示或使用自定义提示词。未携带 `test_type` 的历史调用才允许回退到旧模型名判断。图片和文字的结果分别通过 SSE 图片事件和内容事件返回；不支持图片端点的平台应直接返回可诊断的错误，不得静默改成文字测试。
+管理端连接测试显式选择 `test_type=text|image` 并传入自定义 `prompt`；Grok 还提供视频、搜索、TTS、STT 和 Realtime 模式，素材与结果边界见 [Grok 管理员连接测试](../interfaces/grok_upstream.md#grok_account_tests)。文字测试不因模型名称含图片标记而生图；仅未携带 `test_type` 的历史调用保留旧推断。OpenAI 的 `compact` 与 `legacy_compact` 使用固定载荷，不显示或使用自定义提示词。
+
+文字测试可在账号支持的范围内选择 `test_endpoint`，显式选择只验证当前协议；默认自动仍使用原有账号协议及自适应诊断流程。选项不写入账号配置，不改变用户路由、计费和定时测试。OAuth、Bedrock、Vertex 等凭据只开放其原生协议；不支持的组合直接报错，不能静默改测其他端点。详细参数与协议矩阵见 [管理员账号连接测试](../interfaces/http_api.md#account_connection_tests)。
 
 ## 额度与能力探测
 
 平台可维护独立的上游额度快照：OpenAI/Codex 窗口、Gemini tier/model quota、Antigravity credits、Grok 计费/媒体资格、Qoder Credits，以及 Kimi/Zhipu/DeepSeek/MiniMax 的统一用量监控快照等。快照用于调度、容量展示和诊断，不是 TokenRouter 用户余额或订阅账本。
 
-OpenAI 重置次数查询把带到期时间的完整结果保存为账号展示快照；上游只返回正数次数却缺少到期明细时，实时结果仍返回给调用方，但旧快照必须保留。直接调用重置 API 成功消费次数后，服务先在脱离客户端取消信号的有界上下文中恢复账号 error、限流和临时不可调度状态，再回读额度快照与最新账号投影；恢复不修改人工 `schedulable` 开关。后续步骤部分失败时响应使用 `cache_refreshed`、`account_state_recovered` 和 `warning_code` 明确区分，调用方不得把已消费的次数当作可重试失败。
+OpenAI 重置次数查询把带到期时间的完整结果保存为账号展示快照；上游只返回正数次数却缺少到期明细时，实时结果仍返回给调用方，但旧快照必须保留。账号用量单元格可在查询次数后手动确认重置，Spark 影子账号需在母账号操作。只有已知成功码且实际重置窗口数为正时，服务才在脱离客户端取消信号的有界上下文中恢复账号 error、限流和临时不可调度状态，再回读额度快照与最新账号投影；恢复不修改人工 `schedulable` 开关。HTTP 200 的无次数或未知结果不进入恢复流程。后续步骤部分失败时响应使用 `cache_refreshed`、`account_state_recovered` 和 `warning_code` 明确区分，调用方不得把已消费的次数当作可重试失败；网络结果不明确时先查询再判断，不自动重复消费。完整交互与结果判断见[管理员手动重置上游额度](../interfaces/openai_upstream.md#openai_quota_reset)。
+
+Codex 积分与重置卡次数分开展示和持久化。手动查询额度后，原始十进制积分余额、是否不限量和观测时间保存在 `extra.codex_credits_snapshot`；重置卡详情失败不丢失积分结果，成功查询缺少积分字段则清除旧积分快照。影子账号查询复用父账号认证，但展示快照保存到实际查询的账号行。积分展示不参与本地账务，也不增加自动扣取或重置操作。
+
+管理员可通过 `POST /api/v1/admin/openai/accounts/:id/referrals/refresh` 查询邀请资格，通过 `POST /api/v1/admin/openai/accounts/:id/referrals/invite` 向单个邮箱发送邀请。两者使用账号现有代理、TLS 路由、OAuth/Agent Identity 与身份请求头；邀请快照只用于显示，不改变调度。发送前服务端重新检查资格、套餐对应活动、发送/奖励名额和必要确认；影子账号只能查询，发送须使用父账号。邀请发送没有幂等凭据，不自动重试或跟随重定向；网络断开导致结果不确定时必须提示先核对 Codex 状态。已确认发送成功后，刷新或持久化失败仍返回发送成功和相应告警，避免重复提交。原有邀请重置入口与只查询重置次数的操作保持独立。
 
 OpenAI API Key 的 Responses 探测只维护 `extra.openai_responses_probe_status`，取值为 `supported`、`unsupported`、`unknown`；管理员路由策略 `extra.openai_text_route_mode` 和 HTTP continuation 能力开关 `extra.openai_responses_continuation_supported` 不属于探测服务，任何探测结果都不得覆盖它们。2xx 响应若仍因 `max_output_tokens` 未完成，或响应状态为 `failed`，应保持 `unknown`；完成但没有 `function_call` 的响应判定为 `unsupported`。网络错误、响应读取失败和其它结论不足的结果保留最近状态。账号默认连接测试以 Responses 为首选协议，路由策略显式强制 Chat 时才使用 Chat 测试路径。HTTP continuation 缺失时按关闭处理；嵌套 Sub2API 账号应显式关闭，直连且确认支持的 API Key 账号才开启。
 

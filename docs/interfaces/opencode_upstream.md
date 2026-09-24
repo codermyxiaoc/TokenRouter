@@ -31,6 +31,8 @@ Zen 默认根地址为 `https://opencode.ai/zen/v1`，GO 为 `https://opencode.a
 
 推理请求派生 `X-OpenCode-Session`，顺序为调用方 OpenCode/已有会话头、原始入站 `prompt_cache_key` 或 `metadata.user_id`、账号覆写。协议转换前保存原始请求，防止转换后丢失会话字段。GO 在全部线索缺失时为同一次请求生成稳定随机回退值；持续缓存命中仍需要客户端提供稳定会话。OpenCode 会话按本站 API Key 隔离，两个用户的同名会话不会共用上游标识。
 
+官方 OpenCode 请求默认使用 `opencode/1.0.0` User-Agent，官方 CommandCode 默认使用项目的 Codex 客户端身份；管理员配置的 TLS 路由 UA、账号 UA 继续优先，账号显式 Header Override 最后应用。Cloudflare 1010 仍记录请求失败，但不会累加账号级 403 惩罚。
+
 GO 自定义中继可接收该会话头；Zen 与历史普通兼容账号沿官方 `https://opencode.ai` 主机边界。真实上游端点写入请求上下文和用量结果，错误日志不再依靠入站 URL 推测。输出前的可重试错误继续交给当前账号故障转移及智能路由协调器；已经产生输出或用量后不重放。后台错误记录和用户最终错误沿原有规则保留。
 
 OpenCode 的 Messages→Responses 转换保留完整会话历史，不进入 OpenAI 专用的摘要注入、`previous_response_id` 续接、历史截断与 Todo 提示分支。缓存会话标识用于供应商提示词缓存，不表示服务端已经存储了被省略的消息。
@@ -44,7 +46,9 @@ Zen 402 沿已有余额不足临时冷却处理。GO 429 优先使用身份有�
 <a id="opencode_usage_and_scheduling"></a>
 ## GO 用量与调度
 
-GO 自动使用内部 `opencode_go` 只读适配器，在配置的 GO API 根地址请求 `/usage`，保留中继主机和路径。解析 rolling（五小时）、weekly、monthly 窗口并归一化为百分比。Zen 没有接入余额查询协议，明确返回不支持，不发送猜测的请求。
+GO 自动使用内部 `opencode_go` 只读适配器，在配置的 GO API 根地址归一化到 `/v1/usage`（已有 `/v1` 时不重复追加），保留中继主机和路径。解析 rolling（五小时）、weekly、monthly 窗口并归一化为百分比。Zen 没有接入余额查询协议，明确返回不支持，不发送猜测的请求。
+
+仅官方 `https://opencode.ai/zen/go[/v1]` GO 账号可以在 API Key、代理、TLS、认证头和完整查询配置一致时共享并发查询及 30 秒成功结果。共享缓存有界，每个调用方再次验证自身账号身份并返回独立结果；凭据变化使旧结果失效。Zen 与第三方中继不进入共享，查询目标不会被改为官方。保留现有周期监控及 CAS，没有并行引入上游独立活动防抖任务。
 
 手动查询只用于展示。既有 `gateway.cn_providers.monitor_enabled` 默认关闭；开启后可监控 GO 并保存统一、身份绑定的 `cn_usage_monitor_snapshot`。GO 的五小时/周/月阈值读取该快照，耗尽或多个阈值同时命中时选择最晚恢复时间。查询失败、凭据/代理/模式/端点变化后的旧快照不得用于停调；GO 调度元数据保留完整查询身份以维持与完整账号相同的校验。
 

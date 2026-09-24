@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -291,6 +292,21 @@ func filterOpenCodePrompt(text string) string {
 	return ""
 }
 
+var claudeIdentityOpeners = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)^[ \t\r\n]*You are a Claude agent, built on Anthropic'?s Claude Agent SDK\.?`),
+	regexp.MustCompile(`(?i)^[ \t\r\n]*You are Claude Code, Anthropic'?s official CLI for Claude\.?`),
+}
+
+// 只改写 system 起始的固定 SDK 身份句，不触碰正文中的厂商名称或用户指令。
+func neutralizeClaudeIdentity(text string) string {
+	for _, pattern := range claudeIdentityOpeners {
+		if loc := pattern.FindStringIndex(text); loc != nil {
+			return "You are an AI agent." + text[loc[1]:]
+		}
+	}
+	return text
+}
+
 // stripClaudeAttribution 删除 Antigravity 上游不需要的 Claude 归属提示行。
 // 该内容属于提示词元数据，部分 Gemini 上游会将其判定为资源异常；只在
 // Antigravity 转换链路内处理，避免影响原生 Anthropic 请求。
@@ -322,7 +338,7 @@ func buildSystemInstruction(system json.RawMessage, modelName string, opts Trans
 		// 尝试解析为字符串
 		var sysStr string
 		if err := json.Unmarshal(system, &sysStr); err == nil {
-			sysStr = stripClaudeAttribution(sysStr)
+			sysStr = neutralizeClaudeIdentity(stripClaudeAttribution(sysStr))
 			if strings.TrimSpace(sysStr) != "" {
 				if strings.Contains(sysStr, "You are Antigravity") {
 					userHasAntigravityIdentity = true
@@ -338,7 +354,7 @@ func buildSystemInstruction(system json.RawMessage, modelName string, opts Trans
 			var sysBlocks []SystemBlock
 			if err := json.Unmarshal(system, &sysBlocks); err == nil {
 				for _, block := range sysBlocks {
-					block.Text = stripClaudeAttribution(block.Text)
+					block.Text = neutralizeClaudeIdentity(stripClaudeAttribution(block.Text))
 					if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
 						if strings.Contains(block.Text, "You are Antigravity") {
 							userHasAntigravityIdentity = true

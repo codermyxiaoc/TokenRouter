@@ -211,18 +211,26 @@ func (r *dashboardAggregationRepository) CleanupUsageLogs(ctx context.Context, c
 		return err
 	}
 	if isPartitioned {
-		return r.dropUsageLogsPartitions(ctx, cutoff)
+		if err := r.dropUsageLogsPartitions(ctx, cutoff); err != nil {
+			return err
+		}
+		// 继续删除边界分区中过期的行，按天精确保留。
 	}
+	return r.cleanupUsageLogsBatches(ctx, cutoff)
+}
+
+// cleanupUsageLogsBatches 用表标识与行地址联合定位，避免分区之间相同 ctid 误删。
+func (r *dashboardAggregationRepository) cleanupUsageLogsBatches(ctx context.Context, cutoff time.Time) error {
 	for {
 		res, err := r.sql.ExecContext(ctx, `
 			WITH victims AS (
-				SELECT ctid
+				SELECT tableoid, ctid
 				FROM usage_logs
 				WHERE created_at < $1
 				LIMIT $2
 			)
 			DELETE FROM usage_logs
-			WHERE ctid IN (SELECT ctid FROM victims)
+			WHERE (tableoid, ctid) IN (SELECT tableoid, ctid FROM victims)
 		`, cutoff.UTC(), usageLogsCleanupBatchSize)
 		if err != nil {
 			return err

@@ -1,7 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import AccountUsageCell from '../AccountUsageCell.vue'
-import type { Account } from '@/types'
+import OpenAIQuotaResetCell from '../OpenAIQuotaResetCell.vue'
+import type { OpenAIQuotaResetResult } from '@/api/admin/accounts'
+import type { Account, AccountUsageInfo } from '@/types'
 
 const { getUsage } = vi.hoisted(() => ({
   getUsage: vi.fn()
@@ -475,7 +477,7 @@ describe('AccountUsageCell', () => {
     expect(getUsage).toHaveBeenCalledWith(2011, 'active', true)
   })
 
-  it('OpenAI OAuth 用量列不再显示容易误触的上游重置按钮', async () => {
+  it('OpenAI OAuth 用量列显示重置入口，但实时查询次数之前禁用', async () => {
     getUsage.mockResolvedValue({
       five_hour: {
         utilization: 26,
@@ -527,7 +529,8 @@ describe('AccountUsageCell', () => {
 
     expect(wrapper.text()).toContain('admin.accounts.usageWindow.activeQuery')
     expect(wrapper.text()).toContain('admin.accounts.openaiQuotaReset.count')
-    expect(wrapper.text()).not.toContain('admin.accounts.openaiQuotaReset.reset')
+    expect(wrapper.text()).toContain('admin.accounts.openaiQuotaReset.reset')
+    expect(wrapper.get('[data-testid="reset-quota"]').attributes('disabled')).toBeDefined()
   })
 
   it('OpenAI OAuth 自动暂停时会在查询按钮右侧显示暂停调度状态', async () => {
@@ -1655,5 +1658,133 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).toContain('7d|56')
     expect(wrapper.text()).not.toContain('7d S')
     expect(wrapper.text()).not.toContain('7d F')
+  })
+
+  // 真实重置只由子组件负责；这里验证父列表投影与窗口用量的刷新边界。
+  const resetStubs = {
+    OpenAIQuotaResetCell: {
+      name: 'OpenAIQuotaResetCell',
+      props: ['account'],
+      emits: ['quota-reset'],
+      template: '<div><slot name="pre-actions" /><slot /></div>',
+    },
+    UsageProgressBar: {
+      props: ['label', 'utilization'],
+      template: '<div>{{ label }}|{{ utilization }}</div>',
+    },
+    AccountQuotaInfo: true,
+  }
+  const usedWindows = (percent: number): AccountUsageInfo => ({
+    five_hour: { utilization: percent, resets_at: '2099-07-03T00:00:00Z', remaining_seconds: 3600 },
+    seven_day: { utilization: percent, resets_at: '2099-07-09T00:00:00Z', remaining_seconds: 3600 },
+  })
+  const successfulReset = (account?: Account): OpenAIQuotaResetResult => ({
+    code: 'reset', windows_reset: 2, cache_refreshed: true, account_state_recovered: true,
+    quota: { fetched_at: 1770000000, rate_limit_reset_credits: { available_count: 1 } },
+    account,
+  })
+
+  it('重置成功后转发恢复的账号并强制刷新 5h/7d，组件不因刷新被卸载', async () => {
+    const account = makeAccount({ id: 9300, platform: 'openai', rate_limit_reset_at: '2099-07-03T00:00:00Z' })
+    const updated = { ...account, rate_limit_reset_at: null, updated_at: '2026-09-24T00:00:00Z' }
+    getUsage.mockResolvedValueOnce(usedWindows(100)).mockResolvedValueOnce(usedWindows(0))
+    const wrapper = mount(AccountUsageCell, { props: { account }, global: { stubs: resetStubs } })
+    await flushPromises()
+    const resetCell = wrapper.getComponent(OpenAIQuotaResetCell)
+    resetCell.vm.$emit('quota-reset', successfulReset(updated))
+    await wrapper.setProps({ account: updated })
+    await flushPromises()
+    expect(wrapper.emitted('account-updated')).toEqual([[updated]])
+    expect(getUsage).toHaveBeenCalledTimes(2)
+    expect(getUsage).toHaveBeenLastCalledWith(9300, 'active', true)
+    expect(wrapper.text()).toContain('5h|0')
+    expect(wrapper.text()).toContain('7d|0')
+    expect(wrapper.getComponent(OpenAIQuotaResetCell).vm).toBe(resetCell.vm)
+    wrapper.unmount()
+  })
+
+  it('重置之后旧的主动查询结果不能覆盖新窗口', async () => {
+    let resolveOld!: (usage: AccountUsageInfo) => void
+    getUsage.mockResolvedValueOnce(usedWindows(100))
+      .mockImplementationOnce(() => new Promise<AccountUsageInfo>((resolve) => { resolveOld = resolve }))
+      .mockResolvedValueOnce(usedWindows(0))
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: makeAccount({ id: 9301, platform: 'openai' }) }, global: { stubs: resetStubs },
+    })
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.usageWindow.activeQuery')!.trigger('click')
+    wrapper.getComponent(OpenAIQuotaResetCell).vm.$emit('quota-reset', successfulReset())
+    await flushPromises()
+    expect(wrapper.text()).toContain('5h|0')
+    resolveOld(usedWindows(99))
+    await flushPromises()
+    expect(wrapper.text()).toContain('5h|0')
+    expect(wrapper.text()).not.toContain('5h|99')
+    expect(getUsage).toHaveBeenCalledTimes(3)
+    wrapper.unmount()
+  })
+
+  it('桌面批量管理模式在重置后强制刷新用量，账号回写不再触发缓存查询', async () => {
+    const requestBatchedUsage = vi.fn()
+    const account = makeAccount({ id: 9302, platform: 'openai', quota_auto_paused: true })
+    const updated = { ...account, quota_auto_paused: false, updated_at: '2026-09-24T00:00:00Z' }
+    const wrapper = mount(AccountUsageCell, {
+      props: { account, batchedUsage: { ...usedWindows(100), quota_auto_paused: true }, requestBatchedUsage },
+      global: { stubs: resetStubs },
+    })
+    await flushPromises()
+    requestBatchedUsage.mockClear()
+    wrapper.getComponent(OpenAIQuotaResetCell).vm.$emit('quota-reset', successfulReset(updated))
+    await wrapper.setProps({ account: updated })
+    await flushPromises()
+    expect(requestBatchedUsage).toHaveBeenCalledTimes(1)
+    expect(requestBatchedUsage).toHaveBeenCalledWith(updated, { force: true })
+    expect(getUsage).not.toHaveBeenCalled()
+    // 批量请求仍在途或失败时，父层会保留旧 payload，子组件不能重新显示旧窗口。
+    await wrapper.setProps({ batchedUsageLoading: true })
+    expect(wrapper.text()).not.toContain('5h|100')
+    expect(wrapper.text()).not.toContain('admin.accounts.usageWindow.quotaAutoPaused')
+    await wrapper.setProps({ batchedUsageLoading: false, batchedUsageError: 'Failed' })
+    expect(wrapper.text()).not.toContain('5h|100')
+    expect(wrapper.text()).not.toContain('admin.accounts.usageWindow.quotaAutoPaused')
+    await wrapper.setProps({ batchedUsage: { ...usedWindows(0), quota_auto_paused: false } })
+    expect(wrapper.text()).toContain('5h|0')
+    expect(wrapper.text()).toContain('7d|0')
+    expect(wrapper.text()).not.toContain('admin.accounts.usageWindow.quotaAutoPaused')
+    wrapper.unmount()
+  })
+
+  it('重置后缺少账号投影仍刷新用量但不伪造账号恢复状态', async () => {
+    getUsage.mockResolvedValueOnce(usedWindows(100)).mockResolvedValueOnce(usedWindows(0))
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: makeAccount({ id: 9303, platform: 'openai' }) }, global: { stubs: resetStubs },
+    })
+    await flushPromises()
+    wrapper.getComponent(OpenAIQuotaResetCell).vm.$emit('quota-reset', successfulReset())
+    await flushPromises()
+    expect(wrapper.emitted('account-updated')).toBeUndefined()
+    expect(getUsage).toHaveBeenLastCalledWith(9303, 'active', true)
+    expect(wrapper.text()).toContain('5h|0')
+    wrapper.unmount()
+  })
+
+  it('切换账号后旧的主动用量请求不能污染新账号', async () => {
+    let resolveOld!: (usage: AccountUsageInfo) => void
+    getUsage.mockResolvedValueOnce(usedWindows(40))
+      .mockImplementationOnce(() => new Promise<AccountUsageInfo>((resolve) => { resolveOld = resolve }))
+      .mockResolvedValueOnce(usedWindows(12))
+    const wrapper = mount(AccountUsageCell, {
+      props: { account: makeAccount({ id: 9304, platform: 'openai' }) }, global: { stubs: resetStubs },
+    })
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.usageWindow.activeQuery')!.trigger('click')
+    await wrapper.setProps({ account: makeAccount({ id: 9305, platform: 'openai' }) })
+    await flushPromises()
+    resolveOld(usedWindows(99))
+    await flushPromises()
+    expect(wrapper.text()).toContain('5h|12')
+    expect(wrapper.text()).not.toContain('5h|99')
+    expect(getUsage).toHaveBeenLastCalledWith(9305)
+    wrapper.unmount()
   })
 })

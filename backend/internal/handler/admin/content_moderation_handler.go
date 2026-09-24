@@ -21,57 +21,61 @@ func NewContentModerationHandler(svc *service.ContentModerationService) *Content
 }
 
 type contentModerationConfigRequest struct {
-	Enabled                 *bool                                        `json:"enabled"`
-	Mode                    *string                                      `json:"mode"`
-	BaseURL                 *string                                      `json:"base_url"`
-	Model                   *string                                      `json:"model"`
-	ProxyID                 *int64                                       `json:"proxy_id"`
-	APIKey                  *string                                      `json:"api_key"`
-	APIKeys                 *[]string                                    `json:"api_keys"`
-	APIKeyEntries           *[]service.ContentModerationAPIKeyEntryInput `json:"api_key_entries"`
-	APIKeyUpdates           *[]service.ContentModerationAPIKeyMetadata   `json:"api_key_updates"`
-	APIKeysMode             string                                       `json:"api_keys_mode"`
-	DeleteAPIKeyHashes      *[]string                                    `json:"delete_api_key_hashes"`
-	ClearAPIKey             bool                                         `json:"clear_api_key"`
-	TimeoutMS               *int                                         `json:"timeout_ms"`
-	SampleRate              *int                                         `json:"sample_rate"`
-	AllGroups               *bool                                        `json:"all_groups"`
-	GroupIDs                *[]int64                                     `json:"group_ids"`
-	RecordNonHits           *bool                                        `json:"record_non_hits"`
-	Thresholds              *map[string]float64                          `json:"thresholds"`
-	WorkerCount             *int                                         `json:"worker_count"`
-	QueueSize               *int                                         `json:"queue_size"`
-	BlockStatus             *int                                         `json:"block_status"`
-	BlockMessage            *string                                      `json:"block_message"`
-	EmailOnHit              *bool                                        `json:"email_on_hit"`
-	AutoBanEnabled          *bool                                        `json:"auto_ban_enabled"`
-	BanThreshold            *int                                         `json:"ban_threshold"`
-	ViolationWindowHours    *int                                         `json:"violation_window_hours"`
-	RetryCount              *int                                         `json:"retry_count"`
-	HitRetentionDays        *int                                         `json:"hit_retention_days"`
-	NonHitRetentionDays     *int                                         `json:"non_hit_retention_days"`
-	PreHashCheckEnabled     *bool                                        `json:"pre_hash_check_enabled"`
-	CyberWarningEnabled     *bool                                        `json:"cyber_warning_enabled"`
-	CyberAutoBanEnabled     *bool                                        `json:"cyber_auto_ban_enabled"`
-	CyberBanThreshold       *int                                         `json:"cyber_ban_threshold"`
-	CyberWindowHours        *int                                         `json:"cyber_violation_window_hours"`
-	BlockedKeywords         *[]string                                    `json:"blocked_keywords"`
-	KeywordBlockingMode     *string                                      `json:"keyword_blocking_mode"`
-	ModelFilter             *service.ContentModerationModelFilter        `json:"model_filter"`
-	AuditUserTextMaxChars   *int                                         `json:"audit_user_text_max_chars"`
-	AuditImages             *bool                                        `json:"audit_images"`
-	AuditToolOutputs        *bool                                        `json:"audit_tool_outputs"`
-	AuditToolOutputMaxChars *int                                         `json:"audit_tool_output_max_chars"`
+	Engine                  *string                                               `json:"engine"`
+	EngineConfigs           map[string]service.UpdateContentModerationEngineInput `json:"engine_configs"`
+	Enabled                 *bool                                                 `json:"enabled"`
+	Mode                    *string                                               `json:"mode"`
+	BaseURL                 *string                                               `json:"base_url"`
+	Model                   *string                                               `json:"model"`
+	ProxyID                 *int64                                                `json:"proxy_id"`
+	APIKey                  *string                                               `json:"api_key"`
+	APIKeys                 *[]string                                             `json:"api_keys"`
+	APIKeyEntries           *[]service.ContentModerationAPIKeyEntryInput          `json:"api_key_entries"`
+	APIKeyUpdates           *[]service.ContentModerationAPIKeyMetadata            `json:"api_key_updates"`
+	APIKeysMode             string                                                `json:"api_keys_mode"`
+	DeleteAPIKeyHashes      *[]string                                             `json:"delete_api_key_hashes"`
+	ClearAPIKey             bool                                                  `json:"clear_api_key"`
+	TimeoutMS               *int                                                  `json:"timeout_ms"`
+	SampleRate              *int                                                  `json:"sample_rate"`
+	AllGroups               *bool                                                 `json:"all_groups"`
+	GroupIDs                *[]int64                                              `json:"group_ids"`
+	RecordNonHits           *bool                                                 `json:"record_non_hits"`
+	Thresholds              *map[string]float64                                   `json:"thresholds"`
+	WorkerCount             *int                                                  `json:"worker_count"`
+	QueueSize               *int                                                  `json:"queue_size"`
+	BlockStatus             *int                                                  `json:"block_status"`
+	BlockMessage            *string                                               `json:"block_message"`
+	EmailOnHit              *bool                                                 `json:"email_on_hit"`
+	AutoBanEnabled          *bool                                                 `json:"auto_ban_enabled"`
+	BanThreshold            *int                                                  `json:"ban_threshold"`
+	ViolationWindowHours    *int                                                  `json:"violation_window_hours"`
+	RetryCount              *int                                                  `json:"retry_count"`
+	HitRetentionDays        *int                                                  `json:"hit_retention_days"`
+	NonHitRetentionDays     *int                                                  `json:"non_hit_retention_days"`
+	PreHashCheckEnabled     *bool                                                 `json:"pre_hash_check_enabled"`
+	CyberWarningEnabled     *bool                                                 `json:"cyber_warning_enabled"`
+	CyberAutoBanEnabled     *bool                                                 `json:"cyber_auto_ban_enabled"`
+	CyberBanThreshold       *int                                                  `json:"cyber_ban_threshold"`
+	CyberWindowHours        *int                                                  `json:"cyber_violation_window_hours"`
+	BlockedKeywords         *[]string                                             `json:"blocked_keywords"`
+	KeywordBlockingMode     *string                                               `json:"keyword_blocking_mode"`
+	ModelFilter             *service.ContentModerationModelFilter                 `json:"model_filter"`
+	AuditUserTextMaxChars   *int                                                  `json:"audit_user_text_max_chars"`
+	AuditImages             *bool                                                 `json:"audit_images"`
+	AuditToolOutputs        *bool                                                 `json:"audit_tool_outputs"`
+	AuditToolOutputMaxChars *int                                                  `json:"audit_tool_output_max_chars"`
 }
 
 type contentModerationAPIKeyTestRequest struct {
-	APIKeys   []string `json:"api_keys"`
-	BaseURL   string   `json:"base_url"`
-	Model     string   `json:"model"`
-	TimeoutMS int      `json:"timeout_ms"`
-	ProxyID   *int64   `json:"proxy_id"`
-	Prompt    string   `json:"prompt"`
-	Images    []string `json:"images"`
+	Engine     string              `json:"engine"`
+	Thresholds *map[string]float64 `json:"thresholds"`
+	APIKeys    []string            `json:"api_keys"`
+	BaseURL    string              `json:"base_url"`
+	Model      string              `json:"model"`
+	TimeoutMS  int                 `json:"timeout_ms"`
+	ProxyID    *int64              `json:"proxy_id"`
+	Prompt     string              `json:"prompt"`
+	Images     []string            `json:"images"`
 }
 
 type contentModerationHashRequest struct {
@@ -94,6 +98,7 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		return
 	}
 	cfg, err := h.service.UpdateConfig(c.Request.Context(), service.UpdateContentModerationConfigInput{
+		Engine: req.Engine, EngineConfigs: req.EngineConfigs,
 		Enabled:                 req.Enabled,
 		Mode:                    req.Mode,
 		BaseURL:                 req.BaseURL,
@@ -150,6 +155,7 @@ func (h *ContentModerationHandler) TestAPIKeys(c *gin.Context) {
 		return
 	}
 	result, err := h.service.TestAPIKeys(c.Request.Context(), service.TestContentModerationAPIKeysInput{
+		Engine: req.Engine, Thresholds: req.Thresholds,
 		APIKeys:   req.APIKeys,
 		BaseURL:   req.BaseURL,
 		Model:     req.Model,

@@ -266,8 +266,10 @@ type UpdateSettingsRequest struct {
 	OpsRealtimeMonitoringEnabled *bool `json:"ops_realtime_monitoring_enabled"`
 	OpsMetricsIntervalSeconds    *int  `json:"ops_metrics_interval_seconds"`
 
-	MinClaudeCodeVersion string `json:"min_claude_code_version"`
-	MaxClaudeCodeVersion string `json:"max_claude_code_version"`
+	ClaudeCodeClientVersion          *string `json:"claude_code_client_version"`
+	ClaudeCodeVersionAutoSyncEnabled *bool   `json:"claude_code_version_auto_sync_enabled"`
+	MinClaudeCodeVersion             string  `json:"min_claude_code_version"`
+	MaxClaudeCodeVersion             string  `json:"max_claude_code_version"`
 
 	// 分组隔离
 	AllowUngroupedKeyScheduling bool `json:"allow_ungrouped_key_scheduling"`
@@ -1647,6 +1649,15 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	// 验证最低版本号格式（空字符串=禁用，或合法 semver）
+	if req.ClaudeCodeClientVersion != nil {
+		// 该值会被拼进出站 User-Agent 与 billing attribution，必须是合法版本号；空串表示跟随自动同步。
+		normalized := strings.TrimSpace(*req.ClaudeCodeClientVersion)
+		if normalized != "" && service.NormalizeClaudeCodeClientVersion(normalized) == "" {
+			response.Error(c, http.StatusBadRequest, "claude_code_client_version must be empty or a valid version (e.g. 2.1.258)")
+			return
+		}
+		req.ClaudeCodeClientVersion = &normalized
+	}
 	if req.MinClaudeCodeVersion != "" {
 		if !semverPattern.MatchString(req.MinClaudeCodeVersion) {
 			response.Error(c, http.StatusBadRequest, "min_claude_code_version must be empty or a valid semver (e.g. 2.1.63)")
@@ -1934,8 +1945,22 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.GrokDefaultBaseURLMode
 		}(),
-		EnableIdentityPatch:         req.EnableIdentityPatch,
-		IdentityPatchPrompt:         req.IdentityPatchPrompt,
+		EnableIdentityPatch: req.EnableIdentityPatch,
+		IdentityPatchPrompt: req.IdentityPatchPrompt,
+		ClaudeCodeClientVersion: func() string {
+			if req.ClaudeCodeClientVersion != nil {
+				return *req.ClaudeCodeClientVersion
+			}
+			return previousSettings.ClaudeCodeClientVersion
+		}(),
+		// 同步值由自动同步任务独占写入，面板保存时原样带回，避免被清空。
+		ClaudeCodeClientVersionSynced: previousSettings.ClaudeCodeClientVersionSynced,
+		ClaudeCodeVersionAutoSyncEnabled: func() bool {
+			if req.ClaudeCodeVersionAutoSyncEnabled != nil {
+				return *req.ClaudeCodeVersionAutoSyncEnabled
+			}
+			return previousSettings.ClaudeCodeVersionAutoSyncEnabled
+		}(),
 		MinClaudeCodeVersion:        req.MinClaudeCodeVersion,
 		MaxClaudeCodeVersion:        req.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling: req.AllowUngroupedKeyScheduling,
@@ -2483,6 +2508,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpsMonitoringEnabled:                             updatedSettings.OpsMonitoringEnabled,
 		OpsRealtimeMonitoringEnabled:                     updatedSettings.OpsRealtimeMonitoringEnabled,
 		OpsMetricsIntervalSeconds:                        updatedSettings.OpsMetricsIntervalSeconds,
+		ClaudeCodeClientVersion:                          updatedSettings.ClaudeCodeClientVersion,
+		ClaudeCodeClientVersionSynced:                    updatedSettings.ClaudeCodeClientVersionSynced,
+		ClaudeCodeVersionAutoSyncEnabled:                 updatedSettings.ClaudeCodeVersionAutoSyncEnabled,
 		MinClaudeCodeVersion:                             updatedSettings.MinClaudeCodeVersion,
 		MaxClaudeCodeVersion:                             updatedSettings.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling:                      updatedSettings.AllowUngroupedKeyScheduling,

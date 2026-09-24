@@ -63,21 +63,19 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 		return nil, fmt.Errorf("missing model in request")
 	}
 	clientStream := responsesReq.Stream
+	// 转换器必须读取最终型号，不能把客户端别名的能力套到映射目标上。
+	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
+	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 
 	// 3. 把 Responses 请求转换为 Anthropic 请求。
-	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq)
+	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq, upstreamModel)
 	if err != nil {
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", "Failed to convert request")
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
 	}
 
 	// 4. Model mapping（OpenAI 网关统一入口的映射语义）
-	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
-	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	anthropicReq.Model = upstreamModel
-
-	reasoningEffort := ExtractResponsesReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
-	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
 
 	// 5. Force upstream streaming（客户端原始终决定响应格式；
 	// 上游恒为流式，非流式由缓冲路径组装）。
@@ -117,7 +115,10 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 	}
 
 	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
-	upstreamReq, _, err := s.buildNativeAnthropicUpstreamRequest(upstreamCtx, c, account, anthropicBody, apiKey, targetURL, tlsRouterMatch...)
+	upstreamReq, forwardedBody, err := s.buildNativeAnthropicUpstreamRequest(upstreamCtx, c, account, anthropicBody, apiKey, targetURL, tlsRouterMatch...)
+	// 原生 Anthropic 桥接必须使用最终发送的 output_config.effort。
+	reasoningEffort := NormalizeClaudeOutputEffort(gjson.GetBytes(forwardedBody, "output_config.effort").String())
+	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, forwardedBody, upstreamModel)
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)

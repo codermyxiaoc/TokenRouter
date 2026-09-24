@@ -18,9 +18,10 @@ import (
 
 // GroupHandler handles admin group management
 type GroupHandler struct {
-	adminService         service.AdminService
-	dashboardService     *service.DashboardService
-	groupCapacityService *service.GroupCapacityService
+	adminService            service.AdminService
+	dashboardService        *service.DashboardService
+	groupCapacityService    *service.GroupCapacityService
+	availabilityProbeRunner groupAvailabilityProbeRunner
 }
 
 // GetLiveCapability 返回当前服务端是否具备生成 Live attestation 的运行环境。
@@ -34,11 +35,12 @@ func (h *GroupHandler) GetLiveCapability(c *gin.Context) {
 }
 
 // NewGroupHandler creates a new admin group handler
-func NewGroupHandler(adminService service.AdminService, dashboardService *service.DashboardService, groupCapacityService *service.GroupCapacityService) *GroupHandler {
+func NewGroupHandler(adminService service.AdminService, dashboardService *service.DashboardService, groupCapacityService *service.GroupCapacityService, availabilityProbeRunner *service.GroupAvailabilityProbeRunnerService) *GroupHandler {
 	return &GroupHandler{
-		adminService:         adminService,
-		dashboardService:     dashboardService,
-		groupCapacityService: groupCapacityService,
+		adminService:            adminService,
+		dashboardService:        dashboardService,
+		groupCapacityService:    groupCapacityService,
+		availabilityProbeRunner: availabilityProbeRunner,
 	}
 }
 

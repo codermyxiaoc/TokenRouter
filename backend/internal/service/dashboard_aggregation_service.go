@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -51,6 +52,7 @@ type DashboardAggregationRepository interface {
 
 // DashboardAggregationService 负责定时聚合与回填。
 type DashboardAggregationService struct {
+	settingRepo          SettingRepository
 	repo                 DashboardAggregationRepository
 	analyticsRepo        UsageAnalyticsAggregationRepository
 	timingWheel          *TimingWheelService
@@ -100,6 +102,11 @@ func NewDashboardAggregationService(repo DashboardAggregationRepository, timingW
 	}
 }
 
+// SetRequestRetentionSettings 注入使用记录留存设置，不改变完整错误请求详情的清理规则。
+func (s *DashboardAggregationService) SetRequestRetentionSettings(repo SettingRepository) {
+	s.settingRepo = repo
+}
+
 // SetLeaderLock 注入跨实例主实例锁，用于限制定时聚合每轮只由一个实例执行。
 func (s *DashboardAggregationService) SetLeaderLock(lockCache LeaderLockCache, db *sql.DB) {
 	if s == nil {
@@ -114,6 +121,8 @@ func (s *DashboardAggregationService) Start() {
 	if s == nil || s.repo == nil || s.timingWheel == nil {
 		return
 	}
+	// 请求历史留存独立于预聚合开关，复用主实例锁和六小时清理节流。
+	s.timingWheel.ScheduleRecurring("dashboard:retention", time.Minute, s.runScheduledRetention)
 	if !s.cfg.Enabled {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合作业已禁用")
 		return
@@ -418,26 +427,43 @@ func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context,
 		}
 	}
 
+	usageDays, err := s.requestRetentionDays(ctx)
+	if err != nil {
+		// 设置读取失败时不能回退为更短窗口并误删记录。
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 读取日志保留设置失败，跳过清理: %v", err)
+		return
+	}
 	hourlyCutoff := now.AddDate(0, 0, -s.cfg.Retention.HourlyDays)
 	dailyCutoff := now.AddDate(0, 0, -s.cfg.Retention.DailyDays)
-	usageCutoff := now.AddDate(0, 0, -s.cfg.Retention.UsageLogsDays)
-	dedupCutoff := now.AddDate(0, 0, -s.cfg.Retention.UsageBillingDedupDays)
-
-	aggErr := s.repo.CleanupAggregates(ctx, hourlyCutoff, dailyCutoff)
-	if aggErr != nil {
-		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合保留清理失败: %v", aggErr)
+	usageCutoff := now.AddDate(0, 0, -usageDays)
+	dedupDays := s.cfg.Retention.UsageBillingDedupDays
+	if dedupDays <= 0 {
+		dedupDays = 365
 	}
-	if s.analyticsRepo != nil {
+	dedupDays = max(dedupDays, usageDays)
+	dedupCutoff := now.AddDate(0, 0, -dedupDays)
+
+	var aggErr, usageErr, dedupErr error
+	if s.cfg.Enabled {
+		aggErr = s.repo.CleanupAggregates(ctx, hourlyCutoff, dailyCutoff)
+	}
+	if s.cfg.Enabled && s.analyticsRepo != nil {
 		if analyticsErr := s.analyticsRepo.CleanupUsageAnalytics(ctx, hourlyCutoff, dailyCutoff); analyticsErr != nil {
-			logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 多维聚合保留清理失败: %v", analyticsErr)
 			aggErr = analyticsErr
 		}
 	}
-	usageErr := s.repo.CleanupUsageLogs(ctx, usageCutoff)
+	if aggErr != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合保留清理失败: %v", aggErr)
+	}
+	if usageDays > 0 {
+		usageErr = s.repo.CleanupUsageLogs(ctx, usageCutoff)
+	}
 	if usageErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] usage_logs 保留清理失败: %v", usageErr)
 	}
-	dedupErr := s.repo.CleanupUsageBillingDedup(ctx, dedupCutoff)
+	if usageDays > 0 {
+		dedupErr = s.repo.CleanupUsageBillingDedup(ctx, dedupCutoff)
+	}
 	if dedupErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] usage_billing_dedup 保留清理失败: %v", dedupErr)
 	}
@@ -446,7 +472,51 @@ func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context,
 	}
 }
 
-// TriggerNow 立即尝试执行一轮聚合，供运行时开关开启后使用。
+func (s *DashboardAggregationService) requestRetentionDays(ctx context.Context) (int, error) {
+	days := s.cfg.Retention.UsageLogsDays
+	if !s.cfg.Enabled {
+		days = 0
+	}
+	if s.settingRepo == nil {
+		return days, nil
+	}
+	raw, err := s.settingRepo.GetValue(ctx, SettingKeyOpsRuntimeLogConfig)
+	if errors.Is(err, ErrSettingNotFound) {
+		return days, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var cfg struct {
+		RequestRetentionDays *int `json:"request_retention_days"`
+	}
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return 0, err
+	}
+	if cfg.RequestRetentionDays != nil {
+		days = *cfg.RequestRetentionDays
+		if days < 0 || days > 3650 {
+			return 0, fmt.Errorf("invalid request_retention_days: %d", days)
+		}
+	}
+	return days, nil
+}
+
+func (s *DashboardAggregationService) runScheduledRetention() {
+	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
+		return
+	}
+	defer atomic.StoreInt32(&s.running, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultDashboardAggregationTimeout)
+	defer cancel()
+	release, ok := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, dashboardAggregationLeaderLockKey, s.instanceID, dashboardAggregationLeaderLockTTL)
+	if !ok {
+		return
+	}
+	defer release()
+	s.maybeCleanupRetention(ctx, time.Now().UTC())
+}
+
 func (s *DashboardAggregationService) TriggerNow() {
 	if s == nil {
 		return

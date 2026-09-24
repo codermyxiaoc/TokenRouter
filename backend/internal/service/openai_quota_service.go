@@ -35,6 +35,7 @@ const (
 	openaiQuotaSecFetchMode     = "no-cors"
 	openaiQuotaSecFetchDest     = "empty"
 	openaiQuotaResetCreditsKey  = "codex_reset_credit_snapshot"
+	openaiQuotaCreditsKey       = "codex_credits_snapshot"
 )
 
 // OpenAIRateLimitWindow 描述上游返回的单个限流窗口。
@@ -71,8 +72,20 @@ type OpenAIRateLimitResetCredits struct {
 	Credits        []OpenAIRateLimitResetCreditDetail `json:"credits,omitempty"`
 }
 
+// OpenAICredits 保存可消费的 Codex 积分余额，独立于重置次数；字符串保留上游小数精度。
+type OpenAICredits struct {
+	HasCredits bool    `json:"has_credits"`
+	Unlimited  bool    `json:"unlimited"`
+	Balance    *string `json:"balance"`
+}
+type openAICreditsSnapshot struct {
+	Credits   *OpenAICredits `json:"credits"`
+	FetchedAt int64          `json:"fetched_at"`
+}
+
 // OpenAIQuotaUsage 是暴露给前端的 /wham/usage 精简结果。
 type OpenAIQuotaUsage struct {
+	Credits               *OpenAICredits               `json:"credits,omitempty"`
 	UserID                string                       `json:"user_id,omitempty"`
 	AccountID             string                       `json:"account_id,omitempty"`
 	Email                 string                       `json:"email,omitempty"`
@@ -101,8 +114,23 @@ type OpenAIQuotaResetResult struct {
 	WindowsReset int                     `json:"windows_reset"`
 }
 
+// Applied 仅确认已实际重置窗口的已知结果，不能把 HTTP 200 或无次数当作成功。
+// @project-doc docs/interfaces/openai_upstream.md#openai_quota_reset
+func (r *OpenAIQuotaResetResult) Applied() bool {
+	if r == nil || r.WindowsReset <= 0 {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(r.Code)) {
+	case "reset", "success", "ok":
+		return true
+	default:
+		return false
+	}
+}
+
 // OpenAIQuotaService 查询和消耗 OpenAI OAuth 账号的 Codex 限流重置次数。
 type OpenAIQuotaService struct {
+	referralClient      OpenAIReferralClient
 	adminService        AdminService
 	httpUpstream        HTTPUpstream
 	openAITokenProvider *OpenAITokenProvider
@@ -177,11 +205,16 @@ func (s *OpenAIQuotaService) CachePostResetSnapshot(ctx context.Context, account
 	if usage == nil {
 		return s.cacheResetCreditsSnapshot(ctx, accountID, nil, nil)
 	}
+	updates := buildOpenAIAutoResetUsageUpdates(usage, time.Now())
+	if updates == nil {
+		updates = make(map[string]any)
+	}
+	updates[openaiQuotaCreditsKey] = openAICreditsSnapshot{Credits: usage.Credits, FetchedAt: usage.FetchedAt}
 	return s.cacheResetCreditsSnapshot(
 		ctx,
 		accountID,
 		usage.RateLimitResetCredits,
-		buildOpenAIAutoResetUsageUpdates(usage, time.Now()),
+		updates,
 	)
 }
 
@@ -289,10 +322,11 @@ func (s *OpenAIQuotaService) ResetCredit(ctx context.Context, accountID int64) (
 	if err := remarshalOpenAIQuotaPayload(raw, &result); err != nil {
 		return nil, err
 	}
-	slog.Info("openai_quota_reset_success",
+	slog.Info("openai_quota_reset_result",
 		"account_id", accountID,
 		"code", result.Code,
 		"windows_reset", result.WindowsReset,
+		"applied", result.Applied(),
 	)
 	return &result, nil
 }
@@ -692,4 +726,19 @@ func mapOpenAIQuotaUpstreamStatus(status int) int {
 	default:
 		return http.StatusBadGateway
 	}
+}
+
+// CacheCreditsSnapshot 保存当前查询行的积分；上游未提供时明确清除旧余额，不能伪造零。
+func (s *OpenAIQuotaService) CacheCreditsSnapshot(ctx context.Context, accountID int64, usage *OpenAIQuotaUsage) error {
+	if usage == nil {
+		return infraerrors.New(http.StatusBadGateway, "OPENAI_QUOTA_EMPTY_USAGE", "openai quota query returned an empty result")
+	}
+	updates := map[string]any{openaiQuotaCreditsKey: openAICreditsSnapshot{Credits: usage.Credits, FetchedAt: usage.FetchedAt}}
+	if s.accountRepo != nil {
+		return s.accountRepo.UpdateExtra(ctx, accountID, updates)
+	}
+	if s.adminService != nil {
+		return s.adminService.UpdateAccountExtra(ctx, accountID, updates)
+	}
+	return infraerrors.New(http.StatusServiceUnavailable, "OPENAI_QUOTA_NOT_CONFIGURED", "quota service is unavailable")
 }

@@ -331,6 +331,83 @@ func (_u *UserSubscriptionUpdate) AddMonthlyUsageUsd(v float64) *UserSubscriptio
 	return _u
 }
 
+// SetDailyResetCount sets the "daily_reset_count" field.
+func (_u *UserSubscriptionUpdate) SetDailyResetCount(v int64) *UserSubscriptionUpdate {
+	_u.mutation.ResetDailyResetCount()
+	_u.mutation.SetDailyResetCount(v)
+	return _u
+}
+
+// SetNillableDailyResetCount sets the "daily_reset_count" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableDailyResetCount(v *int64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetDailyResetCount(*v)
+	}
+	return _u
+}
+
+// AddDailyResetCount adds value to the "daily_reset_count" field.
+func (_u *UserSubscriptionUpdate) AddDailyResetCount(v int64) *UserSubscriptionUpdate {
+	_u.mutation.AddDailyResetCount(v)
+	return _u
+}
+
+// SetWeeklyResetCount sets the "weekly_reset_count" field.
+func (_u *UserSubscriptionUpdate) SetWeeklyResetCount(v int64) *UserSubscriptionUpdate {
+	_u.mutation.ResetWeeklyResetCount()
+	_u.mutation.SetWeeklyResetCount(v)
+	return _u
+}
+
+// SetNillableWeeklyResetCount sets the "weekly_reset_count" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableWeeklyResetCount(v *int64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetWeeklyResetCount(*v)
+	}
+	return _u
+}
+
+// AddWeeklyResetCount adds value to the "weekly_reset_count" field.
+func (_u *UserSubscriptionUpdate) AddWeeklyResetCount(v int64) *UserSubscriptionUpdate {
+	_u.mutation.AddWeeklyResetCount(v)
+	return _u
+}
+
+// SetMonthlyResetCount sets the "monthly_reset_count" field.
+func (_u *UserSubscriptionUpdate) SetMonthlyResetCount(v int64) *UserSubscriptionUpdate {
+	_u.mutation.ResetMonthlyResetCount()
+	_u.mutation.SetMonthlyResetCount(v)
+	return _u
+}
+
+// SetNillableMonthlyResetCount sets the "monthly_reset_count" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableMonthlyResetCount(v *int64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetMonthlyResetCount(*v)
+	}
+	return _u
+}
+
+// AddMonthlyResetCount adds value to the "monthly_reset_count" field.
+func (_u *UserSubscriptionUpdate) AddMonthlyResetCount(v int64) *UserSubscriptionUpdate {
+	_u.mutation.AddMonthlyResetCount(v)
+	return _u
+}
+
+// SetResetCountedAt sets the "reset_counted_at" field.
+func (_u *UserSubscriptionUpdate) SetResetCountedAt(v time.Time) *UserSubscriptionUpdate {
+	_u.mutation.SetResetCountedAt(v)
+	return _u
+}
+
+// SetNillableResetCountedAt sets the "reset_counted_at" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableResetCountedAt(v *time.Time) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetResetCountedAt(*v)
+	}
+	return _u
+}
+
 // SetAssignedBy sets the "assigned_by" field.
 func (_u *UserSubscriptionUpdate) SetAssignedBy(v int64) *UserSubscriptionUpdate {
 	_u.mutation.SetAssignedBy(v)
@@ -549,6 +626,21 @@ func (_u *UserSubscriptionUpdate) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.DailyResetCount(); ok {
+		if err := usersubscription.DailyResetCountValidator(v); err != nil {
+			return &ValidationError{Name: "daily_reset_count", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.daily_reset_count": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.WeeklyResetCount(); ok {
+		if err := usersubscription.WeeklyResetCountValidator(v); err != nil {
+			return &ValidationError{Name: "weekly_reset_count", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.weekly_reset_count": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.MonthlyResetCount(); ok {
+		if err := usersubscription.MonthlyResetCountValidator(v); err != nil {
+			return &ValidationError{Name: "monthly_reset_count", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.monthly_reset_count": %w`, err)}
+		}
+	}
 	if _u.mutation.UserCleared() && len(_u.mutation.UserIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "UserSubscription.user"`)
 	}
@@ -650,6 +742,27 @@ func (_u *UserSubscriptionUpdate) sqlSave(ctx context.Context) (_node int, err e
 	}
 	if value, ok := _u.mutation.AddedMonthlyUsageUsd(); ok {
 		_spec.AddField(usersubscription.FieldMonthlyUsageUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.DailyResetCount(); ok {
+		_spec.SetField(usersubscription.FieldDailyResetCount, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedDailyResetCount(); ok {
+		_spec.AddField(usersubscription.FieldDailyResetCount, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.WeeklyResetCount(); ok {
+		_spec.SetField(usersubscription.FieldWeeklyResetCount, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedWeeklyResetCount(); ok {
+		_spec.AddField(usersubscription.FieldWeeklyResetCount, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.MonthlyResetCount(); ok {
+		_spec.SetField(usersubscription.FieldMonthlyResetCount, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedMonthlyResetCount(); ok {
+		_spec.AddField(usersubscription.FieldMonthlyResetCount, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.ResetCountedAt(); ok {
+		_spec.SetField(usersubscription.FieldResetCountedAt, field.TypeTime, value)
 	}
 	if value, ok := _u.mutation.AssignedAt(); ok {
 		_spec.SetField(usersubscription.FieldAssignedAt, field.TypeTime, value)
@@ -1121,6 +1234,83 @@ func (_u *UserSubscriptionUpdateOne) AddMonthlyUsageUsd(v float64) *UserSubscrip
 	return _u
 }
 
+// SetDailyResetCount sets the "daily_reset_count" field.
+func (_u *UserSubscriptionUpdateOne) SetDailyResetCount(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetDailyResetCount()
+	_u.mutation.SetDailyResetCount(v)
+	return _u
+}
+
+// SetNillableDailyResetCount sets the "daily_reset_count" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableDailyResetCount(v *int64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetDailyResetCount(*v)
+	}
+	return _u
+}
+
+// AddDailyResetCount adds value to the "daily_reset_count" field.
+func (_u *UserSubscriptionUpdateOne) AddDailyResetCount(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddDailyResetCount(v)
+	return _u
+}
+
+// SetWeeklyResetCount sets the "weekly_reset_count" field.
+func (_u *UserSubscriptionUpdateOne) SetWeeklyResetCount(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetWeeklyResetCount()
+	_u.mutation.SetWeeklyResetCount(v)
+	return _u
+}
+
+// SetNillableWeeklyResetCount sets the "weekly_reset_count" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableWeeklyResetCount(v *int64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetWeeklyResetCount(*v)
+	}
+	return _u
+}
+
+// AddWeeklyResetCount adds value to the "weekly_reset_count" field.
+func (_u *UserSubscriptionUpdateOne) AddWeeklyResetCount(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddWeeklyResetCount(v)
+	return _u
+}
+
+// SetMonthlyResetCount sets the "monthly_reset_count" field.
+func (_u *UserSubscriptionUpdateOne) SetMonthlyResetCount(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetMonthlyResetCount()
+	_u.mutation.SetMonthlyResetCount(v)
+	return _u
+}
+
+// SetNillableMonthlyResetCount sets the "monthly_reset_count" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableMonthlyResetCount(v *int64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetMonthlyResetCount(*v)
+	}
+	return _u
+}
+
+// AddMonthlyResetCount adds value to the "monthly_reset_count" field.
+func (_u *UserSubscriptionUpdateOne) AddMonthlyResetCount(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddMonthlyResetCount(v)
+	return _u
+}
+
+// SetResetCountedAt sets the "reset_counted_at" field.
+func (_u *UserSubscriptionUpdateOne) SetResetCountedAt(v time.Time) *UserSubscriptionUpdateOne {
+	_u.mutation.SetResetCountedAt(v)
+	return _u
+}
+
+// SetNillableResetCountedAt sets the "reset_counted_at" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableResetCountedAt(v *time.Time) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetResetCountedAt(*v)
+	}
+	return _u
+}
+
 // SetAssignedBy sets the "assigned_by" field.
 func (_u *UserSubscriptionUpdateOne) SetAssignedBy(v int64) *UserSubscriptionUpdateOne {
 	_u.mutation.SetAssignedBy(v)
@@ -1352,6 +1542,21 @@ func (_u *UserSubscriptionUpdateOne) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.DailyResetCount(); ok {
+		if err := usersubscription.DailyResetCountValidator(v); err != nil {
+			return &ValidationError{Name: "daily_reset_count", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.daily_reset_count": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.WeeklyResetCount(); ok {
+		if err := usersubscription.WeeklyResetCountValidator(v); err != nil {
+			return &ValidationError{Name: "weekly_reset_count", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.weekly_reset_count": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.MonthlyResetCount(); ok {
+		if err := usersubscription.MonthlyResetCountValidator(v); err != nil {
+			return &ValidationError{Name: "monthly_reset_count", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.monthly_reset_count": %w`, err)}
+		}
+	}
 	if _u.mutation.UserCleared() && len(_u.mutation.UserIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "UserSubscription.user"`)
 	}
@@ -1470,6 +1675,27 @@ func (_u *UserSubscriptionUpdateOne) sqlSave(ctx context.Context) (_node *UserSu
 	}
 	if value, ok := _u.mutation.AddedMonthlyUsageUsd(); ok {
 		_spec.AddField(usersubscription.FieldMonthlyUsageUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.DailyResetCount(); ok {
+		_spec.SetField(usersubscription.FieldDailyResetCount, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedDailyResetCount(); ok {
+		_spec.AddField(usersubscription.FieldDailyResetCount, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.WeeklyResetCount(); ok {
+		_spec.SetField(usersubscription.FieldWeeklyResetCount, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedWeeklyResetCount(); ok {
+		_spec.AddField(usersubscription.FieldWeeklyResetCount, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.MonthlyResetCount(); ok {
+		_spec.SetField(usersubscription.FieldMonthlyResetCount, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedMonthlyResetCount(); ok {
+		_spec.AddField(usersubscription.FieldMonthlyResetCount, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.ResetCountedAt(); ok {
+		_spec.SetField(usersubscription.FieldResetCountedAt, field.TypeTime, value)
 	}
 	if value, ok := _u.mutation.AssignedAt(); ok {
 		_spec.SetField(usersubscription.FieldAssignedAt, field.TypeTime, value)

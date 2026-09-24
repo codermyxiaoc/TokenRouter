@@ -43,21 +43,7 @@
 
       <div class="space-y-1.5">
         <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-          {{ t('admin.accounts.selectTestModel') }}
-        </label>
-        <Select
-          v-model="selectedModelId"
-          :options="availableModels"
-          :disabled="loadingModels || status === 'connecting'"
-          value-key="id"
-          label-key="display_name"
-          :placeholder="loadingModels ? t('common.loading') + '...' : t('admin.accounts.selectTestModel')"
-        />
-      </div>
-
-      <div class="space-y-1.5">
-        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-          {{ t('admin.accounts.testType') }}
+          {{ isGrokAccount ? t('admin.accounts.grok.testMode') : t('admin.accounts.testType') }}
         </label>
         <Select
           v-model="testType"
@@ -67,18 +53,45 @@
         />
       </div>
 
-      <div v-if="isOpenAIAccount" class="space-y-1.5">
+      <div v-if="showModelSelect" class="space-y-1.5">
+        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+          {{ t('admin.accounts.selectTestModel') }}
+        </label>
+        <Select
+          v-model="selectedModelId"
+          :options="modelOptionsForMode"
+          :disabled="loadingModels || status === 'connecting'"
+          value-key="id"
+          label-key="display_name"
+          :placeholder="loadingModels ? t('common.loading') + '...' : t('admin.accounts.selectTestModel')"
+        />
+      </div>
+
+      <div v-if="showEndpointSelect" class="space-y-1.5">
+        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+          {{ t('admin.accounts.testEndpoint') }}
+        </label>
+        <Select
+          v-model="testEndpoint"
+          :options="endpointOptions"
+          :disabled="status === 'connecting' || isCompactTestMode || endpointOptions.length === 1"
+          data-testid="account-test-endpoint"
+        />
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.testEndpointHint') }}</p>
+      </div>
+
+      <div v-if="isOpenAIAccount && testType === 'text'" class="space-y-1.5">
         <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
           {{ t('admin.accounts.openai.testMode') }}
         </label>
         <Select
           v-model="testMode"
           :options="openAITestModeOptions"
-          :disabled="status === 'connecting' || testType === 'image'"
+          :disabled="status === 'connecting'"
         />
       </div>
 
-      <div v-if="!isCompactTestMode" class="space-y-1.5">
+      <div v-if="!isCompactTestMode && supportsPromptInput" class="space-y-1.5">
         <TextArea
           v-model="testPrompt"
           :label="promptInputLabel"
@@ -89,6 +102,33 @@
           rows="3"
         />
       </div>
+
+      <div v-if="supportsImageUpload" class="space-y-1.5">
+        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+          {{ t(testType === 'video' ? 'admin.accounts.grok.videoFirstFrameLabel' : 'admin.accounts.grok.imageUploadLabel') }}
+        </label>
+        <div class="flex items-center gap-3">
+          <button type="button" class="btn btn-secondary btn-sm shrink-0" :disabled="status === 'connecting'" @click="imageFileInput?.click()">
+            {{ t('admin.accounts.grok.chooseImageFile') }}
+          </button>
+          <span class="min-w-0 truncate text-xs text-gray-500 dark:text-gray-400">{{ uploadImageName || t('common.noFileSelected') }}</span>
+          <button v-if="uploadImageDataURL" type="button" class="text-xs text-gray-500" :disabled="status === 'connecting'" @click="clearMediaUploads">{{ t('common.remove') }}</button>
+          <input ref="imageFileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden" :disabled="status === 'connecting'" @change="onImageFileChange" />
+        </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(testType === 'video' ? 'admin.accounts.grok.videoFirstFrameHint' : 'admin.accounts.grok.imageUploadHint') }}</p>
+        <img v-if="uploadImageDataURL" :src="uploadImageDataURL" :alt="t('admin.accounts.grok.uploadPreviewAlt')" class="max-h-40 w-full rounded-lg object-contain" />
+      </div>
+      <div v-if="supportsAudioUpload" class="space-y-1.5">
+        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.grok.audioUploadLabel') }}</label>
+        <div class="flex items-center gap-3">
+          <button type="button" class="btn btn-secondary btn-sm shrink-0" :disabled="status === 'connecting'" @click="audioFileInput?.click()">{{ t('admin.accounts.grok.chooseAudioFile') }}</button>
+          <span class="min-w-0 truncate text-xs text-gray-500 dark:text-gray-400">{{ uploadAudioName || t('common.noFileSelected') }}</span>
+          <button v-if="uploadAudioDataURL" type="button" class="text-xs text-gray-500" :disabled="status === 'connecting'" @click="clearMediaUploads">{{ t('common.remove') }}</button>
+          <input ref="audioFileInput" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm" class="hidden" :disabled="status === 'connecting'" @change="onAudioFileChange" />
+        </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.grok.audioUploadHint') }}</p>
+      </div>
+      <p v-if="isGrokAccount && testType === 'realtime'" class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.grok.realtimeTestHint') }}</p>
 
       <!-- Terminal Output -->
       <div class="group relative">
@@ -166,6 +206,15 @@
         </div>
       </div>
 
+      <div v-if="generatedAudios.length > 0" class="space-y-2">
+        <div class="text-xs font-medium text-gray-600 dark:text-gray-300">{{ t('admin.accounts.audioPreview') }}</div>
+        <audio v-for="(audio, index) in generatedAudios" :key="index" :src="audio.url" controls preload="none" class="w-full" />
+      </div>
+      <div v-if="generatedVideos.length > 0" class="space-y-2">
+        <div class="text-xs font-medium text-gray-600 dark:text-gray-300">{{ t('admin.accounts.videoPreview') }}</div>
+        <video v-for="(video, index) in generatedVideos" :key="index" :src="video.url" controls preload="metadata" class="max-h-[360px] w-full rounded-xl" />
+      </div>
+
       <!-- Image Lightbox -->
       <Teleport to="body">
         <Transition name="fade">
@@ -214,10 +263,10 @@
         </button>
         <button
           @click="startTest"
-          :disabled="status === 'connecting' || !selectedModelId"
+          :disabled="!canStartTest"
           :class="[
             'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all',
-            status === 'connecting' || !selectedModelId
+            !canStartTest
               ? 'cursor-not-allowed bg-primary-400 text-white'
               : status === 'success'
                 ? 'bg-green-500 text-white hover:bg-green-600'
@@ -251,7 +300,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick, toRef, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
@@ -261,6 +310,9 @@ import { useClipboard } from '@/composables/useClipboard'
 import { buildApiUrl } from '@/api/client'
 import { adminAPI } from '@/api/admin'
 import type { Account, ClaudeModel } from '@/types'
+import type { AccountTestRequest, AccountTestType } from '@/types/accountTest'
+import { useAccountTestOptions } from '@/composables/useAccountTestOptions'
+import { useAccountTestUploads } from '@/composables/useAccountTestUploads'
 
 const { t } = useI18n()
 const { copyToClipboard } = useClipboard()
@@ -295,9 +347,10 @@ const testPrompt = ref('')
 let lastDefaultPrompt = ''
 const loadingModels = ref(false)
 let abortController: AbortController | null = null
+let streamGeneration = 0
 const generatedImages = ref<PreviewImage[]>([])
 const testMode = ref<'default' | 'compact' | 'legacy_compact'>('default')
-const testType = ref<'text' | 'image'>('text')
+const testType = ref<AccountTestType>('text')
 const isOpenAIAccount = computed(() => props.account?.platform === 'openai')
 // Compact 探测使用固定探针载荷，不显示可编辑提示词输入框。
 const isCompactTestMode = computed(() => isOpenAIAccount.value && testMode.value !== 'default')
@@ -310,37 +363,24 @@ const previewImageUrl = ref('')
 const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-image', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
 // 图片/文字请求类型完全由管理员选择，不再从模型名称推断。
 const supportsImageTest = computed(() => testType.value === 'image')
-const imageTestAvailable = computed(() => {
-  const platform = props.account?.platform
-  return platform === 'openai' || platform === 'gemini' || platform === 'grok' ||
-    (platform === 'antigravity' && props.account?.type === 'apikey')
+const {
+  testEndpoint, isGrokAccount, testTypeOptions, endpointOptions, showEndpointSelect,
+  showModelSelect, modelOptionsForMode, supportsImageUpload, supportsAudioUpload,
+  supportsPromptInput, promptInputLabel, promptInputPlaceholder, promptInputHint,
+  defaultPrompt, testTypeSummary
+} = useAccountTestOptions(toRef(props, 'account'), availableModels, selectedModelId, testType, t)
+const {
+  imageFileInput, audioFileInput, uploadImageDataURL, uploadImageName, uploadAudioDataURL,
+  uploadAudioName, loadingUpload, clearMediaUploads, onImageFileChange, onAudioFileChange
+} = useAccountTestUploads(t, (message) => {
+  status.value = 'error'
+  errorMessage.value = message
 })
+const generatedAudios = ref<PreviewImage[]>([])
+const generatedVideos = ref<PreviewImage[]>([])
+const canStartTest = computed(() => status.value !== 'connecting' && !loadingModels.value &&
+  !loadingUpload.value && (!showModelSelect.value || Boolean(selectedModelId.value)))
 
-const testTypeOptions = computed(() => [
-  { value: 'text', label: t('admin.accounts.testTypeText') },
-  { value: 'image', label: t('admin.accounts.testTypeImage'), disabled: !imageTestAvailable.value }
-])
-
-const promptInputLabel = computed(() =>
-  testType.value === 'image'
-    ? t('admin.accounts.imagePromptLabel')
-    : t('admin.accounts.textPromptLabel')
-)
-const promptInputPlaceholder = computed(() =>
-  testType.value === 'image'
-    ? t('admin.accounts.imagePromptPlaceholder')
-    : t('admin.accounts.textPromptPlaceholder')
-)
-const promptInputHint = computed(() =>
-  testType.value === 'image'
-    ? t('admin.accounts.imageTestHint')
-    : t('admin.accounts.textTestHint')
-)
-const testTypeSummary = computed(() =>
-  testType.value === 'image'
-    ? t('admin.accounts.imageTestMode')
-    : t('admin.accounts.textTestMode')
-)
 
 const sortTestModels = (models: ClaudeModel[]) => {
   const priorityMap = new Map(prioritizedGeminiModels.map((id, index) => [id, index]))
@@ -355,13 +395,16 @@ const sortTestModels = (models: ClaudeModel[]) => {
 
 // Load available models when modal opens
 watch(
-  () => props.show,
-  async (newVal) => {
+  () => [props.show, props.account?.id] as const,
+  async ([newVal]) => {
+    abortStream()
+    clearMediaUploads()
     if (newVal && props.account) {
       testPrompt.value = ''
       lastDefaultPrompt = ''
       testMode.value = 'default'
       testType.value = 'text'
+      testEndpoint.value = 'auto'
       resetState()
       await loadAvailableModels()
     } else {
@@ -371,9 +414,7 @@ watch(
 )
 
 watch([selectedModelId, testType], () => {
-  const nextDefaultPrompt = testType.value === 'image'
-    ? t('admin.accounts.imagePromptDefault')
-    : t('admin.accounts.textPromptDefault')
+  const nextDefaultPrompt = defaultPrompt.value
   if (!testPrompt.value.trim() || testPrompt.value === lastDefaultPrompt) {
     testPrompt.value = nextDefaultPrompt
     lastDefaultPrompt = nextDefaultPrompt
@@ -381,18 +422,27 @@ watch([selectedModelId, testType], () => {
 })
 
 watch(testType, (nextType) => {
-  if (nextType === 'image') {
+  clearMediaUploads()
+  if (nextType !== 'text') {
     testMode.value = 'default'
+    testEndpoint.value = 'auto'
   }
 })
 
+watch(testMode, (mode) => {
+  if (mode !== 'default') testEndpoint.value = 'auto'
+})
+
+let modelLoadGeneration = 0
 const loadAvailableModels = async () => {
   if (!props.account) return
 
+  const current = ++modelLoadGeneration
   loadingModels.value = true
   selectedModelId.value = '' // Reset selection before loading
   try {
     const models = await adminAPI.accounts.getAvailableModels(props.account.id)
+    if (current !== modelLoadGeneration || !props.show) return
     availableModels.value = props.account.platform === 'gemini' || props.account.platform === 'antigravity'
       ? sortTestModels(models)
       : models
@@ -407,12 +457,13 @@ const loadAvailableModels = async () => {
       }
     }
   } catch (error) {
+    if (current !== modelLoadGeneration) return
     console.error('Failed to load available models:', error)
     // Fallback to empty list
     availableModels.value = []
     selectedModelId.value = ''
   } finally {
-    loadingModels.value = false
+    if (current === modelLoadGeneration) loadingModels.value = false
   }
 }
 
@@ -422,15 +473,20 @@ const resetState = () => {
   streamingContent.value = ''
   errorMessage.value = ''
   generatedImages.value = []
+  generatedAudios.value = []
+  generatedVideos.value = []
   previewImageUrl.value = ''
 }
 
 const handleClose = () => {
   abortStream()
+  clearMediaUploads()
+  modelLoadGeneration++
   emit('close')
 }
 
 const abortStream = () => {
+  streamGeneration++
   if (abortController) {
     abortController.abort()
     abortController = null
@@ -450,7 +506,7 @@ const scrollToBottom = async () => {
 }
 
 const startTest = async () => {
-  if (!props.account || !selectedModelId.value) return
+  if (!props.account || !canStartTest.value) return
 
   resetState()
   status.value = 'connecting'
@@ -461,8 +517,22 @@ const startTest = async () => {
   abortStream()
 
   abortController = new AbortController()
+  const currentStream = streamGeneration
 
   try {
+    const requestBody: AccountTestRequest = {
+      model_id: showModelSelect.value ? selectedModelId.value : '',
+      prompt: isCompactTestMode.value || !supportsPromptInput.value ? '' : testPrompt.value.trim(),
+      test_type: testType.value
+    }
+    if (isOpenAIAccount.value) requestBody.mode = testMode.value
+    // 自动测试省略端点，保持历史客户端和既有账号协议的默认行为。
+    if (showEndpointSelect.value && testEndpoint.value !== 'auto' && !isCompactTestMode.value) {
+      requestBody.test_endpoint = testEndpoint.value
+    }
+    if (supportsImageUpload.value && uploadImageDataURL.value) requestBody.image_data_url = uploadImageDataURL.value
+    if (supportsAudioUpload.value && uploadAudioDataURL.value) requestBody.audio_data_url = uploadAudioDataURL.value
+
     // SSE 测试接口用 POST，只能走 fetch，必须显式套用配置的 API base。
     const url = buildApiUrl(`/admin/accounts/${props.account.id}/test`)
 
@@ -473,15 +543,11 @@ const startTest = async () => {
         Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        model_id: selectedModelId.value,
-        prompt: isCompactTestMode.value ? '' : testPrompt.value.trim(),
-        test_type: testType.value,
-        mode: isOpenAIAccount.value ? testMode.value : 'default'
-      }),
+      body: JSON.stringify(requestBody),
       signal: abortController.signal
     })
 
+    if (currentStream !== streamGeneration) return
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`)
     }
@@ -496,6 +562,7 @@ const startTest = async () => {
 
     while (true) {
       const { done, value } = await reader.read()
+      if (currentStream !== streamGeneration) return
       if (done) break
 
       buffer += decoder.decode(value, { stream: true })
@@ -516,7 +583,13 @@ const startTest = async () => {
         }
       }
     }
+    // 上游提前断开不能继续显示测试中，必须有明确终态供管理员判断。
+    if (status.value === 'connecting') {
+      status.value = 'error'
+      errorMessage.value = t('admin.accounts.testStreamInterrupted')
+    }
   } catch (error: unknown) {
+    if (currentStream !== streamGeneration) return
     if (error instanceof DOMException && error.name === 'AbortError') {
       status.value = 'idle'
       return
@@ -535,6 +608,8 @@ const handleEvent = (event: {
   success?: boolean
   error?: string
   image_url?: string
+  video_url?: string
+  audio_url?: string
   mime_type?: string
 }) => {
   switch (event.type) {
@@ -544,9 +619,13 @@ const handleEvent = (event: {
         addLine(t('admin.accounts.usingModel', { model: event.model }), 'text-cyan-400')
       }
       addLine(
-        supportsImageTest.value
-            ? t('admin.accounts.sendingImageRequest')
-            : t('admin.accounts.sendingTestMessage'),
+        testType.value === 'video' ? t('admin.accounts.sendingVideoRequest')
+          : testType.value === 'search' ? t('admin.accounts.grok.sendingSearchRequest')
+          : testType.value === 'tts' ? t('admin.accounts.grok.sendingTTSRequest')
+          : testType.value === 'stt' ? t('admin.accounts.grok.sendingSTTRequest')
+          : testType.value === 'realtime' ? t('admin.accounts.grok.sendingRealtimeRequest')
+          : supportsImageTest.value ? t('admin.accounts.sendingImageRequest')
+          : t('admin.accounts.sendingTestMessage'),
         'text-gray-400'
       )
       addLine('', 'text-gray-300')
@@ -576,6 +655,17 @@ const handleEvent = (event: {
       }
       break
 
+    case 'video':
+    case 'audio': {
+      const url = event.type === 'video' ? event.video_url : event.audio_url
+      const items = event.type === 'video' ? generatedVideos : generatedAudios
+      if (url) {
+        items.value.push({ url, mimeType: event.mime_type })
+        addLine(t(`admin.accounts.${event.type}Received`, { count: items.value.length }), 'text-purple-300')
+      }
+      break
+    }
+
     case 'test_complete':
       // Move streaming content to output lines
       if (streamingContent.value) {
@@ -600,6 +690,12 @@ const handleEvent = (event: {
       break
   }
 }
+
+onBeforeUnmount(() => {
+  abortStream()
+  clearMediaUploads()
+  modelLoadGeneration++
+})
 
 const copyOutput = () => {
   const text = outputLines.value.map((l) => l.text).join('\n')

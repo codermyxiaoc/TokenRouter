@@ -1186,6 +1186,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		reqBody = nil
 
 		var usage *OpenAIUsage
+		var streamErr error
 		var firstTokenMs *int
 		responseID := ""
 		imageCount := 0
@@ -1193,7 +1194,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		var imageOutputSizes []string
 		if reqStream {
 			streamResult, err := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
-			if err != nil {
+			if err != nil && (streamResult == nil || !openAIStreamHasBillableResult(streamResult.usage, streamResult.imageCount)) {
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
 					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
 						c, account, requestedModel, body, http.StatusBadRequest, signal.message, signal.payload, compactModelFallbackRetried,
@@ -1233,6 +1234,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				}
 				return nil, err
 			}
+			// 已消耗用量的失败返回完整部分结果，保留原 handler 的错误结算与幂等键。
+			streamErr = err
 			usage = streamResult.usage
 			firstTokenMs = streamResult.firstTokenMs
 			responseID = strings.TrimSpace(streamResult.responseID)
@@ -1261,9 +1264,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageCount = nonStreamResult.imageCount
 			imageOutputSizes = nonStreamResult.imageOutputSizes
 		}
-		s.bindHTTPResponseAccount(ctx, c, account, responseID)
+		if streamErr == nil {
+			s.bindHTTPResponseAccount(ctx, c, account, responseID)
+		}
 
-		if account.IsOAuth() && !account.IsShadow() {
+		if streamErr == nil && account.IsOAuth() && !account.IsShadow() {
 			if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
 				s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
 			}
@@ -1302,7 +1307,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if searchCount > 0 && account != nil && account.IsGrok() {
 			forwardResult.SearchCount = searchCount
 		}
-		return forwardResult, nil
+		return forwardResult, streamErr
 	}
 }
 
@@ -1442,6 +1447,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		req.Header.Set("accept", "application/json")
 	}
 
+	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	// 根据 TLS 路由规则、账号配置与全局兜底决定最终上游 User-Agent。
 	s.applyOpenAIUpstreamUserAgent(ctx, c, account, req, false, routerMatch...)
 
@@ -1480,6 +1486,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
 
+	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
+		return nil, err
+	}
 	return req, nil
 }
 

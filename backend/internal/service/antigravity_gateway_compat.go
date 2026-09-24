@@ -235,7 +235,7 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 
 	thinkingEnabled := claudeRequest.Thinking != nil &&
 		(claudeRequest.Thinking.Type == "enabled" || claudeRequest.Thinking.Type == "adaptive")
-	modelCtx := WithThinkingEnabled(ctx, thinkingEnabled, false)
+	modelCtx := withAntigravityThinkingLevel(WithThinkingEnabled(ctx, thinkingEnabled, false), geminiThinkingLevelFromClaudeThinking(claudeRequest.Thinking))
 	mappedModel := resolveFinalAntigravityModelKey(modelCtx, account, request.originalModel)
 	if mappedModel == "" {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)

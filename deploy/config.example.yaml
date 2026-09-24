@@ -95,6 +95,10 @@ webauthn:
 # - simple: Hides SaaS features and skips billing/balance checks
 # - simple: 隐藏 SaaS 功能，跳过计费和余额校验
 run_mode: "standard"
+# 默认保持旧行为：创建默认分组，不执行密钥消费窗口限额。
+simple_mode:
+  auto_create_default_groups: true
+simple_mode_key_rate_limit_enabled: false
 
 # 本地插件运行参数；安装后默认停用，菜单在后台功能开关中单独显示。
 # @project-doc docs/interfaces/local_plugins.md#plugin_lifecycle
@@ -797,6 +801,24 @@ concurrency:
   # SSE ping interval during concurrency wait (seconds)
   # 并发等待期间的 SSE ping 间隔（秒）
   ping_interval: 10
+
+# =============================================================================
+# 异步图片对象存储（OpenAI/Grok Images API；默认关闭）
+# 后台备份页保存的设置优先于此配置；S3 凭据和开关完整后才接受异步任务。
+# 任务结果在 Redis 保留 24 小时，图片对象的自动删除须在存储桶设置生命周期。
+# =============================================================================
+image_storage:
+  enabled: false
+  endpoint: "" # S3 兼容服务地址；AWS 官方可留空
+  region: "auto"
+  bucket: ""
+  access_key_id: ""
+  secret_access_key: ""
+  prefix: "images/"
+  force_path_style: false
+  public_base_url: "" # 为空时返回临时签名链接
+  presign_expiry_hours: 24
+  max_download_bytes: 33554432
 
 # =============================================================================
 # Creative Studio Configuration

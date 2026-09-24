@@ -505,7 +505,7 @@ func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_AdvancedGroupS
 	require.Zero(t, concurrencyCache.acquireCalls, "仅选账号入口不得占用真实并发槽")
 }
 
-func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabledUsesLegacyLoadAwareness(t *testing.T) {
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabledHonorsPreviousResponse(t *testing.T) {
 	resetAdvancedSchedulerSettingCacheForTest()
 
 	ctx := context.Background()
@@ -556,9 +556,9 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabledUsesLega
 	require.NoError(t, err)
 	require.NotNil(t, selection)
 	require.NotNil(t, selection.Account)
-	require.Equal(t, int64(36002), selection.Account.ID)
-	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
-	require.False(t, decision.StickyPreviousHit)
+	require.Equal(t, int64(36001), selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerPreviousResponse, decision.Layer)
+	require.True(t, decision.StickyPreviousHit)
 }
 
 // 回归：legacy 负载批处理路径有两个直接返回 ErrNoAvailableAccounts 的出口，

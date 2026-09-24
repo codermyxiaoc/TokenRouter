@@ -570,7 +570,7 @@ func (r *affiliateRepository) ListAffiliateTransferRecords(ctx context.Context, 
 	baseJoin := `
 FROM user_affiliate_ledger ual
 JOIN users u ON u.id = ual.user_id
-WHERE ual.action = 'transfer'`
+WHERE ual.action IN ('transfer', 'withdraw')`
 	if where != "" {
 		where = strings.Replace(where, "WHERE ", " AND ", 1)
 	}
@@ -584,6 +584,7 @@ WHERE ual.action = 'transfer'`
 		"user":                  "u.email",
 		"amount":                "ual.amount",
 		"balance_after":         "ual.balance_after",
+		"action":                "ual.action",
 		"available_quota_after": "ual.aff_quota_after",
 		"frozen_quota_after":    "ual.aff_frozen_quota_after",
 		"history_quota_after":   "ual.aff_history_quota_after",
@@ -592,6 +593,7 @@ WHERE ual.action = 'transfer'`
 	args = append(args, filter.PageSize, (filter.Page-1)*filter.PageSize)
 	rows, err := client.QueryContext(ctx, `
 SELECT ual.id,
+       ual.action,
        ual.user_id,
        COALESCE(u.email, ''),
        COALESCE(u.username, ''),
@@ -618,6 +620,7 @@ LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 		var historyQuotaAfter sql.NullFloat64
 		if err := rows.Scan(
 			&item.LedgerID,
+			&item.Action,
 			&item.UserID,
 			&item.UserEmail,
 			&item.Username,
@@ -1223,4 +1226,158 @@ func scanInt64(ctx context.Context, client affiliateQueryExecer, query string, a
 		return 0, err
 	}
 	return v, nil
+}
+
+// 线下提现的扣减与幂等占位在同一事务，失败不占用幂等键。
+func (r *affiliateRepository) WithdrawQuota(ctx context.Context, userID int64, amount float64, operationID string) (*service.AffiliateWithdrawResult, error) {
+	if userID <= 0 {
+		return nil, service.ErrUserNotFound
+	}
+	if amount <= 0 {
+		return nil, service.ErrAffiliateWithdrawAmountInvalid
+	}
+	if operationID == "" {
+		return nil, service.ErrIdempotencyKeyRequired
+	}
+
+	var result *service.AffiliateWithdrawResult
+	err := r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
+		ledgerID, claimed, err := claimAffiliateWithdrawLedger(txCtx, txClient, userID, amount, operationID)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			result, err = findAffiliateWithdrawByOperation(txCtx, txClient, userID, amount, operationID)
+			return err
+		}
+
+		if _, err := thawFrozenQuotaTx(txCtx, txClient, userID); err != nil {
+			return fmt.Errorf("thaw before withdraw: %w", err)
+		}
+
+		res, err := txClient.ExecContext(txCtx, `
+UPDATE user_affiliates
+SET aff_quota = aff_quota - $1,
+    updated_at = NOW()
+WHERE user_id = $2
+  AND aff_quota >= $1`, amount, userID)
+		if err != nil {
+			return fmt.Errorf("deduct affiliate quota: %w", err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("deduct affiliate quota: %w", err)
+		}
+		if affected == 0 {
+			return service.ErrAffiliateQuotaInsufficient
+		}
+
+		snapshot, err := queryAffiliateTransferSnapshot(txCtx, txClient, userID)
+		if err != nil {
+			return err
+		}
+
+		if _, err := txClient.ExecContext(txCtx, `
+UPDATE user_affiliate_ledger
+SET balance_after = $1,
+    aff_quota_after = $2,
+    aff_frozen_quota_after = $3,
+    aff_history_quota_after = $4,
+    updated_at = NOW()
+WHERE id = $5`,
+			snapshot.BalanceAfter,
+			snapshot.AvailableQuotaAfter,
+			snapshot.FrozenQuotaAfter,
+			snapshot.HistoryQuotaAfter,
+			ledgerID,
+		); err != nil {
+			return fmt.Errorf("record affiliate withdraw snapshot: %w", err)
+		}
+
+		result = &service.AffiliateWithdrawResult{
+			LedgerID:            ledgerID,
+			UserID:              userID,
+			Amount:              amount,
+			AvailableQuotaAfter: snapshot.AvailableQuotaAfter,
+			FrozenQuotaAfter:    snapshot.FrozenQuotaAfter,
+			HistoryQuotaAfter:   snapshot.HistoryQuotaAfter,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// 线下提现的扣减与幂等占位在同一事务，失败不占用幂等键。
+func claimAffiliateWithdrawLedger(ctx context.Context, client affiliateQueryExecer, userID int64, amount float64, operationID string) (int64, bool, error) {
+	rows, err := client.QueryContext(ctx, `
+INSERT INTO user_affiliate_ledger (user_id, action, amount, operation_id, created_at, updated_at)
+SELECT ua.user_id, 'withdraw', $2, $3, NOW(), NOW()
+FROM user_affiliates ua
+WHERE ua.user_id = $1
+ON CONFLICT (operation_id) WHERE operation_id IS NOT NULL DO NOTHING
+RETURNING id`, userID, amount, operationID)
+	if err != nil {
+		return 0, false, fmt.Errorf("claim affiliate withdraw ledger: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, false, fmt.Errorf("claim affiliate withdraw ledger: %w", err)
+		}
+		return 0, false, nil
+	}
+	var ledgerID int64
+	if err := rows.Scan(&ledgerID); err != nil {
+		return 0, false, err
+	}
+	return ledgerID, true, rows.Close()
+}
+
+// 线下提现的扣减与幂等占位在同一事务，失败不占用幂等键。
+func findAffiliateWithdrawByOperation(ctx context.Context, client affiliateQueryExecer, userID int64, amount float64, operationID string) (*service.AffiliateWithdrawResult, error) {
+	rows, err := client.QueryContext(ctx, `
+SELECT id,
+       user_id = $2 AND action = 'withdraw' AND amount = CAST($3 AS DECIMAL(20,8)),
+       user_id,
+       amount::double precision,
+       COALESCE(aff_quota_after, 0)::double precision,
+       COALESCE(aff_frozen_quota_after, 0)::double precision,
+       COALESCE(aff_history_quota_after, 0)::double precision
+FROM user_affiliate_ledger
+WHERE operation_id = $1`, operationID, userID, amount)
+	if err != nil {
+		return nil, fmt.Errorf("query affiliate withdraw by operation: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("query affiliate withdraw by operation: %w", err)
+		}
+		return nil, service.ErrAffiliateQuotaInsufficient
+	}
+	var sameRequest bool
+	result := &service.AffiliateWithdrawResult{Replayed: true}
+	if err := rows.Scan(
+		&result.LedgerID,
+		&sameRequest,
+		&result.UserID,
+		&result.Amount,
+		&result.AvailableQuotaAfter,
+		&result.FrozenQuotaAfter,
+		&result.HistoryQuotaAfter,
+	); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if !sameRequest {
+		return nil, service.ErrIdempotencyKeyConflict
+	}
+	return result, nil
 }

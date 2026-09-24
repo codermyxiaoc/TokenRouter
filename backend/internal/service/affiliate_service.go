@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"math"
 	"strings"
@@ -12,11 +14,13 @@ import (
 )
 
 var (
-	ErrAffiliateProfileNotFound = infraerrors.NotFound("AFFILIATE_PROFILE_NOT_FOUND", "affiliate profile not found")
-	ErrAffiliateCodeInvalid     = infraerrors.BadRequest("AFFILIATE_CODE_INVALID", "invalid affiliate code")
-	ErrAffiliateCodeTaken       = infraerrors.Conflict("AFFILIATE_CODE_TAKEN", "affiliate code already in use")
-	ErrAffiliateAlreadyBound    = infraerrors.Conflict("AFFILIATE_ALREADY_BOUND", "affiliate inviter already bound")
-	ErrAffiliateQuotaEmpty      = infraerrors.BadRequest("AFFILIATE_QUOTA_EMPTY", "no affiliate quota available to transfer")
+	ErrAffiliateProfileNotFound       = infraerrors.NotFound("AFFILIATE_PROFILE_NOT_FOUND", "affiliate profile not found")
+	ErrAffiliateCodeInvalid           = infraerrors.BadRequest("AFFILIATE_CODE_INVALID", "invalid affiliate code")
+	ErrAffiliateCodeTaken             = infraerrors.Conflict("AFFILIATE_CODE_TAKEN", "affiliate code already in use")
+	ErrAffiliateAlreadyBound          = infraerrors.Conflict("AFFILIATE_ALREADY_BOUND", "affiliate inviter already bound")
+	ErrAffiliateQuotaInsufficient     = infraerrors.BadRequest("AFFILIATE_QUOTA_INSUFFICIENT", "insufficient available affiliate quota")
+	ErrAffiliateWithdrawAmountInvalid = infraerrors.BadRequest("AFFILIATE_WITHDRAW_AMOUNT_INVALID", "invalid offline withdrawal amount")
+	ErrAffiliateQuotaEmpty            = infraerrors.BadRequest("AFFILIATE_QUOTA_EMPTY", "no affiliate quota available to transfer")
 )
 
 const (
@@ -175,6 +179,7 @@ type AffiliateRebateRecord struct {
 }
 
 type AffiliateTransferRecord struct {
+	Action              string    `json:"action"`
 	LedgerID            int64     `json:"ledger_id"`
 	UserID              int64     `json:"user_id"`
 	UserEmail           string    `json:"user_email"`
@@ -623,4 +628,53 @@ func normalizeAffiliateRecordFilter(filter AffiliateRecordFilter) AffiliateRecor
 	filter.Search = strings.TrimSpace(filter.Search)
 	filter.SortBy = strings.TrimSpace(filter.SortBy)
 	return filter
+}
+
+// AffiliateWithdrawResult 记录线下提现流水及首次扣款快照。
+type AffiliateWithdrawResult struct {
+	LedgerID            int64   `json:"ledger_id"`
+	UserID              int64   `json:"user_id"`
+	Amount              float64 `json:"amount"`
+	AvailableQuotaAfter float64 `json:"available_quota_after"`
+	FrozenQuotaAfter    float64 `json:"frozen_quota_after"`
+	HistoryQuotaAfter   float64 `json:"history_quota_after"`
+	Replayed            bool    `json:"-"`
+}
+
+// AdminWithdrawQuota 以幂等标识登记站外打款，只扣可提现返利。
+// @project-doc docs/domains/promotions_and_affiliates.md#affiliate_offline_withdrawal
+func (s *AffiliateService) AdminWithdrawQuota(ctx context.Context, userID int64, amount float64, idempotencyKey string) (*AffiliateWithdrawResult, error) {
+	if userID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_USER", "invalid user")
+	}
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	key, err := NormalizeIdempotencyKey(idempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	if key == "" {
+		return nil, ErrIdempotencyKeyRequired
+	}
+	if math.IsNaN(amount) || math.IsInf(amount, 0) {
+		return nil, ErrAffiliateWithdrawAmountInvalid
+	}
+	amount = roundTo(amount, 8)
+	if amount <= 0 || math.IsInf(amount, 0) {
+		return nil, ErrAffiliateWithdrawAmountInvalid
+	}
+	repo, ok := s.repo.(interface {
+		WithdrawQuota(context.Context, int64, float64, string) (*AffiliateWithdrawResult, error)
+	})
+	if !ok {
+		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate withdrawal unavailable")
+	}
+	return repo.WithdrawQuota(ctx, userID, amount, affiliateWithdrawOperationID(key))
+}
+
+// affiliateWithdrawOperationID 仅持久化幂等键摘要，不保存原始请求头。
+func affiliateWithdrawOperationID(idempotencyKey string) string {
+	sum := sha256.Sum256([]byte("admin.affiliates.withdraw\x00" + idempotencyKey))
+	return hex.EncodeToString(sum[:])
 }

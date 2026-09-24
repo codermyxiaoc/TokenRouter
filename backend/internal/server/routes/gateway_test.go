@@ -404,8 +404,8 @@ func TestGatewayRoutesOpenAIImagesPathsAreRegistered(t *testing.T) {
 	}
 }
 
-// TestGatewayRoutesAsyncImagesPathsAreRemoved 锁定自研异步图片接口不再暴露。
-func TestGatewayRoutesAsyncImagesPathsAreRemoved(t *testing.T) {
+// TestGatewayRoutesAsyncImagesPathsRestored 保证异步路由恢复且默认关闭时不接收任务。
+func TestGatewayRoutesAsyncImagesPathsRestored(t *testing.T) {
 	router := newGatewayRoutesTestRouter()
 	registered := make(map[string]bool)
 	for _, route := range router.Routes() {
@@ -426,15 +426,15 @@ func TestGatewayRoutesAsyncImagesPathsAreRemoved(t *testing.T) {
 	}
 	for _, route := range removed {
 		routeKey := route.method + " " + route.routePath
-		require.False(t, registered[routeKey], "%s should not be registered", routeKey)
+		require.True(t, registered[routeKey], "%s should be registered", routeKey)
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(route.method, route.requestPath, nil)
 		router.ServeHTTP(w, req)
-		require.Equal(t, http.StatusNotFound, w.Code, "method=%s path=%s", route.method, route.requestPath)
+		require.NotEqual(t, http.StatusAccepted, w.Code, "disabled feature must not accept method=%s path=%s", route.method, route.requestPath)
 	}
 
-	// Gemini 批量图片作业是独立功能，移除自研异步接口后仍须保留。
+	// Gemini 批量图片作业是独立功能，恢复异步接口后仍须保留。
 	for _, route := range []string{
 		"POST /v1/images/batches",
 		"GET /v1/images/batches",

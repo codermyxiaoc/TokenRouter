@@ -13,7 +13,6 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -71,9 +70,6 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		chatReq.StreamOptions = &apicompat.ChatStreamOptions{IncludeUsage: true}
 	}
 
-	convertedEffort := chatReq.ReasoningEffort
-	reasoningEffort := &convertedEffort
-	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
 	serviceTier := extractOpenAIServiceTierFromBody(body)
 
 	chatBody, err := json.Marshal(chatReq)
@@ -96,9 +92,6 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		}
 		if changed {
 			chatBody = policyBody
-			if effectiveEffort := strings.TrimSpace(gjson.GetBytes(chatBody, "reasoning_effort").String()); effectiveEffort != "" {
-				reasoningEffort = &effectiveEffort
-			}
 		}
 	}
 	chatBody, err = s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, chatBody)
@@ -112,6 +105,9 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	if serviceTier == nil {
 		serviceTier = extractOpenAIServiceTierFromBody(chatBody)
 	}
+	// 上游规范化和分组策略都会改变档位，日志与扣费读取最终请求。
+	reasoningEffort := extractEffectiveOpenAIReasoningEffortFromBody(chatBody, body, upstreamModel, billingModel, originalModel)
+	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, chatBody, upstreamModel)
 
 	logger.L().Debug("openai messages: forwarding via raw chat completions",
 		zap.Int64("account_id", account.ID),

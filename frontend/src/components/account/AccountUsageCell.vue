@@ -131,30 +131,6 @@
           :show-now-when-idle="true"
           color="emerald"
         />
-        <OpenAIQuotaResetCell :account="account">
-          <template #pre-actions>
-            <button
-              type="button"
-              class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30"
-              :disabled="activeQueryLoading"
-              @click="loadActiveUsage"
-            >
-              <Icon
-                name="refresh"
-                size="xs"
-                :class="{ 'animate-spin': activeQueryLoading }"
-                :stroke-width="2"
-              />
-              {{ t('admin.accounts.usageWindow.activeQuery') }}
-            </button>
-          </template>
-          <span
-            v-if="openAIQuotaAutoPaused"
-            class="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-          >
-            {{ t('admin.accounts.usageWindow.quotaAutoPaused') }}
-          </span>
-        </OpenAIQuotaResetCell>
       </div>
       <div v-else-if="loading" class="space-y-1.5">
         <div class="flex items-center gap-1">
@@ -170,8 +146,27 @@
       </div>
       <div v-else>
         <div class="text-xs text-gray-400">-</div>
-        <OpenAIQuotaResetCell :account="account" class="mt-1" />
       </div>
+      <!-- 保持重置组件挂载，刷新用量时不丢失已消费次数的成功或告警提示。 -->
+      <OpenAIQuotaResetCell :account="account" class="mt-1" @quota-reset="handleOpenAIQuotaReset">
+        <template #pre-actions>
+          <button
+            type="button"
+            class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30"
+            :disabled="activeQueryLoading"
+            @click="loadActiveUsage"
+          >
+            <Icon name="refresh" size="xs" :class="{ 'animate-spin': activeQueryLoading }" :stroke-width="2" />
+            {{ t('admin.accounts.usageWindow.activeQuery') }}
+          </button>
+        </template>
+        <span
+          v-if="openAIQuotaAutoPaused"
+          class="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+        >
+          {{ t('admin.accounts.usageWindow.quotaAutoPaused') }}
+        </span>
+      </OpenAIQuotaResetCell>
     </template>
 
     <!-- 内置供应商的用量组件同时负责查询入口及不支持模式提示。 -->
@@ -760,9 +755,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
+import type { OpenAIQuotaResetResult } from '@/api/admin/accounts'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 import type {
   Account,
@@ -837,6 +833,11 @@ const loading = ref(false)
 const activeQueryLoading = ref(false)
 const error = ref<string | null>(null)
 const usageInfo = ref<AccountUsageInfo | null>(null)
+// 新请求、切账号和重置后的刷新都使旧用量请求失效，避免旧窗口覆盖新窗口。
+let usageRequestGeneration = 0
+let resetAccountRefreshKey: string | null = null
+let staleResetBatchedUsage: AccountUsageInfo | null | undefined
+let waitingForResetUsage = false
 const rootRef = ref<HTMLElement | null>(null)
 const isDesktopViewport = ref(getDesktopViewportMatches())
 const hasEnteredViewport = ref(false)
@@ -1548,7 +1549,13 @@ const requestParentBatchUsage = (options?: { force?: boolean }) => {
 
 const syncManagedUsageState = () => {
   if (!isBatchManaged.value) return
-  usageInfo.value = props.batchedUsage ?? null
+  // 父列表刷新期间会保留上一份批量数据；已重置的窗口不能被 loading/error 更新重新水合。
+  if (waitingForResetUsage && props.batchedUsage === staleResetBatchedUsage) {
+    usageInfo.value = null
+  } else {
+    waitingForResetUsage = false
+    usageInfo.value = props.batchedUsage ?? null
+  }
   error.value = props.batchedUsageError ?? null
   loading.value = props.batchedUsageLoading === true
 }
@@ -1570,26 +1577,29 @@ const loadUsage = async (options?: { source?: 'passive' | 'active'; bypassCache?
     }
   }
 
+  const account = props.account
+  const generation = ++usageRequestGeneration
+  activeQueryLoading.value = false
   loading.value = true
   error.value = null
 
   try {
     const fetchFn = () =>
       options?.source
-        ? adminAPI.accounts.getUsage(props.account.id, options.source)
-        : adminAPI.accounts.getUsage(props.account.id)
-    const result = await enqueueUsageRequest(props.account, fetchFn)
-    if (!unmounted.value) {
+        ? adminAPI.accounts.getUsage(account.id, options.source)
+        : adminAPI.accounts.getUsage(account.id)
+    const result = await enqueueUsageRequest(account, fetchFn)
+    if (!unmounted.value && generation === usageRequestGeneration) {
       usageInfo.value = result
-      _usageCache.set(props.account.id, { data: result, ts: Date.now() })
+      _usageCache.set(account.id, { data: result, ts: Date.now() })
     }
   } catch (e: any) {
-    if (!unmounted.value) {
+    if (!unmounted.value && generation === usageRequestGeneration) {
       error.value = t('common.error')
       console.error('Failed to load usage:', e)
     }
   } finally {
-    if (!unmounted.value) loading.value = false
+    if (!unmounted.value && generation === usageRequestGeneration) loading.value = false
   }
 }
 
@@ -1644,16 +1654,44 @@ const attachVisibilityObserver = () => {
 }
 
 const loadActiveUsage = async () => {
+  if (activeQueryLoading.value) return
+  const accountID = props.account.id
+  const generation = ++usageRequestGeneration
   activeQueryLoading.value = true
   error.value = null
   try {
-    const result = await adminAPI.accounts.getUsage(props.account.id, 'active', true)
+    const result = await adminAPI.accounts.getUsage(accountID, 'active', true)
+    if (unmounted.value || generation !== usageRequestGeneration) return
     usageInfo.value = result
-    _usageCache.set(props.account.id, { data: result, ts: Date.now() })
+    _usageCache.set(accountID, { data: result, ts: Date.now() })
   } catch (e: any) {
     console.error('Failed to load active usage:', e)
   } finally {
-    activeQueryLoading.value = false
+    if (!unmounted.value && generation === usageRequestGeneration) {
+      activeQueryLoading.value = false
+      loading.value = false
+    }
+  }
+}
+
+const handleOpenAIQuotaReset = async (result: OpenAIQuotaResetResult) => {
+  const accountID = props.account.id
+  const generation = ++usageRequestGeneration
+  _usageCache.delete(accountID)
+  usageInfo.value = null
+  waitingForResetUsage = isBatchManaged.value
+  staleResetBatchedUsage = props.batchedUsage
+  activeQueryLoading.value = false
+  // 账号投影沿用列表更新入口；跳过该次 prop 更新的普通刷新，随后只做一次强制查询。
+  resetAccountRefreshKey = result.account ? buildOpenAIUsageRefreshKey(result.account) : null
+  if (result.account) emit('account-updated', result.account)
+  await nextTick()
+  resetAccountRefreshKey = null
+  if (unmounted.value || props.account.id !== accountID || generation !== usageRequestGeneration) return
+  if (isBatchManaged.value) {
+    requestParentBatchUsage({ force: true })
+  } else {
+    await loadActiveUsage()
   }
 }
 
@@ -1805,16 +1843,22 @@ watch(
     ) {
       return
     }
+    usageRequestGeneration++
+    waitingForResetUsage = false
+    usageInfo.value = null
+    loading.value = false
+    activeQueryLoading.value = false
     if (!managed || !shouldFetchUsage.value) return
     syncManagedUsageState()
     requestParentBatchUsage()
   },
-  { flush: 'post' }
+  { flush: 'sync' }
 )
 
 watch(openAIUsageRefreshKey, (nextKey, prevKey) => {
   if (!prevKey || nextKey === prevKey) return
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return
+  if (nextKey === resetAccountRefreshKey) return
 
 	_usageCache.delete(props.account.id)
 	usageInfo.value = null

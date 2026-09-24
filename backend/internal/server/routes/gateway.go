@@ -224,6 +224,10 @@ func RegisterGatewayRoutes(
 			h.Gateway.CountTokens(c)
 		}
 	}
+	// 异步任务在进程内重入同步路由，沿用认证、选组、计费及图片不跨组重放的边界。
+	if h.AsyncImage != nil {
+		h.AsyncImage.SetGatewayExecutor(func(_ string, c *gin.Context) { r.ServeHTTP(c.Writer, c.Request) })
+	}
 	imagesHandler := func(c *gin.Context) {
 		switch getGroupPlatform(c) {
 		case service.PlatformOpenAI:
@@ -370,6 +374,7 @@ func RegisterGatewayRoutes(
 	gateway.Use(clientRequestID)
 	gateway.Use(opsErrorLogger)
 	gateway.Use(endpointNorm)
+	gateway.Use(h.AsyncImage.CaptureRequest)
 	gateway.Use(gin.HandlerFunc(apiKeyAuth))
 	gateway.Use(requireGroupAnthropic)
 	{
@@ -449,6 +454,9 @@ func RegisterGatewayRoutes(
 			}
 			h.OpenAIGateway.Embeddings(c)
 		})
+		gateway.POST("/images/generations/async", h.AsyncImage.Submit)
+		gateway.POST("/images/edits/async", h.AsyncImage.Submit)
+		gateway.GET("/images/tasks/:task_id", h.AsyncImage.Get)
 		gateway.POST("/images/generations", imagesHandler)
 		gateway.POST("/images/edits", imagesHandler)
 		gateway.POST("/images/batches", h.BatchImage.Submit)
@@ -630,6 +638,9 @@ func RegisterGatewayRoutes(
 		}
 		h.OpenAIGateway.Embeddings(c)
 	})
+	r.POST("/images/generations/async", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, h.AsyncImage.CaptureRequest, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.AsyncImage.Submit)
+	r.POST("/images/edits/async", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, h.AsyncImage.CaptureRequest, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.AsyncImage.Submit)
+	r.GET("/images/tasks/:task_id", clientRequestID, gin.HandlerFunc(apiKeyAuth), h.AsyncImage.Get)
 	r.POST("/images/generations", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, imagesHandler)
 	r.POST("/images/edits", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, imagesHandler)
 	// 与 /v1/videos 保持兼容，为 OpenAI 风格客户端提供无前缀的视频创建入口。

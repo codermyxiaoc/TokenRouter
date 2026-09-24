@@ -18,6 +18,9 @@ const openaiModels = [
 	'gpt-5.6-terra',
 	'gpt-5.6-luna',
 	'gpt-6-astra',
+  // GPT-6 新增产品保留独立 ID，不改写已有型号和默认映射。
+  'gpt-6-sol',
+  'gpt-6-luna',
 	'gpt-5.4',
 	'gpt-5.4-mini',
 	'gpt-5.5'
@@ -36,6 +39,7 @@ export const claudeModels = [
   'claude-opus-4-7',
   'claude-opus-4-8',
   'claude-opus-5',
+  'claude-opus-5-5',
   'claude-sonnet-4-6',
   'claude-sonnet-5',
   'claude-fable-5-1',
@@ -189,6 +193,7 @@ const metaModels = [
 
 // xAI Grok
 const xaiModels = [
+  'grok-4.7',
   'grok-4.6',
   'grok-4.5',
   'grok-4.3',
@@ -201,6 +206,7 @@ const xaiModels = [
   'grok-4.20-multi-agent-latest',
   'grok-4.3-latest',
   'grok-latest',
+  'grok-4.7-latest',
   'grok-4.6-latest',
   'grok-4.5-latest',
   'grok-build-latest',
@@ -329,6 +335,7 @@ const anthropicPresetMappings = [
   { label: 'Opus 4.7', from: 'claude-opus-4-7', to: 'claude-opus-4-7', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
   { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4-8', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
   { label: 'Opus 5', from: 'claude-opus-5', to: 'claude-opus-5', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
+  { label: 'Opus 5.5', from: 'claude-opus-5-5', to: 'claude-opus-5-5', color: 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400' },
   { label: 'Haiku 3.5', from: 'claude-3-5-haiku-20241022', to: 'claude-3-5-haiku-20241022', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400' },
   { label: 'Haiku 4.5', from: 'claude-haiku-4-5-20251001', to: 'claude-haiku-4-5-20251001', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
   { label: 'Opus->Sonnet', from: 'claude-opus-4-6', to: 'claude-sonnet-4-5-20250929', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' }
@@ -346,6 +353,8 @@ const openaiPresetMappings = [
   { label: 'GPT-5.6 Terra', from: 'gpt-5.6-terra', to: 'gpt-5.6-terra', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-400' },
   { label: 'GPT-5.6 Luna', from: 'gpt-5.6-luna', to: 'gpt-5.6-luna', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
   { label: 'GPT-6 Astra', from: 'gpt-6-astra', to: 'gpt-6-astra', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'GPT-6 Sol', from: 'gpt-6-sol', to: 'gpt-6-sol', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
+  { label: 'GPT-6 Luna', from: 'gpt-6-luna', to: 'gpt-6-luna', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
   { label: 'GPT-5.5', from: 'gpt-5.5', to: 'gpt-5.5', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
   { label: 'GPT-5.4', from: 'gpt-5.4', to: 'gpt-5.4', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
   { label: 'Haiku→5.4', from: 'claude-haiku-4-5-20251001', to: 'gpt-5.4', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
@@ -406,6 +415,7 @@ const qoderModelKeyByAlias: Record<string, string> = Object.fromEntries(
 )
 
 const grokPresetMappings = [
+  { label: 'Grok 4.7', from: 'grok-4.7', to: 'grok-4.7', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/50 dark:text-slate-300' },
   { label: 'Grok 4.6', from: 'grok-4.6', to: 'grok-4.6', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/50 dark:text-slate-300' },
   { label: 'Grok 4.5', from: 'grok-4.5', to: 'grok-4.5', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/50 dark:text-slate-300' },
   { label: 'Grok 4.3', from: 'grok-4.3', to: 'grok-4.3', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/50 dark:text-slate-300' },

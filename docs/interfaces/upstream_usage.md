@@ -59,7 +59,7 @@ Zhipu payg、MiniMax payg 未接入公开余额协议，DeepSeek coding 也不�
 
 ### OpenCode GO
 
-GO 自动选择 `opencode_go` 适配器，按账号配置的 API 根地址追加 `/usage`，归一化五小时、周、月窗口；Zen 返回不支持。手动查询不改变调度；已有的显式周期监控开关可包含 GO，并使用同一身份绑定快照供 GO 阈值和 429 恢复判断，详见 [OpenCode 用量与调度](opencode_upstream.md#opencode_usage_and_scheduling)。
+GO 自动选择 `opencode_go` 适配器，按账号配置的 API 根地址归一化为 `/v1/usage`，不重复已有 `/v1` 且保留中继路径前缀，归一化五小时、周、月窗口；Zen 返回不支持。手动查询不改变调度；已有的显式周期监控开关可包含 GO，并使用同一身份绑定快照供 GO 阈值和 429 恢复判断，详见 [OpenCode 用量与调度](opencode_upstream.md#opencode_usage_and_scheduling)。
 
 ## 管理员接口
 
@@ -68,7 +68,7 @@ GO 自动选择 `opencode_go` 适配器，按账号配置的 API 根地址追加
 
 成功结果在顶层包含 `account_id`、`adapter`、`provider`、UTC `observed_at`、`mode`、`unit`、`balance`、`balances`、`available`、`limits`、`subscription` 和 `expires_at`；未适用字段省略。New API 的 `balance` 是钱包余额，`limits`/`subscription` 是当前 Key 的配额信息；DeepSeek 的 `balances` 保存多币种钱包，coding 周期使用 `unit=PERCENT`。`mode` 为 `balance`、`quota`、`limits` 或 `subscription`。批量响应将成功结果和每个账号的结构化错误分开，单个账号失败不取消其它账号。
 
-每次操作使用约 60 秒总超时、512 KiB 响应体上限、禁止重定向，并复用账号代理、TLS 指纹、Header Override 和 `HTTPUpstream`。查询前后重新读取账号；凭据、代理、Base URL、TLS 连接设置或规范化配置改变时返回 `UPSTREAM_USAGE_IDENTITY_CHANGED`。同一账号和配置指纹使用 singleflight，等待方可以独立取消。
+每次操作使用约 60 秒总超时、512 KiB 响应体上限、禁止重定向，并复用账号代理、TLS 指纹、Header Override 和 `HTTPUpstream`。查询前后重新读取账号；凭据、代理、Base URL、TLS 连接设置或规范化配置改变时返回 `UPSTREAM_USAGE_IDENTITY_CHANGED`。同一账号和配置指纹使用 singleflight，等待方可以独立取消。官方 GO 额外允许身份完全相同的账号共享并发及 30 秒成功观测，返回结果保持各账号 ID 与原观测时间；凭据、代理、TLS、认证头与查询配置仍隔离，Zen 和中继不参与。
 
 ## 前端生命周期
 

@@ -6,13 +6,14 @@ import GroupsView from '../GroupsView.vue'
 import Select from '@/components/common/Select.vue'
 import GroupClientProtocolSelector from '@/components/admin/group/GroupClientProtocolSelector.vue'
 import PricingEntryCard from '@/components/admin/channel/PricingEntryCard.vue'
-import type { AdminGroup, GroupPlatform } from '@/types'
+import type { AdminGroup, GroupPlatform, GroupAvailabilityProbeResult } from '@/types'
 
 const { groups, showError } = vi.hoisted(() => ({
   groups: {
     list: vi.fn(), getAll: vi.fn(), getModelsListCandidates: vi.fn(),
     getUsageSummary: vi.fn(), getCapacitySummary: vi.fn(), getLiveCapability: vi.fn(),
     create: vi.fn(), update: vi.fn(),
+    testAvailabilityProbe: vi.fn(),
   },
   showError: vi.fn(),
 }))
@@ -47,8 +48,8 @@ function group(platform: GroupPlatform): AdminGroup {
   } as AdminGroup
 }
 
-async function open(mode: 'create' | 'edit', platform: GroupPlatform) {
-  groups.list.mockResolvedValue({ items: [group(platform)], total: 1, pages: 1 })
+async function open(mode: 'create' | 'edit', platform: GroupPlatform, overrides: Partial<AdminGroup> = {}) {
+  groups.list.mockResolvedValue({ items: [{ ...group(platform), ...overrides }], total: 1, pages: 1 })
   const wrapper = mount(GroupsView, {
     attachTo: document.body,
     global: { plugins: [createPinia()], stubs: {
@@ -90,6 +91,7 @@ beforeEach(() => {
   groups.getLiveCapability.mockResolvedValue({ supported: true })
   groups.create.mockResolvedValue({ id: 43 })
   groups.update.mockResolvedValue({ id: 42 })
+  groups.testAvailabilityProbe.mockReset()
 })
 afterEach(() => {
   wrappers.splice(0).forEach(wrapper => wrapper.unmount())
@@ -97,6 +99,22 @@ afterEach(() => {
 })
 
 describe.each(['create', 'edit'] as const)('GroupsView %s tabs', mode => {
+  it('保存显式探测协议且不泄漏 UI 临时字段', async () => {
+    const wrapper = await open(mode, 'kimi')
+    await wrapper.get('[data-group-setting="availability_probe_enabled"]').trigger('click')
+    wrapper.findAllComponents(Select).find(select => select.attributes('data-group-field') === 'probe-model')!
+      .vm.$emit('update:modelValue', 'gpt-test')
+    wrapper.findAllComponents(Select).find(select => select.attributes('data-group-field') === 'probe-protocol')!
+      .vm.$emit('update:modelValue', 'chat_completions')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="availability-probe-test"]').exists()).toBe(mode === 'edit')
+    await wrapper.get(`#${mode}-group-form`).trigger('submit')
+    await flushPromises()
+    const payload = mode === 'create' ? groups.create.mock.calls[0]?.[0] : groups.update.mock.calls[0]?.[1]
+    expect(payload.availability_probe_config).toMatchObject({ enabled: true, protocol: 'chat_completions', model_id: 'gpt-test' })
+    expect(payload).not.toHaveProperty('availability_probe_protocol')
+  })
+
   it.each(platforms)('%s 显示正确页签并将通用价格和协议字段放入对应页', async platform => {
     const wrapper = await open(mode, platform)
     const keys = wrapper.findAll('[data-group-tab-button]').map(button => button.attributes('data-group-tab-button'))
@@ -278,5 +296,108 @@ describe.each(['create', 'edit'] as const)('GroupsView %s tabs', mode => {
     expect(card.get('.collapsible-content').classes()).not.toContain('collapsible-content--collapsed')
     expect(document.activeElement).toBe(card.get('input[type="number"]').element)
     expect(groups[mode === 'create' ? 'create' : 'update']).not.toHaveBeenCalled()
+  })
+})
+
+describe('GroupsView 立即探测', () => {
+  const config = {
+    enabled: true, model_id: 'gpt-test', protocol: 'chat_completions' as const,
+    prompt: 'hi', interval_minutes: 30, timeout_seconds: 120, max_retries: 3, user_agent: '',
+  }
+  const result: GroupAvailabilityProbeResult = {
+    group_id: 42, account_id: 99, model_id: 'gpt-test', protocol: 'chat_completions',
+    status: 'success', success: true, latency_ms: 1234,
+    started_at: '2026-09-23T00:00:00Z', finished_at: '2026-09-23T00:00:01Z',
+  }
+
+  it('创建时切换平台清除不兼容协议，避免把 Responses 提交给 Gemini', async () => {
+    const wrapper = await open('create', 'kimi')
+    await wrapper.get('[data-group-setting="availability_probe_enabled"]').trigger('click')
+    const protocol = wrapper.findAllComponents(Select).find(select => select.attributes('data-group-field') === 'probe-protocol')!
+    protocol.vm.$emit('update:modelValue', 'responses')
+    await flushPromises()
+    const platform = wrapper.findAllComponents(Select).find(select => select.attributes('data-tour') === 'group-form-platform')!
+    platform.vm.$emit('update:modelValue', 'gemini')
+    await flushPromises()
+    expect(protocol.props('modelValue')).toBe('auto')
+    expect(protocol.props('options').map((option: { value: string }) => option.value)).toEqual(['auto', 'gemini'])
+  })
+
+  it('存量配置缺少协议时显示自动，不擅自改变探测策略', async () => {
+    const wrapper = await open('edit', 'kimi', { availability_probe_config: { enabled: true, model_id: 'gpt-test' } })
+    const protocol = wrapper.findAllComponents(Select).find(select => select.attributes('data-group-field') === 'probe-protocol')!
+    expect(protocol.props('modelValue')).toBe('auto')
+    expect(wrapper.text()).toContain('admin.groups.availabilityProbe.protocolAutoHint')
+  })
+
+  it.each([true, false])('单次结果 success=%s 会展示并刷新列表，同时保留其他设置草稿', async success => {
+    let resolve!: (value: GroupAvailabilityProbeResult) => void
+    groups.testAvailabilityProbe.mockImplementation(() => new Promise<GroupAvailabilityProbeResult>(done => { resolve = done }))
+    const wrapper = await open('edit', 'kimi', { availability_probe_config: config })
+    const name = wrapper.get('[data-group-field="name"] input')
+    await name.setValue('未保存的其他修改')
+    const listCalls = groups.list.mock.calls.length
+    const button = wrapper.get('[data-testid="availability-probe-test"]')
+    await button.trigger('click')
+    await button.trigger('click')
+    expect(groups.testAvailabilityProbe).toHaveBeenCalledTimes(1)
+    expect(groups.testAvailabilityProbe).toHaveBeenCalledWith(42, config)
+    expect(groups.update).not.toHaveBeenCalled()
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[form="edit-group-form"]').attributes('disabled')).toBeDefined()
+    resolve({ ...result, success, status: success ? 'success' : 'failed', error_message: success ? undefined : 'Upstream rejected Messages' })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="availability-probe-result"]').text()).toContain(
+      success ? 'admin.groups.availabilityProbe.testSuccess' : 'admin.groups.availabilityProbe.testFailed',
+    )
+    if (!success) expect(wrapper.get('[data-testid="availability-probe-result"]').text()).toContain('Upstream rejected Messages')
+    expect(groups.list).toHaveBeenCalledTimes(listCalls + 1)
+    expect((name.element as HTMLInputElement).value).toBe('未保存的其他修改')
+    expect(button.attributes('disabled')).toBeUndefined()
+  })
+
+  it('已有探测进行中时显示忙碌提示，不伪造成功结果', async () => {
+    groups.testAvailabilityProbe.mockRejectedValue({ status: 409, reason: 'GROUP_AVAILABILITY_PROBE_BUSY' })
+    const wrapper = await open('edit', 'kimi', { availability_probe_config: config })
+    await wrapper.get('[data-testid="availability-probe-test"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toBe('admin.groups.availabilityProbe.testBusy')
+    expect(wrapper.find('[data-testid="availability-probe-result"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="availability-probe-test"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('探测设置不完整时不发请求，其他未保存字段不参与立即测试校验', async () => {
+    const wrapper = await open('edit', 'kimi', { availability_probe_config: { ...config, model_id: '' } })
+    await wrapper.get('[data-group-field="name"] input').setValue('')
+    await wrapper.get('[data-testid="availability-probe-test"]').trigger('click')
+    expect(groups.testAvailabilityProbe).not.toHaveBeenCalled()
+    expect(wrapper.get('[role="alert"]').text()).toBe('admin.groups.availabilityProbe.modelRequired')
+    wrapper.findAllComponents(Select).find(select => select.attributes('data-group-field') === 'probe-model')!
+      .vm.$emit('update:modelValue', 'gpt-test')
+    groups.testAvailabilityProbe.mockResolvedValue(result)
+    await flushPromises()
+    await wrapper.get('[data-testid="availability-probe-test"]').trigger('click')
+    await flushPromises()
+    expect(groups.testAvailabilityProbe).toHaveBeenCalledWith(42, config)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect((wrapper.get('[data-group-field="name"] input').element as HTMLInputElement).value).toBe('')
+  })
+
+  it('关闭重开弹窗后，旧请求结果不能覆盖新窗口或清除新请求的等待状态', async () => {
+    const pending: Array<(value: GroupAvailabilityProbeResult) => void> = []
+    groups.testAvailabilityProbe.mockImplementation(() => new Promise<GroupAvailabilityProbeResult>(done => pending.push(done)))
+    const wrapper = await open('edit', 'kimi', { availability_probe_config: config })
+    await wrapper.get('[data-testid="availability-probe-test"]').trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'common.cancel')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'common.edit')!.trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="availability-probe-test"]').trigger('click')
+    pending[0]!(result)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="availability-probe-result"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="availability-probe-test"]').attributes('disabled')).toBeDefined()
+    pending[1]!({ ...result, model_id: '最新请求' })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="availability-probe-result"]').text()).toContain('最新请求')
   })
 })

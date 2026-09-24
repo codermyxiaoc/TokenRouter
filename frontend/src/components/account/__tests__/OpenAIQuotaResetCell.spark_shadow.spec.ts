@@ -6,6 +6,7 @@ import { refreshOpenAIQuota } from '@/api/admin/accounts'
 
 vi.mock('@/api/admin/accounts', () => ({
   refreshOpenAIQuota: vi.fn(),
+  resetOpenAIQuota: vi.fn(),
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -49,24 +50,26 @@ beforeEach(() => {
   vi.mocked(refreshOpenAIQuota).mockReset()
 })
 
-describe('OpenAIQuotaResetCell — fork 查询-only 语义', () => {
-  it('影子账号(parent_account_id 非空)只展示查询按钮，不展示重置入口', () => {
+describe('OpenAIQuotaResetCell — 影子账号和缓存展示', () => {
+  it('影子账号(parent_account_id 非空)可以查询，但重置入口禁用', () => {
     const account = makeAccount({ parent_account_id: 100 })
     const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
 
-    const buttons = wrapper.findAll('button')
-    expect(buttons).toHaveLength(1)
+    const buttons = wrapper.findAll('button').filter(button => !button.attributes('data-testid')?.startsWith('referral-') && button.attributes('data-testid') !== 'codex-credits')
+    expect(buttons).toHaveLength(2)
     expect(buttons[0].attributes('title')).toBe('admin.accounts.openaiQuotaReset.countTooltipLoad')
+    expect(wrapper.get('[data-testid="reset-quota"]').attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 
-  it('普通账号(无 parent_account_id)同样只展示查询按钮', () => {
+  it('普通账号(无 parent_account_id)实时查询之前禁止重置', () => {
     const account = makeAccount({ parent_account_id: null })
     const wrapper = mount(OpenAIQuotaResetCell, { props: { account } })
 
-    const buttons = wrapper.findAll('button')
-    expect(buttons).toHaveLength(1)
+    const buttons = wrapper.findAll('button').filter(button => !button.attributes('data-testid')?.startsWith('referral-') && button.attributes('data-testid') !== 'codex-credits')
+    expect(buttons).toHaveLength(2)
     expect(buttons[0].attributes('title')).toBe('admin.accounts.openaiQuotaReset.countTooltipLoad')
+    expect(wrapper.get('[data-testid="reset-quota"]').attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 
@@ -89,8 +92,9 @@ describe('OpenAIQuotaResetCell — fork 查询-only 语义', () => {
     expect(wrapper.text()).toContain('admin.accounts.openaiQuotaReset.count2')
     expect(wrapper.text()).toContain('admin.accounts.openaiQuotaReset.expiresAt')
     expect(wrapper.text()).toContain('+1')
-    // 第二个按钮仅用于展开到期明细，不是上游重置入口。
-    expect(wrapper.findAll('button')).toHaveLength(2)
+    // 缓存能够展示到期明细，但不能代替实时查询来获得重置资格。
+    expect(wrapper.get('[data-testid="reset-quota"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.findAll('button').filter(button => !button.attributes('data-testid')?.startsWith('referral-') && button.attributes('data-testid') !== 'codex-credits')).toHaveLength(3)
     wrapper.unmount()
   })
 
@@ -108,7 +112,7 @@ describe('OpenAIQuotaResetCell — fork 查询-only 语义', () => {
 
     expect(wrapper.text()).not.toContain('admin.accounts.openaiQuotaReset.count1')
     expect(wrapper.text()).not.toContain('admin.accounts.openaiQuotaReset.expiresAt')
-    expect(wrapper.findAll('button')).toHaveLength(1)
+    expect(wrapper.findAll('button').filter(button => !button.attributes('data-testid')?.startsWith('referral-') && button.attributes('data-testid') !== 'codex-credits')).toHaveLength(2)
     wrapper.unmount()
   })
 
@@ -128,7 +132,28 @@ describe('OpenAIQuotaResetCell — fork 查询-only 语义', () => {
     expect(refreshOpenAIQuota).toHaveBeenCalledWith(1)
     expect(wrapper.text()).toContain('admin.accounts.openaiQuotaReset.count2')
     expect(wrapper.text()).toContain('admin.accounts.openaiQuotaReset.refreshCachePersistFailed')
-    expect(wrapper.findAll('button')).toHaveLength(1)
+    expect(wrapper.findAll('button').filter(button => !button.attributes('data-testid')?.startsWith('referral-') && button.attributes('data-testid') !== 'codex-credits')).toHaveLength(2)
     wrapper.unmount()
   })
+})
+
+// 积分独立于重置次数，已有余额不能直接解锁真实重置入口。
+describe('Codex积分展示', () => {
+ it('保留小数精度且不触发自动网络请求', () => {
+  const account=makeAccount({extra:{codex_credits_snapshot:{credits:{has_credits:true,unlimited:false,balance:'12345678901234567890.0123'},fetched_at:123}}})
+  const wrapper=mount(OpenAIQuotaResetCell,{props:{account}})
+  expect(wrapper.get('[data-testid="codex-credits"]').text()).toContain('12345678901234567890.0123')
+  expect(refreshOpenAIQuota).not.toHaveBeenCalled()
+  expect(wrapper.get('[data-testid="reset-quota"]').attributes('disabled')).toBeDefined()
+  wrapper.unmount()
+ })
+ it('成功查询缺失积分时清除旧余额', async()=>{
+  vi.mocked(refreshOpenAIQuota).mockResolvedValue({fetched_at:456,cache_persisted:true})
+  const account=makeAccount({extra:{codex_credits_snapshot:{credits:{has_credits:true,unlimited:false,balance:'20.1'},fetched_at:123}}})
+  const wrapper=mount(OpenAIQuotaResetCell,{props:{account}})
+  await wrapper.get('[data-testid="codex-credits"]').trigger('click');await flushPromises()
+  expect(wrapper.get('[data-testid="codex-credits"]').text()).toContain('—')
+  expect(wrapper.get('[data-testid="codex-credits"]').text()).not.toContain('20.1')
+  wrapper.unmount()
+ })
 })

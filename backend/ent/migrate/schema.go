@@ -1429,7 +1429,7 @@ var (
 		{Name: "expires_at", Type: field.TypeTime, Nullable: true},
 		{Name: "fallback_mode", Type: field.TypeString, Size: 20, Default: "none"},
 		{Name: "expiry_warn_days", Type: field.TypeInt, Default: 7},
-		{Name: "backup_proxy_id", Type: field.TypeInt64, Unique: true, Nullable: true},
+		{Name: "backup_proxy_id", Type: field.TypeInt64, Nullable: true},
 	}
 	// ProxiesTable holds the schema information for the "proxies" table.
 	ProxiesTable = &schema.Table{
@@ -2331,6 +2331,10 @@ var (
 		{Name: "daily_usage_usd", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
 		{Name: "weekly_usage_usd", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
 		{Name: "monthly_usage_usd", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
+		{Name: "daily_reset_count", Type: field.TypeInt64, Default: 0},
+		{Name: "weekly_reset_count", Type: field.TypeInt64, Default: 0},
+		{Name: "monthly_reset_count", Type: field.TypeInt64, Default: 0},
+		{Name: "reset_counted_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "assigned_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "source_order_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "notes", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
@@ -2346,19 +2350,19 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "user_subscriptions_subscription_plans_subscriptions",
-				Columns:    []*schema.Column{UserSubscriptionsColumns[19]},
+				Columns:    []*schema.Column{UserSubscriptionsColumns[23]},
 				RefColumns: []*schema.Column{SubscriptionPlansColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
 			{
 				Symbol:     "user_subscriptions_users_subscriptions",
-				Columns:    []*schema.Column{UserSubscriptionsColumns[20]},
+				Columns:    []*schema.Column{UserSubscriptionsColumns[24]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
 			{
 				Symbol:     "user_subscriptions_users_assigned_subscriptions",
-				Columns:    []*schema.Column{UserSubscriptionsColumns[21]},
+				Columns:    []*schema.Column{UserSubscriptionsColumns[25]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -2367,12 +2371,12 @@ var (
 			{
 				Name:    "usersubscription_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{UserSubscriptionsColumns[20]},
+				Columns: []*schema.Column{UserSubscriptionsColumns[24]},
 			},
 			{
 				Name:    "usersubscription_plan_id",
 				Unique:  false,
-				Columns: []*schema.Column{UserSubscriptionsColumns[19]},
+				Columns: []*schema.Column{UserSubscriptionsColumns[23]},
 			},
 			{
 				Name:    "usersubscription_status",
@@ -2392,22 +2396,22 @@ var (
 			{
 				Name:    "usersubscription_source_order_id",
 				Unique:  false,
-				Columns: []*schema.Column{UserSubscriptionsColumns[17]},
+				Columns: []*schema.Column{UserSubscriptionsColumns[21]},
 			},
 			{
 				Name:    "usersubscription_user_id_status_starts_at_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{UserSubscriptionsColumns[20], UserSubscriptionsColumns[6], UserSubscriptionsColumns[4], UserSubscriptionsColumns[5]},
+				Columns: []*schema.Column{UserSubscriptionsColumns[24], UserSubscriptionsColumns[6], UserSubscriptionsColumns[4], UserSubscriptionsColumns[5]},
 			},
 			{
 				Name:    "usersubscription_assigned_by",
 				Unique:  false,
-				Columns: []*schema.Column{UserSubscriptionsColumns[21]},
+				Columns: []*schema.Column{UserSubscriptionsColumns[25]},
 			},
 			{
 				Name:    "usersubscription_user_id_plan_id_starts_at",
 				Unique:  false,
-				Columns: []*schema.Column{UserSubscriptionsColumns[20], UserSubscriptionsColumns[19], UserSubscriptionsColumns[4]},
+				Columns: []*schema.Column{UserSubscriptionsColumns[24], UserSubscriptionsColumns[23], UserSubscriptionsColumns[4]},
 			},
 			{
 				Name:    "usersubscription_deleted_at",

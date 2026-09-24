@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -17,9 +16,9 @@ var ccVersionWithFingerprintInBillingRe = regexp.MustCompile(`cc_version=\d+\.\d
 
 // OAuth 伪装会在账号指纹之后强制写入运行时 CLI User-Agent，计费标记必须与其一致。
 // @project-doc docs/interfaces/anthropic_upstream.md#claude_billing_fingerprint
-func effectiveBillingUserAgent(tokenType string, mimicClaudeCode bool, fingerprint *Fingerprint) string {
+func effectiveBillingUserAgent(mimicUserAgent, tokenType string, mimicClaudeCode bool, fingerprint *Fingerprint) string {
 	if tokenType == "oauth" && mimicClaudeCode {
-		return claude.DefaultHeaders["User-Agent"]
+		return mimicUserAgent
 	}
 	if fingerprint == nil {
 		return ""

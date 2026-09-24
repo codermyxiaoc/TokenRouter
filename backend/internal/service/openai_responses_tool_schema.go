@@ -88,6 +88,7 @@ func sanitizeOpenAIResponsesToolParameterTypes(body []byte) ([]byte, bool, error
 	return sanitizeOpenAIResponsesToolSchemas(body, openAIResponsesToolSchemaOptions{
 		replaceNullParameterTypes:       true,
 		injectObjectUnionRootObjectType: true,
+		dropNullRequired:                true,
 	})
 }
 
@@ -107,6 +108,7 @@ type openAIResponsesToolSchemaOptions struct {
 	removeLookaroundPatterns        bool
 	replaceNullParameterTypes       bool
 	injectObjectUnionRootObjectType bool
+	dropNullRequired                bool
 }
 
 type openAIResponsesToolSchemaContext uint8
@@ -276,6 +278,12 @@ func (p *openAIResponsesToolSchemaParser) parseObject(
 			if pattern, ok := decodeOpenAIResponsesJSONStringValue(p.body[valueStart:valueEnd]); ok && hasRegexLookaround(pattern) {
 				deleteMember = true
 			}
+		}
+		// required 必须为数组；删除等价于空数组的 null，兼容严格的上游校验。
+		if context == openAIResponsesToolSchema && p.options.dropNullRequired &&
+			openAIResponsesJSONStringEquals(key, "required") &&
+			bytes.Equal(p.body[valueStart:valueEnd], []byte("null")) {
+			deleteMember = true
 		}
 		if context == openAIResponsesToolSchema && schemaRoot && openAIResponsesJSONStringEquals(key, "type") {
 			// Duplicate JSON keys have parser-dependent effective values. Repair a
@@ -455,7 +463,8 @@ func openAIResponsesToolSchemaChildContext(
 		}
 	case openAIResponsesToolSchemaTool:
 		switch {
-		case openAIResponsesJSONStringEquals(key, "parameters"):
+		// Messages 的同类 Schema 位于 input_schema，也需要经过相同清洗。
+		case openAIResponsesJSONStringMatchesAny(key, "parameters", "input_schema"):
 			return openAIResponsesToolSchema, true
 		case openAIResponsesJSONStringEquals(key, "function"):
 			return openAIResponsesToolSchemaFunction, false
@@ -477,7 +486,7 @@ func openAIResponsesToolSchemaChildContext(
 		switch {
 		case openAIResponsesJSONStringMatchesAny(key,
 			"additionalProperties", "additionalItems", "contains", "not", "if", "then", "else",
-			"propertyNames", "unevaluatedProperties", "unevaluatedItems"):
+			"propertyNames", "unevaluatedProperties", "unevaluatedItems", "contentSchema"):
 			return openAIResponsesToolSchema, false
 		case openAIResponsesJSONStringEquals(key, "items"):
 			return openAIResponsesToolSchemaOrArray, false

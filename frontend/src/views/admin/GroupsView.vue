@@ -677,6 +677,18 @@
                   />
                 </div>
                 <div>
+                  <label class="input-label">{{ t("admin.groups.availabilityProbe.protocol") }}</label>
+                  <Select
+                    data-group-field="probe-protocol"
+                    v-model="createForm.availability_probe_protocol"
+                    :options="availabilityProbeProtocolOptions(createForm.platform)"
+                    :aria-label="t('admin.groups.availabilityProbe.protocol')"
+                  />
+                  <p class="input-hint">{{ availabilityProbeProtocolHint(createForm.availability_probe_protocol) }}</p>
+                  <p v-if="createForm.platform === 'openai'" class="input-hint">{{ t("admin.groups.availabilityProbe.protocolOpenAIHint") }}</p>
+                  <p v-if="createForm.platform === 'opencode_go'" class="input-hint">{{ t("admin.groups.availabilityProbe.protocolOpenCodeHint") }}</p>
+                </div>
+                <div>
                   <label class="input-label">{{ t("admin.groups.availabilityProbe.interval") }}</label>
                   <input
                     v-model.number="createForm.availability_probe_interval_minutes"
@@ -727,6 +739,7 @@
                     :placeholder="t('admin.groups.availabilityProbe.promptPlaceholder')"
                   />
                 </div>
+                <p class="input-hint md:col-span-2">{{ t("admin.groups.availabilityProbe.createBeforeTest") }}</p>
               </div>
             </div>
           </template>
@@ -1208,7 +1221,7 @@
                 />
               </div>
               <div class="mt-3 space-y-2">
-                <PricingEntryCard v-for="(entry, index) in createForm.model_pricing" :key="index" :entry="entry" :platform="createForm.platform" hide-token-intervals @update="createForm.model_pricing[index] = $event" @remove="createForm.model_pricing.splice(index, 1)" />
+                <PricingEntryCard v-for="(entry, index) in createForm.model_pricing" :key="index" :entry="entry" :platform="createForm.platform" hide-token-intervals enable-tier-multipliers @update="createForm.model_pricing[index] = $event" @remove="createForm.model_pricing.splice(index, 1)" />
               </div>
             </div>
             <div
@@ -2361,6 +2374,18 @@
                   />
                 </div>
                 <div>
+                  <label class="input-label">{{ t("admin.groups.availabilityProbe.protocol") }}</label>
+                  <Select
+                    data-group-field="probe-protocol"
+                    v-model="editForm.availability_probe_protocol"
+                    :options="availabilityProbeProtocolOptions(editForm.platform)"
+                    :aria-label="t('admin.groups.availabilityProbe.protocol')"
+                  />
+                  <p class="input-hint">{{ availabilityProbeProtocolHint(editForm.availability_probe_protocol) }}</p>
+                  <p v-if="editForm.platform === 'openai'" class="input-hint">{{ t("admin.groups.availabilityProbe.protocolOpenAIHint") }}</p>
+                  <p v-if="editForm.platform === 'opencode_go'" class="input-hint">{{ t("admin.groups.availabilityProbe.protocolOpenCodeHint") }}</p>
+                </div>
+                <div>
                   <label class="input-label">{{ t("admin.groups.availabilityProbe.interval") }}</label>
                   <input
                     v-model.number="editForm.availability_probe_interval_minutes"
@@ -2410,6 +2435,37 @@
                     class="input"
                     :placeholder="t('admin.groups.availabilityProbe.promptPlaceholder')"
                   />
+                </div>
+                <div class="space-y-3 border-t border-gray-200 pt-4 dark:border-dark-600 md:col-span-2">
+                  <p class="input-hint">{{ t("admin.groups.availabilityProbe.testNowHint") }}</p>
+                  <button
+                    type="button"
+                    class="btn btn-secondary"
+                    data-testid="availability-probe-test"
+                    :disabled="availabilityProbeTesting || submitting"
+                    :aria-busy="availabilityProbeTesting"
+                    @click="handleTestAvailabilityProbe"
+                  >
+                    {{ t(availabilityProbeTesting ? "admin.groups.availabilityProbe.testing" : "admin.groups.availabilityProbe.testNow") }}
+                  </button>
+                  <div
+                    v-if="availabilityProbeResult"
+                    role="status"
+                    data-testid="availability-probe-result"
+                    class="rounded-lg border p-3 text-sm"
+                    :class="availabilityProbeResult.success
+                      ? 'border-green-200 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300'
+                      : 'border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300'"
+                  >
+                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span class="font-medium">{{ t(availabilityProbeResult.success ? "admin.groups.availabilityProbe.testSuccess" : "admin.groups.availabilityProbe.testFailed") }}</span>
+                      <span>{{ t("admin.groups.availabilityProbe.testLatency", { ms: availabilityProbeResult.latency_ms }) }}</span>
+                      <span v-if="availabilityProbeResult.account_id">{{ t("admin.groups.availabilityProbe.testAccount", { id: availabilityProbeResult.account_id }) }}</span>
+                    </div>
+                    <p class="mt-1 break-all">{{ availabilityProbeResult.model_id }} · {{ t(`admin.groups.availabilityProbe.protocols.${availabilityProbeResult.protocol}`) }}</p>
+                    <p v-if="availabilityProbeResult.error_message" class="mt-2 whitespace-pre-wrap break-words">{{ availabilityProbeResult.error_message }}</p>
+                  </div>
+                  <p v-if="availabilityProbeError" role="alert" class="whitespace-pre-wrap break-words text-sm text-red-600 dark:text-red-400">{{ availabilityProbeError }}</p>
                 </div>
               </div>
             </div>
@@ -2891,7 +2947,7 @@
                 />
               </div>
               <div class="mt-3 space-y-2">
-                <PricingEntryCard v-for="(entry, index) in editForm.model_pricing" :key="index" :entry="entry" :platform="editForm.platform" hide-token-intervals @update="editForm.model_pricing[index] = $event" @remove="editForm.model_pricing.splice(index, 1)" />
+                <PricingEntryCard v-for="(entry, index) in editForm.model_pricing" :key="index" :entry="entry" :platform="editForm.platform" hide-token-intervals enable-tier-multipliers @update="editForm.model_pricing[index] = $event" @remove="editForm.model_pricing.splice(index, 1)" />
               </div>
             </div>
             <div
@@ -3684,7 +3740,7 @@
           <button
             type="submit"
             form="edit-group-form"
-            :disabled="submitting"
+            :disabled="submitting || availabilityProbeTesting"
             class="btn btn-primary"
             data-tour="group-form-submit"
           >
@@ -3874,6 +3930,8 @@ import { useBalanceDisplay } from "@/composables/useBalanceDisplay";
 import type {
   AdminGroup,
   GroupAvailabilityProbeConfig,
+  GroupAvailabilityProbeProtocol,
+  GroupAvailabilityProbeResult,
   GroupClientProtocol,
   GroupPlatform,
   GroupSchedulerType,
@@ -3900,8 +3958,10 @@ import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffor
 import GroupClientProtocolSelector from "@/components/admin/group/GroupClientProtocolSelector.vue";
 import GroupAdvancedSchedulerOverridesModal from "@/components/admin/group/GroupAdvancedSchedulerOverridesModal.vue";
 import GroupFormTabs from "@/components/admin/group/GroupFormTabs.vue";
+import { getAvailabilityProbeProtocols } from "./groupsAvailabilityProbe";
 import PricingEntryCard from "@/components/admin/channel/PricingEntryCard.vue";
 import type { PricingFormEntry } from "@/components/admin/channel/types";
+import { reasoningEffortMultipliersToAPI } from "@/components/admin/channel/types";
 import {
   apiIntervalsToForm,
   createDefaultTimePricingForm,
@@ -4005,6 +4065,10 @@ const groupPricingFromAPI = (
     billing_mode: entry.billing_mode || "token",
     price_multiplier: entry.price_multiplier ?? null,
     fast_mode_multiplier: entry.fast_mode_multiplier ?? null,
+    fast_multiplier: entry.fast_multiplier ?? null,
+    flex_multiplier: entry.flex_multiplier ?? null,
+    max_reasoning_effort_multiplier: entry.max_reasoning_effort_multiplier ?? null,
+    reasoning_effort_multipliers: { ...entry.reasoning_effort_multipliers },
     input_price: perTokenToMTok(entry.input_price),
     output_price: perTokenToMTok(entry.output_price),
     cache_write_price: perTokenToMTok(entry.cache_write_price),
@@ -4029,6 +4093,10 @@ const groupPricingToAPI = (
       billing_mode: entry.billing_mode,
       price_multiplier: toNullableNumber(entry.price_multiplier),
       fast_mode_multiplier: toNullableNumber(entry.fast_mode_multiplier),
+      fast_multiplier: toNullableNumber(entry.fast_multiplier),
+      flex_multiplier: toNullableNumber(entry.flex_multiplier),
+      max_reasoning_effort_multiplier: toNullableNumber(entry.max_reasoning_effort_multiplier),
+      reasoning_effort_multipliers: reasoningEffortMultipliersToAPI(entry.reasoning_effort_multipliers),
       input_price: mTokToPerToken(entry.input_price),
       output_price: mTokToPerToken(entry.output_price),
       cache_write_price: mTokToPerToken(entry.cache_write_price),
@@ -4498,6 +4566,17 @@ const showSortModal = ref(false);
 const submitting = ref(false);
 const sortSubmitting = ref(false);
 const editingGroup = ref<AdminGroup | null>(null);
+const availabilityProbeTesting = ref(false);
+const availabilityProbeResult = ref<GroupAvailabilityProbeResult | null>(null);
+const availabilityProbeError = ref("");
+// 弹窗切换后忽略旧请求的 UI 回写，服务端已执行的探测仍正常记录。
+let availabilityProbeSession = 0;
+const resetAvailabilityProbeTest = () => {
+  availabilityProbeSession += 1;
+  availabilityProbeTesting.value = false;
+  availabilityProbeResult.value = null;
+  availabilityProbeError.value = "";
+};
 const deletingGroup = ref<AdminGroup | null>(null);
 const duplicatingGroupIds = reactive(new Set<number>());
 const actionMenuGroup = ref<AdminGroup | null>(null);
@@ -4642,6 +4721,7 @@ const createForm = reactive({
   reasoning_effort_mappings: [] as ReasoningEffortMappingRow[],
   // 分组主动可用性探测配置
   availability_probe_enabled: false,
+  availability_probe_protocol: "auto" as GroupAvailabilityProbeProtocol,
   availability_probe_model_id: "",
   availability_probe_prompt: "hi",
   availability_probe_interval_minutes: 30,
@@ -4907,6 +4987,17 @@ function buildAvailabilityProbeModelOptions(models: string[]) {
   return options;
 }
 
+const availabilityProbeProtocolOptions = (platform: GroupPlatform) =>
+  getAvailabilityProbeProtocols(platform).map((value) => ({
+    value,
+    label: t(`admin.groups.availabilityProbe.protocols.${value}`),
+  }));
+
+const availabilityProbeProtocolHint = (protocol: GroupAvailabilityProbeProtocol) =>
+  t(protocol === "auto"
+    ? "admin.groups.availabilityProbe.protocolAutoHint"
+    : "admin.groups.availabilityProbe.protocolSelectedHint");
+
 const isAvailabilityProbeModelAvailable = (
   modelID: string,
   options: ReturnType<typeof buildAvailabilityProbeModelOptions>,
@@ -4920,6 +5011,7 @@ const resetAvailabilityProbeFormState = (
   config?: GroupAvailabilityProbeConfig | null,
 ) => {
   form.availability_probe_enabled = config?.enabled ?? false;
+  form.availability_probe_protocol = config?.protocol ?? "auto";
   form.availability_probe_model_id = config?.model_id ?? "";
   form.availability_probe_prompt = config?.prompt ?? "hi";
   form.availability_probe_interval_minutes = config?.interval_minutes ?? 30;
@@ -4946,6 +5038,7 @@ const buildAvailabilityProbeConfig = (
 
   return {
     enabled: true,
+    protocol: form.availability_probe_protocol,
     model_id: modelID,
     prompt,
     interval_minutes: Number(form.availability_probe_interval_minutes) || 30,
@@ -4954,6 +5047,42 @@ const buildAvailabilityProbeConfig = (
     max_retries: Number(form.availability_probe_max_retries),
     user_agent: form.availability_probe_user_agent.trim(),
   };
+};
+
+const handleTestAvailabilityProbe = async () => {
+  if (!editingGroup.value || !showEditModal.value || !editForm.availability_probe_enabled
+    || availabilityProbeTesting.value || submitting.value) return;
+  availabilityProbeResult.value = null;
+  availabilityProbeError.value = "";
+  let config: GroupAvailabilityProbeConfig;
+  try {
+    // 立即测试只保存探测设置，不要求提交其他页签中尚未完成的草稿。
+    config = buildAvailabilityProbeConfig(editForm);
+  } catch (error) {
+    availabilityProbeError.value = extractApiErrorMessage(error);
+    return;
+  }
+  const session = availabilityProbeSession;
+  const groupID = editingGroup.value.id;
+  const isCurrent = () => session === availabilityProbeSession && showEditModal.value
+    && editingGroup.value?.id === groupID;
+  availabilityProbeTesting.value = true;
+  try {
+    const result = await adminAPI.groups.testAvailabilityProbe(groupID, config);
+    if (!isCurrent()) return;
+    availabilityProbeResult.value = result;
+    // 仅刷新列表投影，不重新初始化编辑表单，避免覆盖其他分组设置的草稿。
+    await loadGroups();
+  } catch (error: unknown) {
+    if (!isCurrent()) return;
+    const reason = (error as { reason?: string; response?: { data?: { reason?: string } } })?.reason
+      ?? (error as { response?: { data?: { reason?: string } } })?.response?.data?.reason;
+    availabilityProbeError.value = reason === "GROUP_AVAILABILITY_PROBE_BUSY"
+      ? t("admin.groups.availabilityProbe.testBusy")
+      : extractApiErrorMessage(error, t("admin.groups.availabilityProbe.testRequestFailed"));
+  } finally {
+    if (isCurrent()) availabilityProbeTesting.value = false;
+  }
 };
 
 // 将 UI 格式的路由规则转换为 API 格式
@@ -5081,6 +5210,7 @@ const editForm = reactive({
   reasoning_effort_mappings: [] as ReasoningEffortMappingRow[],
   // 分组主动可用性探测配置
   availability_probe_enabled: false,
+  availability_probe_protocol: "auto" as GroupAvailabilityProbeProtocol,
   availability_probe_model_id: "",
   availability_probe_prompt: "hi",
   availability_probe_interval_minutes: 30,
@@ -5633,6 +5763,7 @@ const handleCreateGroup = async () => {
       ),
     };
     delete (requestData as any).availability_probe_enabled;
+    delete (requestData as any).availability_probe_protocol;
     delete (requestData as any).availability_probe_model_id;
     delete (requestData as any).availability_probe_prompt;
     delete (requestData as any).availability_probe_interval_minutes;
@@ -5707,6 +5838,7 @@ const handleCreateGroup = async () => {
 };
 
 const handleEdit = async (group: AdminGroup) => {
+  resetAvailabilityProbeTest();
   editingGroup.value = group;
   editForm.name = group.name;
   editForm.description = group.description || "";
@@ -5813,6 +5945,7 @@ const handleEdit = async (group: AdminGroup) => {
 };
 
 const closeEditModal = () => {
+  resetAvailabilityProbeTest();
   editModelRoutingRules.value.forEach((rule) => {
     accountSearchRunner.clearKey(getEditRuleSearchKey(rule));
   });
@@ -5857,8 +5990,8 @@ const closeEditModal = () => {
 
 const handleUpdateGroup = async () => {
   if (!editingGroup.value) return;
-  if (submitting.value || !(await validateGroupForm("edit"))) return;
-  if (submitting.value || !showEditModal.value || !editingGroup.value) return;
+  if (submitting.value || availabilityProbeTesting.value || !(await validateGroupForm("edit"))) return;
+  if (submitting.value || availabilityProbeTesting.value || !showEditModal.value || !editingGroup.value) return;
 
   submitting.value = true;
   try {
@@ -5916,6 +6049,7 @@ const handleUpdateGroup = async () => {
       ),
     };
     delete (payload as any).availability_probe_enabled;
+    delete (payload as any).availability_probe_protocol;
     delete (payload as any).availability_probe_model_id;
     delete (payload as any).availability_probe_prompt;
     delete (payload as any).availability_probe_interval_minutes;
@@ -6073,6 +6207,9 @@ watch(
   () => createForm.platform,
   (newVal) => {
     createForm.allowed_client_protocols = defaultGroupClientProtocols(newVal);
+    if (!getAvailabilityProbeProtocols(newVal).includes(createForm.availability_probe_protocol)) {
+      createForm.availability_probe_protocol = "auto";
+    }
     createForm.unavailable_fallback_group_id = null;
     if (!["anthropic", "antigravity"].includes(newVal)) {
       createForm.fallback_group_id_on_invalid_request = null;
@@ -6116,6 +6253,9 @@ watch(
   () => editForm.platform,
   (newVal) => {
     editForm.allowed_client_protocols = defaultGroupClientProtocols(newVal);
+    if (!getAvailabilityProbeProtocols(newVal).includes(editForm.availability_probe_protocol)) {
+      editForm.availability_probe_protocol = "auto";
+    }
   },
   { flush: "sync" },
 );
@@ -6321,6 +6461,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  resetAvailabilityProbeTest();
   document.removeEventListener("click", handleClickOutside);
   accountSearchRunner.clearAll();
   clearAllAccountSearchState();

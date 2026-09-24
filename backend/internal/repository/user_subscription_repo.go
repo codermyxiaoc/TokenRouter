@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	dbent "github.com/TokenFlux/TokenRouter/ent"
@@ -10,6 +11,7 @@ import (
 	dbuser "github.com/TokenFlux/TokenRouter/ent/user"
 	"github.com/TokenFlux/TokenRouter/ent/usersubscription"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/pagination"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/lib/pq"
 )
@@ -118,50 +120,65 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 		return service.ErrSubscriptionNilInput
 	}
 
-	client := clientFromContext(ctx, r.client)
-	builder := client.UserSubscription.UpdateOneID(sub.ID).
-		SetUserID(sub.UserID).
-		SetPlanID(sub.PlanID).
-		SetStartsAt(sub.StartsAt).
-		SetExpiresAt(sub.ExpiresAt).
-		SetStatus(sub.Status).
-		SetNillableDailyWindowStart(sub.DailyWindowStart).
-		SetNillableWeeklyWindowStart(sub.WeeklyWindowStart).
-		SetNillableMonthlyWindowStart(sub.MonthlyWindowStart).
-		SetNillableDailyLimitUsd(sub.DailyLimitUSD).
-		SetNillableWeeklyLimitUsd(sub.WeeklyLimitUSD).
-		SetNillableMonthlyLimitUsd(sub.MonthlyLimitUSD).
-		SetDailyUsageUsd(sub.DailyUsageUSD).
-		SetWeeklyUsageUsd(sub.WeeklyUsageUSD).
-		SetMonthlyUsageUsd(sub.MonthlyUsageUSD).
-		SetNillableAssignedBy(sub.AssignedBy).
-		SetAssignedAt(sub.AssignedAt).
-		SetNillableSourceOrderID(sub.SourceOrderID).
-		SetNotes(sub.Notes)
+	return r.mutateWithResetCountSettlement(ctx, sub.ID, false, func(txCtx context.Context, client *dbent.Client, row *dbent.UserSubscription) error {
+		// 通用编辑的计数及水位来自锁内新快照，避免旧输入覆盖已结清的时间表。
+		builder := client.UserSubscription.UpdateOneID(sub.ID).
+			SetUserID(sub.UserID).
+			SetPlanID(sub.PlanID).
+			SetStartsAt(sub.StartsAt).
+			SetExpiresAt(sub.ExpiresAt).
+			SetStatus(sub.Status).
+			SetNillableDailyWindowStart(sub.DailyWindowStart).
+			SetNillableWeeklyWindowStart(sub.WeeklyWindowStart).
+			SetNillableMonthlyWindowStart(sub.MonthlyWindowStart).
+			SetNillableDailyLimitUsd(sub.DailyLimitUSD).
+			SetNillableWeeklyLimitUsd(sub.WeeklyLimitUSD).
+			SetNillableMonthlyLimitUsd(sub.MonthlyLimitUSD).
+			SetDailyUsageUsd(sub.DailyUsageUSD).
+			SetWeeklyUsageUsd(sub.WeeklyUsageUSD).
+			SetMonthlyUsageUsd(sub.MonthlyUsageUSD).
+			SetNillableAssignedBy(sub.AssignedBy).
+			SetAssignedAt(sub.AssignedAt).
+			SetNillableSourceOrderID(sub.SourceOrderID).
+			SetNotes(sub.Notes)
+		setSubscriptionResetCountMutation(builder.Mutation(), row)
 
-	updated, err := builder.Save(ctx)
-	if err == nil {
-		applyUserSubscriptionEntityToService(sub, updated)
-		return nil
-	}
-	return translatePersistenceError(err, service.ErrSubscriptionNotFound, service.ErrSubscriptionAlreadyExists)
+		updated, err := builder.Save(txCtx)
+		if err == nil {
+			applyUserSubscriptionEntityToService(sub, updated)
+			return nil
+		}
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, service.ErrSubscriptionAlreadyExists)
+	})
 }
 
 func (r *userSubscriptionRepository) Delete(ctx context.Context, id int64) error {
-	client := clientFromContext(ctx, r.client)
-	_, err := client.UserSubscription.Delete().Where(usersubscription.IDEQ(id)).Exec(ctx)
+	err := r.mutateWithResetCountSettlement(ctx, id, false, func(txCtx context.Context, client *dbent.Client, row *dbent.UserSubscription) error {
+		// 复用删除钩子将计数与软删除合并为同一条更新，并保留内部显式物理删除的语义。
+		mutation := client.UserSubscription.Update().Where(usersubscription.IDEQ(id)).Mutation()
+		setSubscriptionResetCountMutation(mutation, row)
+		mutation.SetOp(dbent.OpDelete)
+		_, err := client.Mutate(txCtx, mutation)
+		return err
+	})
+	// 保持原批量删除的幂等语义：不存在或已经软删除的记录视为完成。
+	if errors.Is(err, service.ErrSubscriptionNotFound) {
+		return nil
+	}
 	return err
 }
 
 // Restore 清除订阅软删除标记，并按当前时间窗口写回恢复后的状态。
 func (r *userSubscriptionRepository) Restore(ctx context.Context, subscriptionID int64, restoredStatus string) (*service.UserSubscription, error) {
-	client := clientFromContext(ctx, r.client)
-	queryCtx := mixins.SkipSoftDelete(ctx)
-	_, err := client.UserSubscription.UpdateOneID(subscriptionID).
-		SetStatus(restoredStatus).
-		ClearDeletedAt().
-		SetUpdatedAt(time.Now()).
-		Save(queryCtx)
+	err := r.mutateWithResetCountSettlement(ctx, subscriptionID, true, func(txCtx context.Context, client *dbent.Client, row *dbent.UserSubscription) error {
+		update := client.UserSubscription.UpdateOneID(subscriptionID).
+			SetStatus(restoredStatus).
+			ClearDeletedAt().
+			SetUpdatedAt(time.Now())
+		setSubscriptionResetCountMutation(update.Mutation(), row)
+		_, err := update.Save(txCtx)
+		return err
+	})
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, service.ErrSubscriptionAlreadyExists)
 	}
@@ -410,19 +427,21 @@ func (r *userSubscriptionRepository) ListBySourceOrderID(ctx context.Context, so
 }
 
 func (r *userSubscriptionRepository) ExtendExpiry(ctx context.Context, subscriptionID int64, newExpiresAt time.Time) error {
-	client := clientFromContext(ctx, r.client)
-	_, err := client.UserSubscription.UpdateOneID(subscriptionID).
-		SetExpiresAt(newExpiresAt).
-		Save(ctx)
-	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	return r.mutateWithResetCountSettlement(ctx, subscriptionID, false, func(txCtx context.Context, client *dbent.Client, row *dbent.UserSubscription) error {
+		update := client.UserSubscription.UpdateOneID(subscriptionID).SetExpiresAt(newExpiresAt)
+		setSubscriptionResetCountMutation(update.Mutation(), row)
+		_, err := update.Save(txCtx)
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	})
 }
 
 func (r *userSubscriptionRepository) UpdateStatus(ctx context.Context, subscriptionID int64, status string) error {
-	client := clientFromContext(ctx, r.client)
-	_, err := client.UserSubscription.UpdateOneID(subscriptionID).
-		SetStatus(status).
-		Save(ctx)
-	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	return r.mutateWithResetCountSettlement(ctx, subscriptionID, false, func(txCtx context.Context, client *dbent.Client, row *dbent.UserSubscription) error {
+		update := client.UserSubscription.UpdateOneID(subscriptionID).SetStatus(status)
+		setSubscriptionResetCountMutation(update.Mutation(), row)
+		_, err := update.Save(txCtx)
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	})
 }
 
 func (r *userSubscriptionRepository) UpdateNotes(ctx context.Context, subscriptionID int64, notes string) error {
@@ -437,100 +456,92 @@ func (r *userSubscriptionRepository) ActivateWindows(ctx context.Context, id int
 	if !activation.Any() {
 		return nil
 	}
-	client := clientFromContext(ctx, r.client)
-	update := client.UserSubscription.UpdateOneID(id)
-	if activation.Daily {
-		update.SetDailyWindowStart(start)
-	}
-	if activation.Weekly {
-		update.SetWeeklyWindowStart(start)
-	}
-	if activation.Monthly {
-		update.SetMonthlyWindowStart(start)
-	}
-	_, err := update.Save(ctx)
-	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	return r.mutateWithResetCountSettlement(ctx, id, false, func(txCtx context.Context, client *dbent.Client, row *dbent.UserSubscription) error {
+		update := client.UserSubscription.UpdateOneID(id)
+		setSubscriptionResetCountMutation(update.Mutation(), row)
+		// 只激活锁内仍为空的窗口，避免扫描旧快照覆盖其他请求已经建立的锚点。
+		if activation.Daily && row.DailyWindowStart == nil {
+			update.SetDailyWindowStart(timezone.StartOfDay(start))
+		}
+		if activation.Weekly && row.WeeklyWindowStart == nil {
+			update.SetWeeklyWindowStart(start)
+		}
+		if activation.Monthly && row.MonthlyWindowStart == nil {
+			update.SetMonthlyWindowStart(start)
+		}
+		_, err := update.Save(txCtx)
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	})
 }
 
 func (r *userSubscriptionRepository) ResetUsageWindows(ctx context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, newWindowStart time.Time) error {
-	client := clientFromContext(ctx, r.client)
-	update := client.UserSubscription.UpdateOneID(id)
-	if resetDaily {
-		update.SetDailyUsageUsd(0).SetDailyWindowStart(newWindowStart)
-	}
-	if resetWeekly {
-		update.SetWeeklyUsageUsd(0).SetWeeklyWindowStart(newWindowStart)
-	}
-	if resetMonthly {
-		update.SetMonthlyUsageUsd(0).SetMonthlyWindowStart(newWindowStart)
-	}
-	_, err := update.Save(ctx)
-	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	return r.mutateWithResetCountSettlement(ctx, id, false, func(txCtx context.Context, client *dbent.Client, row *dbent.UserSubscription) error {
+		update := client.UserSubscription.UpdateOneID(id)
+		setSubscriptionResetCountMutation(update.Mutation(), row)
+		if resetDaily {
+			// 日额度按配置时区零点刷新，周/月保留实际手动重置时刻。
+			update.SetDailyUsageUsd(0).SetDailyWindowStart(timezone.StartOfDay(newWindowStart))
+		}
+		if resetWeekly {
+			update.SetWeeklyUsageUsd(0).SetWeeklyWindowStart(newWindowStart)
+		}
+		if resetMonthly {
+			update.SetMonthlyUsageUsd(0).SetMonthlyWindowStart(newWindowStart)
+		}
+		_, err := update.Save(txCtx)
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	})
 }
 
 func (r *userSubscriptionRepository) ResetDailyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
-	client := clientFromContext(ctx, r.client)
-	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
-	if expectedWindowStart == nil {
-		query = query.Where(usersubscription.DailyWindowStartIsNil())
-	} else {
-		query = query.Where(usersubscription.DailyWindowStartEQ(*expectedWindowStart))
-	}
-	n, err := query.
-		SetDailyUsageUsd(0).
-		SetDailyWindowStart(newWindowStart).
-		Save(ctx)
-	return r.translateConditionalWindowReset(ctx, client, id, n, err)
+	return r.mutateWithResetCountSettlement(ctx, id, false, func(txCtx context.Context, client *dbent.Client, row *dbent.UserSubscription) error {
+		update := client.UserSubscription.UpdateOneID(id)
+		setSubscriptionResetCountMutation(update.Mutation(), row)
+		// 在行锁内比较旧锚点；过时请求只结清计数，不覆盖新窗口已经产生的消费。
+		if subscriptionWindowStartMatches(row.DailyWindowStart, expectedWindowStart) {
+			update.SetDailyUsageUsd(0).SetDailyWindowStart(newWindowStart)
+		} else {
+			update.SetUpdatedAt(row.UpdatedAt)
+		}
+		_, err := update.Save(txCtx)
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	})
 }
 
 func (r *userSubscriptionRepository) ResetWeeklyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
-	client := clientFromContext(ctx, r.client)
-	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
-	if expectedWindowStart == nil {
-		query = query.Where(usersubscription.WeeklyWindowStartIsNil())
-	} else {
-		query = query.Where(usersubscription.WeeklyWindowStartEQ(*expectedWindowStart))
-	}
-	n, err := query.
-		SetWeeklyUsageUsd(0).
-		SetWeeklyWindowStart(newWindowStart).
-		Save(ctx)
-	return r.translateConditionalWindowReset(ctx, client, id, n, err)
+	return r.mutateWithResetCountSettlement(ctx, id, false, func(txCtx context.Context, client *dbent.Client, row *dbent.UserSubscription) error {
+		update := client.UserSubscription.UpdateOneID(id)
+		setSubscriptionResetCountMutation(update.Mutation(), row)
+		if subscriptionWindowStartMatches(row.WeeklyWindowStart, expectedWindowStart) {
+			update.SetWeeklyUsageUsd(0).SetWeeklyWindowStart(newWindowStart)
+		} else {
+			update.SetUpdatedAt(row.UpdatedAt)
+		}
+		_, err := update.Save(txCtx)
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	})
 }
 
 func (r *userSubscriptionRepository) ResetMonthlyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
-	client := clientFromContext(ctx, r.client)
-	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
-	if expectedWindowStart == nil {
-		query = query.Where(usersubscription.MonthlyWindowStartIsNil())
-	} else {
-		query = query.Where(usersubscription.MonthlyWindowStartEQ(*expectedWindowStart))
-	}
-	n, err := query.
-		SetMonthlyUsageUsd(0).
-		SetMonthlyWindowStart(newWindowStart).
-		Save(ctx)
-	return r.translateConditionalWindowReset(ctx, client, id, n, err)
+	return r.mutateWithResetCountSettlement(ctx, id, false, func(txCtx context.Context, client *dbent.Client, row *dbent.UserSubscription) error {
+		update := client.UserSubscription.UpdateOneID(id)
+		setSubscriptionResetCountMutation(update.Mutation(), row)
+		if subscriptionWindowStartMatches(row.MonthlyWindowStart, expectedWindowStart) {
+			update.SetMonthlyUsageUsd(0).SetMonthlyWindowStart(newWindowStart)
+		} else {
+			update.SetUpdatedAt(row.UpdatedAt)
+		}
+		_, err := update.Save(txCtx)
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	})
 }
 
-func (r *userSubscriptionRepository) translateConditionalWindowReset(ctx context.Context, client *dbent.Client, id int64, affected int, err error) error {
-	if err != nil {
-		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+// subscriptionWindowStartMatches 保留原条件重置的空值语义，调用方必须持有订阅行锁。
+func subscriptionWindowStartMatches(current, expected *time.Time) bool {
+	if current == nil || expected == nil {
+		return current == nil && expected == nil
 	}
-	if affected > 0 {
-		return nil
-	}
-
-	// 旧快照触发的重置是预期的空操作，说明另一请求已推进窗口；但目标记录
-	// 确实不存在时仍需保留 not-found 语义。
-	exists, err := client.UserSubscription.Query().Where(usersubscription.IDEQ(id)).Exist(ctx)
-	if err != nil {
-		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
-	}
-	if !exists {
-		return service.ErrSubscriptionNotFound
-	}
-	return nil
+	return current.Equal(*expected)
 }
 
 func (r *userSubscriptionRepository) IncrementUsage(ctx context.Context, id int64, costUSD float64) error {
@@ -686,6 +697,10 @@ func userSubscriptionEntityToServiceWithStatusMapping(m *dbent.UserSubscription,
 		DailyUsageUSD:      m.DailyUsageUsd,
 		WeeklyUsageUSD:     m.WeeklyUsageUsd,
 		MonthlyUsageUSD:    m.MonthlyUsageUsd,
+		DailyResetCount:    m.DailyResetCount,
+		WeeklyResetCount:   m.WeeklyResetCount,
+		MonthlyResetCount:  m.MonthlyResetCount,
+		ResetCountedAt:     m.ResetCountedAt,
 		AssignedBy:         m.AssignedBy,
 		AssignedAt:         m.AssignedAt,
 		SourceOrderID:      m.SourceOrderID,
@@ -723,6 +738,11 @@ func applyUserSubscriptionEntityToService(dst *service.UserSubscription, src *db
 	dst.ID = src.ID
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt
+	// 创建及普通编辑回传数据库权威次数，不保留调用方传入的旧计数快照。
+	dst.DailyResetCount = src.DailyResetCount
+	dst.WeeklyResetCount = src.WeeklyResetCount
+	dst.MonthlyResetCount = src.MonthlyResetCount
+	dst.ResetCountedAt = src.ResetCountedAt
 }
 
 func subscriptionPlanEntityToService(plan *dbent.SubscriptionPlan) *service.SubscriptionPlan {

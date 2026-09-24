@@ -117,6 +117,7 @@ export default {
     teams: 'Teams',
     batchImage: 'Batch Images',
     creative: 'Creative Studio',
+    mediaTasks: 'Task Records',
     usage: 'Usage',
     redeem: 'Redeem',
     affiliate: 'Affiliate Rebates',

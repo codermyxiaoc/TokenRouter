@@ -204,6 +204,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	// 在请求上下文中记录 thinking 状态，供 Antigravity 最终模型 key 推导/模型维度限流使用
 	c.Request = c.Request.WithContext(service.WithThinkingEnabled(c.Request.Context(), parsedReq.ThinkingEnabled, h.metadataBridgeEnabled()))
+	c.Request = c.Request.WithContext(service.WithAntigravityThinkingLevelFromBody(c.Request.Context(), parsedReq.Body.Bytes()))
 
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
@@ -2278,6 +2279,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	reqLog = reqLog.With(zap.String("model", parsedReq.Model), zap.Bool("stream", parsedReq.Stream))
 	// 在请求上下文中记录 thinking 状态，供 Antigravity 最终模型 key 推导/模型维度限流使用
 	c.Request = c.Request.WithContext(service.WithThinkingEnabled(c.Request.Context(), parsedReq.ThinkingEnabled, h.metadataBridgeEnabled()))
+	c.Request = c.Request.WithContext(service.WithAntigravityThinkingLevelFromBody(c.Request.Context(), parsedReq.Body.Bytes()))
 
 	// 验证 model 必填
 	if parsedReq.Model == "" {

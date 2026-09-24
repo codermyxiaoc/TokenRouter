@@ -37,7 +37,7 @@ func focusProgressWindow(progress *SubscriptionProgress, kind string) *UsageWind
 }
 
 // 使用虚拟时钟真正走过未来的日、周、月边界，不仅检查延期之后窗口是否非空。
-func TestSubscriptionFocus_ExtensionRestoresFullWindowLifecycle(t *testing.T) {
+func TestSubscriptionFocus_ExtensionPreservesUpstreamWindowLifecycle(t *testing.T) {
 	for _, window := range []struct {
 		kind string
 		days int
@@ -66,12 +66,14 @@ func TestSubscriptionFocus_ExtensionRestoresFullWindowLifecycle(t *testing.T) {
 						before, err := svc.EnsureWindowMaintenance(ctx, sub)
 						require.NoError(t, err)
 						_, _, beforeUsage := focusWindowFields(before, window.kind)
-						require.Equal(t, 3.0, *beforeUsage, "临期且没有外层额度保护时不能额外赠送新窗口")
+						if stale {
+							require.Zero(t, *beforeUsage, "已到期窗口在尾段也应正常刷新")
+						} else {
+							require.Equal(t, 3.0, *beforeUsage, "首次激活仅补齐锚点，不抹掉迁移遗留用量")
+						}
 						beforeProgress, err := svc.GetSubscriptionProgress(ctx, sub.ID)
 						require.NoError(t, err)
-						if !stale {
-							require.Nil(t, focusProgressWindow(beforeProgress, window.kind), "尚未启动的迁移窗口不应伪造重置时间")
-						}
+						require.NotNil(t, focusProgressWindow(beforeProgress, window.kind), "尾段首次使用即可激活窗口")
 
 						var extended *UserSubscription
 						// 保留至少两个完整窗口，确保首个重置不是恰好落在订阅到期时。
@@ -84,7 +86,11 @@ func TestSubscriptionFocus_ExtensionRestoresFullWindowLifecycle(t *testing.T) {
 						require.NoError(t, err)
 						currentAnchor, _, currentUsage := focusWindowFields(extended, window.kind)
 						require.NotNil(t, *currentAnchor)
-						require.True(t, (*currentAnchor).Equal(timezone.StartOfDay(now)))
+						wantAnchor := timezone.StartOfDay(now)
+						if !stale && window.kind != "daily" {
+							wantAnchor = now
+						}
+						require.True(t, (*currentAnchor).Equal(wantAnchor))
 						if stale {
 							require.Zero(t, *currentUsage, "已到期旧窗口延期后立即推进并清零")
 						} else {
@@ -94,7 +100,7 @@ func TestSubscriptionFocus_ExtensionRestoresFullWindowLifecycle(t *testing.T) {
 						require.NoError(t, err)
 						visible := focusProgressWindow(progress, window.kind)
 						require.NotNil(t, visible)
-						resetAt := timezone.StartOfDay(now).AddDate(0, 0, window.days)
+						resetAt := wantAnchor.AddDate(0, 0, window.days)
 						require.True(t, resetAt.Equal(visible.ResetsAt), "管理界面使用的进度接口应立即给出正确重置时刻")
 						require.Greater(t, visible.ResetsInSeconds, int64(0))
 
@@ -137,8 +143,8 @@ func TestSubscriptionFocus_ExtensionRestoresFullWindowLifecycle(t *testing.T) {
 	}
 }
 
-// 完整窗口边界以当前窗口零点计算；刚好容纳一个窗口只允许使用至到期，不赠送下一窗口。
-func TestSubscriptionFocus_FullWindowThresholdAndTailProtection(t *testing.T) {
+// 首次使用仅需订阅有效；自动重置则要求重置时刻严格早于到期时间。
+func TestSubscriptionFocus_ActivationAndStrictExpiryBoundary(t *testing.T) {
 	base := timezone.StartOfDay(time.Now())
 	for _, tc := range []struct {
 		kind string
@@ -160,7 +166,20 @@ func TestSubscriptionFocus_FullWindowThresholdAndTailProtection(t *testing.T) {
 				default:
 					enabled = activation.Monthly
 				}
-				require.Equal(t, delta >= 0, enabled)
+				require.True(t, enabled, "剩余不足完整周期也允许首次激活")
+				anchor, _, _ := focusWindowFields(sub, tc.kind)
+				*anchor = &base
+				due := base.AddDate(0, 0, tc.days)
+				var shouldReset bool
+				switch tc.kind {
+				case "daily":
+					shouldReset = sub.NeedsDailyResetAt(due)
+				case "weekly":
+					shouldReset = sub.NeedsWeeklyResetAt(due)
+				default:
+					shouldReset = sub.NeedsMonthlyResetAt(due)
+				}
+				require.Equal(t, delta > 0, shouldReset, "与到期同一时刻的窗口不能刷新")
 			})
 		}
 	}
@@ -168,9 +187,9 @@ func TestSubscriptionFocus_FullWindowThresholdAndTailProtection(t *testing.T) {
 		t.Run(fmt.Sprintf("outer_limit_%g", outer), func(t *testing.T) {
 			limit := 10.0
 			sub := &UserSubscription{StartsAt: base.AddDate(0, 0, -90), ExpiresAt: base.Add(12 * time.Hour), DailyLimitUSD: &limit, WeeklyLimitUSD: &outer}
-			require.Equal(t, outer > 0, sub.WindowActivationAt(base).Daily)
+			require.True(t, sub.WindowActivationAt(base).Daily)
 			sub.DailyLimitUSD, sub.WeeklyLimitUSD, sub.MonthlyLimitUSD = nil, &limit, &outer
-			require.Equal(t, outer > 0, sub.WindowActivationAt(base).Weekly)
+			require.True(t, sub.WindowActivationAt(base).Weekly)
 		})
 	}
 }

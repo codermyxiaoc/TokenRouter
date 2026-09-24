@@ -16,6 +16,8 @@ export const useAnnouncementStore = defineStore('announcements', () => {
 
   // Session-scoped dedup set — not reactive, used as plain lookup only
   let shownPopupIds = new Set<number>()
+  // 会话重置或更新请求后，旧请求不得回填其他会话的公告。
+  let fetchGeneration = 0
 
   // Getters
   const unreadCount = computed(() =>
@@ -31,19 +33,22 @@ export const useAnnouncementStore = defineStore('announcements', () => {
 
     // Set immediately to prevent concurrent duplicate requests
     lastFetchTime.value = now
+    const generation = ++fetchGeneration
 
     try {
       loading.value = true
       const all = await announcementsAPI.list(false, force)
+      if (generation !== fetchGeneration) return
       // 保留完整可见列表，确保不同界面可以按各自规则排序和统计。
       announcements.value = all
       enqueueNewPopups()
     } catch (err: any) {
+      if (generation !== fetchGeneration) return
       // Revert throttle timestamp on failure so retry is allowed
       lastFetchTime.value = 0
       console.error('Failed to fetch announcements:', err)
     } finally {
-      loading.value = false
+      if (generation === fetchGeneration) loading.value = false
     }
   }
 
@@ -121,6 +126,7 @@ export const useAnnouncementStore = defineStore('announcements', () => {
   }
 
   function reset() {
+    fetchGeneration++
     announcements.value = []
     lastFetchTime.value = 0
     shownPopupIds = new Set()

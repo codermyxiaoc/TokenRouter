@@ -562,18 +562,23 @@ func StripEmptyTextBlocks(body []byte) []byte {
 // 主要用于避免无效 thinking block signature 触发上游 400。
 //
 // 策略：
-//   - 当 thinking.type 不是 "enabled"/"adaptive"：移除所有 thinking 相关块
+//   - 当 thinking.type 不是 "enabled"/"adaptive"：旧型号移除相关块，Opus 5.5 保留合法历史
 //   - 当 thinking.type 是 "enabled"/"adaptive"：仅移除缺失/无效 signature 的 thinking 块（避免 400）
 //     例如缺失、空值或占位 signature 的块
 //
 // 调用方传入 mappedModel 时会按上游协议族分流：仅 Anthropic 官方语义执行过滤；
 // DeepSeek/Kimi/GLM/MiniMax 等 passback-required 上游必须原样回传历史 thinking block。
-// 未传 mappedModel 时保留旧行为，便于既有单元测试和纯工具调用继续使用。
+// 未传 mappedModel 时读取请求中的型号；旧型号保持原有过滤行为。
 func FilterThinkingBlocks(body []byte, mappedModel ...string) []byte {
 	if len(mappedModel) > 0 && !ShouldPreFilterThinkingBlocks(mappedModel[0]) {
 		return body
 	}
-	return filterThinkingBlocksInternal(body, false)
+	model := gjson.GetBytes(body, "model").String()
+	if len(mappedModel) > 0 {
+		model = mappedModel[0]
+	}
+	// Opus 5.5 缺省即开启自适应思考，合法的历史签名仍需回传。
+	return filterThinkingBlocksInternal(body, claude.IsOpus55Model(model))
 }
 
 // FilterThinkingBlocksForRetry 在 retry 场景中移除或降级 thinking 相关结构。
@@ -1274,9 +1279,9 @@ func FilterSignatureSensitiveBlocksForRetry(body []byte, mappedModel ...string) 
 
 // filterThinkingBlocksInternal removes invalid thinking blocks from request
 // 策略：
-//   - 当 thinking.type 不是 "enabled"/"adaptive"：移除所有 thinking 相关块
+//   - 当 thinking.type 不是 "enabled"/"adaptive"：仅默认开启思考的型号保留合法历史
 //   - 当 thinking.type 是 "enabled"/"adaptive"：仅移除缺失/无效 signature 的 thinking 块
-func filterThinkingBlocksInternal(body []byte, _ bool) []byte {
+func filterThinkingBlocksInternal(body []byte, thinkingEnabledByDefault bool) []byte {
 	// Fast path: if body doesn't contain "thinking", skip parsing
 	if !bytes.Contains(body, []byte(`"type":"thinking"`)) &&
 		!bytes.Contains(body, []byte(`"type": "thinking"`)) &&
@@ -1293,7 +1298,7 @@ func filterThinkingBlocksInternal(body []byte, _ bool) []byte {
 	}
 
 	// Check if thinking is enabled
-	thinkingEnabled := false
+	thinkingEnabled := thinkingEnabledByDefault
 	if thinking, ok := req["thinking"].(map[string]any); ok {
 		if thinkType, ok := thinking["type"].(string); ok && (thinkType == "enabled" || thinkType == "adaptive") {
 			thinkingEnabled = true
@@ -1331,6 +1336,13 @@ func filterThinkingBlocksInternal(body []byte, _ bool) []byte {
 			blockType, _ := blockMap["type"].(string)
 
 			if blockType == "thinking" || blockType == "redacted_thinking" {
+				// Opus 5.5 回传的加密思考块用 data 承载内容，不包含 signature。
+				if thinkingEnabledByDefault && role == "assistant" && blockType == "redacted_thinking" {
+					if data, ok := blockMap["data"].(string); ok && data != "" {
+						newContent = append(newContent, block)
+						continue
+					}
+				}
 				// When thinking is enabled and this is an assistant message,
 				// only keep thinking blocks with valid signatures
 				if thinkingEnabled && role == "assistant" {
@@ -1534,6 +1546,9 @@ const (
 //  3. Contains ">= 1024" or "greater than or equal to 1024" or ("1024" + "input should be")
 func isThinkingBudgetConstraintError(errMsg string) bool {
 	m := strings.ToLower(errMsg)
+	if isFinalAnswerReserveError(m) {
+		return true
+	}
 
 	// Condition 1: budget_tokens or budget tokens
 	hasBudget := strings.Contains(m, "budget_tokens") || strings.Contains(m, "budget tokens")
@@ -1555,6 +1570,12 @@ func isThinkingBudgetConstraintError(errMsg string) bool {
 	}
 
 	return false
+}
+
+// isFinalAnswerReserveError 只识别 Baseten 为最终答案预留令牌的约束，避免误修复上下文或额度错误。
+func isFinalAnswerReserveError(errMsg string) bool {
+	m := strings.ToLower(errMsg)
+	return strings.Contains(m, "must be greater than 1024 to reserve tokens for a final answer") && strings.Contains(m, "baseten reasoning is enabled")
 }
 
 // RectifyThinkingBudget modifies the request body to fix budget_tokens constraint errors.

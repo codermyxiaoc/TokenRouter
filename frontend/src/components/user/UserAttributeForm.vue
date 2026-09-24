@@ -20,14 +20,14 @@
       <!-- Number Input -->
       <input
         v-else-if="attr.type === 'number'"
-        v-model.number="localValues[attr.id]"
+        :value="localValues[attr.id]"
         type="number"
         :required="attr.required"
         :placeholder="attr.placeholder"
         :min="attr.validation?.min"
         :max="attr.validation?.max"
         class="input"
-        @input="emitChange"
+        @input="localValues[attr.id] = ($event.target as HTMLInputElement).value; emitChange()"
       />
 
       <!-- Date Input -->
@@ -112,6 +112,8 @@ const emit = defineEmits<Emits>()
 const loading = ref(false)
 const attributes = ref<UserAttributeDefinition[]>([])
 const localValues = ref<UserAttributeValuesMap>({})
+// 用户变化或组件卸载后，旧属性请求不得更新表单。
+let requestVersion = 0
 
 const loadAttributes = async () => {
   loading.value = true
@@ -126,9 +128,11 @@ const loadAttributes = async () => {
 
 const loadUserValues = async () => {
   if (!props.userId) return
+  const version = ++requestVersion
 
   try {
     const values = await adminAPI.userAttributes.getUserAttributeValues(props.userId)
+    if (version !== requestVersion) return
     const valuesMap: UserAttributeValuesMap = {}
     values.forEach(v => {
       valuesMap[v.attribute_id] = v.value
@@ -184,12 +188,12 @@ watch(() => props.modelValue, (newVal) => {
   }
 }, { immediate: true })
 
-watch(() => props.userId, (newUserId) => {
+watch(() => props.userId, (newUserId, oldUserId, onCleanup) => {
+  onCleanup(() => { requestVersion++ })
+  // 新建表单首次挂载保留父组件传入草稿；切换用户才清理旧值。
+  if (newUserId || oldUserId !== undefined) localValues.value = {}
   if (newUserId) {
     loadUserValues()
-  } else {
-    // Reset for new user
-    localValues.value = {}
   }
 }, { immediate: true })
 

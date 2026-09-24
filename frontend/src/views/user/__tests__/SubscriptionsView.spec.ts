@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { createI18n } from 'vue-i18n'
+import { createI18n, type MessageContext } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import type { SubscriptionPlan, UserSubscription } from '@/types'
 import SubscriptionsView from '../SubscriptionsView.vue'
+import english from '@/i18n/locales/en/misc'
 
 const mockGetMySubscriptions = vi.fn()
 const mockGetActiveSubscriptions = vi.fn()
@@ -44,8 +45,13 @@ function createTestI18n() {
           daily: 'Daily',
           weekly: 'Weekly',
           monthly: 'Monthly',
-          resetIn: 'Reset in {time}',
-          quotaEndsIn: 'Ends in {time}',
+          resetIn: ({ named }: MessageContext) => `Reset in ${named('time')}`,
+          quotaEndsIn: ({ named }: MessageContext) => `Ends in ${named('time')}`,
+          // 测试环境使用 runtime-only i18n，消息函数验证实际计数而非只检查翻译键。
+          resetCount: ({ named }: MessageContext) => english.userSubscriptions.resetCount.replace('{count}', String(named('count'))),
+          resetCountHint: () => english.userSubscriptions.resetCountHint,
+          quotaNoFurtherResetHint: () => english.userSubscriptions.quotaNoFurtherResetHint,
+          oneTimeQuotaHint: () => english.userSubscriptions.oneTimeQuotaHint,
           unlimited: 'Unlimited',
           unlimitedDesc: 'Unlimited usage',
           pendingOnly: 'Pending only',
@@ -149,6 +155,136 @@ describe('SubscriptionsView', () => {
     mockGetMySubscriptions.mockReset()
     mockGetActiveSubscriptions.mockReset().mockResolvedValue([])
     mockRevokeExhaustedSubscription.mockReset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shows the server reset count for each configured window even before it is started', async () => {
+    mockGetMySubscriptions.mockResolvedValue([{
+      ...subscriptionWithGroups(),
+      daily_limit_usd: 10, weekly_limit_usd: 60, monthly_limit_usd: 150,
+      daily_reset_count: 17, weekly_reset_count: 3, monthly_reset_count: 2
+    }])
+    const wrapper = await mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="quota-reset-count-daily"]').text()).toBe('Reset 17 times')
+    expect(wrapper.get('[data-testid="quota-reset-count-weekly"]').text()).toBe('Reset 3 times')
+    expect(wrapper.get('[data-testid="quota-reset-count-monthly"]').text()).toBe('Reset 2 times')
+    expect(wrapper.get('[data-testid="quota-reset-count-daily"]').attributes('title')).toContain('even without usage')
+    wrapper.unmount()
+  })
+
+  it('defaults legacy missing reset counts to zero without inferring elapsed windows', async () => {
+    mockGetMySubscriptions.mockResolvedValue([{
+      ...subscriptionWithGroups(),
+      starts_at: new Date(Date.now() - 90 * 86400000).toISOString(),
+      daily_limit_usd: 10,
+      daily_window_start: new Date(Date.now() - 24 * 86400000).toISOString()
+    }])
+    const wrapper = await mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="quota-reset-count-daily"]').text()).toBe('Reset 0 times')
+    expect(wrapper.find('[data-testid="quota-reset-count-weekly"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="quota-reset-count-monthly"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('switches to the new term count when the backend activates a renewed subscription', async () => {
+    const active = { ...subscriptionWithGroups(), daily_limit_usd: 10, daily_reset_count: 17 }
+    const next: UserSubscription = {
+      ...active, id: active.id + 1, status: 'pending', daily_reset_count: 0,
+      starts_at: active.expires_at,
+      expires_at: new Date(new Date(active.expires_at).getTime() + 30 * 86400000).toISOString()
+    }
+    mockGetMySubscriptions.mockResolvedValueOnce([active, next])
+      .mockResolvedValueOnce([{ ...active, status: 'expired' }, { ...next, status: 'active' }])
+    const before = await mountView()
+    await flushPromises()
+    expect(before.findAll('[data-testid="quota-reset-count-daily"]')).toHaveLength(1)
+    expect(before.get('[data-testid="quota-reset-count-daily"]').text()).toBe('Reset 17 times')
+    before.unmount()
+
+    const after = await mountView()
+    await flushPromises()
+    expect(after.findAll('[data-testid="quota-reset-count-daily"]')).toHaveLength(1)
+    expect(after.get('[data-testid="quota-reset-count-daily"]').text()).toBe('Reset 0 times')
+    after.unmount()
+  })
+
+  it('preserves server counts after an administrator extends validity and restarts an inactive window', async () => {
+    const original = {
+      ...subscriptionWithGroups(), starts_at: new Date(Date.now() - 40 * 86400000).toISOString(),
+      expires_at: new Date(Date.now() + 3600000).toISOString(),
+      daily_limit_usd: 10, daily_reset_count: 8
+    }
+    mockGetMySubscriptions.mockResolvedValueOnce([original]).mockResolvedValueOnce([{
+      ...original,
+      expires_at: new Date(Date.now() + 30 * 86400000).toISOString(),
+      daily_window_start: new Date().toISOString()
+    }])
+    const before = await mountView()
+    await flushPromises()
+    expect(before.get('[data-testid="quota-reset-count-daily"]').text()).toBe('Reset 8 times')
+    before.unmount()
+
+    const after = await mountView()
+    await flushPromises()
+    expect(after.get('[data-testid="quota-reset-count-daily"]').text()).toBe('Reset 8 times')
+    expect(after.text()).toContain('Reset in')
+    expect(after.find('[data-testid="quota-window-explanation-daily"]').exists()).toBe(false)
+    after.unmount()
+  })
+
+  it('allows the final daily reset before expiry without requiring an outer quota or a complete remaining day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-23T12:00:00+08:00'))
+    mockGetMySubscriptions.mockResolvedValue([{
+      ...subscriptionWithGroups(), starts_at: '2026-09-01T00:00:00+08:00',
+      expires_at: '2026-09-24T01:00:00+08:00', daily_limit_usd: 10,
+      daily_window_start: '2026-09-23T00:00:00+08:00', daily_reset_count: 21
+    }])
+    const wrapper = await mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('Reset in 12h 0m')
+    expect(wrapper.find('[data-testid="quota-window-explanation-daily"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Ends in')
+    wrapper.unmount()
+  })
+
+  it('explains why the next daily reset at subscription expiry cannot happen', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-23T12:00:00+08:00'))
+    mockGetMySubscriptions.mockResolvedValue([{
+      ...subscriptionWithGroups(), starts_at: '2026-09-01T00:00:00+08:00',
+      expires_at: '2026-09-24T00:00:00+08:00', daily_limit_usd: 10, monthly_limit_usd: 200,
+      daily_window_start: '2026-09-23T00:00:00+08:00'
+    }])
+    const wrapper = await mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('Ends in')
+    expect(wrapper.get('[data-testid="quota-window-explanation-daily"]').text()).toBe(english.userSubscriptions.quotaNoFurtherResetHint)
+    expect(wrapper.text()).not.toContain('Reset in')
+    wrapper.unmount()
+  })
+
+  it('describes a one-day plan as one-time quota even when a finite outer quota exists', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-23T12:00:00+08:00'))
+    mockGetMySubscriptions.mockResolvedValue([{
+      ...subscriptionWithGroups(), starts_at: '2026-09-23T00:00:00+08:00',
+      expires_at: '2026-09-24T00:00:00+08:00', daily_limit_usd: 10, monthly_limit_usd: 200,
+      daily_window_start: '2026-09-23T00:00:00+08:00'
+    }])
+    const wrapper = await mountView()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="quota-window-explanation-daily"]').text()).toBe(english.userSubscriptions.oneTimeQuotaHint)
+    expect(wrapper.text()).not.toContain('Reset in')
+    expect(wrapper.get('[data-testid="quota-reset-count-daily"]').text()).toBe('Reset 0 times')
+    wrapper.unmount()
   })
 
   it('shows resolved group rates independently for each plan, including a free default group', async () => {

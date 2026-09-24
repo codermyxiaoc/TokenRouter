@@ -59,8 +59,7 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
 
       loaded.value = true
     } catch (err) {
-      // Keep cached/default value: do not "flip" the UI based on a transient fetch failure.
-      loaded.value = true
+      // 保留缓存和默认值，同时允许首次加载短暂失败后再次请求。
       console.error('[adminSettings] Failed to fetch settings:', err)
     } finally {
       loading.value = false

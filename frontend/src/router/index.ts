@@ -271,6 +271,12 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/media-tasks',
+    name: 'MediaTasks',
+    component: () => import('@/views/MediaTasksView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: false, title: 'Task Records', titleKey: 'mediaTasks.title', descriptionKey: 'mediaTasks.description' }
+  },
+  {
     path: '/usage',
     name: 'Usage',
     component: () => import('@/views/user/UsageView.vue'),
@@ -682,6 +688,13 @@ const routes: RouteRecordRaw[] = [
       requiresRiskControl: true,
       hidePageHeading: true
     }
+  },
+  {
+    path: '/admin/media-tasks',
+    name: 'AdminMediaTasks',
+    component: () => import('@/views/MediaTasksView.vue'),
+    props: { admin: true },
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Task Records', titleKey: 'mediaTasks.title', descriptionKey: 'mediaTasks.adminDescription' }
   },
   {
     path: '/admin/usage',

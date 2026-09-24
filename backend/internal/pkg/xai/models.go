@@ -42,6 +42,7 @@ var modelIDAliases = map[string]string{
 	"grok":                    DefaultResponsesModel,
 	"grok-latest":             DefaultResponsesModel,
 	"grok-4.5-latest":         DefaultResponsesModel,
+	"grok-4.7-latest":         "grok-4.7",
 	"grok-build":              "grok-build-0.1",
 	"grok-build-latest":       "grok-build-0.1",
 	"grok-composer":           "grok-composer-2.5-fast",
@@ -93,6 +94,7 @@ func (o ModelMappingOptions) defaultText() string {
 
 var defaultModels = []Model{
 	// 文本模型。
+	{ID: "grok-4.7", Object: "model", Type: "model", OwnedBy: "xai", DisplayName: "Grok 4.7"},
 	{ID: "grok-4.6", Object: "model", Type: "model", OwnedBy: "xai", DisplayName: "Grok 4.6"},
 	{ID: "grok-4.5", Object: "model", Type: "model", OwnedBy: "xai", DisplayName: "Grok 4.5"},
 	{ID: "grok-4.3", Object: "model", Type: "model", OwnedBy: "xai", DisplayName: "Grok 4.3"},
@@ -112,6 +114,8 @@ var defaultModels = []Model{
 // grokTextResponsesModelAliases 是 Responses 路径接受的 Grok 文本模型权威映射，
 // 把客户端别名和无日期别名归一为上游规范 ID。
 var grokTextResponsesModelAliases = map[string]string{
+	"grok-4.7":                     "grok-4.7",
+	"grok-4.7-latest":              "grok-4.7",
 	"grok":                         DefaultTextModel,
 	"grok-latest":                  DefaultTextModel,
 	"grok-4.6":                     "grok-4.6",

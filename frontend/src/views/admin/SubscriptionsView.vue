@@ -294,21 +294,30 @@
                     {{ formatSubscriptionBalance(row.daily_limit_usd) }}
                   </span>
                 </div>
-                <div class="reset-info" v-if="row.daily_window_start">
-                  <svg
-                    class="h-3 w-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <span>{{ formatDailyUsageWindow(row) }}</span>
+                <!-- 计数由服务端按符合规则的到点窗口返回，不在前端按用量或天数推算。 -->
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1 pl-12">
+                  <span
+                    data-testid="admin-quota-reset-count-daily"
+                    class="reset-count"
+                    :title="t('userSubscriptions.resetCountHint')"
+                    tabindex="0"
+                  >{{ t('userSubscriptions.resetCount', { count: row.daily_reset_count ?? 0 }) }}</span>
+                  <div class="reset-info" v-if="row.daily_window_start">
+                    <svg
+                      class="h-3 w-3"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <span>{{ formatDailyUsageWindow(row) }}</span>
+                  </div>
                 </div>
               </div>
 
@@ -331,21 +340,29 @@
                     {{ formatSubscriptionBalance(row.weekly_limit_usd) }}
                   </span>
                 </div>
-                <div class="reset-info" v-if="row.weekly_window_start">
-                  <svg
-                    class="h-3 w-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <span>{{ formatUsageWindow(row, row.weekly_window_start, 'weekly') }}</span>
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1 pl-12">
+                  <span
+                    data-testid="admin-quota-reset-count-weekly"
+                    class="reset-count"
+                    :title="t('userSubscriptions.resetCountHint')"
+                    tabindex="0"
+                  >{{ t('userSubscriptions.resetCount', { count: row.weekly_reset_count ?? 0 }) }}</span>
+                  <div class="reset-info" v-if="row.weekly_window_start">
+                    <svg
+                      class="h-3 w-3"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <span>{{ formatUsageWindow(row, row.weekly_window_start, 'weekly') }}</span>
+                  </div>
                 </div>
               </div>
 
@@ -368,21 +385,29 @@
                     {{ formatSubscriptionBalance(row.monthly_limit_usd) }}
                   </span>
                 </div>
-                <div class="reset-info" v-if="row.monthly_window_start">
-                  <svg
-                    class="h-3 w-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <span>{{ formatUsageWindow(row, row.monthly_window_start, 'monthly') }}</span>
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1 pl-12">
+                  <span
+                    data-testid="admin-quota-reset-count-monthly"
+                    class="reset-count"
+                    :title="t('userSubscriptions.resetCountHint')"
+                    tabindex="0"
+                  >{{ t('userSubscriptions.resetCount', { count: row.monthly_reset_count ?? 0 }) }}</span>
+                  <div class="reset-info" v-if="row.monthly_window_start">
+                    <svg
+                      class="h-3 w-3"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <span>{{ formatUsageWindow(row, row.monthly_window_start, 'monthly') }}</span>
+                  </div>
                 </div>
               </div>
 
@@ -773,6 +798,7 @@ import { readPendingSubscriptionOperation, writePendingSubscriptionOperation } f
 import {
   getRemainingDurationParts,
   getRemainingExpiryDuration,
+  getSubscriptionQuotaResetTime,
   isOneTimeDailyQuota,
   isQuotaWindowEndingAtSubscriptionExpiry,
   type RemainingDurationParts
@@ -1512,33 +1538,17 @@ const formatUsageWindow = (
     const parts = getRemainingDurationParts(subscription.expires_at)
     return parts ? formatQuotaEndDuration(parts) : t('admin.subscriptions.windowNotActive')
   }
-  return formatResetTime(windowStart, period)
+  return formatResetTime(subscription, windowStart, period)
 }
 
 const formatResetTime = (
+  subscription: UserSubscription,
   windowStart: string | null,
   period: 'daily' | 'weekly' | 'monthly'
 ): string => {
-  if (!windowStart) return t('admin.subscriptions.windowNotActive')
-
-  const start = new Date(windowStart)
-  const now = new Date()
-
-  // 按窗口类型计算重置时间。
-  let resetTime: Date
-  switch (period) {
-    case 'daily':
-      resetTime = new Date(start.getTime() + 24 * 60 * 60 * 1000)
-      break
-    case 'weekly':
-      resetTime = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000)
-      break
-    case 'monthly':
-      resetTime = new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000)
-      break
-  }
-
-  const parts = getRemainingDurationParts(resetTime, now)
+  const resetTime = getSubscriptionQuotaResetTime(subscription, windowStart, period)
+  if (!resetTime) return t('admin.subscriptions.windowNotActive')
+  const parts = getRemainingDurationParts(resetTime)
   return parts ? formatResetDuration(parts) : t('admin.subscriptions.windowNotActive')
 }
 
@@ -1588,6 +1598,10 @@ onUnmounted(() => {
 }
 
 .reset-info {
-  @apply flex items-center gap-1 pl-12 text-[10px] text-blue-600 dark:text-blue-400;
+  @apply flex items-center gap-1 text-[10px] text-blue-600 dark:text-blue-400;
+}
+
+.reset-count {
+  @apply cursor-help whitespace-nowrap rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-dark-700 dark:text-dark-400;
 }
 </style>

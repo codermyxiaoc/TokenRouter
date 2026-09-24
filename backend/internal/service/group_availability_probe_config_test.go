@@ -26,6 +26,7 @@ func TestNormalizeGroupAvailabilityProbeConfig(t *testing.T) {
 			input: GroupAvailabilityProbeConfig{Enabled: true, ModelID: " gpt-5.4 ", Prompt: " hi ", UserAgent: " probe/1.0 "},
 			want: GroupAvailabilityProbeConfig{
 				Enabled:         true,
+				Protocol:        GroupAvailabilityProbeProtocolAuto,
 				ModelID:         "gpt-5.4",
 				Prompt:          "hi",
 				IntervalMinutes: defaultGroupAvailabilityProbeIntervalMinutes,
@@ -39,12 +40,18 @@ func TestNormalizeGroupAvailabilityProbeConfig(t *testing.T) {
 			input: GroupAvailabilityProbeConfig{Enabled: true, ModelID: "gpt-5.4", Prompt: "hi", MaxRetries: groupAvailabilityProbeRetryPointer(0)},
 			want: GroupAvailabilityProbeConfig{
 				Enabled:         true,
+				Protocol:        GroupAvailabilityProbeProtocolAuto,
 				ModelID:         "gpt-5.4",
 				Prompt:          "hi",
 				IntervalMinutes: defaultGroupAvailabilityProbeIntervalMinutes,
 				TimeoutSeconds:  defaultGroupAvailabilityProbeTimeoutSeconds,
 				MaxRetries:      groupAvailabilityProbeRetryPointer(0),
 			},
+		},
+		{
+			name:    "rejects unknown protocol",
+			input:   GroupAvailabilityProbeConfig{Enabled: true, ModelID: "kimi-k3", Prompt: "hi", Protocol: "invalid"},
+			wantErr: true,
 		},
 		{
 			name:    "enabled requires model",
@@ -125,5 +132,47 @@ func TestNormalizeGroupAvailabilityProbeConfigForAdminWriteReturnsBadRequest(t *
 	}
 	if infraerrors.Reason(err) != invalidGroupAvailabilityProbeConfigReason {
 		t.Fatalf("normalizeGroupAvailabilityProbeConfigForAdminWrite() reason = %q, want %q", infraerrors.Reason(err), invalidGroupAvailabilityProbeConfigReason)
+	}
+}
+
+func TestValidateGroupAvailabilityProbeProtocol(t *testing.T) {
+	// 平台矩阵同时保护前端选项、后台保存校验和任务执行，不能静默降级其它协议。
+	tests := []struct {
+		platform string
+		allowed  []string
+	}{
+		{PlatformOpenAI, []string{APIProtocolChatCompletions, APIProtocolResponses}},
+		{PlatformKimi, []string{APIProtocolChatCompletions, APIProtocolResponses, APIProtocolAnthropic}},
+		{PlatformDeepseek, []string{APIProtocolChatCompletions, APIProtocolResponses, APIProtocolAnthropic}},
+		{PlatformMiniMax, []string{APIProtocolChatCompletions, APIProtocolResponses, APIProtocolAnthropic}},
+		{PlatformOpenCodeGo, []string{APIProtocolChatCompletions, APIProtocolResponses, APIProtocolAnthropic}},
+		{PlatformZhipu, []string{APIProtocolChatCompletions, APIProtocolAnthropic}},
+		{PlatformAnthropic, []string{APIProtocolAnthropic}},
+		{PlatformGemini, []string{GroupAvailabilityProbeProtocolGemini}},
+		{PlatformGrok, []string{APIProtocolResponses}},
+		{PlatformAntigravity, nil},
+		{PlatformQoder, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.platform, func(t *testing.T) {
+			for _, protocol := range []string{"", GroupAvailabilityProbeProtocolAuto, APIProtocolChatCompletions, APIProtocolResponses, APIProtocolAnthropic, GroupAvailabilityProbeProtocolGemini, "invalid"} {
+				allowed := protocol == "" || protocol == GroupAvailabilityProbeProtocolAuto
+				for _, candidate := range tt.allowed {
+					allowed = allowed || candidate == protocol
+				}
+				if err := ValidateGroupAvailabilityProbeProtocol(tt.platform, protocol); (err == nil) != allowed {
+					t.Errorf("protocol=%q allowed=%v error=%v", protocol, allowed, err)
+				}
+			}
+		})
+	}
+}
+
+func TestNormalizeGroupAvailabilityProbeConfigSelectedProtocol(t *testing.T) {
+	got, err := normalizeGroupAvailabilityProbeConfig(GroupAvailabilityProbeConfig{
+		Enabled: true, ModelID: "kimi-k3", Prompt: "hi", Protocol: " chat_completions ",
+	})
+	if err != nil || got.Protocol != APIProtocolChatCompletions {
+		t.Fatalf("selected protocol=%q error=%v", got.Protocol, err)
 	}
 }

@@ -111,6 +111,8 @@ Kimi、Zhipu、DeepSeek 的账号类型、模式与协议矩阵暂由本页和[A
 4. OAuth-only、隐私状态、客户端限制、transport capability 和站点/区域等平台策略通过。
 5. 并发槽、等待队列和粘性约束允许本次选择。
 
+管理员账号连接测试的 `test_endpoint` 是仅作用于本次测试的诊断选择，不增加账号的正式网关能力，也不改写已保存的协议。兼容 API Key 可以分别验证 Chat Completions、Responses、Messages；OAuth 等专用凭据仍限制为已有原生协议，Zhipu 不提供原生 Responses，OpenCode Jev 保留独立 System One。具体选项和回退规则见[管理员账号连接测试](http_api.md#account_connection_tests)。
+
 账号选择和快照一致性见[账号调度与缓存一致性](../architecture/account_scheduling_and_cache.md)，分组/渠道策略见[网关策略控制](../domains/gateway_policy_controls.md)，凭据和健康恢复见[账号维护](../operations/account_maintenance.md)。
 
 ## 已确认冲突

@@ -39271,33 +39271,36 @@ func (m *PromoCodeUsageMutation) ResetEdge(name string) error {
 // ProxyMutation represents an operation that mutates the Proxy nodes in the graph.
 type ProxyMutation struct {
 	config
-	op                  Op
-	typ                 string
-	id                  *int64
-	created_at          *time.Time
-	updated_at          *time.Time
-	deleted_at          *time.Time
-	name                *string
-	protocol            *string
-	host                *string
-	port                *int
-	addport             *int
-	username            *string
-	password            *string
-	status              *string
-	expires_at          *time.Time
-	fallback_mode       *string
-	expiry_warn_days    *int
-	addexpiry_warn_days *int
-	clearedFields       map[string]struct{}
-	accounts            map[int64]struct{}
-	removedaccounts     map[int64]struct{}
-	clearedaccounts     bool
-	backup_proxy        *int64
-	clearedbackup_proxy bool
-	done                bool
-	oldValue            func(context.Context) (*Proxy, error)
-	predicates          []predicate.Proxy
+	op                      Op
+	typ                     string
+	id                      *int64
+	created_at              *time.Time
+	updated_at              *time.Time
+	deleted_at              *time.Time
+	name                    *string
+	protocol                *string
+	host                    *string
+	port                    *int
+	addport                 *int
+	username                *string
+	password                *string
+	status                  *string
+	expires_at              *time.Time
+	fallback_mode           *string
+	expiry_warn_days        *int
+	addexpiry_warn_days     *int
+	clearedFields           map[string]struct{}
+	accounts                map[int64]struct{}
+	removedaccounts         map[int64]struct{}
+	clearedaccounts         bool
+	backup_proxy            *int64
+	clearedbackup_proxy     bool
+	fallback_sources        map[int64]struct{}
+	removedfallback_sources map[int64]struct{}
+	clearedfallback_sources bool
+	done                    bool
+	oldValue                func(context.Context) (*Proxy, error)
+	predicates              []predicate.Proxy
 }
 
 var _ ent.Mutation = (*ProxyMutation)(nil)
@@ -40088,6 +40091,60 @@ func (m *ProxyMutation) ResetBackupProxy() {
 	m.clearedbackup_proxy = false
 }
 
+// AddFallbackSourceIDs adds the "fallback_sources" edge to the Proxy entity by ids.
+func (m *ProxyMutation) AddFallbackSourceIDs(ids ...int64) {
+	if m.fallback_sources == nil {
+		m.fallback_sources = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.fallback_sources[ids[i]] = struct{}{}
+	}
+}
+
+// ClearFallbackSources clears the "fallback_sources" edge to the Proxy entity.
+func (m *ProxyMutation) ClearFallbackSources() {
+	m.clearedfallback_sources = true
+}
+
+// FallbackSourcesCleared reports if the "fallback_sources" edge to the Proxy entity was cleared.
+func (m *ProxyMutation) FallbackSourcesCleared() bool {
+	return m.clearedfallback_sources
+}
+
+// RemoveFallbackSourceIDs removes the "fallback_sources" edge to the Proxy entity by IDs.
+func (m *ProxyMutation) RemoveFallbackSourceIDs(ids ...int64) {
+	if m.removedfallback_sources == nil {
+		m.removedfallback_sources = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.fallback_sources, ids[i])
+		m.removedfallback_sources[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedFallbackSources returns the removed IDs of the "fallback_sources" edge to the Proxy entity.
+func (m *ProxyMutation) RemovedFallbackSourcesIDs() (ids []int64) {
+	for id := range m.removedfallback_sources {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// FallbackSourcesIDs returns the "fallback_sources" edge IDs in the mutation.
+func (m *ProxyMutation) FallbackSourcesIDs() (ids []int64) {
+	for id := range m.fallback_sources {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetFallbackSources resets all changes to the "fallback_sources" edge.
+func (m *ProxyMutation) ResetFallbackSources() {
+	m.fallback_sources = nil
+	m.clearedfallback_sources = false
+	m.removedfallback_sources = nil
+}
+
 // Where appends a list predicates to the ProxyMutation builder.
 func (m *ProxyMutation) Where(ps ...predicate.Proxy) {
 	m.predicates = append(m.predicates, ps...)
@@ -40502,12 +40559,15 @@ func (m *ProxyMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *ProxyMutation) AddedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.accounts != nil {
 		edges = append(edges, proxy.EdgeAccounts)
 	}
 	if m.backup_proxy != nil {
 		edges = append(edges, proxy.EdgeBackupProxy)
+	}
+	if m.fallback_sources != nil {
+		edges = append(edges, proxy.EdgeFallbackSources)
 	}
 	return edges
 }
@@ -40526,15 +40586,24 @@ func (m *ProxyMutation) AddedIDs(name string) []ent.Value {
 		if id := m.backup_proxy; id != nil {
 			return []ent.Value{*id}
 		}
+	case proxy.EdgeFallbackSources:
+		ids := make([]ent.Value, 0, len(m.fallback_sources))
+		for id := range m.fallback_sources {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *ProxyMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.removedaccounts != nil {
 		edges = append(edges, proxy.EdgeAccounts)
+	}
+	if m.removedfallback_sources != nil {
+		edges = append(edges, proxy.EdgeFallbackSources)
 	}
 	return edges
 }
@@ -40549,18 +40618,27 @@ func (m *ProxyMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case proxy.EdgeFallbackSources:
+		ids := make([]ent.Value, 0, len(m.removedfallback_sources))
+		for id := range m.removedfallback_sources {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *ProxyMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.clearedaccounts {
 		edges = append(edges, proxy.EdgeAccounts)
 	}
 	if m.clearedbackup_proxy {
 		edges = append(edges, proxy.EdgeBackupProxy)
+	}
+	if m.clearedfallback_sources {
+		edges = append(edges, proxy.EdgeFallbackSources)
 	}
 	return edges
 }
@@ -40573,6 +40651,8 @@ func (m *ProxyMutation) EdgeCleared(name string) bool {
 		return m.clearedaccounts
 	case proxy.EdgeBackupProxy:
 		return m.clearedbackup_proxy
+	case proxy.EdgeFallbackSources:
+		return m.clearedfallback_sources
 	}
 	return false
 }
@@ -40597,6 +40677,9 @@ func (m *ProxyMutation) ResetEdge(name string) error {
 		return nil
 	case proxy.EdgeBackupProxy:
 		m.ResetBackupProxy()
+		return nil
+	case proxy.EdgeFallbackSources:
+		m.ResetFallbackSources()
 		return nil
 	}
 	return fmt.Errorf("unknown Proxy edge %s", name)
@@ -65212,6 +65295,13 @@ type UserSubscriptionMutation struct {
 	addweekly_usage_usd     *float64
 	monthly_usage_usd       *float64
 	addmonthly_usage_usd    *float64
+	daily_reset_count       *int64
+	adddaily_reset_count    *int64
+	weekly_reset_count      *int64
+	addweekly_reset_count   *int64
+	monthly_reset_count     *int64
+	addmonthly_reset_count  *int64
+	reset_counted_at        *time.Time
 	assigned_at             *time.Time
 	source_order_id         *int64
 	addsource_order_id      *int64
@@ -66155,6 +66245,210 @@ func (m *UserSubscriptionMutation) ResetMonthlyUsageUsd() {
 	m.addmonthly_usage_usd = nil
 }
 
+// SetDailyResetCount sets the "daily_reset_count" field.
+func (m *UserSubscriptionMutation) SetDailyResetCount(i int64) {
+	m.daily_reset_count = &i
+	m.adddaily_reset_count = nil
+}
+
+// DailyResetCount returns the value of the "daily_reset_count" field in the mutation.
+func (m *UserSubscriptionMutation) DailyResetCount() (r int64, exists bool) {
+	v := m.daily_reset_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDailyResetCount returns the old "daily_reset_count" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldDailyResetCount(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDailyResetCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDailyResetCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDailyResetCount: %w", err)
+	}
+	return oldValue.DailyResetCount, nil
+}
+
+// AddDailyResetCount adds i to the "daily_reset_count" field.
+func (m *UserSubscriptionMutation) AddDailyResetCount(i int64) {
+	if m.adddaily_reset_count != nil {
+		*m.adddaily_reset_count += i
+	} else {
+		m.adddaily_reset_count = &i
+	}
+}
+
+// AddedDailyResetCount returns the value that was added to the "daily_reset_count" field in this mutation.
+func (m *UserSubscriptionMutation) AddedDailyResetCount() (r int64, exists bool) {
+	v := m.adddaily_reset_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDailyResetCount resets all changes to the "daily_reset_count" field.
+func (m *UserSubscriptionMutation) ResetDailyResetCount() {
+	m.daily_reset_count = nil
+	m.adddaily_reset_count = nil
+}
+
+// SetWeeklyResetCount sets the "weekly_reset_count" field.
+func (m *UserSubscriptionMutation) SetWeeklyResetCount(i int64) {
+	m.weekly_reset_count = &i
+	m.addweekly_reset_count = nil
+}
+
+// WeeklyResetCount returns the value of the "weekly_reset_count" field in the mutation.
+func (m *UserSubscriptionMutation) WeeklyResetCount() (r int64, exists bool) {
+	v := m.weekly_reset_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWeeklyResetCount returns the old "weekly_reset_count" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldWeeklyResetCount(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWeeklyResetCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWeeklyResetCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWeeklyResetCount: %w", err)
+	}
+	return oldValue.WeeklyResetCount, nil
+}
+
+// AddWeeklyResetCount adds i to the "weekly_reset_count" field.
+func (m *UserSubscriptionMutation) AddWeeklyResetCount(i int64) {
+	if m.addweekly_reset_count != nil {
+		*m.addweekly_reset_count += i
+	} else {
+		m.addweekly_reset_count = &i
+	}
+}
+
+// AddedWeeklyResetCount returns the value that was added to the "weekly_reset_count" field in this mutation.
+func (m *UserSubscriptionMutation) AddedWeeklyResetCount() (r int64, exists bool) {
+	v := m.addweekly_reset_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetWeeklyResetCount resets all changes to the "weekly_reset_count" field.
+func (m *UserSubscriptionMutation) ResetWeeklyResetCount() {
+	m.weekly_reset_count = nil
+	m.addweekly_reset_count = nil
+}
+
+// SetMonthlyResetCount sets the "monthly_reset_count" field.
+func (m *UserSubscriptionMutation) SetMonthlyResetCount(i int64) {
+	m.monthly_reset_count = &i
+	m.addmonthly_reset_count = nil
+}
+
+// MonthlyResetCount returns the value of the "monthly_reset_count" field in the mutation.
+func (m *UserSubscriptionMutation) MonthlyResetCount() (r int64, exists bool) {
+	v := m.monthly_reset_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMonthlyResetCount returns the old "monthly_reset_count" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldMonthlyResetCount(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMonthlyResetCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMonthlyResetCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMonthlyResetCount: %w", err)
+	}
+	return oldValue.MonthlyResetCount, nil
+}
+
+// AddMonthlyResetCount adds i to the "monthly_reset_count" field.
+func (m *UserSubscriptionMutation) AddMonthlyResetCount(i int64) {
+	if m.addmonthly_reset_count != nil {
+		*m.addmonthly_reset_count += i
+	} else {
+		m.addmonthly_reset_count = &i
+	}
+}
+
+// AddedMonthlyResetCount returns the value that was added to the "monthly_reset_count" field in this mutation.
+func (m *UserSubscriptionMutation) AddedMonthlyResetCount() (r int64, exists bool) {
+	v := m.addmonthly_reset_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMonthlyResetCount resets all changes to the "monthly_reset_count" field.
+func (m *UserSubscriptionMutation) ResetMonthlyResetCount() {
+	m.monthly_reset_count = nil
+	m.addmonthly_reset_count = nil
+}
+
+// SetResetCountedAt sets the "reset_counted_at" field.
+func (m *UserSubscriptionMutation) SetResetCountedAt(t time.Time) {
+	m.reset_counted_at = &t
+}
+
+// ResetCountedAt returns the value of the "reset_counted_at" field in the mutation.
+func (m *UserSubscriptionMutation) ResetCountedAt() (r time.Time, exists bool) {
+	v := m.reset_counted_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResetCountedAt returns the old "reset_counted_at" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldResetCountedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResetCountedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResetCountedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResetCountedAt: %w", err)
+	}
+	return oldValue.ResetCountedAt, nil
+}
+
+// ResetResetCountedAt resets all changes to the "reset_counted_at" field.
+func (m *UserSubscriptionMutation) ResetResetCountedAt() {
+	m.reset_counted_at = nil
+}
+
 // SetAssignedBy sets the "assigned_by" field.
 func (m *UserSubscriptionMutation) SetAssignedBy(i int64) {
 	m.assigned_by_user = &i
@@ -66541,7 +66835,7 @@ func (m *UserSubscriptionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserSubscriptionMutation) Fields() []string {
-	fields := make([]string, 0, 21)
+	fields := make([]string, 0, 25)
 	if m.created_at != nil {
 		fields = append(fields, usersubscription.FieldCreatedAt)
 	}
@@ -66592,6 +66886,18 @@ func (m *UserSubscriptionMutation) Fields() []string {
 	}
 	if m.monthly_usage_usd != nil {
 		fields = append(fields, usersubscription.FieldMonthlyUsageUsd)
+	}
+	if m.daily_reset_count != nil {
+		fields = append(fields, usersubscription.FieldDailyResetCount)
+	}
+	if m.weekly_reset_count != nil {
+		fields = append(fields, usersubscription.FieldWeeklyResetCount)
+	}
+	if m.monthly_reset_count != nil {
+		fields = append(fields, usersubscription.FieldMonthlyResetCount)
+	}
+	if m.reset_counted_at != nil {
+		fields = append(fields, usersubscription.FieldResetCountedAt)
 	}
 	if m.assigned_by_user != nil {
 		fields = append(fields, usersubscription.FieldAssignedBy)
@@ -66647,6 +66953,14 @@ func (m *UserSubscriptionMutation) Field(name string) (ent.Value, bool) {
 		return m.WeeklyUsageUsd()
 	case usersubscription.FieldMonthlyUsageUsd:
 		return m.MonthlyUsageUsd()
+	case usersubscription.FieldDailyResetCount:
+		return m.DailyResetCount()
+	case usersubscription.FieldWeeklyResetCount:
+		return m.WeeklyResetCount()
+	case usersubscription.FieldMonthlyResetCount:
+		return m.MonthlyResetCount()
+	case usersubscription.FieldResetCountedAt:
+		return m.ResetCountedAt()
 	case usersubscription.FieldAssignedBy:
 		return m.AssignedBy()
 	case usersubscription.FieldAssignedAt:
@@ -66698,6 +67012,14 @@ func (m *UserSubscriptionMutation) OldField(ctx context.Context, name string) (e
 		return m.OldWeeklyUsageUsd(ctx)
 	case usersubscription.FieldMonthlyUsageUsd:
 		return m.OldMonthlyUsageUsd(ctx)
+	case usersubscription.FieldDailyResetCount:
+		return m.OldDailyResetCount(ctx)
+	case usersubscription.FieldWeeklyResetCount:
+		return m.OldWeeklyResetCount(ctx)
+	case usersubscription.FieldMonthlyResetCount:
+		return m.OldMonthlyResetCount(ctx)
+	case usersubscription.FieldResetCountedAt:
+		return m.OldResetCountedAt(ctx)
 	case usersubscription.FieldAssignedBy:
 		return m.OldAssignedBy(ctx)
 	case usersubscription.FieldAssignedAt:
@@ -66834,6 +67156,34 @@ func (m *UserSubscriptionMutation) SetField(name string, value ent.Value) error 
 		}
 		m.SetMonthlyUsageUsd(v)
 		return nil
+	case usersubscription.FieldDailyResetCount:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDailyResetCount(v)
+		return nil
+	case usersubscription.FieldWeeklyResetCount:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWeeklyResetCount(v)
+		return nil
+	case usersubscription.FieldMonthlyResetCount:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMonthlyResetCount(v)
+		return nil
+	case usersubscription.FieldResetCountedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResetCountedAt(v)
+		return nil
 	case usersubscription.FieldAssignedBy:
 		v, ok := value.(int64)
 		if !ok {
@@ -66888,6 +67238,15 @@ func (m *UserSubscriptionMutation) AddedFields() []string {
 	if m.addmonthly_usage_usd != nil {
 		fields = append(fields, usersubscription.FieldMonthlyUsageUsd)
 	}
+	if m.adddaily_reset_count != nil {
+		fields = append(fields, usersubscription.FieldDailyResetCount)
+	}
+	if m.addweekly_reset_count != nil {
+		fields = append(fields, usersubscription.FieldWeeklyResetCount)
+	}
+	if m.addmonthly_reset_count != nil {
+		fields = append(fields, usersubscription.FieldMonthlyResetCount)
+	}
 	if m.addsource_order_id != nil {
 		fields = append(fields, usersubscription.FieldSourceOrderID)
 	}
@@ -66911,6 +67270,12 @@ func (m *UserSubscriptionMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedWeeklyUsageUsd()
 	case usersubscription.FieldMonthlyUsageUsd:
 		return m.AddedMonthlyUsageUsd()
+	case usersubscription.FieldDailyResetCount:
+		return m.AddedDailyResetCount()
+	case usersubscription.FieldWeeklyResetCount:
+		return m.AddedWeeklyResetCount()
+	case usersubscription.FieldMonthlyResetCount:
+		return m.AddedMonthlyResetCount()
 	case usersubscription.FieldSourceOrderID:
 		return m.AddedSourceOrderID()
 	}
@@ -66963,6 +67328,27 @@ func (m *UserSubscriptionMutation) AddField(name string, value ent.Value) error 
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddMonthlyUsageUsd(v)
+		return nil
+	case usersubscription.FieldDailyResetCount:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDailyResetCount(v)
+		return nil
+	case usersubscription.FieldWeeklyResetCount:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddWeeklyResetCount(v)
+		return nil
+	case usersubscription.FieldMonthlyResetCount:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMonthlyResetCount(v)
 		return nil
 	case usersubscription.FieldSourceOrderID:
 		v, ok := value.(int64)
@@ -67111,6 +67497,18 @@ func (m *UserSubscriptionMutation) ResetField(name string) error {
 		return nil
 	case usersubscription.FieldMonthlyUsageUsd:
 		m.ResetMonthlyUsageUsd()
+		return nil
+	case usersubscription.FieldDailyResetCount:
+		m.ResetDailyResetCount()
+		return nil
+	case usersubscription.FieldWeeklyResetCount:
+		m.ResetWeeklyResetCount()
+		return nil
+	case usersubscription.FieldMonthlyResetCount:
+		m.ResetMonthlyResetCount()
+		return nil
+	case usersubscription.FieldResetCountedAt:
+		m.ResetResetCountedAt()
 		return nil
 	case usersubscription.FieldAssignedBy:
 		m.ResetAssignedBy()

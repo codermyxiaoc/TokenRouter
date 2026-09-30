@@ -29,6 +29,8 @@ export interface AdminUsageStatsResponse {
 export interface SimpleUser {
   id: number
   email: string
+  // 可选字段兼容旧版响应，筛选列表优先展示用户名。
+  username?: string
   deleted: boolean
 }
 

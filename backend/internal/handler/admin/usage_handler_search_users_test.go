@@ -23,7 +23,7 @@ func (s *searchUsersAdminStub) ListUsers(ctx context.Context, page, pageSize int
 	s.gotFilters = filters
 	ts := time.Date(2026, 5, 28, 0, 0, 0, 0, time.UTC)
 	return []service.User{
-		{ID: 1, Email: "active@test.com"},
+		{ID: 1, Email: "active@test.com", Username: "任务用户"},
 		{ID: 2, Email: "deleted@test.com", DeletedAt: &ts},
 	}, 2, nil
 }
@@ -44,13 +44,15 @@ func TestAdminUsageSearchUsers_IncludesDeletedAndFlags(t *testing.T) {
 
 	var resp struct {
 		Data []struct {
-			ID      int64  `json:"id"`
-			Email   string `json:"email"`
-			Deleted bool   `json:"deleted"`
+			ID       int64  `json:"id"`
+			Email    string `json:"email"`
+			Username string `json:"username"`
+			Deleted  bool   `json:"deleted"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Len(t, resp.Data, 2)
+	require.Equal(t, "任务用户", resp.Data[0].Username)
 	require.False(t, resp.Data[0].Deleted)
 	require.True(t, resp.Data[1].Deleted, "已删用户必须标记 deleted=true")
 }

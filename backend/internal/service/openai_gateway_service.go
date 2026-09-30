@@ -297,6 +297,8 @@ type OpenAIForwardResult struct {
 	VideoResolution string
 	// VideoDurationSeconds 是提交时请求的生成时长（xAI 按输出秒数计费），已归一化到 1-15 秒。
 	VideoDurationSeconds int
+	// 媒体预览快照不参与计费，仅供已授权任务记录写入短期结果缓存。
+	MediaTaskVideoPreview *MediaTaskVideoSnapshot
 	// WebSearchCalls 是 Codex alpha/search 网页搜索调用次数（每次成功请求为 1）。
 	// 上游不返回 usage 字段，>0 时走按次计费（分组单价 × 次数 × 倍率）。
 	WebSearchCalls int

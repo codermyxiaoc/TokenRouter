@@ -3,7 +3,7 @@
 当前标准、本地目录和 standalone Compose 默认从 DockerHub 拉取：
 
 ```text
-coderxiaoc/tokenrouter:v0.1.278-ct-v2.6
+coderxiaoc/tokenrouter:v0.1.278-ct-v2.7
 ```
 
 在 `.env` 中设置 `SUB2API_IMAGE` 可选择其他已发布标签或镜像摘要。这些 Compose 保留 `pull_policy: always`，部署服务器无需源码。应用依赖 PostgreSQL 和 Redis；Compose 提供运行配置、持久化存储、健康检查和依赖启动顺序。
@@ -27,10 +27,10 @@ coderxiaoc/tokenrouter:v0.1.278-ct-v2.6
 
 ```bash
 docker login
-docker buildx build --platform linux/amd64 --build-arg VERSION=0.1.278-ct-v2.6 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v2.6 --load --file Dockerfile .
-docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v2.6 --version
-docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v2.6 --version
-docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.6
+docker buildx build --platform linux/amd64 --build-arg VERSION=0.1.278-ct-v2.7 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v2.7 --load --file Dockerfile .
+docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v2.7 --version
+docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v2.7 --version
+docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.7
 ```
 
 版本和 PostgreSQL 客户端检查不挂载现有数据，也不启动应用服务。程序内部版本号不带 `v`，镜像标签保留 `v` 前缀。根 `Dockerfile` 还支持 `COMMIT`、`DATE` 构建参数；发布下一版本时同时替换构建参数、镜像标签与部署端 `SUB2API_IMAGE`。以上命令只发布 `amd64`，不会同时生成 `arm64` 镜像。
@@ -43,8 +43,8 @@ docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.6
 
 ```bash
 set -e
-binary="$PWD/release/sub2api_v0.1.278-ct-v2.6_linux_amd64/sub2api"
-image=coderxiaoc/tokenrouter:v0.1.278-ct-v2.6
+binary="$PWD/release/sub2api_v0.1.278-ct-v2.7_linux_amd64/sub2api"
+image=coderxiaoc/tokenrouter:v0.1.278-ct-v2.7
 build_context="$(mktemp -d)"
 test -s "$binary"
 mkdir -p "$build_context/backend" "$build_context/deploy"
@@ -64,7 +64,7 @@ image_binary_hash="$(docker run --rm --entrypoint sha256sum "$image" /app/sub2ap
 test "$binary_hash" = "$image_binary_hash"
 ```
 
-核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v2.6`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
+核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v2.7`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
 
 ```bash
 docker login
@@ -89,7 +89,7 @@ nano .env
 在现有部署目录修改 `.env`，保留原有密码、JWT/TOTP 密钥以及其他配置：
 
 ```dotenv
-SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v2.6
+SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v2.7
 POSTGRES_BIND_HOST=127.0.0.1
 POSTGRES_PORT=5433
 ```
@@ -107,7 +107,7 @@ docker compose -f docker-compose.yml pull sub2api
 
 ```bash
 docker compose -f docker-compose.yml stop sub2api
-backup_dir="backups/pre-v2.6-$(date +%Y%m%d-%H%M%S)"
+backup_dir="backups/pre-v2.7-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$backup_dir"
 chmod 700 "$backup_dir"
 cp -p .env docker-compose.yml "$backup_dir/"
@@ -130,7 +130,15 @@ docker compose -f docker-compose.yml exec -T sub2api wget -q -O - http://127.0.0
 
 `--no-deps sub2api` 只更新应用，不替换 PostgreSQL 或 Redis。新应用启动时自动执行待应用迁移。沿用既有数据、配置和稳定安全密钥，完成升级后检查程序版本、健康状态、登录、网关调用和用量记录。
 
-### v2.6 升级检查
+### v2.7 升级检查
+
+从 `v0.1.278-ct-v2.6` 更新到 `v0.1.278-ct-v2.7` 不新增或修改 SQL 迁移，最高迁移仍为 `288_affiliate_ledger_operation_id.sql`。本次新增用户与管理员任务记录的图片/视频预览，用户筛选改为用户名或邮箱搜索选择，模型改为可搜索的精确选择，并补齐仪表盘“实际消费”中英文文案。
+
+预览只读取已有结果，不重新生成、不查询上游任务或执行扣费；原有余额、订阅、路由和生成规则保持不变。图片沿用短期结果与对象存储链接，视频结果使用 Redis 短期缓存和十分钟播放票据。历史未缓存、未取得完成结果或已过期的产物不能补预览；后续合法完成查询可产生新的可用快照。播放文件需要服务器访问公网媒体站点，保留现有 Redis 和固定安全密钥；外部反向代理应对 `/api/v1/media-tasks/preview-content/` 隐藏票据路径，详见[任务结果预览](../docs/domains/media_tasks.md#media_task_preview)。
+
+升级后核对版本、健康、用户/管理员任务筛选与归属隔离、已有图片及新视频结果预览。交付为 `linux/amd64`，使用原 Compose 项目及数据卷，只重建应用容器；二进制部署沿用原配置与数据库。
+
+### v2.6 历史升级检查
 
 从 `v0.1.278-ct-v2.5` 更新到 `v0.1.278-ct-v2.6` 不新增或修改 SQL 迁移，最高迁移仍为 `288_affiliate_ledger_operation_id.sql`。本次交付 `linux/amd64` 二进制和同平台 DockerHub 镜像，包含已同步的上游 v0.2.10 / v0.2.11 适配、用户与管理员任务记录的手机卡片及折叠筛选，并将版本检查、在线更新和安装脚本统一到 `codermyxiaoc/TokenRouter` 的 GitHub Releases。
 
@@ -248,7 +256,7 @@ v1.3 的 WS 执行状态按 API Key、原始线程/会话和 `request_kind` 隔�
 
 ## 镜像标签
 
-当前默认固定版本标签 `v0.1.278-ct-v2.6`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
+当前默认固定版本标签 `v0.1.278-ct-v2.7`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
 
 ## 相关链接
 

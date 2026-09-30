@@ -53,6 +53,8 @@ export default {
       tokens: 'Token',
       cache: '缓存',
       recentUsage: '最近使用',
+      // 最近使用图表中，切换到用户实际扣费口径的按钮文案。
+      actualSpending: '实际消费',
       viewModelDistribution: '模型分布',
       viewSpendingRanking: '用户消费榜',
       spendingRankingTitle: '用户消费榜',

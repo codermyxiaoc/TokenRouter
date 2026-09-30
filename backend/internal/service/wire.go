@@ -868,7 +868,7 @@ var ProviderSet = wire.NewSet(
 	ProvideBatchImageModelPricingResolver,
 	ProvideImageStorageSettingService,
 	ProvideImageTaskService,
-	NewMediaTaskService,
+	ProvideMediaTaskService,
 	NewBatchImagePublicService,
 	NewBatchImageDownloadService,
 	ProvideBatchImageCleanupService,

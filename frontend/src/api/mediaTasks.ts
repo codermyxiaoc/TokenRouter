@@ -38,6 +38,7 @@ export interface MediaTaskFilters {
   status?: string
   source?: string
   model?: string
+  model_exact?: boolean
   user_id?: number
 }
 
@@ -48,6 +49,25 @@ export interface MediaTaskPage {
   page_size: number
   pages: number
 }
+
+// 预览只读取已保存的结果，未知媒体属性保持为空，不用请求参数冒充产物属性。
+export interface MediaTaskPreviewItem {
+  url: string
+  media_type: 'image' | 'video'
+  mime_type?: string
+  width?: number
+  height?: number
+  duration_seconds?: number
+  size_bytes?: number
+}
+
+export interface MediaTaskPreview {
+  items: MediaTaskPreviewItem[]
+  unavailable_reason?: 'pending' | 'expired' | 'unavailable'
+  expires_at?: string
+}
+
+export type MediaTaskModelFilters = Omit<MediaTaskFilters, 'page' | 'page_size' | 'model' | 'model_exact'>
 
 // 两个只读入口共用响应契约；用户入口不发送管理员专用的用户筛选字段。
 export function mediaTasksAPI(admin = false) {
@@ -61,6 +81,17 @@ export function mediaTasksAPI(admin = false) {
     },
     async get(id: number): Promise<MediaTask> {
       const { data } = await apiClient.get<MediaTask>(`${base}/${id}`)
+      return data
+    },
+    async models(filters: MediaTaskModelFilters = {}): Promise<string[]> {
+      const { user_id, ...shared } = filters
+      const { data } = await apiClient.get<string[]>(`${base}/models`, {
+        params: admin ? { ...shared, user_id } : shared,
+      })
+      return data
+    },
+    async preview(id: number): Promise<MediaTaskPreview> {
+      const { data } = await apiClient.get<MediaTaskPreview>(`${base}/${id}/preview`)
       return data
     },
   }

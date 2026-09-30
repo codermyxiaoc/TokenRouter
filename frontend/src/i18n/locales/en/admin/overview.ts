@@ -53,6 +53,8 @@ export default {
       standardDescription: 'The standard billed cost. Calculated from the current model or channel base pricing, and is not affected by group multipliers, user-specific multipliers, or account billing multipliers.',
       noDataAvailable: 'No data available',
       recentUsage: 'Recent Usage',
+      // 最近使用图表中，切换到用户实际扣费口径的按钮文案。
+      actualSpending: 'Actual Spending',
       viewModelDistribution: 'Model Distribution',
       viewSpendingRanking: 'User Spending Ranking',
       spendingRankingTitle: 'User Spending Ranking',

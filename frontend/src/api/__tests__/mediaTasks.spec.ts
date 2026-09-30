@@ -22,4 +22,15 @@ describe('mediaTasksAPI', () => {
     await mediaTasksAPI(true).get(42)
     expect(get).toHaveBeenLastCalledWith('/admin/media-tasks/42')
   })
+
+  it('模型选项与预览沿用角色入口，个人模型筛选不接受其他用户 ID', async () => {
+    await mediaTasksAPI().models({ user_id: 99, media_type: 'video' })
+    expect(get).toHaveBeenLastCalledWith('/media-tasks/models', { params: { media_type: 'video' } })
+    await mediaTasksAPI(true).models({ user_id: 99 })
+    expect(get).toHaveBeenLastCalledWith('/admin/media-tasks/models', { params: { user_id: 99 } })
+    await mediaTasksAPI().preview(5)
+    expect(get).toHaveBeenLastCalledWith('/media-tasks/5/preview')
+    await mediaTasksAPI(true).preview(5)
+    expect(get).toHaveBeenLastCalledWith('/admin/media-tasks/5/preview')
+  })
 })

@@ -46,7 +46,8 @@ RequestLogger
 | `/api/v1/admin/*` | 管理员 JWT 或受限管理密钥；部分操作另需 step-up | `routes/admin.go`；用户、分组、账号、渠道、设置、运维、备份、支付和安全管理 |
 | `/api/v1/payment/*` | 用户 JWT | `routes/payment.go`；配置/套餐读取、下单、查单、取消、invoice 和退款申请 |
 | `/api/v1/tickets/*`、`/api/v1/admin/tickets/*` | 个人入口为用户 JWT，管理入口为管理员认证 | `routes/tickets.go`；工单、私有附件、后台对话与工单设置，继承面板限流和审计 |
-| `/api/v1/media-tasks`、`/api/v1/admin/media-tasks` 及 `/:id` | 个人入口为用户 JWT，管理入口为管理员认证 | 图片/视频任务只读列表与详情，用户仅本人、管理员可筛选用户，见[任务记录观测](../domains/media_tasks.md#media_task_observation) |
+| `/api/v1/media-tasks`、`/api/v1/admin/media-tasks` 及 `/models`、`/:id`、`/:id/preview` | 个人入口为用户 JWT，管理入口为管理员认证 | 图片/视频任务只读列表、全量可见模型选项、详情及结果预览，用户仅本人、管理员可筛选用户，见[任务记录观测](../domains/media_tasks.md#media_task_observation) |
+| `/api/v1/media-tasks/preview-content/:ticket` | 由已鉴权预览签发的短期任务专属票据 | 仅 `GET`/`HEAD`，支持单段 Range，读取缓存产物且不进入模型状态查询或计费，见[任务结果预览](../domains/media_tasks.md#media_task_preview) |
 | `/api/v1/payment/public/*` | 签名 resume token 或遗留订单验证约束 | 支付结果恢复；不得扩展为匿名订单枚举接口 |
 | `/api/v1/payment/webhook/*` | 提供商验签 | EasyPay、Alipay、WeChat Pay、Stripe、Airwallex 通知 |
 | `/v1/*` 和兼容裸别名 | TokenRouter API Key | Anthropic/OpenAI 兼容消息、Responses、Chat、图片、视频、模型、用量与批任务 |

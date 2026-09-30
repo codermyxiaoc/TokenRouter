@@ -18,6 +18,11 @@ func RegisterUserRoutes(
 	settingService *service.SettingService,
 	panelRateLimiter *middleware.PanelRateLimiter,
 ) {
+	// 原生视频元素无法设置面板 JWT；只允许通过已鉴权接口签发的短期任务专属票据播放。
+	if h.MediaTask != nil {
+		v1.GET("/media-tasks/preview-content/:ticket", panelRateLimiter.PublicIP(), h.MediaTask.PreviewContent)
+		v1.HEAD("/media-tasks/preview-content/:ticket", panelRateLimiter.PublicIP(), h.MediaTask.PreviewContent)
+	}
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
 	authenticated.Use(middleware.BackendModeUserGuard(settingService))

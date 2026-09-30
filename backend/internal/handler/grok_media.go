@@ -100,6 +100,12 @@ func (h *OpenAIGatewayHandler) observeVideoTask(c *gin.Context, endpoint service
 	if err := h.mediaTaskObserver.ObserveMediaTask(ctx, observation); err != nil {
 		logger.L().Warn("media_task.observation_failed", zap.String("source", observation.Source), zap.String("task_id", observation.TaskID), zap.Error(err))
 	}
+	// 缓存是独立的尽力写入，共享观测预算，不改变上游响应、原有扣费或并发释放。
+	if observer, ok := h.mediaTaskObserver.(service.MediaTaskVideoPreviewObserver); ok && result.MediaTaskVideoPreview != nil {
+		if err := observer.ObserveMediaTaskVideoPreview(ctx, observation, result.MediaTaskVideoPreview); err != nil {
+			logger.L().Warn("media_task.preview_cache_failed", zap.String("source", observation.Source), zap.String("task_id", observation.TaskID))
+		}
+	}
 }
 
 func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.GrokMediaEndpoint, requestID string) {

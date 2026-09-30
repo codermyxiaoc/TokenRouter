@@ -11,6 +11,7 @@ import (
 )
 
 type mediaTaskRepoStub struct {
+	MediaTaskRepository
 	observation MediaTaskObservation
 	actor       MediaTaskActor
 	filter      MediaTaskFilter

@@ -17,9 +17,41 @@ import (
 )
 
 type videoTaskObserverStub struct {
-	observations  []service.MediaTaskObservation
-	err           error
-	contextErrors []error
+	observations        []service.MediaTaskObservation
+	err                 error
+	contextErrors       []error
+	previewObservations []service.MediaTaskObservation
+	previews            []*service.MediaTaskVideoSnapshot
+}
+
+func (s *videoTaskObserverStub) ObserveMediaTaskVideoPreview(ctx context.Context, observation service.MediaTaskObservation, snapshot *service.MediaTaskVideoSnapshot) error {
+	s.contextErrors = append(s.contextErrors, ctx.Err())
+	s.previewObservations = append(s.previewObservations, observation)
+	s.previews = append(s.previews, snapshot)
+	return s.err
+}
+
+// 投影存储失败或客户端断连都不能改变原请求结果，缓存仍按已鉴权的任务身份尽力写入。
+func TestVideoTaskPreviewObservationIndependentOfProjection(t *testing.T) {
+	observer := &videoTaskObserverStub{err: errors.New("temporary storage failure")}
+	h := &OpenAIGatewayHandler{}
+	h.SetMediaTaskObserver(observer)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c, _ := grokMediaSlotContext(ctx, false)
+	key, _ := middleware.GetAPIKeyFromContext(c)
+	snapshot := &service.MediaTaskVideoSnapshot{URL: "https://media.example/video.mp4"}
+	result := &service.OpenAIForwardResult{MediaTaskVideoPreview: snapshot, MediaTaskObservation: &service.MediaTaskObservation{Source: "seedance_video", MediaType: "video", Status: "completed"}}
+	h.observeVideoTask(c, service.SeedanceEndpointStatus, "seedance:original", key, 999, &service.Account{ID: 31}, result, "", "")
+	require.Len(t, observer.previews, 1)
+	require.Same(t, snapshot, observer.previews[0])
+	require.Equal(t, key.UserID, observer.previewObservations[0].UserID)
+	require.Equal(t, key.ID, observer.previewObservations[0].APIKeyID)
+	require.Equal(t, "original", observer.previewObservations[0].TaskID)
+	require.Equal(t, observer.observations[0], observer.previewObservations[0])
+	require.Equal(t, []error{nil, nil}, observer.contextErrors)
+	require.Zero(t, result.VideoCount)
+	require.Zero(t, result.Usage.OutputTokens)
 }
 
 func (s *videoTaskObserverStub) ObserveMediaTask(ctx context.Context, observation service.MediaTaskObservation) error {

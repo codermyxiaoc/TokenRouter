@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import MediaTasksView from '../MediaTasksView.vue'
 import type { MediaTask } from '@/api/mediaTasks'
 
-const { list, get, api } = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), api: vi.fn() }))
+const { list, get, models, preview, api } = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), models: vi.fn(), preview: vi.fn(), api: vi.fn() }))
 vi.mock('@/api/mediaTasks', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/api/mediaTasks')>()), mediaTasksAPI: api }))
 vi.mock('vue-i18n', async (importOriginal) => ({
   ...(await importOriginal<typeof import('vue-i18n')>()),
@@ -23,7 +23,9 @@ function mountView(admin = false) {
     props: { admin },
     global: { stubs: {
       AppLayout: { template: '<div><slot name="page-heading-actions" /><slot /></div>' },
-      Select: { props: ['modelValue', 'options'], template: '<div />' },
+      Select: { props: { modelValue: String, options: Array, searchable: Boolean }, template: '<div />' },
+      MediaTaskUserFilter: { props: ['id', 'modelValue'], template: '<div :id="id" />' },
+      MediaTaskPreviewDialog: { props: ['show', 'task', 'preview', 'loading', 'error', 'admin'], template: '<div v-if="show" data-testid="preview">{{ task?.task_id }}</div>' },
       Pagination: { props: ['page', 'pageSize', 'total'], template: '<button data-testid="next" @click="$emit(\'update:page\', 2)">next</button>' },
       BaseDialog: { props: ['show'], template: '<div v-if="show" data-testid="detail"><slot /></div>' },
     } },
@@ -31,7 +33,7 @@ function mountView(admin = false) {
 }
 
 describe('MediaTasksView', () => {
-  beforeEach(() => { list.mockReset(); get.mockReset(); api.mockReset(); api.mockReturnValue({ list, get }); list.mockResolvedValue(result([])) })
+  beforeEach(() => { list.mockReset(); get.mockReset(); models.mockReset(); preview.mockReset(); api.mockReset(); api.mockReturnValue({ list, get, models, preview }); list.mockResolvedValue(result([])); models.mockResolvedValue(['gpt-image-2', 'image-model']); preview.mockResolvedValue({ items: [] }) })
 
   it('完成任务仍可待确认，明确零费用显示为零且无写操作', async () => {
     list.mockResolvedValue(result([task(), task({ id: 2, task_id: 'zero-cost', actual_cost: '0' })]))
@@ -55,12 +57,14 @@ describe('MediaTasksView', () => {
     list.mockResolvedValue(result([task()]))
     const wrapper = mountView(true)
     await flushPromises()
-    await wrapper.get('#media-user').setValue('42')
-    await wrapper.get('#media-model').setValue('  gpt-image-2  ')
+    wrapper.getComponent('#media-user').vm.$emit('update:modelValue', { id: 42, username: '测试用户', email: 'test@example.com', deleted: false })
+    await wrapper.vm.$nextTick()
+    wrapper.getComponent('#media-user').vm.$emit('change')
+    wrapper.getComponent('#media-model').vm.$emit('update:modelValue', 'gpt-image-2')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
     expect(api).toHaveBeenLastCalledWith(true)
-    expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ user_id: 42, model: 'gpt-image-2', page: 1 }))
+    expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ user_id: 42, model: 'gpt-image-2', model_exact: true, page: 1 }))
     await wrapper.get('[data-testid="next"]').trigger('click')
     await flushPromises()
     expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }))
@@ -166,8 +170,10 @@ describe('MediaTasksView', () => {
     expect(toggle.attributes('aria-expanded')).toBe('false')
     await toggle.trigger('click')
     expect(toggle.attributes('aria-expanded')).toBe('true')
-    await wrapper.get('#media-user-mobile').setValue('42')
-    await wrapper.get('#media-model-mobile').setValue('  image-model  ')
+    wrapper.getComponent('#media-user-mobile').vm.$emit('update:modelValue', { id: 42, username: '测试用户', email: 'test@example.com', deleted: false })
+    await wrapper.vm.$nextTick()
+    wrapper.getComponent('#media-user-mobile').vm.$emit('change')
+    wrapper.getComponent('#media-model-mobile').vm.$emit('update:modelValue', 'image-model')
     const status = wrapper.getComponent('#media-status-mobile')
     status.vm.$emit('update:modelValue', 'failed')
     await wrapper.vm.$nextTick()
@@ -175,7 +181,7 @@ describe('MediaTasksView', () => {
     await flushPromises()
     expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ user_id: 42, model: 'image-model', status: 'failed', page: 1 }))
     expect(toggle.text()).toContain('2')
-    expect((wrapper.get('#media-user').element as HTMLInputElement).value).toBe('42')
+    expect(wrapper.getComponent('#media-user').props('modelValue')).toMatchObject({ id: 42, username: '测试用户' })
     await wrapper.get('[data-testid="next"]').trigger('click')
     await flushPromises()
     expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }))
@@ -217,4 +223,48 @@ describe('MediaTasksView', () => {
     expect(wrapper.text()).not.toContain('video-1')
     wrapper.unmount()
   })
+  it('模型候选独立于当前分页，使用可搜索的项目选择框', async () => {
+    models.mockResolvedValue(['model-other-page', 'gpt-image-2'])
+    list.mockResolvedValue(result([task()]))
+    const wrapper = mountView()
+    await flushPromises()
+    expect(models).toHaveBeenCalledWith(expect.not.objectContaining({ user_id: expect.anything() }))
+    expect(wrapper.getComponent('#media-model').props('options')).toContainEqual({ value: 'model-other-page', label: 'model-other-page' })
+    expect(wrapper.getComponent('#media-model').props('searchable')).toBe(true)
+    expect(wrapper.find('input#media-model').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('预览读取原任务结果，角色切换后旧预览不能回写', async () => {
+    let resolvePreview!: (value: { items: { url: string; media_type: 'video' }[] }) => void
+    preview.mockReturnValue(new Promise(resolve => { resolvePreview = resolve }))
+    list.mockResolvedValue(result([task()]))
+    get.mockResolvedValue(task())
+    const wrapper = mountView(true)
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'mediaTasks.preview.open')!.trigger('click')
+    await flushPromises()
+    expect(preview).toHaveBeenCalledWith(1)
+    expect(wrapper.find('[data-testid="preview"]').exists()).toBe(true)
+    await wrapper.setProps({ admin: false })
+    resolvePreview({ items: [{ url: 'https://media.example/old.mp4', media_type: 'video' }] })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="preview"]').exists()).toBe(false)
+    expect(api).toHaveBeenLastCalledWith(false)
+    wrapper.unmount()
+  })
+
+  it('切换权限时旧模型候选不能覆盖新用户范围', async () => {
+    let resolveModels!: (value: string[]) => void
+    models.mockReturnValueOnce(new Promise(resolve => { resolveModels = resolve }))
+    const wrapper = mountView(true)
+    models.mockResolvedValueOnce(['own-model'])
+    await wrapper.setProps({ admin: false })
+    await flushPromises()
+    resolveModels(['another-user-model'])
+    await flushPromises()
+    expect(wrapper.getComponent('#media-model').props('options')).toEqual([{ value: '', label: 'mediaTasks.all' }, { value: 'own-model', label: 'own-model' }])
+    wrapper.unmount()
+  })
+
 })

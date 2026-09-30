@@ -185,6 +185,7 @@ func (s *OpenAIGatewayService) ForwardSeedance(ctx context.Context, c *gin.Conte
 	}
 	result := &OpenAIForwardResult{Model: model, BillingModel: model, UpstreamModel: upstreamModel, Duration: time.Since(started), ResponseHeaders: resp.Header.Clone(), UpstreamHeaders: resp.Header.Clone(), UpstreamEndpoint: "/api/v3/contents/generations/tasks"}
 	result.MediaTaskObservation = videoTaskObservation(endpoint, responseBody, resp.StatusCode)
+	result.MediaTaskVideoPreview = videoTaskPreviewSnapshot(endpoint, responseBody, taskID)
 	if endpoint == SeedanceEndpointCreate {
 		idValue := gjson.GetBytes(responseBody, "id")
 		id := strings.TrimSpace(idValue.String())

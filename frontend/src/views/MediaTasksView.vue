@@ -1,7 +1,7 @@
 <template>
   <AppLayout>
     <template #page-heading-actions>
-      <button type="button" class="btn btn-secondary" :disabled="loading" @click="load">{{ t('common.refresh') }}</button>
+      <button type="button" class="btn btn-secondary" :disabled="loading" @click="refresh">{{ t('common.refresh') }}</button>
     </template>
     <div class="min-w-0 space-y-5">
       <div class="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
@@ -12,8 +12,8 @@
         <div class="w-36"><label class="input-label" for="media-type">{{ t('mediaTasks.type') }}</label><Select id="media-type" v-model="filters.media_type" :options="typeOptions" @change="search" /></div>
         <div class="w-40"><label class="input-label" for="media-status">{{ t('mediaTasks.status') }}</label><Select id="media-status" v-model="filters.status" :options="statusOptions" @change="search" /></div>
         <div class="w-48"><label class="input-label" for="media-source">{{ t('mediaTasks.source') }}</label><Select id="media-source" v-model="filters.source" :options="sourceOptions" @change="search" /></div>
-        <div class="min-w-40 flex-1"><label class="input-label" for="media-model">{{ t('mediaTasks.model') }}</label><input id="media-model" v-model="filters.model" type="search" maxlength="256" class="input w-full" /></div>
-        <div v-if="admin" class="w-36"><label class="input-label" for="media-user">{{ t('mediaTasks.userId') }}</label><input id="media-user" v-model="filters.user_id" type="number" min="1" step="1" class="input w-full" /></div>
+        <div class="min-w-40 flex-1"><label class="input-label" for="media-model">{{ t('mediaTasks.model') }}</label><Select id="media-model" v-model="filters.model" :options="modelOptions" searchable :disabled="modelsLoading" @change="search" /></div>
+        <div v-if="admin" class="w-64"><label class="input-label" for="media-user">{{ t('mediaTasks.user') }}</label><MediaTaskUserFilter id="media-user" v-model="selectedUser" @change="changeUser" /></div>
         <button type="submit" class="btn btn-secondary">{{ t('common.search') }}</button>
       </form>
       <!-- 移动端沿用账号管理的紧凑搜索和折叠筛选，共用同一份筛选状态。 -->
@@ -21,7 +21,7 @@
         <div class="flex min-w-0 items-end gap-2">
           <div class="min-w-0 flex-1">
             <label class="input-label" for="media-model-mobile">{{ t('mediaTasks.model') }}</label>
-            <input id="media-model-mobile" v-model="filters.model" type="search" maxlength="256" class="input w-full" />
+            <Select id="media-model-mobile" v-model="filters.model" :options="modelOptions" searchable :disabled="modelsLoading" @change="search" />
           </div>
           <button type="submit" class="btn btn-secondary h-9 w-9 shrink-0 p-0" :aria-label="t('common.search')" :title="t('common.search')"><Icon name="search" size="sm" /></button>
           <button
@@ -48,11 +48,12 @@
             <div class="min-w-0"><label class="input-label" for="media-type-mobile">{{ t('mediaTasks.type') }}</label><Select id="media-type-mobile" v-model="filters.media_type" :options="typeOptions" @change="search" /></div>
             <div class="min-w-0"><label class="input-label" for="media-status-mobile">{{ t('mediaTasks.status') }}</label><Select id="media-status-mobile" v-model="filters.status" :options="statusOptions" @change="search" /></div>
             <div class="min-w-0"><label class="input-label" for="media-source-mobile">{{ t('mediaTasks.source') }}</label><Select id="media-source-mobile" v-model="filters.source" :options="sourceOptions" @change="search" /></div>
-            <div v-if="admin" class="min-w-0"><label class="input-label" for="media-user-mobile">{{ t('mediaTasks.userId') }}</label><input id="media-user-mobile" v-model="filters.user_id" type="number" min="1" step="1" class="input w-full" /></div>
+            <div v-if="admin" class="min-w-0"><label class="input-label" for="media-user-mobile">{{ t('mediaTasks.user') }}</label><MediaTaskUserFilter id="media-user-mobile" v-model="selectedUser" @change="changeUser" /></div>
           </div>
           <button type="submit" class="btn btn-secondary mt-4 w-full">{{ t('common.search') }}</button>
         </div>
       </form>
+      <p v-if="modelsError" role="alert" class="text-sm text-red-600 dark:text-red-400">{{ modelsError }}</p>
       <p v-if="error" role="alert" class="text-sm text-red-600 dark:text-red-400">{{ error }}</p>
       <div class="media-task-results card overflow-hidden">
         <div v-if="loading" class="card p-12 text-center text-gray-500 lg:rounded-none lg:border-0" role="status">{{ t('common.loading') }}</div>
@@ -96,7 +97,7 @@
                 <dd class="min-w-0 break-words text-right text-xs text-gray-500">{{ formatTime(task.updated_at) }}</dd>
               </div>
             </dl>
-            <div class="mt-4 border-t border-gray-100 pt-3 dark:border-dark-700"><button type="button" class="btn btn-secondary min-h-10 w-full" @click="openDetails(task.id)">{{ t('mediaTasks.details') }}</button></div>
+            <div class="mt-4 flex flex-wrap gap-2 border-t border-gray-100 pt-3 dark:border-dark-700"><button v-if="task.status === 'completed'" type="button" class="btn btn-secondary min-h-10 w-full" @click="openPreview(task)">{{ t('mediaTasks.preview.open') }}</button><button type="button" class="btn btn-secondary min-h-10 w-full" @click="openDetails(task.id)">{{ t('mediaTasks.details') }}</button></div>
           </article>
         </div>
         <div class="hidden overflow-x-auto lg:block" data-testid="desktop-task-list">
@@ -120,7 +121,7 @@
               <td class="whitespace-nowrap px-4 py-4"><span class="rounded-full px-2 py-1 text-xs font-medium" :class="statusClass(task.status)">{{ label('statuses', task.status) }}</span></td>
               <td class="whitespace-nowrap px-4 py-4 tabular-nums">{{ formatCost(task.actual_cost) }}</td>
               <td class="whitespace-nowrap px-4 py-4 text-xs text-gray-500">{{ formatTime(task.updated_at) }}</td>
-              <td class="px-4 py-4"><button type="button" class="btn btn-secondary btn-sm whitespace-nowrap" @click="openDetails(task.id)">{{ t('mediaTasks.details') }}</button></td>
+              <td class="px-4 py-4"><div class="flex gap-2"><button v-if="task.status === 'completed'" type="button" class="btn btn-secondary btn-sm whitespace-nowrap" @click="openPreview(task)">{{ t('mediaTasks.preview.open') }}</button><button type="button" class="btn btn-secondary btn-sm whitespace-nowrap" @click="openDetails(task.id)">{{ t('mediaTasks.details') }}</button></div></td>
             </tr></tbody>
           </table>
         </div>
@@ -128,6 +129,7 @@
         <Pagination v-if="total > 0" class="media-task-pagination" :page="page" :page-size="pageSize" :total="total" @update:page="changePage" @update:page-size="changePageSize" />
       </div>
     </div>
+    <MediaTaskPreviewDialog :show="previewOpen" :task="previewTask" :preview="preview" :loading="previewLoading" :error="previewError" :admin="admin" @close="closePreview" @retry="retryPreview" />
     <BaseDialog :show="detailsOpen" :title="t('mediaTasks.details')" width="wide" @close="closeDetails">
       <p v-if="detailsLoading" role="status" class="py-8 text-center text-gray-500">{{ t('common.loading') }}</p>
       <p v-else-if="detailsError" role="alert" class="text-sm text-red-600">{{ detailsError }}</p>
@@ -148,12 +150,27 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { mediaTasksAPI, mediaTaskTypes, mediaTaskStatuses, mediaTaskSources, type MediaTask } from '@/api/mediaTasks'
+import MediaTaskUserFilter from '@/components/media/MediaTaskUserFilter.vue'
+import MediaTaskPreviewDialog from '@/components/media/MediaTaskPreviewDialog.vue'
+import type { SimpleUser } from '@/api/admin/usage'
+import { mediaTasksAPI, mediaTaskTypes, mediaTaskStatuses, mediaTaskSources, type MediaTask, type MediaTaskPreview } from '@/api/mediaTasks'
 import { extractApiErrorMessage } from '@/utils/apiError'
 
 const props = withDefaults(defineProps<{ admin?: boolean }>(), { admin: false })
 const { t, te } = useI18n()
 const filters = reactive({ media_type: '', status: '', source: '', model: '', user_id: '' })
+const selectedUser = ref<SimpleUser | null>(null)
+const models = ref<string[]>([])
+const modelsLoading = ref(false)
+const modelsError = ref('')
+const modelOptions = computed(() => [{ value: '', label: t('mediaTasks.all') }, ...Array.from(new Set([...models.value, ...(filters.model ? [filters.model] : [])])).map(model => ({ value: model, label: model }))])
+const previewOpen = ref(false)
+const previewTask = ref<MediaTask | null>(null)
+const preview = ref<MediaTaskPreview | null>(null)
+const previewLoading = ref(false)
+const previewError = ref('')
+let modelsRequest = 0
+let previewRequest = 0
 const showMobileFilters = ref(false)
 const activeFilterCount = computed(() => [filters.media_type, filters.status, filters.source, ...(props.admin ? [filters.user_id] : [])].filter(value => String(value).trim() !== '').length)
 const items = ref<MediaTask[]>([])
@@ -229,7 +246,8 @@ async function load() {
     const result = await mediaTasksAPI(props.admin).list({
       page: page.value, page_size: pageSize.value,
       media_type: filters.media_type || undefined, status: filters.status || undefined,
-      source: filters.source || undefined, model: filters.model.trim() || undefined,
+      source: filters.source || undefined, model: filters.model || undefined,
+      model_exact: true,
       ...(props.admin && Number.isSafeInteger(userID) && userID > 0 ? { user_id: userID } : {}),
     })
     // 筛选、翻页及角色入口切换后，旧请求不得覆盖新的列表。
@@ -246,10 +264,54 @@ async function load() {
     if (current === listRequest) loading.value = false
   }
 }
-function search() { page.value = 1; void load() }
+async function loadModels() {
+  const request = ++modelsRequest
+  modelsLoading.value = true
+  modelsError.value = ''
+  try {
+    const result = await mediaTasksAPI(props.admin).models({
+      media_type: filters.media_type || undefined, status: filters.status || undefined,
+      source: filters.source || undefined,
+      ...(props.admin && selectedUser.value ? { user_id: selectedUser.value.id } : {}),
+    })
+    if (request === modelsRequest) models.value = result
+  } catch (err) {
+    if (request === modelsRequest) { models.value = []; modelsError.value = extractApiErrorMessage(err, t('mediaTasks.modelsLoadFailed')) }
+  } finally {
+    if (request === modelsRequest) modelsLoading.value = false
+  }
+}
+function refresh() { void load(); void loadModels() }
+function search() { page.value = 1; refresh() }
+function changeUser() {
+  // 用户变更时清空上一个用户的模型候选，避免跨用户的晚到响应污染选择框。
+  filters.user_id = selectedUser.value ? String(selectedUser.value.id) : ''
+  filters.model = ''
+  models.value = []
+  search()
+}
+async function openPreview(task: MediaTask) {
+  const request = ++previewRequest
+  previewOpen.value = true
+  previewTask.value = task
+  preview.value = null
+  previewError.value = ''
+  previewLoading.value = true
+  const api = mediaTasksAPI(props.admin)
+  try {
+    const [latest, result] = await Promise.all([api.get(task.id), api.preview(task.id)])
+    if (request === previewRequest) { previewTask.value = latest; preview.value = result }
+  } catch (err) {
+    if (request === previewRequest) previewError.value = extractApiErrorMessage(err, t('mediaTasks.loadFailed'))
+  } finally {
+    if (request === previewRequest) previewLoading.value = false
+  }
+}
+function closePreview() { ++previewRequest; previewOpen.value = false; previewTask.value = null; preview.value = null }
+function retryPreview() { if (previewTask.value) void openPreview(previewTask.value) }
 function resetFilters() {
-  // 模型搜索独立于折叠筛选，重置筛选时保留当前搜索词。
-  filters.media_type = ''; filters.status = ''; filters.source = ''; filters.user_id = ''
+  // 模型选择独立于折叠筛选，重置筛选时保留当前选中的模型。
+  filters.media_type = ''; filters.status = ''; filters.source = ''; filters.user_id = ''; selectedUser.value = null
   search()
 }
 function changePage(value: number) { page.value = value; void load() }
@@ -270,9 +332,9 @@ async function openDetails(id: number) {
   }
 }
 function closeDetails() { ++detailRequest; detailsOpen.value = false; detail.value = null }
-watch(() => props.admin, () => { closeDetails(); filters.user_id = ''; items.value = []; search() })
-onMounted(load)
-onBeforeUnmount(() => { ++listRequest; ++detailRequest })
+watch(() => props.admin, () => { closeDetails(); closePreview(); selectedUser.value = null; filters.user_id = ''; filters.model = ''; models.value = []; items.value = []; search() })
+onMounted(refresh)
+onBeforeUnmount(() => { ++listRequest; ++detailRequest; ++modelsRequest; ++previewRequest })
 </script>
 
 <style scoped>

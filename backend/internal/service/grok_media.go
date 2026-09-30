@@ -818,6 +818,7 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 			}
 		}
 	}
+	previewSnapshot := videoTaskPreviewSnapshot(endpoint, respBody, requestID)
 	if endpoint == GrokMediaEndpointVideoStatus {
 		respBody = rewriteGrokMediaVideoContentURLs(
 			respBody,
@@ -839,23 +840,24 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		}
 	}
 	return &OpenAIForwardResult{
-		RequestID:            requestIDHeader,
-		MediaTaskObservation: videoTaskObservation(endpoint, respBody, resp.StatusCode),
-		UpstreamHeaders:      resp.Header,
-		ResponseID:           usage.ResponseID,
-		Usage:                usage.Usage,
-		Model:                resultModel,
-		BillingModel:         resultBillingModel,
-		UpstreamModel:        upstreamModel,
-		ResponseHeaders:      resp.Header.Clone(),
-		Duration:             time.Since(startTime),
-		ImageCount:           usage.ImageCount,
-		ImageSize:            usage.ImageSize,
-		ImageInputSize:       usage.ImageInputSize,
-		ImageOutputSizes:     usage.ImageOutputSizes,
-		VideoCount:           usage.VideoCount,
-		VideoResolution:      usage.VideoResolution,
-		VideoDurationSeconds: usage.VideoDurationSeconds,
+		RequestID:             requestIDHeader,
+		MediaTaskObservation:  videoTaskObservation(endpoint, respBody, resp.StatusCode),
+		MediaTaskVideoPreview: previewSnapshot,
+		UpstreamHeaders:       resp.Header,
+		ResponseID:            usage.ResponseID,
+		Usage:                 usage.Usage,
+		Model:                 resultModel,
+		BillingModel:          resultBillingModel,
+		UpstreamModel:         upstreamModel,
+		ResponseHeaders:       resp.Header.Clone(),
+		Duration:              time.Since(startTime),
+		ImageCount:            usage.ImageCount,
+		ImageSize:             usage.ImageSize,
+		ImageInputSize:        usage.ImageInputSize,
+		ImageOutputSizes:      usage.ImageOutputSizes,
+		VideoCount:            usage.VideoCount,
+		VideoResolution:       usage.VideoResolution,
+		VideoDurationSeconds:  usage.VideoDurationSeconds,
 	}, nil
 }
 
@@ -979,11 +981,12 @@ func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
 	// 内容下载也是完成观测入口：状态体满足官方 done 和 video.url 条件时附加计费单位，
 	// 使处理器能够按与状态轮询相同的路径领取一次计费；待计费快照由处理器合并。
 	result := &OpenAIForwardResult{
-		RequestID:            contentRequestID,
-		MediaTaskObservation: videoTaskObservation(GrokMediaEndpointVideoStatus, statusBody, statusResp.StatusCode),
-		UpstreamHeaders:      contentResp.Header,
-		ResponseHeaders:      contentResp.Header.Clone(),
-		Duration:             time.Since(startTime),
+		RequestID:             contentRequestID,
+		MediaTaskObservation:  videoTaskObservation(GrokMediaEndpointVideoStatus, statusBody, statusResp.StatusCode),
+		MediaTaskVideoPreview: videoTaskPreviewSnapshot(GrokMediaEndpointVideoStatus, statusBody, requestID),
+		UpstreamHeaders:       contentResp.Header,
+		ResponseHeaders:       contentResp.Header.Clone(),
+		Duration:              time.Since(startTime),
 	}
 	if billed := ExtractGrokVideoBillingFromStatusBody(statusBody, nil, requestID); billed != nil {
 		result.ResponseID = firstNonEmpty(billed.ResponseID, strings.TrimSpace(requestID))

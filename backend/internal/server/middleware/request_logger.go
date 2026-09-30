@@ -35,7 +35,7 @@ func RequestLogger() gin.HandlerFunc {
 			zap.String("component", "http"),
 			zap.String("request_id", requestID),
 			zap.String("client_request_id", strings.TrimSpace(clientRequestID)),
-			zap.String("path", c.Request.URL.Path),
+			zap.String("path", redactMediaPreviewPath(c.Request.URL.Path)),
 			zap.String("method", c.Request.Method),
 		)
 
@@ -43,4 +43,13 @@ func RequestLogger() gin.HandlerFunc {
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
+}
+
+// 短期媒体票据具有访问权限，日志仅记录固定路径，连无效票据也不能写入日志。
+func redactMediaPreviewPath(path string) string {
+	const prefix = "/api/v1/media-tasks/preview-content/"
+	if strings.HasPrefix(path, prefix) {
+		return prefix + ":ticket"
+	}
+	return path
 }

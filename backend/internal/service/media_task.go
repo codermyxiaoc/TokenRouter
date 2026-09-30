@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"time"
 
@@ -84,6 +85,7 @@ type MediaTaskFilter struct {
 	Page, PageSize                   int
 	MediaType, Status, Source, Model string
 	UserID                           int64
+	ModelExact                       bool
 }
 
 type MediaTaskList struct {
@@ -98,12 +100,22 @@ type MediaTaskRepository interface {
 	Observe(context.Context, MediaTaskObservation) error
 	List(context.Context, MediaTaskActor, MediaTaskFilter) (*MediaTaskList, error)
 	Get(context.Context, MediaTaskActor, int64) (*MediaTask, error)
+	ListModels(context.Context, MediaTaskActor, MediaTaskFilter) ([]string, error)
+	GetImageResult(context.Context, *MediaTask) (*ImageTaskRecord, error)
 }
 
-type MediaTaskService struct{ repo MediaTaskRepository }
+type MediaTaskService struct {
+	repo         MediaTaskRepository
+	previewCache MediaTaskPreviewCache
+	previewHTTP  *http.Client
+	previewSlots chan struct{}
+}
 
 func NewMediaTaskService(repo MediaTaskRepository) *MediaTaskService {
-	return &MediaTaskService{repo: repo}
+	client := defaultImageDownloadHTTPClient()
+	// 视频单次 Range 或下载比图片更大，保留有界两分钟预算且不改变图片下载器的超时。
+	client.Timeout = 2 * time.Minute
+	return &MediaTaskService{repo: repo, previewHTTP: client, previewSlots: make(chan struct{}, 16)}
 }
 
 func mediaTaskStatusValid(value string) bool {
@@ -155,6 +167,22 @@ func (s *MediaTaskService) List(ctx context.Context, actor MediaTaskActor, filte
 	if actor.UserID <= 0 || s == nil || s.repo == nil {
 		return nil, ErrMediaTaskInvalid
 	}
+	filter, err := normalizeMediaTaskFilter(actor, filter)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.repo.List(ctx, actor, filter)
+	if err != nil {
+		return nil, err
+	}
+	for i := range result.Items {
+		projectMediaTaskForActor(&result.Items[i], actor)
+	}
+	return result, nil
+}
+
+// normalizeMediaTaskFilter 让列表与模型选项复用相同的授权范围和筛选校验。
+func normalizeMediaTaskFilter(actor MediaTaskActor, filter MediaTaskFilter) (MediaTaskFilter, error) {
 	if filter.Page < 1 {
 		filter.Page = 1
 	}
@@ -169,19 +197,25 @@ func (s *MediaTaskService) List(ctx context.Context, actor MediaTaskActor, filte
 		(filter.MediaType != "" && filter.MediaType != "image" && filter.MediaType != "video") ||
 		(filter.Status != "" && !mediaTaskStatusValid(filter.Status)) ||
 		(filter.Source != "" && !mediaTaskSourceValid(filter.Source)) {
-		return nil, ErrMediaTaskInvalid
+		return filter, ErrMediaTaskInvalid
 	}
 	if !actor.IsAdmin {
 		filter.UserID = actor.UserID
 	}
-	result, err := s.repo.List(ctx, actor, filter)
+	return filter, nil
+}
+
+// ListModels 从完整授权结果集取模型，不让当前分页或已选择模型截断下拉选项。
+func (s *MediaTaskService) ListModels(ctx context.Context, actor MediaTaskActor, filter MediaTaskFilter) ([]string, error) {
+	if actor.UserID <= 0 || s == nil || s.repo == nil {
+		return nil, ErrMediaTaskInvalid
+	}
+	filter.Model, filter.Page, filter.PageSize = "", 1, 20
+	filter, err := normalizeMediaTaskFilter(actor, filter)
 	if err != nil {
 		return nil, err
 	}
-	for i := range result.Items {
-		projectMediaTaskForActor(&result.Items[i], actor)
-	}
-	return result, nil
+	return s.repo.ListModels(ctx, actor, filter)
 }
 
 func (s *MediaTaskService) Get(ctx context.Context, actor MediaTaskActor, id int64) (*MediaTask, error) {

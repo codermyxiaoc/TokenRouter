@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -84,6 +85,11 @@ func mediaTaskConditions(actor service.MediaTaskActor, f service.MediaTaskFilter
 		add("t.source", f.Source)
 	}
 	if f.Model != "" {
+		if f.ModelExact {
+			// 下拉选择使用精确模型名，历史文本搜索仍保留字面子串匹配。
+			add("t.model", f.Model)
+			return strings.Join(conditions, " AND "), args
+		}
 		// 搜索条件始终绑定参数，LIKE 通配符按普通模型名字符处理。
 		model := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(f.Model)
 		args = append(args, "%"+model+"%")
@@ -144,4 +150,41 @@ func (r *mediaTaskRepository) Get(ctx context.Context, actor service.MediaTaskAc
 	// 归属约束与主键查询共同下推 SQL，跨用户任务与不存在任务使用同一种响应。
 	return scanMediaTask(r.db.QueryRowContext(ctx, "SELECT "+mediaTaskColumns+mediaTaskJoins+
 		" WHERE t.id=$1 AND ($2 OR t.user_id=$3)", id, actor.IsAdmin, actor.UserID))
+}
+
+// ListModels 不带分页且忽略当前模型；其它筛选和用户隔离与列表保持一致。
+func (r *mediaTaskRepository) ListModels(ctx context.Context, actor service.MediaTaskActor, filter service.MediaTaskFilter) ([]string, error) {
+	filter.Model = ""
+	where, args := mediaTaskConditions(actor, filter)
+	rows, err := r.db.QueryContext(ctx, "SELECT DISTINCT t.model FROM media_tasks t WHERE "+where+" AND t.model<>'' ORDER BY t.model", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	models := []string{}
+	for rows.Next() {
+		var model string
+		if err := rows.Scan(&model); err != nil {
+			return nil, err
+		}
+		models = append(models, model)
+	}
+	return models, rows.Err()
+}
+
+// GetImageResult 仅查询已持久化的短期结果，不调用带补写或恢复行为的 ImageTaskStore.Get。
+func (r *mediaTaskRepository) GetImageResult(ctx context.Context, task *service.MediaTask) (*service.ImageTaskRecord, error) {
+	var raw []byte
+	err := r.db.QueryRowContext(ctx, `SELECT record FROM image_tasks WHERE id=$1 AND user_id=$2 AND api_key_id=$3`, task.TaskID, task.UserID, task.APIKeyID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrImageTaskNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	var result service.ImageTaskRecord
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }

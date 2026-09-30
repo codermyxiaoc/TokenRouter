@@ -39,7 +39,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v2.6`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v2.7`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -54,11 +54,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v2.6`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v2.7`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v2.6 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v2.7 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -111,9 +111,9 @@
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v2.6`，交付范围为 `linux/amd64` 二进制与 DockerHub 镜像。从 v2.5 升级不新增或修改 SQL 迁移，最高迁移仍为 `288_affiliate_ledger_operation_id.sql`。本次包含已同步的上游 v0.2.10 / v0.2.11 适配、用户与管理员任务记录的手机布局，以及上述 fork GitHub Releases 更新来源。
+当前发布版本为 `v0.1.278-ct-v2.7`，交付范围为 `linux/amd64` 二进制与 DockerHub 镜像。从 v2.6 升级不新增或修改 SQL 迁移，最高迁移仍为 `288_affiliate_ledger_operation_id.sql`。本次新增任务结果预览、管理员用户名筛选与模型精确选择，并补齐仪表盘实际消费文案；预览只读既有结果，不改变生成、路由或扣费。视频短期缓存、票据有效期和历史结果限制见[任务结果预览](../domains/media_tasks.md#media_task_preview)。
 
-上游适配覆盖 Sonnet 5.5、GPT-6.1 Sol、Astra Ultrafast、Claude 原生重置查询与兑换、风控白名单、仪表盘指标、Key 每小时创建限制及兼容协议修正；仍使用本 fork 的订阅与余额结算规则，未引入上游余额在途预占。升级不重算用户余额、订阅用量、窗口、有效期和已重置次数。完成全部后端和前端更新后，核对模型目录及定价、常用协议请求与实际扣费、手机任务列表与筛选、GitHub 更新来源；二进制包同步本版本官方离线定价资源并保留自定义覆盖。Claude 兑换的消费、幂等及未知结果保护见[账号维护](account_maintenance.md)，任务列表仍遵循[异步图片与任务记录](../domains/media_tasks.md)的权限和账务边界。
+此前 v2.6 的上游适配覆盖 Sonnet 5.5、GPT-6.1 Sol、Astra Ultrafast、Claude 原生重置查询与兑换、风控白名单、仪表盘指标、Key 每小时创建限制及兼容协议修正；仍使用本 fork 的订阅与余额结算规则，未引入上游余额在途预占。升级不重算用户余额、订阅用量、窗口、有效期和已重置次数。完成全部后端和前端更新后，核对模型目录及定价、常用协议请求与实际扣费、手机任务列表与筛选、GitHub 更新来源；二进制包同步本版本官方离线定价资源并保留自定义覆盖。Claude 兑换的消费、幂等及未知结果保护见[账号维护](account_maintenance.md)，任务列表仍遵循[异步图片与任务记录](../domains/media_tasks.md)的权限和账务边界。
 
 历史 v2.5 从 v2.4 升级同样不新增或修改数据库迁移，恢复 OpenAI OAuth 手动额度重置入口并适配两种角色的工单手机界面。手动重置的消费及部分成功边界见[OpenAI 上游额度重置](../interfaces/openai_upstream.md#openai_quota_reset)，手机展示仍遵循[工单生命周期与权限](../domains/support_tickets.md#ticket_lifecycle)。
 

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -212,6 +213,7 @@ type SettingService struct {
 	openAIAllowCodexPluginCache  atomic.Value // *cachedOpenAIAllowCodexPlugin
 	openAIAllowCodexPluginSF     singleflight.Group
 	cyberSessionBlockCache       atomic.Value // *cachedCyberSessionBlockRuntime
+	cyberSessionBlockMu          sync.Mutex
 	cyberSessionBlockSF          singleflight.Group
 
 	// panelRateLimitCache 面板 API 限流配置进程内缓存（*cachedPanelRateLimitSettings）。

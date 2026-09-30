@@ -242,6 +242,11 @@ type apiKeyCacheStub struct {
 	deleteAuthKeys []string // 记录调用 DeleteAuthCache 时传入的缓存 key
 }
 
+// IncrementCreateCount 默认不限制与创建无关的单元测试。
+func (s *apiKeyCacheStub) IncrementCreateCount(context.Context, int64, time.Duration) (int64, error) {
+	return 1, nil
+}
+
 // GetCreateAttemptCount 返回 0，表示用户未超过创建次数限制
 func (s *apiKeyCacheStub) GetCreateAttemptCount(ctx context.Context, userID int64) (int, error) {
 	return 0, nil
@@ -328,8 +333,8 @@ func TestApiKeyService_Delete_Success(t *testing.T) {
 
 	err := svc.Delete(context.Background(), 42, 7) // API Key ID=42, 调用者 userID=7
 	require.NoError(t, err)
-	require.Equal(t, []int64{42}, repo.deletedIDs)  // 验证正确的 API Key 被删除
-	require.Equal(t, []int64{7}, cache.invalidated) // 验证所有者的缓存被清除
+	require.Equal(t, []int64{42}, repo.deletedIDs) // 验证正确的 API Key 被删除
+	require.Empty(t, cache.invalidated)            // 删除密钥不能清零创建失败次数。
 	require.Equal(t, []string{svc.authCacheKey("k")}, cache.deleteAuthKeys)
 	_, exists := svc.lastUsedTouchL1.Load(int64(42))
 	require.False(t, exists, "delete should clear touch debounce cache")

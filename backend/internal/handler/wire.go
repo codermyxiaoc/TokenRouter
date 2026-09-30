@@ -46,8 +46,10 @@ func ProvideAdminHandlers(
 	auditLogHandler *admin.AuditLogHandler,
 	teamHandler *admin.TeamHandler,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
+	claudeResetCredits *service.ClaudeResetCreditService,
 ) *AdminHandlers {
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
+	accountHandler.SetClaudeResetCreditService(claudeResetCredits)
 	return &AdminHandlers{
 		Dashboard:             dashboardHandler,
 		User:                  userHandler,

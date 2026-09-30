@@ -48,7 +48,7 @@ assert_exists "${STATE_DIR}/containers/sub2api-apple"
 assert_exists "${STATE_DIR}/containers/sub2api-apple-postgres"
 assert_exists "${STATE_DIR}/containers/sub2api-apple-redis"
 assert_exists "${STATE_DIR}/running/sub2api-apple"
-grep -Fq 'ghcr.io/tokenflux/tokenrouter:latest' "${STATE_DIR}/commands.log" || fail "up did not use the TokenRouter application image"
+grep -Fq 'coderxiaoc/tokenrouter:v0.1.278-ct-v2.6' "${STATE_DIR}/commands.log" || fail "up did not use the fork application image"
 "${SCRIPT}" status >/dev/null
 
 "${SCRIPT}" up --recreate

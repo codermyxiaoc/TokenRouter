@@ -113,7 +113,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel, tlsRouterMatch...)
 	}
-	if err := validateOpenAIReasoningEffort(body, gjson.GetBytes(body, "model").String()); err != nil {
+	if err := validateOpenAIReasoningEffort(body, gjson.GetBytes(body, "model").String(), resolveOpenAIForwardModel(account, gjson.GetBytes(body, "model").String(), defaultMappedModel)); err != nil {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}

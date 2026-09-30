@@ -317,6 +317,9 @@ riskControl: {
         input: 'Input Summary',
       },
       result: {
+        logOnly: 'Allowlisted (audit only)',
+        cyberLogOnly: 'Allowlisted · upstream refusal (audit only)',
+        riskControlLogOnly: 'Allowlisted · audit only',
         all: 'All Results',
         hit: 'Hit',
         hitNotBlocked: 'Hit (Not Blocked)',

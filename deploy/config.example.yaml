@@ -656,6 +656,10 @@ token_refresh:
 # API Key Auth Cache Configuration
 # API Key 认证缓存配置
 # =============================================================================
+# 用户创建密钥的独立固定窗口；删除不返还次数，0 关闭；数量上限仍使用用户 api_key_limit。
+api_key_create:
+  max_per_user_per_hour: 60
+
 api_key_auth_cache:
   # L1 cache size (entries), in-process LRU/TTL cache
   # L1 缓存容量（条目数），进程内 LRU/TTL 缓存

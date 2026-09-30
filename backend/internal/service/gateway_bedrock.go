@@ -25,6 +25,10 @@ func (s *GatewayService) ApplyBedrockCCCompat(c *gin.Context, body []byte, model
 	if !s.isBedrockCCCompatEnabled(c.Request.Context(), account, groupID) {
 		return body
 	}
+	// 兼容参数依据实际映射型号转换，别名不应回退为旧式手动预算。
+	if mappedModel, ok := ResolveBedrockModelID(account, model); ok {
+		model = mappedModel
+	}
 	body = sanitizeBedrockCCFields(body)
 	body = sanitizeBedrockThinking(body, model)
 	body = sanitizeBedrockToolUseIDs(body)

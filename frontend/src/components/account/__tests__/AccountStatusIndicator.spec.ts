@@ -80,7 +80,8 @@ describe('AccountStatusIndicator', () => {
 
   it.each([
     ['claude-opus-5', 'COpus5'],
-    ['claude-opus-5-5', 'COpus55']
+    ['claude-opus-5-5', 'COpus55'],
+    ['claude-sonnet-5-5', 'CSon55']
   ])('%s 模型限流时显示短别名', (model, alias) => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {

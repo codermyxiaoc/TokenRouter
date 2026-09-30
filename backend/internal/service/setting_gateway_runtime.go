@@ -116,9 +116,10 @@ const openAICodexUserAgentDBTimeout = 5 * time.Second
 
 // cachedCyberSessionBlockRuntime 缓存 cyber 会话屏蔽运行态，避免网关热路径每次访问 DB。
 type cachedCyberSessionBlockRuntime struct {
-	enabled   bool
-	ttl       time.Duration
-	expiresAt int64 // unix nano
+	allowlistedUsers map[int64]struct{}
+	enabled          bool
+	ttl              time.Duration
+	expiresAt        int64 // unix nano
 }
 
 const cyberSessionBlockRuntimeCacheTTL = 60 * time.Second
@@ -145,6 +146,8 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 		}
 	}
 	result, _, _ := s.cyberSessionBlockSF.Do("cyber_session_block_runtime", func() (any, error) {
+		s.cyberSessionBlockMu.Lock()
+		defer s.cyberSessionBlockMu.Unlock()
 		if cached, ok := s.cyberSessionBlockCache.Load().(*cachedCyberSessionBlockRuntime); ok && cached != nil {
 			if time.Now().UnixNano() < cached.expiresAt {
 				return cached, nil
@@ -155,15 +158,11 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 
 		enabledVal, enabledErr := s.settingRepo.GetValue(dbCtx, SettingKeyCyberSessionBlockEnabled)
 		ttlVal, ttlErr := s.settingRepo.GetValue(dbCtx, SettingKeyCyberSessionBlockTTLSeconds)
+		previous, _ := s.cyberSessionBlockCache.Load().(*cachedCyberSessionBlockRuntime)
+		cacheTTL := cyberSessionBlockRuntimeCacheTTL
 		if enabledErr != nil && !errors.Is(enabledErr, ErrSettingNotFound) {
 			slog.Warn("failed to get cyber session block setting", "error", enabledErr)
-			entry := &cachedCyberSessionBlockRuntime{
-				enabled:   false,
-				ttl:       time.Hour,
-				expiresAt: time.Now().Add(cyberSessionBlockRuntimeErrorTTL).UnixNano(),
-			}
-			s.cyberSessionBlockCache.Store(entry)
-			return entry, nil
+			cacheTTL = cyberSessionBlockRuntimeErrorTTL
 		}
 
 		ttl := time.Hour
@@ -172,10 +171,23 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 				ttl = time.Duration(seconds) * time.Second
 			}
 		}
+		allowlistVal, allowlistErr := s.settingRepo.GetValue(dbCtx, SettingKeyCyberPolicyUserAllowlist)
+		var allowlistedUsers map[int64]struct{}
+		if allowlistErr == nil {
+			allowlistedUsers, allowlistErr = ParseCyberPolicyUserAllowlist(allowlistVal)
+		}
+		if allowlistErr != nil && !errors.Is(allowlistErr, ErrSettingNotFound) {
+			slog.Warn("failed to load risk control user allowlist", "error", allowlistErr)
+			cacheTTL = cyberSessionBlockRuntimeErrorTTL
+			if previous != nil {
+				allowlistedUsers = previous.allowlistedUsers
+			}
+		}
 		entry := &cachedCyberSessionBlockRuntime{
-			enabled:   enabledErr == nil && strings.TrimSpace(enabledVal) == "true",
-			ttl:       ttl,
-			expiresAt: time.Now().Add(cyberSessionBlockRuntimeCacheTTL).UnixNano(),
+			allowlistedUsers: allowlistedUsers,
+			enabled:          enabledErr == nil && strings.TrimSpace(enabledVal) == "true",
+			ttl:              ttl,
+			expiresAt:        time.Now().Add(cacheTTL).UnixNano(),
 		}
 		s.cyberSessionBlockCache.Store(entry)
 		return entry, nil

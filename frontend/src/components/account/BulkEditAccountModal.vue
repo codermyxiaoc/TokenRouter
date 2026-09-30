@@ -447,6 +447,7 @@
 
               <ModelWhitelistSelector
                 v-model="allowedModels"
+                :model-mappings="includesAntigravity ? modelMappings : undefined"
                 :platforms="targetSelectedPlatforms"
               />
 
@@ -1735,6 +1736,8 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import Icon from '@/components/icons/Icon.vue'
 import {
   buildModelMappingObject,
+  buildCombinedModelMappingObject,
+  findModelWhitelistMappingConflict,
   buildPersistedModelRestriction,
   getPresetMappingsByPlatform,
   normalizeModelWhitelist,
@@ -2484,8 +2487,7 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   if (enableModelRestriction.value && !isOpenAIModelRestrictionDisabled.value) {
     // Antigravity 账号仍使用 mapping-only 语义，批量修改不能给它写入普通账号的独立白名单字段。
     if (targetSelectedPlatforms.value.length === 1 && targetSelectedPlatforms.value[0] === 'antigravity') {
-      credentials.model_mapping = buildModelMappingObject(
-        modelRestrictionMode.value,
+      credentials.model_mapping = buildCombinedModelMappingObject(
         allowedModels.value,
         modelMappings.value
       ) ?? {}
@@ -2728,6 +2730,14 @@ const handleSubmit = async () => {
   if (enableModelRestriction.value && isMixedPlatform.value && includesAntigravity.value) {
     appStore.showError(t('admin.accounts.bulkEdit.modelRestrictionMixedAntigravityNotSupported'))
     return
+  }
+
+  if (enableModelRestriction.value && includesAntigravity.value) {
+    const conflict = findModelWhitelistMappingConflict(allowedModels.value, modelMappings.value)
+    if (conflict) {
+      appStore.showError(t('admin.accounts.modelMappingConflict', { model: conflict }))
+      return
+    }
   }
 
   // base_url 现在也会作用于 Grok OAuth 订阅账号的转发端点；坏值会让请求期

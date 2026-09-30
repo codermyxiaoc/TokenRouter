@@ -10,12 +10,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -28,13 +26,11 @@ var (
 )
 
 const (
-	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
-	githubRepo     = "TokenFlux/TokenRouter"
-
-	// Security: allowed download domains for updates
-	allowedDownloadHost = "github.com"
-	allowedAssetHost    = "objects.githubusercontent.com"
+	// 更新检查、回退与下载共用本 fork 的发布来源，不回退到原版仓库。
+	UpdateGitHubRepository = "codermyxiaoc/TokenRouter"
+	githubRepo             = UpdateGitHubRepository
+	updateCacheSchema      = 2
 
 	// Security: max download size (500MB)
 	maxDownloadSize = 500 * 1024 * 1024
@@ -172,38 +168,19 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) error {
 		return ErrNoUpdateAvailable
 	}
 
-	return s.applyReleaseAssets(ctx, info.ReleaseInfo.Assets)
+	if info.ReleaseInfo == nil {
+		return fmt.Errorf("release information is missing")
+	}
+	return s.applyReleaseAssets(ctx, info.LatestVersion, info.ReleaseInfo.Assets)
 }
 
 // applyReleaseAssets 下载当前平台的 release 包，校验 checksum，并原子替换运行中的二进制。
 // PerformUpdate（最新版）和 RollbackToVersion（指定旧版）共用该流程。
-func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []Asset) error {
-	// Find matching archive and checksum for current platform
-	archiveName := s.getArchiveName()
-	var downloadURL string
-	var checksumURL string
-
-	for _, asset := range releaseAssets {
-		if strings.Contains(asset.Name, archiveName) && !strings.HasSuffix(asset.Name, ".txt") {
-			downloadURL = asset.DownloadURL
-		}
-		if asset.Name == "checksums.txt" {
-			checksumURL = asset.DownloadURL
-		}
-	}
-
-	if downloadURL == "" {
-		return fmt.Errorf("no compatible release found for %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
-
-	// SECURITY: Validate download URL is from trusted domain
-	if err := validateDownloadURL(downloadURL); err != nil {
-		return fmt.Errorf("invalid download URL: %w", err)
-	}
-	if checksumURL != "" {
-		if err := validateDownloadURL(checksumURL); err != nil {
-			return fmt.Errorf("invalid checksum URL: %w", err)
-		}
+func (s *UpdateService) applyReleaseAssets(ctx context.Context, version string, releaseAssets []Asset) error {
+	// 精确选择当前架构归档及同一发布的校验文件，避免把 .sha256 当成程序包。
+	archive, checksum, err := selectUpdateAssets(version, releaseAssets, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return err
 	}
 
 	// Get current executable path
@@ -227,16 +204,14 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Download archive
-	archivePath := filepath.Join(tempDir, filepath.Base(downloadURL))
-	if err := s.downloadFile(ctx, downloadURL, archivePath); err != nil {
+	archivePath := filepath.Join(tempDir, archive.Name)
+	if err := s.downloadFile(ctx, archive.DownloadURL, archivePath); err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
 
-	// Verify checksum if available
-	if checksumURL != "" {
-		if err := s.verifyChecksum(ctx, archivePath, checksumURL); err != nil {
-			return fmt.Errorf("checksum verification failed: %w", err)
-		}
+	// 每次更新必须校验，发布缺少校验文件时不会替换运行中的程序。
+	if err := s.verifyChecksum(ctx, archivePath, checksum.DownloadURL); err != nil {
+		return fmt.Errorf("checksum verification failed: %w", err)
 	}
 
 	// Extract binary from archive
@@ -356,7 +331,7 @@ func (s *UpdateService) RollbackToVersion(ctx context.Context, version string) e
 		}
 	}
 
-	return s.applyReleaseAssets(ctx, assets)
+	return s.applyReleaseAssets(ctx, target, assets)
 }
 
 // fetchRollbackCandidates 拉取最近 release，并只保留严格早于当前版本的最新候选。
@@ -378,7 +353,7 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 			continue
 		}
 		v, valid := normalizeRollbackVersion(r.TagName)
-		if !valid || seen[v] {
+		if !valid || seen[v] || !validUpdateReleaseURL(r.HTMLURL, v) {
 			continue
 		}
 		// 仅允许严格早于当前版本的正式语义版本，同时排除当前版本。
@@ -404,38 +379,19 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 	return candidates, nil
 }
 
-// normalizeRollbackVersion 只接受可安全用于下载与手动命令展示的 v?MAJOR.MINOR.PATCH。
-// 严格格式既保证排序语义，也防止 release tag 中的 shell 元字符进入复制命令。
-func normalizeRollbackVersion(raw string) (string, bool) {
-	version := strings.TrimSpace(raw)
-	version = strings.TrimPrefix(version, "v")
-	parts := strings.Split(version, ".")
-	if len(parts) != 3 {
-		return "", false
-	}
-	for _, part := range parts {
-		if part == "" || (len(part) > 1 && part[0] == '0') {
-			return "", false
-		}
-		for _, ch := range part {
-			if ch < '0' || ch > '9' {
-				return "", false
-			}
-		}
-		if _, err := strconv.Atoi(part); err != nil {
-			return "", false
-		}
-	}
-	return strings.Join(parts, "."), true
-}
-
 func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, error) {
 	release, err := s.githubClient.FetchLatestRelease(ctx, githubRepo)
 	if err != nil {
 		return nil, err
 	}
 
-	latestVersion := strings.TrimPrefix(release.TagName, "v")
+	if release == nil || release.Draft || release.Prerelease {
+		return nil, fmt.Errorf("no stable TokenRouter release available")
+	}
+	latestVersion, valid := normalizeRollbackVersion(release.TagName)
+	if !valid || !validUpdateReleaseURL(release.HTMLURL, latestVersion) {
+		return nil, fmt.Errorf("invalid TokenRouter release version or source")
+	}
 
 	assets := make([]Asset, len(release.Assets))
 	for i, a := range release.Assets {
@@ -466,38 +422,6 @@ func (s *UpdateService) downloadFile(ctx context.Context, downloadURL, dest stri
 	return s.githubClient.DownloadFile(ctx, downloadURL, dest, maxDownloadSize)
 }
 
-func (s *UpdateService) getArchiveName() string {
-	osName := runtime.GOOS
-	arch := runtime.GOARCH
-	return fmt.Sprintf("%s_%s", osName, arch)
-}
-
-// validateDownloadURL checks if the URL is from an allowed domain
-// SECURITY: This prevents SSRF and ensures downloads only come from trusted GitHub domains
-func validateDownloadURL(rawURL string) error {
-	parsedURL, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("invalid URL: %w", err)
-	}
-
-	// Must be HTTPS
-	if parsedURL.Scheme != "https" {
-		return fmt.Errorf("only HTTPS URLs are allowed")
-	}
-
-	// Check against allowed hosts
-	host := parsedURL.Host
-	// GitHub release URLs can be from github.com or objects.githubusercontent.com
-	if host != allowedDownloadHost &&
-		!strings.HasSuffix(host, "."+allowedDownloadHost) &&
-		host != allowedAssetHost &&
-		!strings.HasSuffix(host, "."+allowedAssetHost) {
-		return fmt.Errorf("download from untrusted host: %s", host)
-	}
-
-	return nil
-}
-
 func (s *UpdateService) verifyChecksum(ctx context.Context, filePath, checksumURL string) error {
 	// Download checksums file
 	checksumData, err := s.githubClient.FetchChecksumFile(ctx, checksumURL)
@@ -524,8 +448,8 @@ func (s *UpdateService) verifyChecksum(ctx context.Context, filePath, checksumUR
 	for scanner.Scan() {
 		line := scanner.Text()
 		parts := strings.Fields(line)
-		if len(parts) == 2 && parts[1] == fileName {
-			if parts[0] == actualHash {
+		if len(parts) == 2 && strings.TrimPrefix(parts[1], "*") == fileName {
+			if strings.EqualFold(parts[0], actualHash) {
 				return nil
 			}
 			return fmt.Errorf("checksum mismatch: expected %s, got %s", parts[0], actualHash)
@@ -536,6 +460,10 @@ func (s *UpdateService) verifyChecksum(ctx context.Context, filePath, checksumUR
 }
 
 func (s *UpdateService) extractBinary(archivePath, destPath string) error {
+	// GoReleaser 的 Windows 资产为 ZIP，不能将整个压缩包当成可执行文件复制。
+	if strings.HasSuffix(archivePath, ".zip") {
+		return extractUpdateZIP(archivePath, destPath)
+	}
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return err
@@ -629,16 +557,18 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 		return nil, err
 	}
 
-	var cached struct {
-		Latest      string       `json:"latest"`
-		ReleaseInfo *ReleaseInfo `json:"release_info"`
-		Timestamp   int64        `json:"timestamp"`
-	}
+	var cached updateReleaseCache
 	if err := json.Unmarshal([]byte(data), &cached); err != nil {
 		return nil, err
 	}
 
-	if time.Now().Unix()-cached.Timestamp > updateCacheTTL {
+	if cached.Source != githubRepo || cached.Schema != updateCacheSchema {
+		return nil, fmt.Errorf("update cache source changed")
+	}
+	if _, valid := normalizeRollbackVersion(cached.Latest); !valid || cached.ReleaseInfo == nil || !validUpdateReleaseURL(cached.ReleaseInfo.HTMLURL, cached.Latest) {
+		return nil, fmt.Errorf("invalid cached release")
+	}
+	if time.Now().Unix()-cached.Timestamp > updateCacheTTL || cached.Timestamp > time.Now().Unix() {
 		return nil, fmt.Errorf("cache expired")
 	}
 
@@ -653,11 +583,9 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 }
 
 func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
-	cacheData := struct {
-		Latest      string       `json:"latest"`
-		ReleaseInfo *ReleaseInfo `json:"release_info"`
-		Timestamp   int64        `json:"timestamp"`
-	}{
+	cacheData := updateReleaseCache{
+		Source:      githubRepo,
+		Schema:      updateCacheSchema,
 		Latest:      info.LatestVersion,
 		ReleaseInfo: info.ReleaseInfo,
 		Timestamp:   time.Now().Unix(),
@@ -665,35 +593,4 @@ func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 
 	data, _ := json.Marshal(cacheData)
 	_ = s.cache.SetUpdateInfo(ctx, string(data), time.Duration(updateCacheTTL)*time.Second)
-}
-
-// compareVersions compares two semantic versions
-func compareVersions(current, latest string) int {
-	currentParts := parseVersion(current)
-	latestParts := parseVersion(latest)
-
-	for i := 0; i < 3; i++ {
-		if currentParts[i] < latestParts[i] {
-			return -1
-		}
-		if currentParts[i] > latestParts[i] {
-			return 1
-		}
-	}
-	return 0
-}
-
-func parseVersion(v string) [3]int {
-	v = strings.TrimPrefix(v, "v")
-	if idx := strings.IndexByte(v, '-'); idx != -1 {
-		v = v[:idx]
-	}
-	parts := strings.Split(v, ".")
-	result := [3]int{0, 0, 0}
-	for i := 0; i < len(parts) && i < 3; i++ {
-		if parsed, err := strconv.Atoi(parts[i]); err == nil {
-			result[i] = parsed
-		}
-	}
-	return result
 }

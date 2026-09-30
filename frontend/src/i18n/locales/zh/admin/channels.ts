@@ -317,6 +317,9 @@ riskControl: {
         input: '输入摘要',
       },
       result: {
+        logOnly: '白名单（仅审计）',
+        cyberLogOnly: '白名单 · 上游拒绝（仅审计）',
+        riskControlLogOnly: '白名单 · 仅审计',
         all: '全部结果',
         hit: '命中',
         hitNotBlocked: '命中（未拦截）',

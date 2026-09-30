@@ -5,6 +5,7 @@
 ## 章节导航
 
 - [构建与运行形态](#构建与运行形态)：修改产物或部署拓扑时读取。
+- [应用更新来源](#application_update_source)：修改版本检查、发布源、下载校验和在线回退时读取。
 - [初始化与启动](#初始化与启动)：修改 setup、配置或健康检查时读取。
 - [迁移执行](#migration_execution)：修改 runner 或迁移格式时读取。
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
@@ -33,12 +34,12 @@
 
 手工二进制更新包包含嵌入前端和迁移的 `sub2api`，并携带 `resources/model-pricing/model_prices_and_context_window.json` 作为离线定价回退资源。默认 `pricing.fallback_file` 相对于进程工作目录解析：标准 systemd 的 `WorkingDirectory=/opt/sub2api` 对应 `/opt/sub2api/resources/model-pricing/`；自定义目录或显式定价覆盖继续沿用原配置。Ubuntu 部署的 `pg_dump`、`psql` 是宿主机独立依赖，不能直接复制 Alpine 镜像中的动态链接客户端。
 
-手工归档应保留程序 `0755` 可执行位，并附带校验和及构建来源。带顶层版本目录的更新包用于手工解压替换，不直接交给期待根部 `sub2api` 的安装器。更新默认离线定价文件时，先识别并备份旧官方文件，再安装同版本资源；用户修改过的回退文件和 `pricing.override_file` 保持原有配置，不能只为更新程序覆盖自定义定价。
+手工归档应保留程序 `0755` 可执行位，并附带校验和及构建来源。安装器兼容根部 `sub2api` 和与归档同名的顶层版本目录内的 `sub2api`；现有 GitHub v1.8 发布包只含程序，不包含 `resources/`。在线二进制更新也只替换程序，离线定价资源需按对应发布内容单独核对。更新默认离线定价文件时，先识别并备份旧官方文件，再安装同版本资源；用户修改过的回退文件和 `pricing.override_file` 保持原有配置，不能只为更新程序覆盖自定义定价。
 
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v2.5`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v2.6`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -49,6 +50,19 @@
 逐步操作见 [中文部署指南](../guides/deployment/index.md)、[Docker 镜像说明](../../deploy/DOCKER.md) 和 [Apple Container 指南](../guides/deployment/apple_container.md)。这些是部署者手册，不替代本文的工程约束。
 
 管理后台的数据管理功能还依赖一个通过 Unix Socket 通信的可选 `datamanagementd` 进程。本仓库保留主进程客户端、systemd unit 和安装脚本，但当前检出内容不包含 `datamanagement/` 源码目录，因此根 Makefile 的构建目标和安装脚本的 `--source` 模式不能在本仓库单独完成构建。只有在另行取得兼容二进制或完整源码时才应启用；现成二进制的部署步骤见 [datamanagementd 指南](../guides/deployment/datamanagementd.md)。
+
+<a id="application_update_source"></a>
+## 应用更新来源
+
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v2.6`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+
+版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
+
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v2.6 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+
+更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
+
+版本面板分别展示 GitHub 发布页和 DockerHub 标签页。二进制部署使用在线更新；Docker 部署查看带完整标签的拉取及重建命令，只重建 `sub2api` 应用服务，沿用现有 Compose 和数据卷。回退到旧标签时使用当前 `main` 的安装脚本传入目标标签，避免旧标签中的安装脚本仍指向其他仓库；Docker 回退面板不触发在线二进制替换。
 
 ## 初始化与启动
 
@@ -97,7 +111,11 @@
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v2.5`。从 v2.4 升级不新增或修改数据库迁移；本次恢复 OpenAI OAuth 手动额度重置入口并适配两种角色的工单手机界面，不重算用户余额、订阅用量、窗口、有效期和已重置次数。手动重置的消费及部分成功边界见[OpenAI 上游额度重置](../interfaces/openai_upstream.md#openai_quota_reset)，手机展示仍遵循[工单生命周期与权限](../domains/support_tickets.md#ticket_lifecycle)。
+当前发布版本为 `v0.1.278-ct-v2.6`，交付范围为 `linux/amd64` 二进制与 DockerHub 镜像。从 v2.5 升级不新增或修改 SQL 迁移，最高迁移仍为 `288_affiliate_ledger_operation_id.sql`。本次包含已同步的上游 v0.2.10 / v0.2.11 适配、用户与管理员任务记录的手机布局，以及上述 fork GitHub Releases 更新来源。
+
+上游适配覆盖 Sonnet 5.5、GPT-6.1 Sol、Astra Ultrafast、Claude 原生重置查询与兑换、风控白名单、仪表盘指标、Key 每小时创建限制及兼容协议修正；仍使用本 fork 的订阅与余额结算规则，未引入上游余额在途预占。升级不重算用户余额、订阅用量、窗口、有效期和已重置次数。完成全部后端和前端更新后，核对模型目录及定价、常用协议请求与实际扣费、手机任务列表与筛选、GitHub 更新来源；二进制包同步本版本官方离线定价资源并保留自定义覆盖。Claude 兑换的消费、幂等及未知结果保护见[账号维护](account_maintenance.md)，任务列表仍遵循[异步图片与任务记录](../domains/media_tasks.md)的权限和账务边界。
+
+历史 v2.5 从 v2.4 升级同样不新增或修改数据库迁移，恢复 OpenAI OAuth 手动额度重置入口并适配两种角色的工单手机界面。手动重置的消费及部分成功边界见[OpenAI 上游额度重置](../interfaces/openai_upstream.md#openai_quota_reset)，手机展示仍遵循[工单生命周期与权限](../domains/support_tickets.md#ticket_lifecycle)。
 
 从 v2.3 或更早跨级升级仍会新增迁移 286–288，最高迁移为 `288_affiliate_ledger_operation_id.sql`，已应用迁移保持不变。启动按已有迁移记录只执行尚未应用的文件；升级前备份并验证数据库与配置，排空在途请求，停止所有旧后端后完整切换新后端及前端资源，保留原数据目录、Redis、对象存储配置和固定安全密钥。先启动一个新实例完成迁移和业务抽样，再启动其余新实例；完成全部实例更新后再启用新增功能。从 v1.9 跨级升级仍会执行迁移 285；从 v1.8 或更早跨级升级还会执行迁移 282–284，异步任务升级边界见下文“当前异步图片任务持久化”。
 

@@ -138,6 +138,8 @@ export default {
           enabled: '启用风控中心',
           enabledHint: '关闭后管理员侧边栏入口隐藏，网关内容审计不会执行。',
           cyberSessionBlockEnabled: 'Cyber 会话屏蔽',
+          riskControlUserAllowlist: '风控白名单',
+          riskControlUserAllowlistHint: '白名单中的实际请求用户仍保留审计记录，但不执行本地拦截、会话屏蔽、自动封禁或邮件通知；上游拒绝仍原样返回。',
           cyberSessionBlockEnabledHint: '仅对已纳入风控范围的分组生效；上游返回 cyber_policy 后，按显式 session_id / conversation_id / prompt_cache_key 临时拒绝同会话后续请求。',
           cyberSessionBlockTTLSeconds: '屏蔽时长（秒）',
           cyberSessionBlockTTLSecondsHint: '默认 3600 秒；关闭后只记录审计和用量，不拦截后续会话请求。',

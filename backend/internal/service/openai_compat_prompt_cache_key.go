@@ -15,7 +15,7 @@ func shouldAutoInjectPromptCacheKeyForCompat(model string) bool {
 	trimmed := strings.TrimSpace(strings.ToLower(model))
 	canonical := canonicalizeOpenAIModelAliasSpelling(trimmed)
 	// 仅对已公布的完整 GPT-6 产品名开启兼容缓存身份，未知变体保持原行为。
-	if canonical == "gpt-6-astra" || canonical == "gpt-6-sol" || canonical == "gpt-6-luna" {
+	if canonical == "gpt-6.1-sol" || canonical == "gpt-6-astra" || canonical == "gpt-6-sol" || canonical == "gpt-6-luna" {
 		return true
 	}
 	// 仅对 Responses 兼容路径支持的 GPT-5 族开启自动注入，避免 normalizeCodexModel

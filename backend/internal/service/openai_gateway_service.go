@@ -1601,7 +1601,7 @@ func openAIUpstreamWarningIsCyber(warning *OpenAIUpstreamWarning) bool {
 
 // validateOpenAIReasoningEffort 拒绝 Codex 客户端专用的 Ultra 模式。
 // Ultra 在 Codex 内部表示 max 推理加主动多代理，不是 OpenAI 上游协议档位。
-func validateOpenAIReasoningEffort(body []byte, requestedModel string) error {
+func validateOpenAIReasoningEffort(body []byte, requestedModel string, mappedModels ...string) error {
 	efforts := []string{
 		gjson.GetBytes(body, "reasoning.effort").String(),
 		gjson.GetBytes(body, "reasoning_effort").String(),
@@ -1622,7 +1622,16 @@ func validateOpenAIReasoningEffort(body []byte, requestedModel string) error {
 		gjson.GetBytes(body, "model").String(),
 		gjson.GetBytes(body, "session.model").String(),
 	}
+	models = append(models, mappedModels...)
 	for _, model := range models {
+		if isOpenAIGPT61SolModel(model) {
+			_, suffixEffort, _ := splitOpenAICompatReasoningModel(model)
+			for _, effort := range append(efforts, suffixEffort) {
+				if value := strings.ToLower(strings.TrimSpace(effort)); value == "none" || value == "minimal" {
+					return fmt.Errorf("gpt-6.1-sol does not support reasoning effort %q; use low, medium, high, xhigh or max", value)
+				}
+			}
+		}
 		if hasOpenAIUltraReasoningSuffix(model) {
 			return errors.New(`model reasoning suffix "ultra" is not supported; use "max"`)
 		}

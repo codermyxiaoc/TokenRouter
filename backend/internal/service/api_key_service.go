@@ -35,6 +35,7 @@ var (
 	ErrAPIKeyLimitInvalid                = infraerrors.BadRequest("API_KEY_LIMIT_INVALID", "api key limits must be finite, non-negative, and less than 1000000000000")
 	ErrAPIKeyExpiryInvalid               = infraerrors.BadRequest("API_KEY_EXPIRY_INVALID", "expires_in_days must be greater than zero")
 	ErrAPIKeyRateLimited                 = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
+	ErrAPIKeyCreateLimited               = infraerrors.TooManyRequests("API_KEY_CREATE_RATE_LIMITED", "too many api keys created recently, please try again later")
 	ErrAPIKeyAuthOverloaded              = infraerrors.ServiceUnavailable("API_KEY_AUTH_OVERLOADED", "api key authentication is temporarily overloaded")
 	ErrInvalidIPPattern                  = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
 	ErrInvalidAPIKeyFastModePolicy       = infraerrors.BadRequest("INVALID_API_KEY_FAST_MODE_POLICY", "invalid API key fast mode policy")
@@ -216,6 +217,7 @@ type APIKeyQuotaUsageState struct {
 type APIKeyCache interface {
 	GetCreateAttemptCount(ctx context.Context, userID int64) (int, error)
 	IncrementCreateAttemptCount(ctx context.Context, userID int64) error
+	IncrementCreateCount(ctx context.Context, userID int64, window time.Duration) (int64, error)
 	DeleteCreateAttemptCount(ctx context.Context, userID int64) error
 
 	IncrementDailyUsage(ctx context.Context, apiKey string) error
@@ -713,6 +715,23 @@ func (s *APIKeyService) canUserUseBoundGroup(ctx context.Context, apiKey *APIKey
 	return loadedUser.CanBindGroup(apiKey.Group.ID, apiKey.Group.IsExclusive)
 }
 
+// checkAPIKeyCreateLimit 使用独立固定窗口限制创建，失败次数和删除操作均不改变该计数。
+// 团队请求按实际创建者计数；服务端托管密钥直接调用仓储，不消耗用户操作窗口。
+func (s *APIKeyService) checkAPIKeyCreateLimit(ctx context.Context, userID int64) error {
+	if s.cfg == nil || s.cfg.APIKeyCreate.MaxPerUserPerHour <= 0 || s.cache == nil {
+		return nil
+	}
+	count, err := s.cache.IncrementCreateCount(ctx, userID, time.Hour)
+	if err != nil {
+		// 与既有创建失败限流保持一致：缓存故障放行，数量上限仍由数据库原子保证。
+		return nil
+	}
+	if count > int64(s.cfg.APIKeyCreate.MaxPerUserPerHour) {
+		return ErrAPIKeyCreateLimited
+	}
+	return nil
+}
+
 // Create 创建API Key
 func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*APIKey, error) {
 	if err := validateCreateAPIKeyRequest(req); err != nil {
@@ -865,6 +884,10 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		if err != nil {
 			return nil, fmt.Errorf("generate key: %w", err)
 		}
+	}
+
+	if err := s.checkAPIKeyCreateLimit(ctx, userID); err != nil {
+		return nil, err
 	}
 
 	// 新建 API Key 默认开启分组不可用时的自动回退，仍允许调用方显式传 false 关闭。
@@ -1589,10 +1612,6 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		}
 		apiKey.Status = *req.Status
 		fields.Status = true
-		// 如果状态改变，清除Redis缓存
-		if s.cache != nil {
-			_ = s.cache.DeleteCreateAttemptCount(ctx, apiKey.UserID)
-		}
 	}
 
 	// Update quota fields
@@ -1708,9 +1727,7 @@ func (s *APIKeyService) Delete(ctx context.Context, id int64, userID int64) erro
 	}
 
 	// 删除成功后再清理缓存,避免"缓存已清但删除失败"的竞态。
-	if s.cache != nil {
-		_ = s.cache.DeleteCreateAttemptCount(ctx, userID)
-	}
+	// 删除不返还创建额度，也不重置自定义密钥失败计数，避免循环删除绕过限制。
 	s.InvalidateAuthCacheByKey(ctx, existing.Key)
 	s.lastUsedTouchL1.Delete(id)
 

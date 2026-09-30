@@ -522,3 +522,21 @@ func TestContentModerationRepositoryMarkCyberWarningEmailSent(t *testing.T) {
 	require.NoError(t, repo.MarkCyberWarningEmailSent(context.Background(), 99))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// 白名单移除后也不能把历史仅审计事件计入自动封禁。
+func TestContentModerationRepositoryCountFlaggedExcludesLogOnlyHistory(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := NewContentModerationRepository(db)
+	since := time.Now().Add(-time.Hour)
+	mock.ExpectQuery(regexp.QuoteMeta("AND mode NOT IN ('cyber_log_only', 'risk_control_log_only')")).WithArgs(int64(1001), since).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	count, err := repo.CountFlaggedByUserSince(context.Background(), 1001, since)
+	require.NoError(t, err)
+	require.Zero(t, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestContentModerationLogFilterLogOnly(t *testing.T) {
+	where, args := buildContentModerationLogWhere(service.ContentModerationLogFilter{Result: "log_only"})
+	require.Empty(t, args)
+	require.Contains(t, strings.Join(where, " AND "), "l.mode IN ('cyber_log_only', 'risk_control_log_only')")
+}

@@ -173,7 +173,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if account.Platform == PlatformGrok {
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
 	}
-	if err := validateOpenAIReasoningEffort(body, originalModel); err != nil {
+	if err := validateOpenAIReasoningEffort(body, originalModel, resolveOpenAIAccountUpstreamModelForRequest(account, originalModel, compactPath, true)); err != nil {
 		if c != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": gin.H{

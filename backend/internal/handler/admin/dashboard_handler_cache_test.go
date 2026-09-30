@@ -16,8 +16,9 @@ import (
 
 type dashboardUsageRepoCacheProbe struct {
 	service.UsageLogRepository
-	trendCalls      atomic.Int32
-	usersTrendCalls atomic.Int32
+	trendCalls       atomic.Int32
+	usersTrendCalls  atomic.Int32
+	userTrendMetrics []string
 }
 
 func (r *dashboardUsageRepoCacheProbe) GetUsageTrendWithFilters(
@@ -45,8 +46,10 @@ func (r *dashboardUsageRepoCacheProbe) GetUserUsageTrend(
 	startTime, endTime time.Time,
 	granularity string,
 	limit int,
+	metric string,
 ) ([]usagestats.UserUsageTrendPoint, error) {
 	r.usersTrendCalls.Add(1)
+	r.userTrendMetrics = append(r.userTrendMetrics, metric)
 	return []usagestats.UserUsageTrendPoint{{
 		Date:       "2026-03-11",
 		UserID:     1,
@@ -56,6 +59,27 @@ func (r *dashboardUsageRepoCacheProbe) GetUserUsageTrend(
 		Cost:       2,
 		ActualCost: 1,
 	}}, nil
+}
+
+// 排名指标必须进入缓存键；未知值按默认 Token 指标归一，避免缓存混用。
+func TestDashboardHandler_GetUserUsageTrend_SeparatesMetrics(t *testing.T) {
+	t.Cleanup(resetDashboardReadCachesForTest)
+	resetDashboardReadCachesForTest()
+	gin.SetMode(gin.TestMode)
+	repo := &dashboardUsageRepoCacheProbe{}
+	handler := NewDashboardHandler(service.NewDashboardService(repo, nil, nil, nil))
+	router := gin.New()
+	router.GET("/users-trend", handler.GetUserUsageTrend)
+	for _, tc := range []struct{ metric, cache string }{
+		{"", "miss"}, {"tokens", "hit"}, {"actual_cost", "miss"}, {"invalid", "hit"}, {"actual_cost", "hit"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/users-trend?start_date=2026-03-01&end_date=2026-03-07&granularity=day&metric="+tc.metric, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, tc.cache, rec.Header().Get("X-Snapshot-Cache"))
+	}
+	require.Equal(t, []string{"tokens", "actual_cost"}, repo.userTrendMetrics)
 }
 
 func resetDashboardReadCachesForTest() {

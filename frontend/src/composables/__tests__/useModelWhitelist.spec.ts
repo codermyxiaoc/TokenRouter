@@ -6,6 +6,7 @@ vi.mock('@/api/admin/accounts', () => ({
 
 import {
   buildCombinedModelMappingObject,
+  findModelWhitelistMappingConflict,
   buildModelMappingObject,
   buildPersistedModelRestriction,
   qoderModelKeyByPublicAlias,
@@ -41,6 +42,7 @@ describe('useModelWhitelist', () => {
 			'gpt-5.6-luna',
 			'gpt-6-astra',
       'gpt-6-sol',
+      'gpt-6.1-sol',
       'gpt-6-luna',
 			'gpt-5.4',
 			'gpt-5.4-mini',
@@ -77,7 +79,7 @@ describe('useModelWhitelist', () => {
   })
 
   it('新增官方型号可选择和原名映射，且不扩展第三方平台预设', () => {
-    for (const model of ['gpt-6-sol', 'gpt-6-luna']) {
+    for (const model of ['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol']) {
       expect(getModelsByPlatform('openai')).toContain(model)
       expect(getPresetMappingsByPlatform('openai')).toEqual(expect.arrayContaining([
         expect.objectContaining({ from: model, to: model })
@@ -85,6 +87,8 @@ describe('useModelWhitelist', () => {
       expect(getModelsByPlatform('opencode_go')).not.toContain(model)
     }
     expect(getModelsByPlatform('anthropic')).toContain('claude-opus-5-5')
+    expect(getModelsByPlatform('anthropic')).toContain('claude-sonnet-5-5')
+    expect(getModelsByPlatform('antigravity')).not.toContain('claude-sonnet-5-5')
     expect(getPresetMappingsByPlatform('anthropic')).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: 'Opus 5.5', from: 'claude-opus-5-5', to: 'claude-opus-5-5' })
     ]))
@@ -408,5 +412,13 @@ describe('useModelWhitelist', () => {
       },
       modelWhitelist: []
     })
+  })
+})
+
+describe('AG 白名单与映射冲突', () => {
+  it('规范空白后拒绝同名非自映射，允许自映射及不同来源规则', () => {
+    expect(findModelWhitelistMappingConflict([' sonnet '], [{ from: 'sonnet ', to: 'opus' }])).toBe('sonnet')
+    expect(findModelWhitelistMappingConflict(['sonnet'], [{ from: 'sonnet', to: 'sonnet' }, { from: 'alias', to: 'sonnet' }])).toBeUndefined()
+    expect(findModelWhitelistMappingConflict(['sonnet'], [{ from: 'sonnet', to: '' }])).toBeUndefined()
   })
 })

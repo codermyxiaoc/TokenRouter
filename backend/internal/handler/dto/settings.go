@@ -187,6 +187,7 @@ type SystemSettings struct {
 	CreativeEnabled                      bool                         `json:"creative_enabled"`     // 创作台功能开关
 	RiskControlEnabled                   bool                         `json:"risk_control_enabled"` // 风控中心功能开关
 	CyberSessionBlockEnabled             bool                         `json:"cyber_session_block_enabled"`
+	CyberPolicyUserAllowlist             string                       `json:"cyber_policy_user_allowlist"`
 	CyberSessionBlockTTLSeconds          int                          `json:"cyber_session_block_ttl_seconds"`
 	AffiliateEnabled                     bool                         `json:"affiliate_enabled"`
 	AffiliateRebateRate                  float64                      `json:"affiliate_rebate_rate"`

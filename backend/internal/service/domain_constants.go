@@ -243,6 +243,7 @@ const (
 	SettingKeyCreativeWorkerCount                 = "creative_worker_count"            // 创作台 worker 数量（正整数）
 	SettingKeyRiskControlEnabled                  = "risk_control_enabled"             // 是否启用风控中心入口与内容审计链路
 	SettingKeyCyberSessionBlockEnabled            = "cyber_session_block_enabled"      // cyber_policy 命中后的会话本地屏蔽开关
+	SettingKeyCyberPolicyUserAllowlist            = "cyber_policy_user_allowlist"      // 按实际行为用户仅保留风控审计，不执行本地惩罚
 	SettingKeyCyberSessionBlockTTLSeconds         = "cyber_session_block_ttl_seconds"  // cyber_policy 会话本地屏蔽时长（秒）
 	SettingKeyContentModerationConfig             = "content_moderation_config"        // 内容审计配置（JSON）
 	SettingKeyLoginAgreementEnabled               = "login_agreement_enabled"          // 登录前是否要求同意条款

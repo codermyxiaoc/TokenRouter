@@ -847,7 +847,28 @@ func TestUsageLogRepositoryGetUserUsageTrendGroupsByBillingUser(t *testing.T) {
 			"date", "user_id", "email", "username", "requests", "tokens", "cost", "actual_cost",
 		}).AddRow("2025-01-03", int64(9), "owner@example.com", "owner", int64(3), int64(120), 2.5, 2.5))
 
-	got, err := repo.GetUserUsageTrend(context.Background(), start, end, "day", 12)
+	got, err := repo.GetUserUsageTrend(context.Background(), start, end, "day", 12, "tokens")
+	require.NoError(t, err)
+	require.Equal(t, []usagestats.UserUsageTrendPoint{
+		{Date: "2025-01-03", UserID: 9, Email: "owner@example.com", Username: "owner", Requests: 3, Tokens: 120, Cost: 2.5, ActualCost: 2.5},
+	}, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 实际费用排名与 Token 排名共享付款主体归属，且必须在选取 Top 用户前排序。
+func TestUsageLogRepositoryGetUserUsageTrendGroupsByBillingUserByActualCost(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+	start := time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+
+	mock.ExpectQuery("(?s)WITH top_users AS \\(.*SELECT COALESCE\\(billing_user_id, user_id\\) AS user_id.*GROUP BY COALESCE\\(billing_user_id, user_id\\).*ORDER BY SUM\\(actual_cost\\) DESC.*COALESCE\\(u\\.billing_user_id, u\\.user_id\\) AS user_id.*LEFT JOIN users us ON COALESCE\\(u\\.billing_user_id, u\\.user_id\\) = us\\.id").
+		WithArgs(start, end, 12, start, end).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"date", "user_id", "email", "username", "requests", "tokens", "cost", "actual_cost",
+		}).AddRow("2025-01-03", int64(9), "owner@example.com", "owner", int64(3), int64(120), 2.5, 2.5))
+
+	got, err := repo.GetUserUsageTrend(context.Background(), start, end, "day", 12, "actual_cost")
 	require.NoError(t, err)
 	require.Equal(t, []usagestats.UserUsageTrendPoint{
 		{Date: "2025-01-03", UserID: 9, Email: "owner@example.com", Username: "owner", Requests: 3, Tokens: 120, Cost: 2.5, ActualCost: 2.5},

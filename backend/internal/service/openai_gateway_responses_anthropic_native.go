@@ -66,6 +66,12 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 	// 转换器必须读取最终型号，不能把客户端别名的能力套到映射目标上。
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	// 新型号约束按最终上游模型校验，避免别名绕过请求校验。
+	if err := ValidateSonnet55Request(body, upstreamModel); err != nil {
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
 
 	// 3. 把 Responses 请求转换为 Anthropic 请求。
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq, upstreamModel)
@@ -399,6 +405,10 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 		if event.Type == "message_start" && event.Message != nil {
 			mergeAnthropicUsage(&usage, event.Message.Usage)
 		}
+
+		// 同步外发用量，避免转换器恢复供应商原始重叠输入总量。
+		syncAnthropicResponsesUsage(state, usage)
+		normalizeAnthropicEventUsageForResponses(event, usage)
 
 		events := apicompat.AnthropicEventToResponsesEvents(event, state)
 		if clientDisconnected {

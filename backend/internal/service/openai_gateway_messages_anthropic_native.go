@@ -52,6 +52,12 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	// 原生 Messages 的兼容供应商入口同样按最终型号执行 Sonnet 参数校验。
+	if err := ValidateSonnet55Request(body, upstreamModel); err != nil {
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
 	if upstreamModel != originalModel {
 		rewritten, err := sjson.SetBytes(body, "model", upstreamModel)
 		if err != nil {
@@ -181,6 +187,8 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		clientBeta = beta
 	}
+	model := gjson.GetBytes(body, "model").String()
+	clientBeta = filterSonnet55ToolsetBeta(clientBeta, body, model)
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, clientBeta); changed {
 		body = sanitized
 	}
@@ -225,6 +233,7 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	}
 	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
 	account.ApplyHeaderOverrides(req.Header)
+	filterSonnet55ToolsetBetaHeader(req.Header, body, model)
 	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body)
 	if account.IsOpenCodeGo() {
 		// 错误尚未生成用量结果，也要记录实际 Anthropic 端点。

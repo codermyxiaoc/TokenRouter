@@ -45,6 +45,8 @@ GPT-5.6 系列的内置目录、白名单和配置导出只提供 `gpt-5.6-sol/t
 
 输入模态优先读取 `supported_modalities`，缺失或空数组时兼容 `supported_input_modalities`；输出读取 `supported_output_modalities`。缺少的一侧用原有 mode 规则兜底，再补充 `supports_vision`、音频输入输出、`supports_video_input` 和图片输入价，最终过滤、去重并按文字、图片、音频、视频排序。目录查表受价格服务读锁保护，不另设别名缓存，目录更新立即影响后续查询。
 
+`gpt-6.1-sol` 与 `claude-sonnet-5-5` 也有独立目录和离线兜底价，均支持文字/图片输入及文字输出；前者上下文 1,050,000、后者输入上限 1,000,000，最大输出均为 128,000。目录扩展不创建 Codex 专用 manifest、远程目录或 CLI descriptor；普通 `/models` 与现有配置导出继续按当前可请求集合工作。
+
 目录未命中后，价格仍可按既有专属静态价和跨型号计费政策回退，Spark 的专用重定向保持独立。OpenAI 日期快照和协议后缀的价格回退保留产品名，优先同产品目录及已有专属静态价格。日期回退、静态价和跨型号计费重定向均不向能力查询提供继承依据。上述目录处理不改写公开模型 ID 或 Gemini 上游请求 ID。
 
 ## 价格展示
@@ -66,6 +68,10 @@ GPT-5.6 系列的内置目录、白名单和配置导出只提供 `gpt-5.6-sol/t
 Sol/Luna 的总输入严格超过 272,000 token 时，整次请求输入及缓存按 2 倍、输出按 1.5 倍计算；Fast 为 2 倍、Flex 为 0.5 倍，复用原有分组长上下文开关和渠道倍率规则。Opus 5.5 不添加长上下文溢价，Fast 为 2 倍。新型号的静态兜底独立登记，Opus 5 的模糊查询不得借用 5.5 低价。依据：[GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol)、[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)、[Claude 定价](https://platform.claude.com/docs/zh-CN/about-claude/pricing)。
 
 Sol/Luna 目录和覆盖文件中显式配置的缓存写入价、priority 单价（包括零价）保持有效，只为缺失字段补默认倍率。Fast 的 5m/1h 缓存写入展示和结算共同应用服务档比例，再叠加适用的长上下文或渠道倍率；不能在展示或分时长结算中漏掉 Fast 倍率。
+
+GPT 6.1 Sol 标准输入/输出/缓存写入/缓存读取为每百万 token 2/10/2.5/0.10 美元；继续使用严格超过 272,000 总输入时输入侧 2 倍、输出 1.5 倍，以及 Fast 2 倍、Flex 0.5 倍。其显式缓存价、priority 零价、渠道价和区间价保持优先。Sonnet 5.5 对应价格为 2/10/2.5（5m）或 4（1h）/0.20 美元，无新增长上下文溢价；旧 Sonnet 不得借用 5.5 的低价兜底。
+
+GPT 6 Astra 的 `ultrafast` 对最终普通 token 价应用固定 6 倍，包括缓存；普通 Fast 的渠道倍率不改变此倍率。分组/渠道/区间基础价和显式零价继续有效，不用官方价覆盖已配置价卡。服务档排名区分 Ultrafast 与 Fast，明确降档只按降后的档位结算；Codex OAuth 的 `default` 回显仍按原有非权威规则处理。
 
 未知或歧义价格使用 `unpriced`/unknown 状态，不填 0。显式价格指针为 0 才表示免费。Qoder 内置别名和路由键要求手工渠道价格，不能回退通用模型价；具体优先级见[Qoder 原生上游](qoder_upstream.md)。
 

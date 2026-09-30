@@ -3,7 +3,7 @@
 当前标准、本地目录和 standalone Compose 默认从 DockerHub 拉取：
 
 ```text
-coderxiaoc/tokenrouter:v0.1.278-ct-v2.5
+coderxiaoc/tokenrouter:v0.1.278-ct-v2.6
 ```
 
 在 `.env` 中设置 `SUB2API_IMAGE` 可选择其他已发布标签或镜像摘要。这些 Compose 保留 `pull_policy: always`，部署服务器无需源码。应用依赖 PostgreSQL 和 Redis；Compose 提供运行配置、持久化存储、健康检查和依赖启动顺序。
@@ -27,10 +27,10 @@ coderxiaoc/tokenrouter:v0.1.278-ct-v2.5
 
 ```bash
 docker login
-docker buildx build --platform linux/amd64 --build-arg VERSION=0.1.278-ct-v2.5 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v2.5 --load --file Dockerfile .
-docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v2.5 --version
-docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v2.5 --version
-docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.5
+docker buildx build --platform linux/amd64 --build-arg VERSION=0.1.278-ct-v2.6 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v2.6 --load --file Dockerfile .
+docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v2.6 --version
+docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v2.6 --version
+docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.6
 ```
 
 版本和 PostgreSQL 客户端检查不挂载现有数据，也不启动应用服务。程序内部版本号不带 `v`，镜像标签保留 `v` 前缀。根 `Dockerfile` 还支持 `COMMIT`、`DATE` 构建参数；发布下一版本时同时替换构建参数、镜像标签与部署端 `SUB2API_IMAGE`。以上命令只发布 `amd64`，不会同时生成 `arm64` 镜像。
@@ -43,8 +43,8 @@ docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.5
 
 ```bash
 set -e
-binary="$PWD/release/sub2api_v0.1.278-ct-v2.5_linux_amd64/sub2api"
-image=coderxiaoc/tokenrouter:v0.1.278-ct-v2.5
+binary="$PWD/release/sub2api_v0.1.278-ct-v2.6_linux_amd64/sub2api"
+image=coderxiaoc/tokenrouter:v0.1.278-ct-v2.6
 build_context="$(mktemp -d)"
 test -s "$binary"
 mkdir -p "$build_context/backend" "$build_context/deploy"
@@ -64,7 +64,7 @@ image_binary_hash="$(docker run --rm --entrypoint sha256sum "$image" /app/sub2ap
 test "$binary_hash" = "$image_binary_hash"
 ```
 
-核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v2.5`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
+核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v2.6`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
 
 ```bash
 docker login
@@ -89,7 +89,7 @@ nano .env
 在现有部署目录修改 `.env`，保留原有密码、JWT/TOTP 密钥以及其他配置：
 
 ```dotenv
-SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v2.5
+SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v2.6
 POSTGRES_BIND_HOST=127.0.0.1
 POSTGRES_PORT=5433
 ```
@@ -107,7 +107,7 @@ docker compose -f docker-compose.yml pull sub2api
 
 ```bash
 docker compose -f docker-compose.yml stop sub2api
-backup_dir="backups/pre-v2.5-$(date +%Y%m%d-%H%M%S)"
+backup_dir="backups/pre-v2.6-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$backup_dir"
 chmod 700 "$backup_dir"
 cp -p .env docker-compose.yml "$backup_dir/"
@@ -130,7 +130,15 @@ docker compose -f docker-compose.yml exec -T sub2api wget -q -O - http://127.0.0
 
 `--no-deps sub2api` 只更新应用，不替换 PostgreSQL 或 Redis。新应用启动时自动执行待应用迁移。沿用既有数据、配置和稳定安全密钥，完成升级后检查程序版本、健康状态、登录、网关调用和用量记录。
 
-### v2.5 升级检查
+### v2.6 升级检查
+
+从 `v0.1.278-ct-v2.5` 更新到 `v0.1.278-ct-v2.6` 不新增或修改 SQL 迁移，最高迁移仍为 `288_affiliate_ledger_operation_id.sql`。本次交付 `linux/amd64` 二进制和同平台 DockerHub 镜像，包含已同步的上游 v0.2.10 / v0.2.11 适配、用户与管理员任务记录的手机卡片及折叠筛选，并将版本检查、在线更新和安装脚本统一到 `codermyxiaoc/TokenRouter` 的 GitHub Releases。
+
+上游适配覆盖 Sonnet 5.5、GPT-6.1 Sol、Astra Ultrafast、Claude 原生重置查询与兑换、风控白名单、仪表盘指标、Key 每小时创建限制及兼容协议修正。现有订阅与余额结算、订阅窗口、次数和有效期规则保留；升级不重算历史，不清空用户用量，也未引入上游的余额在途预占。Claude 兑换会消耗上游重置机会，应先查询再按需确认，未知结果不重复兑换；原有本地账号限制仍通过既有恢复入口处理。
+
+沿用原数据库、配置、数据目录和固定安全密钥，完成全部后端与前端更新后，核对新模型目录与定价、常用网关请求和用量记录、任务手机布局及 GitHub 更新来源。二进制部署同步本版本官方离线定价资源并保留自定义覆盖；Docker 镜像已携带同版本资源。更新缓存按来源隔离，无需清空 Redis。Apple Container 需要已发布的 `linux/arm64` 镜像，本次 amd64 标签不提供该架构。跨版本升级继续遵守下方历史迁移边界，详细约束见[部署与数据库迁移](../docs/operations/deployment_and_migrations.md)。
+
+### v2.5 历史升级检查
 
 从 `v0.1.278-ct-v2.4` 更新到 `v0.1.278-ct-v2.5` 不新增或修改数据库迁移，最高迁移仍为 `288_affiliate_ledger_operation_id.sql`。本次恢复 OpenAI OAuth 账号的手动额度重置入口，并适配用户、管理员工单界面的手机布局。
 
@@ -240,9 +248,9 @@ v1.3 的 WS 执行状态按 API Key、原始线程/会话和 `request_kind` 隔�
 
 ## 镜像标签
 
-当前默认固定版本标签 `v0.1.278-ct-v2.5`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
+当前默认固定版本标签 `v0.1.278-ct-v2.6`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
 
 ## 相关链接
 
-- [GitHub 仓库](https://github.com/TokenFlux/TokenRouter)
+- [GitHub 仓库](https://github.com/codermyxiaoc/TokenRouter)
 - [部署指南](../docs/guides/deployment/index.md)

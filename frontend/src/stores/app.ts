@@ -44,6 +44,7 @@ export const useAppStore = defineStore('app', () => {
   const latestVersion = ref<string>('')
   const hasUpdate = ref<boolean>(false)
   const buildType = ref<string>('source')
+  const versionWarning = ref<string>('')
   const releaseInfo = ref<ReleaseInfo | null>(null)
 
   // toast 自增 ID
@@ -258,6 +259,7 @@ export const useAppStore = defineStore('app', () => {
         has_update: hasUpdate.value,
         build_type: buildType.value,
         release_info: releaseInfo.value || undefined,
+        warning: versionWarning.value || undefined,
         cached: true
       }
     }
@@ -275,10 +277,13 @@ export const useAppStore = defineStore('app', () => {
       hasUpdate.value = data.has_update
       buildType.value = data.build_type || 'source'
       releaseInfo.value = data.release_info || null
+      // 检查失败不能伪装成“已是最新版”；缓存返回时同样保留提示。
+      versionWarning.value = data.warning || ''
       versionLoaded.value = true
       return data
     } catch (error) {
       console.error('Failed to fetch version:', error)
+      versionWarning.value = i18n.global.t('version.checkFailed')
       return null
     } finally {
       versionLoading.value = false
@@ -291,6 +296,7 @@ export const useAppStore = defineStore('app', () => {
   function clearVersionCache(): void {
     versionLoaded.value = false
     hasUpdate.value = false
+    versionWarning.value = ''
   }
 
   // ==================== Public Settings Management ====================
@@ -517,6 +523,7 @@ export const useAppStore = defineStore('app', () => {
     latestVersion,
     hasUpdate,
     buildType,
+    versionWarning,
     releaseInfo,
 
     // Computed

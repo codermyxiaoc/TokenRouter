@@ -292,6 +292,32 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it.each([false, true])('AG 批量保存同时保留白名单和映射，冲突=%s', async (conflict) => {
+    for (const id of [1, 2]) {
+      vi.mocked(adminAPI.accounts.getById).mockResolvedValueOnce(createAccount({
+        id, platform: 'antigravity', type: 'oauth',
+        credentials: { model_mapping: { allowed: 'allowed', alias: 'target' } }
+      }))
+    }
+    const wrapper = mountModal({ show: false, selectedPlatforms: ['antigravity'], selectedTypes: ['oauth'] })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await wrapper.get('#bulk-edit-model-restriction-enabled').setValue(true)
+    const whitelistTab = wrapper.findAll('button').find(btn => btn.text().includes('admin.accounts.modelWhitelist'))
+    await whitelistTab!.trigger('click')
+    const selector = wrapper.findComponent(ModelWhitelistSelector)
+    await selector.vm.$emit('update:modelValue', conflict ? ['allowed', 'alias'] : ['allowed', 'extra'])
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    if (conflict) {
+      expect(adminAPI.accounts.bulkUpdate).not.toHaveBeenCalled()
+    } else {
+      expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+        credentials: { model_mapping: { allowed: 'allowed', extra: 'extra', alias: 'target' } }
+      })
+    }
+  })
+
   it('Qoder 批量编辑应把旧 self mapping 保留为显式映射', async () => {
     vi.mocked(adminAPI.accounts.getById)
       .mockResolvedValueOnce(createAccount({

@@ -62,6 +62,9 @@ func openAIModelSupportsReasoningEffort(model string, effort string) bool {
 		return false
 	}
 	value = strings.NewReplacer("-", "", "_", "", " ", "").Replace(value)
+	if isOpenAIGPT61SolModel(model) && (value == "none" || value == "minimal") {
+		return false
+	}
 	switch value {
 	case "max":
 		return openAIModelSupportsMaxReasoningEffort(model)
@@ -151,11 +154,15 @@ func normalizeKnownOpenAICodexModel(model string) string {
 		return ""
 	}
 
+	if isOpenAIGPT61SolModel(normalized) {
+		return "gpt-6.1-sol"
+	}
 	if mapped := normalizeOpenAIGPT6SolLunaModel(normalized); mapped != "" {
 		return mapped
 	}
 	// 新产品只接受已登记的别名，未知后缀不能再进入旧 Codex 兜底。
-	if normalized == "gpt-6-sol" || strings.HasPrefix(normalized, "gpt-6-sol-") ||
+	if normalized == "gpt-6.1-sol" || strings.HasPrefix(normalized, "gpt-6.1-sol-") ||
+		normalized == "gpt-6-sol" || strings.HasPrefix(normalized, "gpt-6-sol-") ||
 		normalized == "gpt-6-luna" || strings.HasPrefix(normalized, "gpt-6-luna-") {
 		return ""
 	}
@@ -299,4 +306,22 @@ func firstUsageBillingModel(candidates []string) string {
 		}
 	}
 	return ""
+}
+
+// isOpenAIGPT61SolModel 保留 6.1 Sol 独立身份；无效推理档位仍可识别以便显式校验。
+func isOpenAIGPT61SolModel(model string) bool {
+	id := strings.TrimSuffix(canonicalizeOpenAIModelAliasSpelling(model), "-openai-compact")
+	if id == "gpt-6.1-sol" {
+		return true
+	}
+	suffix, ok := strings.CutPrefix(id, "gpt-6.1-sol-")
+	if !ok {
+		return false
+	}
+	switch suffix {
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+		return true
+	default:
+		return false
+	}
 }

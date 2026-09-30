@@ -33,9 +33,13 @@ Anthropic 原生入口是 `POST /v1/messages` 和 `POST /v1/messages/count_token
 
 Anthropic 分组支持 Messages、Responses 和 Chat，新建时默认只启用 Messages；三项都可关闭，迁移前已有分组按旧行为启用三项。被关闭的协议会在读取正文和账号调度前返回对应客户端形状的 `403`，不会产生上游 attempt 或结算。
 
+Claude Code-only 分组的 Chat/Responses 入口可使用配置的传统 fallback，但仅限普通 Key 或前缀复合 Key；智能路由继续拒绝该降级，不能跳出有序候选。降级链中的目标必须启用、允许该用户及当前客户端协议，并位于指定订阅的覆盖范围内；当前兼容处理器只接受 Anthropic/Antigravity 目标，其它平台仍返回 `403`。账号选择与渠道准入使用服务解析出的降级组，原 Key 的计费主体及资金检查保持不变；没有合法目标或链路循环时在选号前拒绝。
+
 API Key 和 OAuth/Setup Token 使用 Anthropic HTTP 路径；Bedrock 走独立签名与响应适配；Service Account 走 Vertex Claude 路径。协议转换不能抹平这些传输差异，尤其是 beta header、模型名称、错误结构和 token usage 的来源。
 
 流式请求只在首个客户端分块写出前允许重试或换账号。每次 attempt 都从原始请求重建转换状态，工具名、停止原因、thinking block、usage 和错误事件必须与客户端协议一致。
+
+Anthropic 转 Chat 的普通桥和国产供应商原生桥在实际收到上游 usage 时发送一次末尾用量块，不因客户端省略或关闭 `stream_options.include_usage` 丢弃该事实；显式零用量仍发送，缺失或 `null` 不合成用量。OpenCode 专用响应处理和其它平台保留各自协议契约。Chat/Responses 流的外发用量与内部计费共用归一化缓存桶：权威 `prompt_tokens` 或命中/未命中字段可拆出未缓存输入；只有较晚的缓存桶而无权威总量时，不推测扣减原 `input_tokens`。重复累计用量事件不重复累加，供应商速度字段与客户端断连后的既有排水计费保持原语义。
 
 Responses 请求转换为 Anthropic Messages 时，只发送 Anthropic 入站协议可识别的内容块。OpenAI `reasoning`、`reasoning_text`、未知专有分片、空内容消息和纯空白文本块会被过滤；空白文本与合法图片并存时仅删除坏文本，保留图片。`function_call` / `function_call_output` 仍按调用 ID 转为相邻的 `tool_use` / `tool_result`，过滤过程不能破坏工具配对、角色交替或历史顺序。
 
@@ -46,6 +50,10 @@ Responses 工具参数转换为 Anthropic `input_schema` 时，会把根节点�
 模型依次经过 Key 重定向、渠道映射和账号映射；可请求列表是分组策略、渠道和当前账号能力的交集，不是默认模型常量的直接输出。Bedrock/Vertex 的供应商模型标识可与客户端 Anthropic 名称不同，计费模型也可以由渠道单独指定。
 
 原生 Anthropic 目录新增 `claude-opus-5-5`（Claude Opus 5.5），不替换 Opus 5 或其他旧模型，也不推断 Antigravity、OpenCode 或 Bedrock 地域路由可用性。该型号始终启用 adaptive thinking、默认 effort 为 `medium`；兼容入口为最终映射目标生成 thinking 时使用 adaptive，缺省 thinking 不能被当成关闭思考而删掉合法历史块。客户端显式 `thinking=disabled/enabled`、强制工具选择等不合法原生字段保留上游校验语义，不偷偷改成其他工具策略。旧思考签名与模型、对话绑定，跨模型历史不能凭模型目录扩展保证复用。官方迁移约束见 [Opus 5.5 迁移指南](https://platform.claude.com/docs/zh-CN/models/opus-5-5/migration-guide)，价格与缓存独立条目见[模型目录与市场](model_catalog_and_marketplace.md)。
+
+Sonnet 5.5 原生与协议桥按最终账号映射型号校验：拒绝 `thinking=enabled/disabled`、强制工具选择、非默认采样参数（只接受 temperature 1、top_p 0.99 至 1，不接受 top_k）。Responses/Chat 转换缺省使用 adaptive/high，`reasoning.effort=none` 转为 between_tools/low；between_tools 仅支持 low/medium/high 且不接受 display、budget_tokens、block_binding。合法原生思考签名可回传，任一历史签名非法则移除该次请求全部历史思考块，重试仍保留显式 between_tools。旧 Opus 的参数及局部历史清理策略不变；Responses 的不透明 encrypted_content 仍不重放为 Claude 签名。
+
+Sonnet 5.5 的稳定 computer/browser toolset 会移除旧 fine-grained-tool-streaming beta，工具自身 eager_input_streaming 保留；此约束覆盖最终 Header override、计数、Vertex 和 Bedrock。Bedrock CC 兼容开启时才将 enabled/disabled 转为 adaptive/between_tools；Sonnet 5.5 的 output_config.effort 保留，结构化 format 沿用内联 schema 转换。区域路由仍要求已核实规则，本轮不新增未经核实的 Sonnet 5.5 默认区域映射；显式完整供应商 ID 继续按现有边界透传。
 
 Anthropic 请求策略包括：
 

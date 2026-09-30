@@ -14,6 +14,19 @@ import (
 // by converting them to the native /v1/messages format before forwarding upstream.
 // upstreamModel 可传入账号映射后的型号，仅用于选择转换能力，不改写公开模型 ID。
 func ResponsesToAnthropicRequest(req *ResponsesRequest, upstreamModel ...string) (*AnthropicRequest, error) {
+	thinkingModel := req.Model
+	if len(upstreamModel) > 0 && upstreamModel[0] != "" {
+		thinkingModel = upstreamModel[0]
+	}
+	if claude.IsSonnet55Model(thinkingModel) {
+		body, err := json.Marshal(req)
+		if err != nil {
+			return nil, err
+		}
+		if err := claude.ValidateSonnet55Request(body, thinkingModel); err != nil {
+			return nil, err
+		}
+	}
 	system, messages, err := convertResponsesInputToAnthropic(req.Instructions, req.Input)
 	if err != nil {
 		return nil, err
@@ -57,6 +70,24 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest, upstreamModel ...string)
 			return nil, fmt.Errorf("convert tool_choice: %w", err)
 		}
 		out.ToolChoice = tc
+	}
+
+	// Sonnet 5.5 默认启用自适应思考；none 只关闭工具调用之外的思考。
+	if claude.IsSonnet55Model(thinkingModel) {
+		effort := "high"
+		if req.Reasoning != nil && strings.TrimSpace(req.Reasoning.Effort) != "" {
+			effort = strings.ToLower(strings.TrimSpace(req.Reasoning.Effort))
+		}
+		out.Thinking = &AnthropicThinking{Type: "adaptive"}
+		switch effort {
+		case "none":
+			out.Thinking.Type, effort = "between_tools", "low"
+		case "low", "medium", "high", "xhigh", "max":
+		default:
+			return nil, fmt.Errorf("reasoning effort %q is not supported by claude-sonnet-5-5", effort)
+		}
+		out.OutputConfig = &AnthropicOutputConfig{Effort: effort}
+		return out, nil
 	}
 
 	// reasoning.effort → output_config.effort + thinking

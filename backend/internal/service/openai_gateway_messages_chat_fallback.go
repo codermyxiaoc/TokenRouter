@@ -47,7 +47,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return nil, fmt.Errorf("missing model in request")
 	}
-	if err := validateOpenAIReasoningEffort(body, originalModel); err != nil {
+	if err := validateOpenAIReasoningEffort(body, originalModel, resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)); err != nil {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}

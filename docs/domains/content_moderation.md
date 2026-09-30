@@ -43,6 +43,10 @@ TypeSafe 使用 `/v1/systemone` 对 13 个风险分类独立判定，不声称�
 
 审核日志可驱动按用户的命中计数，在配置的窗口和阈值达到后自动封禁；解封是显式管理动作。Cyber warning 是独立的警告计数和阈值体系，可以记录、查询和处置，但不应与内容审核 block 结果混为一个状态。风险控制启用后，管理员在 standard 与 simple 运行模式的侧栏都可进入现有风险控制页面；simple 模式不会因此获得提示词审计等未同步功能。
 
+管理员可通过 `cyber_policy_user_allowlist` 设置仅审计用户，默认空。白名单匹配实际行为用户（团队 Key 的 ActorUser），不匹配付款 owner；普通关键词、hash、同步/异步审核仍记录事实，但不执行本地拒绝、写入阻断 hash、自动封禁或邮件通知。准入时固定该请求的白名单快照，异步落库不因中途移除名单而追罚；`NoMediaRetention` 与 TypeSafe 的数据边界保持不变。
+
+HTTP 与 WebSocket 的白名单用户跳过既有 Cyber 会话屏蔽，也不创建新屏蔽；上游 `cyber_policy` 拒绝仍原样返回，WS 下一轮可以继续。为保留 fork 独立 CyberWarning 表的原子封禁语义，白名单 Cyber 证据写入已有审核日志，模式为 `cyber_log_only`，不写入惩罚计数表；普通白名单审核使用 `risk_control_log_only`。两种历史模式永久排除自动封禁计数，移除白名单后仅新命中恢复处置。后台风险页支持“白名单（仅审计）”筛选，并区分“上游拒绝（仅审计）”，不会显示成已在本地拦截。
+
 风险处置必须带实际用户、API Key、Group、模型、request ID、命中类别和来源规则。自动封禁失败要告警，不能把数据库更新失败当作已经阻断后续请求。管理员可查看汇总、日志、媒体、warning、API Key 测试和 unban 操作，所有敏感读取仍受管理员认证和审计约束。
 
 <a id="upstream_cyber_policy"></a>

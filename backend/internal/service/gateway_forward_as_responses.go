@@ -62,6 +62,12 @@ func (s *GatewayService) ForwardAsResponses(
 	if mappedModel == "" {
 		mappedModel = originalModel
 	}
+	// 新型号约束按最终上游模型校验，避免别名绕过请求校验。
+	if err := ValidateSonnet55Request(body, mappedModel); err != nil {
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
 
 	// 2. Convert Responses → Anthropic
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(&responsesReq, mappedModel)
@@ -277,21 +283,19 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 		return
 	}
 
-	// 部分 Anthropic 兼容 provider 同时返回 OpenAI 风格的 prompt/cache 字段。
-	// 优先使用这些权威总量或命中/未命中桶，避免误用含义重载的 input_tokens；
-	// 该逻辑覆盖 Kimi 的流式差异以及 GLM/DeepSeek 的缓存别名。
-	if src.PromptTokens > 0 || src.PromptCacheHitTokens != nil || src.PromptCacheMissTokens != nil {
-		cacheReadTokens := src.CacheReadInputTokens
-		if cacheReadTokens == 0 && src.CachedTokens > 0 {
-			cacheReadTokens = src.CachedTokens
-		}
-		if cacheReadTokens == 0 && src.PromptTokensDetails != nil && src.PromptTokensDetails.CachedTokens > 0 {
-			cacheReadTokens = src.PromptTokensDetails.CachedTokens
-		}
-		if cacheReadTokens == 0 && src.PromptCacheHitTokens != nil {
-			cacheReadTokens = max(*src.PromptCacheHitTokens, 0)
-		}
+	cacheReadTokens := src.CacheReadInputTokens
+	if cacheReadTokens == 0 && src.CachedTokens > 0 {
+		cacheReadTokens = src.CachedTokens
+	}
+	if cacheReadTokens == 0 && src.PromptTokensDetails != nil && src.PromptTokensDetails.CachedTokens > 0 {
+		cacheReadTokens = src.PromptTokensDetails.CachedTokens
+	}
+	if cacheReadTokens == 0 && src.PromptCacheHitTokens != nil {
+		cacheReadTokens = max(*src.PromptCacheHitTokens, 0)
+	}
 
+	// 兼容供应商的总输入与命中/未命中桶优先于含义不一致的 input_tokens。
+	if src.PromptTokens > 0 || src.PromptCacheHitTokens != nil || src.PromptCacheMissTokens != nil {
 		if src.PromptCacheMissTokens != nil {
 			dst.InputTokens = max(*src.PromptCacheMissTokens, 0)
 		} else {
@@ -300,13 +304,13 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 		dst.CacheReadInputTokens = cacheReadTokens
 		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
 	} else {
+		// 缺少权威总输入或未命中桶时，后续缓存事件不能触发推测扣减。
+		// input_tokens 可能已经是不含缓存的独立输入桶。
 		if src.InputTokens > 0 {
 			dst.InputTokens = src.InputTokens
 		}
-		if src.CacheReadInputTokens > 0 {
-			dst.CacheReadInputTokens = src.CacheReadInputTokens
-		} else if src.CachedTokens > 0 {
-			dst.CacheReadInputTokens = src.CachedTokens
+		if cacheReadTokens > 0 {
+			dst.CacheReadInputTokens = cacheReadTokens
 		}
 		if src.CacheCreationInputTokens > 0 {
 			dst.CacheCreationInputTokens = src.CacheCreationInputTokens
@@ -315,14 +319,34 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 	if src.OutputTokens > 0 {
 		dst.OutputTokens = src.OutputTokens
 	}
-	if src.CacheReadInputTokens > 0 {
-		dst.CacheReadInputTokens = src.CacheReadInputTokens
-	}
-	if src.CacheCreationInputTokens > 0 {
-		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
-	}
+	// 保留 fork 用于 Fast/Standard 计费的供应商速度字段。
 	if strings.TrimSpace(src.Speed) != "" {
 		dst.Speed = src.Speed
+	}
+}
+
+// syncAnthropicResponsesUsage 让外发用量与内部计费使用同一组归一化桶。
+func syncAnthropicResponsesUsage(state *apicompat.AnthropicEventToResponsesState, usage ClaudeUsage) {
+	state.InputTokens = usage.InputTokens
+	state.OutputTokens = usage.OutputTokens
+	state.CacheReadInputTokens = usage.CacheReadInputTokens
+	state.CacheCreationInputTokens = usage.CacheCreationInputTokens
+}
+
+// normalizeAnthropicEventUsageForResponses 防止转换器用原始重叠总量覆盖状态。
+func normalizeAnthropicEventUsageForResponses(event *apicompat.AnthropicStreamEvent, usage ClaudeUsage) {
+	normalize := func(dst *apicompat.AnthropicUsage) {
+		if dst == nil {
+			return
+		}
+		dst.InputTokens = usage.InputTokens
+		dst.OutputTokens = usage.OutputTokens
+		dst.CacheReadInputTokens = usage.CacheReadInputTokens
+		dst.CacheCreationInputTokens = usage.CacheCreationInputTokens
+	}
+	normalize(event.Usage)
+	if event.Message != nil {
+		normalize(&event.Message.Usage)
 	}
 }
 
@@ -569,6 +593,10 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		if event.Type == "message_start" && event.Message != nil {
 			mergeAnthropicUsage(&usage, event.Message.Usage)
 		}
+
+		// 外发终态使用计费侧归一化用量，保留独立缓存桶。
+		syncAnthropicResponsesUsage(state, usage)
+		normalizeAnthropicEventUsageForResponses(event, usage)
 
 		// Convert to Responses events
 		events := apicompat.AnthropicEventToResponsesEvents(event, state)

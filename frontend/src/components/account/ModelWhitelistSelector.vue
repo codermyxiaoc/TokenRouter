@@ -153,12 +153,13 @@ import type { SyncUpstreamPreviewParams } from '@/api/admin/accounts'
 import { useClipboard } from '@/composables/useClipboard'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { allModels, getModelsByPlatform } from '@/composables/useModelWhitelist'
+import { allModels, getModelsByPlatform, findModelWhitelistMappingConflict } from '@/composables/useModelWhitelist'
 
 const { t } = useI18n()
 
 const props = defineProps<{
   modelValue: string[]
+  modelMappings?: { from: string; to: string }[]
   platform?: string
   platforms?: string[]
   models?: string[]
@@ -274,6 +275,10 @@ const copyModelId = async (model: string) => {
 const addCustom = () => {
   const model = customModel.value.trim()
   if (!model) return
+  if (findModelWhitelistMappingConflict([model], props.modelMappings ?? [])) {
+    appStore.showError(t('admin.accounts.modelMappingConflict', { model }))
+    return
+  }
   if (props.modelValue.includes(model)) {
     appStore.showInfo(t('admin.accounts.modelExists'))
     return

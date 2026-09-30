@@ -1837,7 +1837,7 @@ func (s *UsageLogRepoSuite) TestGetUserUsageTrend() {
 	startTime := base.Add(-1 * time.Hour)
 	endTime := base.Add(48 * time.Hour)
 
-	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10)
+	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10, "tokens")
 	s.Require().NoError(err, "GetUserUsageTrend")
 	s.Require().GreaterOrEqual(len(trend), 2)
 }

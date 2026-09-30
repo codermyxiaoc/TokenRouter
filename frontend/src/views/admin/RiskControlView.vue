@@ -1830,6 +1830,7 @@ const keywordNotice = computed<KeywordNoticeView>(() => {
 const resultOptions = computed<SelectOption[]>(() => [
   { value: '', label: t('admin.riskControl.result.all') },
   { value: 'hit', label: t('admin.riskControl.result.hitNotBlocked') },
+  { value: 'log_only', label: t('admin.riskControl.result.logOnly') },
   // 各类拦截使用独立查询值，避免普通拦截筛选混入哈希或关键词拦截。
   { value: 'block', label: t('admin.riskControl.result.blocked') },
   { value: 'keyword_block', label: t('admin.riskControl.result.keywordBlocked') },
@@ -2810,6 +2811,9 @@ function modeDescription(mode: ModerationMode): string {
 }
 
 function resultLabel(row: ContentModerationLog): string {
+  // 白名单仍保留上游拒绝或本地命中事实，不能显示为已拦截或普通审核错误。
+  if (row.mode === 'cyber_log_only') return t('admin.riskControl.result.cyberLogOnly')
+  if (row.mode === 'risk_control_log_only') return t('admin.riskControl.result.riskControlLogOnly')
   if (row.action === 'keyword_block') return t('admin.riskControl.action.keywordBlock')
   if (row.action === 'hash_block') return t('admin.riskControl.action.hashBlock')
   if (row.action === 'block') return t('admin.riskControl.action.block')
@@ -2819,6 +2823,7 @@ function resultLabel(row: ContentModerationLog): string {
 }
 
 function resultBadgeClass(row: ContentModerationLog): string {
+  if (['cyber_log_only', 'risk_control_log_only'].includes(row.mode)) return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
   if (row.action === 'keyword_block') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (row.action === 'hash_block') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (row.action === 'block') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'

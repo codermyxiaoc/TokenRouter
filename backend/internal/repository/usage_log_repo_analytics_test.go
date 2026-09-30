@@ -385,7 +385,33 @@ func TestGetUserUsageTrendFromAnalyticsGroupsByBillingUser(t *testing.T) {
 			"date", "user_id", "email", "username", "requests", "tokens", "cost", "actual_cost",
 		}).AddRow("2026-08-01", int64(9), "owner@example.com", "owner", int64(3), int64(120), 2.5, 2.5))
 
-	got, ok, err := repo.getUserUsageTrendFromAnalytics(context.Background(), start, end, "day", 12)
+	got, ok, err := repo.getUserUsageTrendFromAnalytics(context.Background(), start, end, "day", 12, "tokens")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []usagestats.UserUsageTrendPoint{
+		{Date: "2026-08-01", UserID: 9, Email: "owner@example.com", Username: "owner", Requests: 3, Tokens: 120, Cost: 2.5, ActualCost: 2.5},
+	}, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 实际费用排名与 Token 排名共享付款主体归属，且必须在选取 Top 用户前排序。
+func TestGetUserUsageTrendFromAnalyticsGroupsByBillingUserByActualCost(t *testing.T) {
+	db, mock := newSQLMock(t)
+	settings := service.NewPreAggregationSettingsService(nil, &config.Config{
+		DashboardAgg: config.DashboardAggregationConfig{Enabled: true, IntervalSeconds: 60},
+	})
+	repo := &usageLogRepository{sql: db, preAggregation: settings}
+	start := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	end := start.Add(4 * time.Hour)
+
+	mock.ExpectQuery("(?s)SELECT live_watermark, coverage_start.*usage_analytics_aggregation_state").
+		WillReturnRows(sqlmock.NewRows([]string{"live_watermark", "coverage_start"}).AddRow(end, start))
+	mock.ExpectQuery("(?s)top_users AS \\(.*SELECT billing_user_id AS user_id.*GROUP BY billing_user_id.*ORDER BY SUM\\(actual_cost\\) DESC.*c\\.billing_user_id AS user_id.*LEFT JOIN users u ON u\\.id = c\\.billing_user_id").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"date", "user_id", "email", "username", "requests", "tokens", "cost", "actual_cost",
+		}).AddRow("2026-08-01", int64(9), "owner@example.com", "owner", int64(3), int64(120), 2.5, 2.5))
+
+	got, ok, err := repo.getUserUsageTrendFromAnalytics(context.Background(), start, end, "day", 12, "actual_cost")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, []usagestats.UserUsageTrendPoint{

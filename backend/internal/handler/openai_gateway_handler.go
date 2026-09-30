@@ -2411,7 +2411,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 	// 首帧已经完整可用，先检查显式会话及其派生会话是否被风控屏蔽，再建立上游连接。
-	if cyberBlockKey := findBlockedCyberSessionKey(c.Request.Context(), h.gatewayService, apiKey.ID, c, firstMessage); cyberBlockKey != "" {
+	if cyberBlockKey := h.findBlockedCyberSessionForAPIKey(c, apiKey, firstMessage); cyberBlockKey != "" {
 		writeCyberSessionBlockedWSError(c.Request.Context(), wsConn)
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, cyberSessionBlockedClientMsg)
 		h.enqueueCyberSessionBlockedOpsEntry(c, apiKey, reqModel, cyberBlockKey)
@@ -2801,7 +2801,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return payload, nil
 			},
 			BeforeTurn: func(turn int) error {
-				if cyberBlockedThisConn.Load() {
+				if cyberBlockedThisConn.Load() && !h.cyberPolicyLogOnly(c, apiKey) {
 					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, cyberSessionBlockedClientMsg, nil)
 				}
 				if turn == 1 {
@@ -2868,7 +2868,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					turnChannelMapping.ToUsageFields(turnModel, ""),
 					service.HashUsageRequestPayload(turnRequestBodyForCyber),
 				)
-				if cyberPolicyHandled {
+				if cyberPolicyHandled && !h.cyberPolicyLogOnly(c, apiKey) {
 					cyberBlockedThisConn.Store(true)
 				}
 				defer clearCyberPromptExcerpt(turn)
@@ -3708,7 +3708,7 @@ func (h *OpenAIGatewayHandler) rejectIfCyberSessionBlocked(c *gin.Context, apiKe
 	if !h.cyberSessionBlockAppliesToGroup(c, apiKey) {
 		return false
 	}
-	key := findBlockedCyberSessionKey(c.Request.Context(), h.gatewayService, apiKey.ID, c, body)
+	key := h.findBlockedCyberSessionForAPIKey(c, apiKey, body)
 	if key == "" {
 		return false
 	}
@@ -3754,6 +3754,8 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 	if mark == nil || c == nil {
 		return false
 	}
+	// 固定当前请求的白名单状态，异步记账保留上游拒绝事实。
+	cyberLogOnly := h.cyberPolicyLogOnly(c, apiKey)
 	cyberBlockKey := ""
 	switch value := cyberBlockArg.(type) {
 	case string:
@@ -3762,7 +3764,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		if apiKey != nil {
 			plan := buildCyberSessionBlockWritePlan(apiKey.ID, c, value)
 			cyberBlockKey = plan.scopeKey
-			if len(plan.keys) > 0 && h.gatewayService != nil {
+			if !cyberLogOnly && len(plan.keys) > 0 && h.gatewayService != nil {
 				blockCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 				h.gatewayService.MarkCyberSessionBlocked(blockCtx, plan.scopeKey, plan.keys)
 				cancel()
@@ -3826,7 +3828,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 				ChannelUsageFields: channelFields,
 			})
 		}
-		if h.gatewayService != nil && cyberBlockKey != "" {
+		if !cyberLogOnly && h.gatewayService != nil && cyberBlockKey != "" {
 			h.gatewayService.MarkCyberSessionBlocked(ctx, "", []string{cyberBlockKey})
 		}
 		if h.opsService != nil {

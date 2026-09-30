@@ -348,6 +348,7 @@ FROM content_moderation_logs
 WHERE user_id = $1
   AND flagged = TRUE
   AND action <> 'hash_block'
+  AND mode NOT IN ('cyber_log_only', 'risk_control_log_only')
   AND created_at >= $2
   AND created_at > COALESCE((SELECT at FROM last_auto_ban), '-infinity'::timestamptz)
 `, userID, since).Scan(&count)
@@ -941,6 +942,8 @@ func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) (
 		where = append(where, fmt.Sprintf(expr, len(args)))
 	}
 	switch strings.ToLower(strings.TrimSpace(filter.Result)) {
+	case "log_only":
+		where = append(where, "l.mode IN ('cyber_log_only', 'risk_control_log_only')")
 	case "hit", "flagged":
 		// 命中表示观察模式下发现风险但未拒绝请求，必须与各类已执行拦截的记录互斥。
 		where = append(where, "l.flagged = TRUE AND l.action NOT IN ('block', 'keyword_block', 'hash_block')")

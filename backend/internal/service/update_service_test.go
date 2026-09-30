@@ -29,15 +29,20 @@ func (s *updateServiceCacheStub) SetUpdateInfo(_ context.Context, data string, _
 
 type updateServiceGitHubClientStub struct {
 	release        *GitHubRelease
+	latestErr      error
+	latestRepo     string
+	recentRepo     string
 	recentReleases []*GitHubRelease
 	recentErr      error
 }
 
-func (s *updateServiceGitHubClientStub) FetchLatestRelease(context.Context, string) (*GitHubRelease, error) {
-	return s.release, nil
+func (s *updateServiceGitHubClientStub) FetchLatestRelease(_ context.Context, repo string) (*GitHubRelease, error) {
+	s.latestRepo = repo
+	return s.release, s.latestErr
 }
 
-func (s *updateServiceGitHubClientStub) FetchRecentReleases(context.Context, string, int) ([]*GitHubRelease, error) {
+func (s *updateServiceGitHubClientStub) FetchRecentReleases(_ context.Context, repo string, _ int) ([]*GitHubRelease, error) {
+	s.recentRepo = repo
 	return s.recentReleases, s.recentErr
 }
 

@@ -222,7 +222,7 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 	parsed.MetadataUserID = gjson.Get(jsonStr, "metadata.user_id").String()
 
 	thinkingType := gjson.Get(jsonStr, "thinking.type").String()
-	parsed.ThinkingEnabled = thinkingType == "enabled" || thinkingType == "adaptive"
+	parsed.ThinkingEnabled = thinkingType == "enabled" || thinkingType == "adaptive" || thinkingType == "between_tools" || claude.IsSonnet55Model(parsed.Model)
 
 	parsed.OutputEffort = strings.TrimSpace(gjson.Get(jsonStr, "output_config.effort").String())
 
@@ -578,7 +578,7 @@ func FilterThinkingBlocks(body []byte, mappedModel ...string) []byte {
 		model = mappedModel[0]
 	}
 	// Opus 5.5 缺省即开启自适应思考，合法的历史签名仍需回传。
-	return filterThinkingBlocksInternal(body, claude.IsOpus55Model(model))
+	return filterThinkingBlocksInternal(body, claude.IsClaude55SignedThinkingModel(model), claude.IsSonnet55Model(model))
 }
 
 // FilterThinkingBlocksForRetry 在 retry 场景中移除或降级 thinking 相关结构。
@@ -602,6 +602,12 @@ func FilterThinkingBlocksForRetry(body []byte, mappedModel ...string) []byte {
 	if len(mappedModel) > 0 && !ShouldApplyRetryFilters(mappedModel[0]) {
 		return body
 	}
+	// between_tools 是 Sonnet 5.5 显式关闭常规思考的选择，重试时不能恢复为默认开启。
+	model := gjson.GetBytes(body, "model").String()
+	if len(mappedModel) > 0 {
+		model = mappedModel[0]
+	}
+	preserveBetweenTools := claude.IsSonnet55Model(model) && gjson.GetBytes(body, "thinking.type").String() == "between_tools"
 
 	hasThinkingContent := bytes.Contains(body, patternTypeThinking) ||
 		bytes.Contains(body, patternTypeThinkingSpaced) ||
@@ -645,7 +651,7 @@ func FilterThinkingBlocksForRetry(body []byte, mappedModel ...string) []byte {
 		bytes.Contains(body, patternTypeRedactedSpaced) ||
 		bytes.Contains(body, patternThinkingFieldSpaced)
 	if !hasEmptyContent && !hasEmptyTextBlock && !containsThinkingBlocks {
-		if topThinking := gjson.Get(jsonStr, "thinking"); topThinking.Exists() {
+		if topThinking := gjson.Get(jsonStr, "thinking"); topThinking.Exists() && !preserveBetweenTools {
 			if out, err := sjson.DeleteBytes(body, "thinking"); err == nil {
 				out = removeThinkingDependentContextStrategies(out)
 				return out
@@ -663,7 +669,7 @@ func FilterThinkingBlocksForRetry(body []byte, mappedModel ...string) []byte {
 	modified := false
 
 	// Disable top-level thinking mode for retry to avoid structural/signature constraints upstream.
-	deleteTopLevelThinking := gjson.Get(jsonStr, "thinking").Exists()
+	deleteTopLevelThinking := gjson.Get(jsonStr, "thinking").Exists() && !preserveBetweenTools
 
 	for i := 0; i < len(messages); i++ {
 		msgMap, ok := messages[i].(map[string]any)
@@ -1098,6 +1104,12 @@ func FilterSignatureSensitiveBlocksForRetry(body []byte, mappedModel ...string) 
 	if len(mappedModel) > 0 && !ShouldApplyRetryFilters(mappedModel[0]) {
 		return body
 	}
+	model := gjson.GetBytes(body, "model").String()
+	if len(mappedModel) > 0 {
+		model = mappedModel[0]
+	}
+	// 更强的重试同样保留客户端显式选择的 between_tools。
+	preserveBetweenTools := claude.IsSonnet55Model(model) && gjson.GetBytes(body, "thinking.type").String() == "between_tools"
 
 	// Fast path: only run when we see likely relevant constructs.
 	if !bytes.Contains(body, []byte(`"type":"thinking"`)) &&
@@ -1121,7 +1133,7 @@ func FilterSignatureSensitiveBlocksForRetry(body []byte, mappedModel ...string) 
 	modified := false
 
 	// Disable top-level thinking for retry to avoid structural/signature constraints upstream.
-	if _, exists := req["thinking"]; exists {
+	if _, exists := req["thinking"]; exists && !preserveBetweenTools {
 		delete(req, "thinking")
 		modified = true
 		// Remove context_management strategies that require thinking to be enabled
@@ -1281,7 +1293,7 @@ func FilterSignatureSensitiveBlocksForRetry(body []byte, mappedModel ...string) 
 // 策略：
 //   - 当 thinking.type 不是 "enabled"/"adaptive"：仅默认开启思考的型号保留合法历史
 //   - 当 thinking.type 是 "enabled"/"adaptive"：仅移除缺失/无效 signature 的 thinking 块
-func filterThinkingBlocksInternal(body []byte, thinkingEnabledByDefault bool) []byte {
+func filterThinkingBlocksInternal(body []byte, thinkingEnabledByDefault bool, strictHistory ...bool) []byte {
 	// Fast path: if body doesn't contain "thinking", skip parsing
 	if !bytes.Contains(body, []byte(`"type":"thinking"`)) &&
 		!bytes.Contains(body, []byte(`"type": "thinking"`)) &&
@@ -1376,6 +1388,30 @@ func filterThinkingBlocksInternal(body []byte, thinkingEnabledByDefault bool) []
 
 	if !filtered {
 		return body
+	}
+	// Sonnet 5.5 签名链必须连续；发现非法块时一并移除历史思考，避免留下断链。
+	if len(strictHistory) > 0 && strictHistory[0] {
+		for _, message := range messages {
+			msg, ok := message.(map[string]any)
+			if !ok {
+				continue
+			}
+			content, ok := msg["content"].([]any)
+			if !ok {
+				continue
+			}
+			clean := make([]any, 0, len(content))
+			for _, block := range content {
+				b, _ := block.(map[string]any)
+				if b["type"] != "thinking" && b["type"] != "redacted_thinking" {
+					clean = append(clean, block)
+				}
+			}
+			if len(clean) == 0 {
+				clean = append(clean, map[string]any{"type": "text", "text": "[thinking omitted]"})
+			}
+			msg["content"] = clean
+		}
 	}
 
 	newBody, err := json.Marshal(req)

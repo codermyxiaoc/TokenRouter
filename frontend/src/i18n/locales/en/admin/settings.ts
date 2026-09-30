@@ -140,6 +140,8 @@ export default {
           enabled: 'Enable Risk Control',
           enabledHint: 'When off, the admin sidebar entry is hidden and gateway moderation is skipped.',
           cyberSessionBlockEnabled: 'Cyber Session Block',
+          riskControlUserAllowlist: 'Risk control allowlist',
+          riskControlUserAllowlistHint: 'Actual request users on this list retain audit records without local blocking, session blocking, automatic bans, or email notifications. Upstream refusals are still returned.',
           cyberSessionBlockEnabledHint: 'Applies only to groups included in the risk control scope. After upstream returns cyber_policy, temporarily reject later requests in the same explicit session_id / conversation_id / prompt_cache_key.',
           cyberSessionBlockTTLSeconds: 'Block Duration (seconds)',
           cyberSessionBlockTTLSecondsHint: 'Default is 3600 seconds. When disabled, only audit and usage records are written.',

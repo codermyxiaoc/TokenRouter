@@ -20,6 +20,7 @@ const openaiModels = [
 	'gpt-6-astra',
   // GPT-6 新增产品保留独立 ID，不改写已有型号和默认映射。
   'gpt-6-sol',
+  'gpt-6.1-sol',
   'gpt-6-luna',
 	'gpt-5.4',
 	'gpt-5.4-mini',
@@ -42,6 +43,7 @@ export const claudeModels = [
   'claude-opus-5-5',
   'claude-sonnet-4-6',
   'claude-sonnet-5',
+  'claude-sonnet-5-5',
   'claude-fable-5-1',
   'claude-fable-5'
 ]
@@ -327,6 +329,7 @@ const anthropicPresetMappings = [
   { label: 'Fable 5.1', from: 'claude-fable-5-1', to: 'claude-fable-5-1', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
   { label: 'Fable 5', from: 'claude-fable-5', to: 'claude-fable-5', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
   { label: 'Sonnet 5', from: 'claude-sonnet-5', to: 'claude-sonnet-5', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
+  { label: 'Sonnet 5.5', from: 'claude-sonnet-5-5', to: 'claude-sonnet-5-5', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
   { label: 'Sonnet 4', from: 'claude-sonnet-4-20250514', to: 'claude-sonnet-4-20250514', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
   { label: 'Sonnet 4.5', from: 'claude-sonnet-4-5-20250929', to: 'claude-sonnet-4-5-20250929', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
   { label: 'Sonnet 4.6', from: 'claude-sonnet-4-6', to: 'claude-sonnet-4-6', color: 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400' },
@@ -354,6 +357,7 @@ const openaiPresetMappings = [
   { label: 'GPT-5.6 Luna', from: 'gpt-5.6-luna', to: 'gpt-5.6-luna', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
   { label: 'GPT-6 Astra', from: 'gpt-6-astra', to: 'gpt-6-astra', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
   { label: 'GPT-6 Sol', from: 'gpt-6-sol', to: 'gpt-6-sol', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
+  { label: 'GPT-6.1 Sol', from: 'gpt-6.1-sol', to: 'gpt-6.1-sol', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
   { label: 'GPT-6 Luna', from: 'gpt-6-luna', to: 'gpt-6-luna', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
   { label: 'GPT-5.5', from: 'gpt-5.5', to: 'gpt-5.5', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
   { label: 'GPT-5.4', from: 'gpt-5.4', to: 'gpt-5.4', color: 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400' },
@@ -771,4 +775,18 @@ export function buildCombinedModelMappingObject(
     ...(whitelistMapping || {}),
     ...(explicitMapping || {})
   }
+}
+
+// AG 用同一个对象保存白名单和映射，同名非自映射会覆盖白名单，保存前必须明确解决。
+// 普通账号使用独立白名单字段，不适用此限制。
+export function findModelWhitelistMappingConflict(
+  allowedModels: string[],
+  modelMappings: { from: string; to: string }[]
+): string | undefined {
+  const whitelist = new Set(normalizeModelWhitelist(allowedModels))
+  return modelMappings.find(mapping => {
+    const from = mapping.from.trim()
+    const to = mapping.to.trim()
+    return from && to && from !== to && whitelist.has(from)
+  })?.from.trim()
 }

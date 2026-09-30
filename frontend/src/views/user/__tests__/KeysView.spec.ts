@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
-import type { ApiKey } from '@/types'
+import type { ApiKey, Group } from '@/types'
 import type { CcSwitchApp, CcSwitchImportSelection } from '@/utils/ccswitchImport'
 import KeysView from '../KeysView.vue'
 
@@ -435,6 +435,24 @@ describe('user KeysView column settings', () => {
     const usage = wrapper.get('[data-test="usage"]').text()
     expect(usage).toContain('Today:$1.2345')
     expect(usage).toContain('Last 30d:$67.8912')
+    wrapper.unmount()
+  })
+
+  it.each([false, true])('Claude-only 用法说明按实际 Key 的团队归属与指定套餐校验降级（团队=%s）', async team => {
+    const source = { id: 1, platform: 'anthropic', status: 'active', claude_code_only: true,
+      fallback_group_id: 2, allowed_client_protocols: ['anthropic_messages', 'openai_responses'] } as Group
+    const key = { ...createApiKey(), group: source, group_id: 1, team_id: team ? 8 : null,
+      billing_mode: 'subscription', preferred_subscription_id: 99 } as ApiKey
+    const wrapper = await mountView()
+    getAvailableGroups.mockClear()
+    getAvailableGroups.mockResolvedValue([{ ...source, id: 2, claude_code_only: false,
+      allowed_client_protocols: ['openai_responses'] }])
+    wrapper.findComponent({ name: 'KeyActionMenu' }).vm.$emit('use', key)
+    await flushPromises()
+    expect(getAvailableGroups).toHaveBeenCalledWith(team ? 'team' : 'personal', 99)
+    const modal = wrapper.findComponent({ name: 'UseKeyModal' })
+    expect(modal.props('claudeCodeOnly')).toBe(true)
+    expect(modal.props('fallbackClientProtocols')).toEqual(['openai_responses'])
     wrapper.unmount()
   })
 

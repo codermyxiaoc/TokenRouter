@@ -104,13 +104,10 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		requestCtx = service.WithOpenAIImageGenerationIntent(requestCtx)
 	}
 
-	// Claude Code only restriction:
-	// /v1/responses is never a Claude Code endpoint.
-	// When claude_code_only is enabled, this endpoint is rejected.
-	// The existing service-layer checkClaudeCodeRestriction handles degradation
-	// to fallback groups when the Forward path calls SelectAccountForModelWithExclusions.
-	// Here we just reject at handler level since /v1/responses clients can't be Claude Code.
-	if apiKey.Group != nil && apiKey.Group.ClaudeCodeOnly {
+	// 非 Claude Code 兼容请求只允许进入已通过目标权限校验的传统降级组。
+	if apiKey.Group != nil && apiKey.Group.ClaudeCodeOnly &&
+		!h.allowsClaudeCodeCompatibilityFallback(c, apiKey, service.GroupClientProtocolOpenAIResponses) {
+		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
 		h.responsesErrorResponse(c, http.StatusForbidden, "permission_error",
 			"This group is restricted to Claude Code clients (/v1/messages only)")
 		return

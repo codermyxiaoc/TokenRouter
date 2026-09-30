@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"math/rand"
@@ -167,6 +169,11 @@ func buildToolNameRewriteFromBody(body []byte) *ToolNameRewrite {
 	return rw
 }
 
+type toolNameSpan struct {
+	start, end int
+	value      []byte
+}
+
 // applyToolNameRewriteToBody 把已构造的 ToolNameRewrite 应用到 body 上：
 //
 //   - 改写 $.tools[*].name（仅对 shouldMimicToolName 通过的 tool）
@@ -181,67 +188,65 @@ func applyToolNameRewriteToBody(body []byte, rw *ToolNameRewrite) []byte {
 		return body
 	}
 
+	// 子节点索引指向原始正文；先收集全部替换再一次组装，
+	// 避免遍历期间改变正文长度及长工具历史反复复制请求。
+	var edits []toolNameSpan
+	addName := func(name gjson.Result) {
+		if !name.Exists() {
+			return
+		}
+		fake, ok := rw.Forward[name.String()]
+		if !ok {
+			return
+		}
+		encoded, err := json.Marshal(fake)
+		if err != nil || name.Index < 0 || name.Index+len(name.Raw) > len(body) ||
+			!bytes.Equal(body[name.Index:name.Index+len(name.Raw)], []byte(name.Raw)) {
+			return
+		}
+		edits = append(edits, toolNameSpan{name.Index, name.Index + len(name.Raw), encoded})
+	}
+
 	tools := gjson.GetBytes(body, "tools")
 	if tools.IsArray() {
-		idx := -1
-		tools.ForEach(func(_, t gjson.Result) bool {
-			idx++
-			if !shouldMimicToolName(t.Get("type").String()) {
-				return true
-			}
-			name := t.Get("name").String()
-			if name == "" {
-				return true
-			}
-			fake, ok := rw.Forward[name]
-			if !ok {
-				return true
-			}
-			if next, err := sjson.SetBytes(body, fmt.Sprintf("tools.%d.name", idx), fake); err == nil {
-				body = next
+		tools.ForEach(func(_, tool gjson.Result) bool {
+			if shouldMimicToolName(tool.Get("type").String()) {
+				addName(tool.Get("name"))
 			}
 			return true
 		})
 	}
-
-	if tc := gjson.GetBytes(body, "tool_choice"); tc.Exists() && tc.Get("type").String() == "tool" {
-		name := tc.Get("name").String()
-		if fake, ok := rw.Forward[name]; ok {
-			if next, err := sjson.SetBytes(body, "tool_choice.name", fake); err == nil {
-				body = next
-			}
-		}
+	if choice := gjson.GetBytes(body, "tool_choice"); choice.Get("type").String() == "tool" {
+		addName(choice.Get("name"))
 	}
-
-	// 历史消息里的 tool_use.name 也要同步改写，否则 tools[] 已声明假名，
-	// 但 messages 仍引用原名时，Anthropic 会因为工具名不一致拒绝请求。
-	messages := gjson.GetBytes(body, "messages")
-	if messages.IsArray() {
-		messages.ForEach(func(msgKey, msg gjson.Result) bool {
-			msgIdx := int(msgKey.Num)
+	if messages := gjson.GetBytes(body, "messages"); messages.IsArray() {
+		messages.ForEach(func(_, msg gjson.Result) bool {
 			content := msg.Get("content")
-			if !content.IsArray() {
-				return true
-			}
-			content.ForEach(func(blkKey, blk gjson.Result) bool {
-				blkIdx := int(blkKey.Num)
-				if blk.Get("type").String() != "tool_use" {
-					return true
-				}
-				name := blk.Get("name").String()
-				if name == "" {
-					return true
-				}
-				if fake, ok := rw.Forward[name]; ok {
-					path := fmt.Sprintf("messages.%d.content.%d.name", msgIdx, blkIdx)
-					if next, err := sjson.SetBytes(body, path, fake); err == nil {
-						body = next
+			if content.IsArray() {
+				content.ForEach(func(_, block gjson.Result) bool {
+					if block.Get("type").String() == "tool_use" {
+						addName(block.Get("name"))
 					}
-				}
-				return true
-			})
+					return true
+				})
+			}
 			return true
 		})
+	}
+	if len(edits) != 0 {
+		sort.Slice(edits, func(i, j int) bool { return edits[i].start < edits[j].start })
+		var out []byte
+		out = make([]byte, 0, len(body))
+		pos := 0
+		for _, edit := range edits {
+			if edit.start < pos { // 畸形 JSON 的重叠结果不重复替换。
+				continue
+			}
+			out = append(out, body[pos:edit.start]...)
+			out = append(out, edit.value...)
+			pos = edit.end
+		}
+		body = append(out, body[pos:]...)
 	}
 
 	body = applyToolsLastCacheBreakpoint(body)

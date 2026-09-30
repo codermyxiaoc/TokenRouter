@@ -108,6 +108,8 @@
         <!-- 即使还没有被动额度 header，也允许手动触发上游额度探测。 -->
         <GrokQuotaProbeCell :account="account" />
       </div>
+      <!-- 组件独立于用量加载状态挂载，避免查询或兑换结果因刷新而丢失。 -->
+      <ClaudeResetCreditsCell :account="account" class="mt-1" @redeemed="loadActiveUsage" />
     </template>
 
     <!-- OpenAI OAuth 账号统一使用 /usage API 数据源 -->
@@ -776,6 +778,7 @@ import Icon from '@/components/icons/Icon.vue'
 import UsageProgressBar from './UsageProgressBar.vue'
 import AccountQuotaInfo from './AccountQuotaInfo.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
+import ClaudeResetCreditsCell from './ClaudeResetCreditsCell.vue'
 import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
 import AccountUpstreamUsageCell from './AccountUpstreamUsageCell.vue'

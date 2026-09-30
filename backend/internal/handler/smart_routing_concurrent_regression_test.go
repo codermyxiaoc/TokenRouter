@@ -212,20 +212,36 @@ func newRoutingConcurrentHarness(t *testing.T, passthrough bool, cooldown int) *
 }
 
 // 写失败模拟客户端断连；仍让上游完成，以验证排水取得终态用量且不重放。
-type routingConcurrentDisconnectedWriter struct{ *httptest.ResponseRecorder }
+type routingConcurrentDisconnectedWriter struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
 
-func (*routingConcurrentDisconnectedWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
-func (*routingConcurrentDisconnectedWriter) WriteString(string) (int, error) {
+func (w *routingConcurrentDisconnectedWriter) Write([]byte) (int, error) {
+	if w.cancel != nil {
+		w.cancel()
+	}
 	return 0, io.ErrClosedPipe
 }
-func (h *routingConcurrentHarness) call(key, model, id string, disconnect bool) *httptest.ResponseRecorder {
+func (w *routingConcurrentDisconnectedWriter) WriteString(value string) (int, error) {
+	return w.Write([]byte(value))
+}
+func (h *routingConcurrentHarness) call(key, model, id string, disconnect bool, cancelOnWrite ...bool) *httptest.ResponseRecorder {
 	body, _ := json.Marshal(map[string]any{"model": model, "stream": true, "input": id, "tools": []any{map[string]any{"type": "namespace", "name": "functions", "tools": []any{map[string]any{"type": "function", "name": "execute", "parameters": map[string]any{"type": "object", "properties": map[string]any{}}}}}}})
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
+	var cancel context.CancelFunc
+	if len(cancelOnWrite) > 0 && cancelOnWrite[0] {
+		// 模拟 socket 写失败同时取消请求，区别于仅返回写错误但上下文仍存活的夹具。
+		var ctx context.Context
+		ctx, cancel = context.WithCancel(req.Context())
+		defer cancel()
+		req = req.WithContext(ctx)
+	}
 	rec := httptest.NewRecorder()
 	if disconnect {
-		h.router.ServeHTTP(&routingConcurrentDisconnectedWriter{rec}, req)
+		h.router.ServeHTTP(&routingConcurrentDisconnectedWriter{ResponseRecorder: rec, cancel: cancel}, req)
 	} else {
 		h.router.ServeHTTP(rec, req)
 	}
@@ -390,4 +406,36 @@ func TestSmartRoutingConcurrentRegressionCooldownIsolation(t *testing.T) {
 		}
 	}
 	require.Len(t, h.usage.snapshot(), 181, "失败和全冷却请求不得产生额外成功用量")
+}
+
+// 请求已产出业务内容后取消，不能重放；排水收到的真实用量仍应只记一次。
+func TestSmartRoutingConcurrentRegressionCancellationAfterOutput(t *testing.T) {
+	for _, passthrough := range []bool{false, true} {
+		for _, count := range []int{60, 120} {
+			t.Run(fmt.Sprintf("passthrough_%v/%d", passthrough, count), func(t *testing.T) {
+				h := newRoutingConcurrentHarness(t, passthrough, 60)
+				runRoutingConcurrentCalls(count, func(i int) {
+					h.call("sk-local-parallel-a", "gpt-6-astra", fmt.Sprintf("cancel-output-%03d", i), true, true)
+				})
+				logs := h.usage.snapshot()
+				require.Len(t, logs, count, "已观测用量不能因客户端取消而漏记或重记")
+				seen := make(map[string]bool)
+				for _, log := range logs {
+					require.False(t, seen[log.RequestID])
+					seen[log.RequestID] = true
+					require.Equal(t, int64(901), log.AccountID)
+					require.Equal(t, int64(1), *log.GroupID)
+					require.Equal(t, 8, log.InputTokens)
+					require.Equal(t, 3, log.OutputTokens)
+					require.Equal(t, 2, log.CacheReadTokens)
+				}
+				for i := range count {
+					require.Equal(t, []int64{1}, h.attempted(fmt.Sprintf("cancel-output-%03d", i)))
+				}
+				ttl, err := h.resolver.GetSmartRoutingCooldown(context.Background(), 4401, 1)
+				require.NoError(t, err)
+				require.Zero(t, ttl, "只有客户端取消而上游完成时，不应冷却健康组")
+			})
+		}
+	}
 }

@@ -86,6 +86,8 @@ Gemini 混合分组的账号目录纳入开启混合调度的 Antigravity 账号
 
 ## 模型与额度
 
+后台批量编辑继续用 `model_mapping` 同时保存 Antigravity 白名单自映射和显式别名。保存合并两个编辑页的内容，不因当前选中的页签丢失另一类规则；精确白名单与同来源的非自映射冲突时拒绝保存，要求管理员先处理冲突。普通账号继续使用独立 `model_whitelist`，不套用该同名限制。
+
 Antigravity 同时提供 Claude 与 Gemini 模型族。Gemini 3.6、3.7、3.8 Flash 的基础、high、low、medium 与 tiered 五种模型 ID 均进入默认模型目录和身份映射；账号存在自定义映射时，只要没有覆盖它们的通配符，这些精确直通映射仍会自动保留。
 
 裸 Gemini 模型通过统一最终模型解析器处理：原生请求使用 `generationConfig.thinkingConfig.thinkingLevel` 或 `thinkingBudget` 选择账号映射中存在的思考变体；Messages/OpenAI 兼容请求根据转换后的 `thinking.budget_tokens` 使用同一档位规则，缺省配置按 `high` 选择。调度上下文和重试冷却键保存相同档位，避免实际请求与限流 scope 不一致。首选档位不可用时依次尝试 `high`、`medium`、`low`、`tiered`，不重复尝试首选项。管理员配置的精确映射和命中的通配符映射始终优先，包括显式原样透传；运行时自动补齐的裸名自映射不视为管理员的显式选择。请求已有思考后缀时保持常规模型映射，找不到任何变体也回到既有映射流程。

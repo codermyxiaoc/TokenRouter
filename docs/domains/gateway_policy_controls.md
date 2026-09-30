@@ -46,6 +46,8 @@ Group 的 `platform` 表示上游平台，不再隐含客户端必须使用同�
 
 Group 还可独立限制 Live、图片、批量图片和视频等能力，并可表达 Claude Code-only、受支持模型 scope 或自定义模型列表。公开路由先存在，具体分组仍可能在本地 feature gate 拒绝；协议拒绝记录 `LocalPolicyDenied`，其它能力拒绝沿用各自本地业务限制，二者都不能伪装成上游故障。
 
+Claude Code-only 分组的 Chat/Responses 兼容入口，仅在传统 fallback 链中每跳均为启用的 Anthropic/Antigravity、调用用户可绑定、允许当前协议且满足指定订阅覆盖，并最终到达非 Claude-only 分组时开放；智能路由仍禁止借用传统 fallback，原 Key 计费归属保持不变。UseKeyModal 按可见且通过团队/订阅过滤的分组验证整条无环链；原组 Messages 权限决定 Claude Code 是否展示，其余客户端还需每跳协议交集。权限信息缺失或智能路由时保守隐藏，不据此推断 Gemini 能力。Antigravity Claude-only 降级配置使用通用 `/v1` 入口，避免专用强制平台别名跳过跨组降级。
+
 endpoint capability 还会由账号类型和探测结果继续收窄。例如 Embeddings 只允许 OpenAI，Grok OAuth 媒体需要明确资格，Realtime 需要 OpenAI 分组与支持的 transport。策略检查应在昂贵调度或上游调用前尽早执行，但不能绕过 Key、团队和计费准入。
 
 ## 模型路由

@@ -7832,6 +7832,18 @@
                 <Toggle v-model="form.risk_control_enabled" />
               </div>
 
+              <div>
+                <label class="input-label">
+                  {{ t('admin.settings.features.riskControl.riskControlUserAllowlist') }}
+                </label>
+                <OpenAIFastPolicyUserSelector
+                  v-model="riskControlAllowlistedUserIds"
+                />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.features.riskControl.riskControlUserAllowlistHint') }}
+                </p>
+              </div>
+
               <div class="border-t border-gray-100 pt-5 dark:border-dark-700">
                 <div class="flex items-center justify-between gap-4">
                   <div>
@@ -10066,6 +10078,7 @@ const form = reactive<SettingsForm>({
   creative_model_settings: [] as CreativeModelSetting[],
   creative_worker_count: 128,
   risk_control_enabled: false,
+  cyber_policy_user_allowlist: "",
   cyber_session_block_enabled: false,
   cyber_session_block_ttl_seconds: 3600,
   antigravity_user_agent_version: "",
@@ -10493,6 +10506,19 @@ function applyCaptchaSelection(provider: CaptchaProviderSelection | null): void 
   form.tencent_captcha_enabled = provider === "tencent";
   form.aliyun_captcha_enabled = provider === "aliyun";
 }
+
+// 设置 API 仍保存用户 ID，选择器向管理员显示邮箱。
+const riskControlAllowlistedUserIds = computed<number[]>({
+  get: () => Array.from(new Set(
+    form.cyber_policy_user_allowlist
+      .split(/[,\s]+/)
+      .map(Number)
+      .filter((id) => Number.isSafeInteger(id) && id > 0),
+  )),
+  set: (ids) => {
+    form.cyber_policy_user_allowlist = ids.join(",");
+  },
+});
 
 const captchaMasterEnabled = computed({
   get: () =>
@@ -12200,6 +12226,7 @@ async function saveSettings() {
       creative_model_settings: normalizedCreativeModelSettings,
       creative_worker_count: normalizedCreativeWorkerCount,
       risk_control_enabled: form.risk_control_enabled,
+      cyber_policy_user_allowlist: form.cyber_policy_user_allowlist,
       cyber_session_block_enabled: form.cyber_session_block_enabled,
       cyber_session_block_ttl_seconds: Math.max(
         1,

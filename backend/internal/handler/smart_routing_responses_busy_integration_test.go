@@ -50,9 +50,9 @@ func (r *responsesBusyKeyRepo) UpdateLastUsed(context.Context, int64, time.Time)
 // 数据库与上游只使用内存仓储和本机模拟服务，不向生产服务发请求。
 func TestSmartRoutingResponsesBusyRecoveryIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, scenario := range []string{"bare_error", "queue_heartbeat", "empty_delta", "partial_output", "all_groups_fail", "concurrent_heartbeats", "third_group_recovers", "upstream_400", "upstream_401", "upstream_403", "upstream_404"} {
+	for _, scenario := range []string{"bare_error", "queue_heartbeat", "empty_delta", "partial_output", "all_groups_fail", "concurrent_heartbeats", "concurrent_heartbeats_120", "third_group_recovers", "upstream_400", "upstream_401", "upstream_403", "upstream_404"} {
 		t.Run(scenario, func(t *testing.T) {
-			concurrent := scenario == "concurrent_heartbeats"
+			concurrent := strings.HasPrefix(scenario, "concurrent_heartbeats")
 			recoveredGroupID := int64(2)
 			upstreamStatus := map[string]int{"upstream_400": 400, "upstream_401": 401, "upstream_403": 403, "upstream_404": 404}[scenario]
 			if scenario == "third_group_recovers" || upstreamStatus > 0 {
@@ -181,6 +181,9 @@ func TestSmartRoutingResponsesBusyRecoveryIntegration(t *testing.T) {
 			requestCount := 1
 			if concurrent {
 				requestCount = 60
+				if scenario == "concurrent_heartbeats_120" {
+					requestCount = 120
+				}
 			}
 			responses := make([]*httptest.ResponseRecorder, requestCount)
 			if concurrent {
@@ -201,13 +204,13 @@ func TestSmartRoutingResponsesBusyRecoveryIntegration(t *testing.T) {
 			}
 			response := responses[0]
 			switch scenario {
-			case "concurrent_heartbeats":
-				require.Len(t, visits, 120, "每个客户端请求只能执行两组尝试")
+			case "concurrent_heartbeats", "concurrent_heartbeats_120":
+				require.Len(t, visits, requestCount*2, "每个客户端请求只能执行两组尝试")
 				counts := make(map[int64]int)
 				for _, groupID := range visits {
 					counts[groupID]++
 				}
-				require.Equal(t, map[int64]int{1: 60, 2: 60}, counts)
+				require.Equal(t, map[int64]int{1: requestCount, 2: requestCount}, counts)
 				for _, result := range responses {
 					require.NotNil(t, result)
 					require.Equal(t, http.StatusOK, result.Code)

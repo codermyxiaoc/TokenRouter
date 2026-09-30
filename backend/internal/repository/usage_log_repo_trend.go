@@ -87,13 +87,14 @@ func (r *usageLogRepository) GetAPIKeyUsageTrend(ctx context.Context, startTime,
 }
 
 // GetUserUsageTrend 返回按付款主体和日期聚合的最活跃用户趋势。
-func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) (results []UserUsageTrendPoint, err error) {
-	if aggregated, ok, aggregateErr := r.getUserUsageTrendFromAnalytics(ctx, startTime, endTime, granularity, limit); aggregateErr == nil && ok {
+func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int, metric string) (results []UserUsageTrendPoint, err error) {
+	if aggregated, ok, aggregateErr := r.getUserUsageTrendFromAnalytics(ctx, startTime, endTime, granularity, limit, metric); aggregateErr == nil && ok {
 		return aggregated, nil
 	} else if aggregateErr != nil {
 		r.logUsageAnalyticsFallback("user_usage_trend", aggregateErr)
 	}
 	dateFormat := safeDateFormat(granularity)
+	rankExpr := userTrendRankExpression(metric)
 
 	query := fmt.Sprintf(`
 		WITH top_users AS (
@@ -102,7 +103,7 @@ func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, e
 			WHERE created_at >= $1 AND created_at < $2
 			-- 团队成员使用团队 Key 时，Top 用户应按付款主体合并用量。
 			GROUP BY COALESCE(billing_user_id, user_id)
-			ORDER BY SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) DESC
+			ORDER BY %s DESC, COALESCE(billing_user_id, user_id) ASC
 			LIMIT $3
 		)
 		SELECT
@@ -120,7 +121,7 @@ func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, e
 		  AND u.created_at >= $4 AND u.created_at < $5
 		GROUP BY date, COALESCE(u.billing_user_id, u.user_id), us.email, us.username
 		ORDER BY date ASC, tokens DESC
-	`, dateFormat)
+	`, rankExpr, dateFormat)
 
 	rows, err := r.sql.QueryContext(ctx, query, startTime, endTime, limit, startTime, endTime)
 	if err != nil {
@@ -148,6 +149,14 @@ func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, e
 	}
 
 	return results, nil
+}
+
+// userTrendRankExpression 只从白名单返回 SQL 表达式，原始表和预聚合共享同一入榜规则。
+func userTrendRankExpression(metric string) string {
+	if metric == "actual_cost" {
+		return "SUM(actual_cost)"
+	}
+	return "SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens)"
 }
 
 // GetUserSpendingRanking 返回按付款主体聚合的消费排行；团队成员用团队 Key 的用量归到 Owner。

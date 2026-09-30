@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAppStore } from '@/stores/app'
 import { getPublicSettings } from '@/api/auth'
+import { checkUpdates } from '@/api/admin/system'
 import type { PublicSettings } from '@/types'
 
 function createDeferred<T>() {
@@ -83,6 +84,25 @@ describe('useAppStore', () => {
   afterEach(() => {
     vi.useRealTimers()
     localStorage.clear()
+  })
+
+  it('版本检查警告随内存缓存保留，成功刷新后清除', async () => {
+    const store = useAppStore()
+    vi.mocked(checkUpdates).mockReset().mockResolvedValue({
+      current_version: '0.1.278-ct-v2.5', latest_version: '0.1.278-ct-v2.5',
+      has_update: false, cached: false, build_type: 'release', warning: 'GitHub unavailable'
+    })
+    await store.fetchVersion()
+    expect(store.versionWarning).toBe('GitHub unavailable')
+    expect((await store.fetchVersion())?.warning).toBe('GitHub unavailable')
+    expect(checkUpdates).toHaveBeenCalledTimes(1)
+    vi.mocked(checkUpdates).mockResolvedValue({
+      current_version: '0.1.278-ct-v2.5', latest_version: '0.1.278-ct-v2.6',
+      has_update: true, cached: false, build_type: 'release'
+    })
+    await store.fetchVersion(true)
+    expect(store.versionWarning).toBe('')
+    expect(store.hasUpdate).toBe(true)
   })
 
   // --- Toast 消息管理 ---

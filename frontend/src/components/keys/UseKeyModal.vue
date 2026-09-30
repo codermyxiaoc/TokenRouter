@@ -319,6 +319,8 @@ interface Props {
   baseUrl: string
   platform: GroupPlatform | null
   allowedClientProtocols?: GroupClientProtocol[] | null
+  claudeCodeOnly?: boolean
+  fallbackClientProtocols?: GroupClientProtocol[]
   compositeGroups?: ApiKeyCompositeGroup[]
   smartRouting?: boolean
   smartRoutingGroups?: Group[]
@@ -388,6 +390,13 @@ const allowedProtocols = computed(() => {
 
 const allowsProtocol = (protocol: GroupClientProtocol) =>
   hasGroupClientProtocol(allowedProtocols.value, protocol)
+
+// Claude Code 保持原组协议，其他客户端只能使用权限校验后的降级协议交集。
+const nonClaudeProtocols = computed(() => props.claudeCodeOnly
+  ? allowedProtocols.value.filter(protocol => !props.smartRouting && props.fallbackClientProtocols?.includes(protocol))
+  : allowedProtocols.value)
+const allowsNonClaudeProtocol = (protocol: GroupClientProtocol) =>
+  hasGroupClientProtocol(nonClaudeProtocols.value, protocol)
 
 // 保留各平台原有 OpenCode 体验，同时保证最终选择的传输协议已经显式启用。
 const openCodeProtocolPriority: Record<GroupPlatform, readonly GroupClientProtocol[]> = {
@@ -477,19 +486,19 @@ const SparkleIcon = {
 const clientTabs = computed((): TabConfig[] => {
   if (!props.platform) return []
   const tabs = new Map<string, TabConfig>()
-  if (props.platform === 'grok' && allowsProtocol('openai_responses')) {
+  if (props.platform === 'grok' && allowsNonClaudeProtocol('openai_responses')) {
     tabs.set('grok', { id: 'grok', label: t('keys.useKeyModal.cliTabs.grokCli'), icon: TerminalIcon })
   }
   if (allowsProtocol('anthropic_messages')) {
     tabs.set('claude', { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon })
   }
-  if (allowsProtocol('openai_responses')) {
+  if (allowsNonClaudeProtocol('openai_responses')) {
     tabs.set('codex', { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon })
   }
-  if (allowsProtocol('gemini_generate_content')) {
+  if (allowsNonClaudeProtocol('gemini_generate_content')) {
     tabs.set('gemini', { id: 'gemini', label: t('keys.useKeyModal.cliTabs.geminiCli'), icon: SparkleIcon })
   }
-  if (allowedProtocols.value.length > 0) {
+  if (nonClaudeProtocols.value.length > 0) {
     tabs.set('opencode', { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon })
   }
   return [...tabs.values()]
@@ -513,7 +522,10 @@ const defaultClientTab = computed(() => {
 watch(
   [
     () => props.platform,
-    () => props.allowedClientProtocols
+    () => props.allowedClientProtocols,
+    () => props.claudeCodeOnly,
+    () => props.fallbackClientProtocols,
+    () => props.smartRouting
   ],
   () => {
     activeTab.value = 'unix'
@@ -794,16 +806,17 @@ const currentFiles = computed((): FileConfig[] => {
   if (activeClientTab.value === 'opencode') {
     if (props.platform === 'antigravity') {
       const nativeConfigs: FileConfig[] = []
-      if (allowsProtocol('anthropic_messages')) {
+      if (allowsNonClaudeProtocol('anthropic_messages')) {
         nativeConfigs.push(generateOpenCodeConfig(
           'antigravity-claude',
           'anthropic_messages',
-          antigravityBase,
+          // 降级必须走通用入口，强制 Antigravity 路由不会重新选择 fallback 平台。
+          props.claudeCodeOnly ? apiBase : antigravityBase,
           apiKey,
           'opencode.json (Claude)'
         ))
       }
-      if (allowsProtocol('gemini_generate_content')) {
+      if (allowsNonClaudeProtocol('gemini_generate_content')) {
         nativeConfigs.push(generateOpenCodeConfig(
           'antigravity-gemini',
           'gemini_generate_content',
@@ -815,15 +828,19 @@ const currentFiles = computed((): FileConfig[] => {
       if (nativeConfigs.length > 0) return nativeConfigs
 
       // 原生协议全部关闭时，两类模型都通过同一个已启用的 OpenAI 兼容入口访问。
-      const protocol = preferredOpenCodeProtocol(props.platform, allowedProtocols.value)
+      const protocol = preferredOpenCodeProtocol(props.platform, nonClaudeProtocols.value)
       if (!protocol) return []
+      if (props.claudeCodeOnly) {
+        // 已验证兼容桥不代表降级目标提供 Gemini 模型，只展示 Claude 配置。
+        return [generateOpenCodeConfig('antigravity-claude', protocol, apiBase, apiKey, 'opencode.json (Claude)')]
+      }
       return [
         generateOpenCodeConfig('antigravity-claude', protocol, apiBase, apiKey, 'opencode.json (Claude)'),
         generateOpenCodeConfig('antigravity-gemini', protocol, apiBase, apiKey, 'opencode.json (Gemini)')
       ]
     }
 
-    const protocol = preferredOpenCodeProtocol(props.platform, allowedProtocols.value)
+    const protocol = preferredOpenCodeProtocol(props.platform, nonClaudeProtocols.value)
     if (!protocol) return []
     const providerBase = protocol === 'gemini_generate_content' ? geminiBase : apiBase
     return [generateOpenCodeConfig(props.platform, protocol, providerBase, apiKey)]
@@ -1487,6 +1504,19 @@ function generateOpenCodeConfig(
         max: {}
       }
     },
+    // 6.1 Sol 与后端目录一致，不提供不受支持的 none/minimal 档位。
+    'gpt-6.1-sol': {
+      name: 'GPT-6.1 Sol',
+      limit: { context: 1050000, output: 128000 },
+      options: { store: false, reasoningEffort: 'medium' },
+      variants: {
+        low: { reasoningEffort: 'low' },
+        medium: { reasoningEffort: 'medium' },
+        high: { reasoningEffort: 'high' },
+        xhigh: { reasoningEffort: 'xhigh' },
+        max: { reasoningEffort: 'max' }
+      }
+    },
     // 新产品独立声明推理档位，避免客户端将 none 当成未设置。
     'gpt-6-sol': {
       name: 'GPT-6 Sol',
@@ -1963,6 +1993,20 @@ function generateOpenCodeConfig(
   } else if (profile === 'anthropic') {
     // 官方原生型号仅进入 Anthropic 配置，不据此推断第三方平台支持。
     provider[profile].models = withOpenCodeToolCalling({
+      // Sonnet 5.5 使用自适应思考，effort 保留上游明确支持的档位。
+      'claude-sonnet-5-5': {
+        name: 'Claude Sonnet 5.5',
+        limit: { context: 1000000, output: 128000 },
+        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+        options: { thinking: { type: 'adaptive' }, effort: 'high' },
+        variants: {
+          low: { effort: 'low' },
+          medium: { effort: 'medium' },
+          high: { effort: 'high' },
+          xhigh: { effort: 'xhigh' },
+          max: { effort: 'max' }
+        }
+      },
       'claude-opus-5-5': {
         name: 'Claude Opus 5.5',
         limit: { context: 1000000, output: 128000 },

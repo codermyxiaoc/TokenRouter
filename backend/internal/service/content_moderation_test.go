@@ -100,6 +100,10 @@ func (r *contentModerationTestRepo) CountFlaggedByUserSince(ctx context.Context,
 	defer r.mu.Unlock()
 	count := 0
 	for _, log := range r.logs {
+		// 与仓储计数契约一致，历史仅审计记录不能在移除白名单后追罚。
+		if log.Mode == ContentModerationModeRiskControlLogOnly || log.Mode == ContentModerationModeCyberLogOnly {
+			continue
+		}
 		if log.UserID == nil || *log.UserID != userID || !log.Flagged || log.Action == ContentModerationActionHashBlock {
 			continue
 		}

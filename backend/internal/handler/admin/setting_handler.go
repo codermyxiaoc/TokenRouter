@@ -329,6 +329,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		CreativeWorkerCount:                              settings.CreativeWorkerCount,
 		RiskControlEnabled:                               settings.RiskControlEnabled,
 		CyberSessionBlockEnabled:                         settings.CyberSessionBlockEnabled,
+		CyberPolicyUserAllowlist:                         settings.CyberPolicyUserAllowlist,
 		CyberSessionBlockTTLSeconds:                      settings.CyberSessionBlockTTLSeconds,
 		AffiliateEnabled:                                 settings.AffiliateEnabled,
 		AffiliateRebateRate:                              settings.AffiliateRebateRate,

@@ -123,9 +123,13 @@ marketplace: {
     viewRelease: 'View Release',
     viewChangelog: 'View Changelog',
     refresh: 'Refresh',
+    checkFailed: 'Unable to confirm the latest version. Please refresh and retry.',
+    dockerUpdate: 'Docker update commands',
+    dockerUpdateHint: 'Run in the existing deployment directory. If .env sets SUB2API_IMAGE, update it to the image below.',
     sourceMode: 'Source Build',
     sourceModeHint: 'Source build, use git pull to update',
     updateNow: 'Update Now',
+    updateBinary: 'Update binary',
     updating: 'Updating...',
     updateComplete: 'Update Complete',
     updateFailed: 'Update Failed',
@@ -150,7 +154,7 @@ marketplace: {
     deployScript: 'Script',
     deployDocker: 'Docker',
     dockerEditCompose: 'Edit the image tag in docker-compose.yml',
-    dockerRecreate: 'Recreate the container'
+    dockerRecreate: 'Pull the image and recreate only the application'
   },
 // Recharge / Subscription Page
   purchase: {

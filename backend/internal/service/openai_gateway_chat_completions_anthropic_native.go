@@ -60,6 +60,12 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 	// 转换器必须读取最终型号，不能把客户端别名的能力套到映射目标上。
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	// 新型号约束按最终上游模型校验，避免别名绕过请求校验。
+	if err := ValidateSonnet55Request(body, upstreamModel); err != nil {
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
 
 	// 2. 按 CC → Responses → Anthropic 做链式转换。
 	responsesReq, err := apicompat.ChatCompletionsToResponses(&ccReq)
@@ -143,7 +149,7 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 		return s.handleOpenCodeNativeAnthropicResponse(resp, c, account, APIProtocolChatCompletions, clientStream, originalModel, billingModel, upstreamModel, reasoningEffort, startTime, apicompat.ResponsesClientToolMapping{}, includeUsage)
 	}
 	if clientStream {
-		return s.handleCCStreamingFromNativeAnthropic(resp, c, originalModel, billingModel, upstreamModel, reasoningEffort, startTime, includeUsage)
+		return s.handleCCStreamingFromNativeAnthropic(resp, c, originalModel, billingModel, upstreamModel, reasoningEffort, startTime)
 	}
 	return s.handleCCBufferedFromNativeAnthropic(resp, c, originalModel, billingModel, upstreamModel, reasoningEffort, startTime)
 }
@@ -310,7 +316,6 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 	upstreamModel string,
 	reasoningEffort *string,
 	startTime time.Time,
-	includeUsage bool,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
@@ -327,7 +332,6 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 	anthState.Model = originalModel
 	ccState := apicompat.NewResponsesEventToChatState()
 	ccState.Model = originalModel
-	ccState.IncludeUsage = includeUsage
 
 	var usage ClaudeUsage
 	var firstTokenMs *int
@@ -417,6 +421,10 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 			mergeAnthropicUsage(&usage, event.Message.Usage)
 		}
 
+		// 同步外发用量，避免转换器恢复供应商原始重叠输入总量。
+		syncAnthropicResponsesUsage(anthState, usage)
+		normalizeAnthropicEventUsageForResponses(event, usage)
+
 		// 客户端已断开：跳过转换与写出，继续读上游直到流结束（usage 完整、
 		// 连接及时归还），不再提前 return。
 		if clientDisconnected {
@@ -467,6 +475,9 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
 		}
+
+		// 转换前区分真实零用量与未提供用量；客户端选项不丢弃上游事实。
+		ccState.IncludeUsage = ccState.IncludeUsage || anthropicChatStreamHasUsage(&event, payload)
 
 		if processAnthropicEvent(&event) {
 			return resultWithUsage(), nil

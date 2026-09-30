@@ -885,6 +885,7 @@ var ProviderSet = wire.NewSet(
 	ProvideCreativeWorkerRuntime,
 	wire.Bind(new(AccountRuntimeBlocker), new(*OpenAIGatewayService)),
 	NewOAuthService,
+	ProvideClaudeResetCreditService,
 	ProvideOpenAIOAuthService,
 	wire.Bind(new(OpenAIOAuthTokenRouterReader), new(*TLSFingerprintRouterService)),
 	wire.Bind(new(OpenAIOAuthTokenProfileResolver), new(*TLSFingerprintProfileService)),
@@ -1041,4 +1042,12 @@ func ProvideImageTaskService(store ImageTaskStore, settings *ImageStorageSetting
 	svc := NewImageTaskServiceWithResolver(store, settings.Resolver(), 0, 0)
 	svc.Start()
 	return svc
+}
+
+// ProvideClaudeResetCreditService 为手动重置注入幂等存储、分布式锁与账号传输策略。
+func ProvideClaudeResetCreditService(accounts AccountRepository, tokens *ClaudeTokenProvider, proxies ProxyRepository, settings *SettingService, idem *IdempotencyCoordinator, locks LeaderLockCache, upstream HTTPUpstream, profiles *TLSFingerprintProfileService) *ClaudeResetCreditService {
+	s := NewClaudeResetCreditService(accounts, tokens, proxies, settings)
+	s.ConfigureRedemption(idem, locks)
+	s.ConfigureTransport(upstream, profiles)
+	return s
 }

@@ -2,7 +2,7 @@
 #
 # Sub2API Installation Script
 # Sub2API 安装脚本
-# Usage: curl -sSL https://raw.githubusercontent.com/TokenFlux/TokenRouter/main/deploy/install.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/codermyxiaoc/TokenRouter/main/deploy/install.sh | bash
 #
 
 set -e
@@ -31,7 +31,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration
-GITHUB_REPO="TokenFlux/TokenRouter"
+GITHUB_REPO="codermyxiaoc/TokenRouter"
 INSTALL_DIR="/opt/sub2api"
 SERVICE_NAME="sub2api"
 SERVICE_USER="sub2api"
@@ -78,7 +78,7 @@ declare -A MSG_ZH=(
     ["verifying_checksum"]="正在校验文件..."
     ["checksum_verified"]="校验通过"
     ["checksum_failed"]="校验失败"
-    ["checksum_not_found"]="无法验证校验和（checksums.txt 未找到）"
+    ["checksum_not_found"]="无法验证校验和（归档 .sha256 与 checksums.txt 均不可用）"
     ["extracting"]="正在解压..."
     ["binary_installed"]="二进制文件已安装到"
     ["user_exists"]="用户已存在"
@@ -203,7 +203,7 @@ declare -A MSG_EN=(
     ["verifying_checksum"]="Verifying checksum..."
     ["checksum_verified"]="Checksum verified"
     ["checksum_failed"]="Checksum verification failed"
-    ["checksum_not_found"]="Could not verify checksum (checksums.txt not found)"
+    ["checksum_not_found"]="Could not verify checksum (archive .sha256 and checksums.txt unavailable)"
     ["extracting"]="Extracting..."
     ["binary_installed"]="Binary installed to"
     ["user_exists"]="User already exists"
@@ -531,7 +531,7 @@ github_api_curl() {
 # Get latest release version
 get_latest_version() {
     print_info "$(msg 'fetching_version')"
-    LATEST_VERSION=$(github_api_curl -s --connect-timeout 10 --max-time 30 "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+    LATEST_VERSION=$(github_api_curl -s --connect-timeout 10 --max-time 30 "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 
     if [ -z "$LATEST_VERSION" ]; then
         print_error "$(msg 'failed_get_version')"
@@ -547,7 +547,7 @@ list_versions() {
     print_info "$(msg 'fetching_versions')"
 
     local versions
-    versions=$(github_api_curl -s --connect-timeout 10 --max-time 30 "https://api.github.com/repos/${GITHUB_REPO}/releases" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' | head -20)
+    versions=$(github_api_curl -s --connect-timeout 10 --max-time 30 "https://api.github.com/repos/${GITHUB_REPO}/releases" 2>/dev/null | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | sed -E 's/.*"([^"]+)".*/\1/' | head -20)
 
     if [ -z "$versions" ]; then
         print_error "$(msg 'failed_get_version')"
@@ -580,6 +580,12 @@ validate_version() {
         version="v$version"
     fi
 
+    # 保留 fork 产品版本后缀，同时限制为发布标签，避免把路径或 URL 当成版本。
+    if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([-+][A-Za-z0-9][A-Za-z0-9.+-]*)?$ ]]; then
+        print_error "$(msg 'version_not_found'): $version" >&2
+        return 1
+    fi
+
     print_info "$(msg 'validating_version') $version" >&2
 
     # Check if the release exists
@@ -606,63 +612,115 @@ validate_version() {
 # Get current installed version
 get_current_version() {
     if [ -f "$INSTALL_DIR/sub2api" ]; then
-        # Use grep -E for better compatibility (works on macOS and Linux)
-        "$INSTALL_DIR/sub2api" --version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown"
+        # 完整保留 -ct-v2.5 等 fork 后缀，回退和同版本判断不能只比较上游基线。
+        "$INSTALL_DIR/sub2api" --version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+(\.[0-9]+)?([-+][A-Za-z0-9][A-Za-z0-9.+-]*)?' | head -1 || echo "unknown"
     else
         echo "not_installed"
     fi
 }
 
-# Download and extract
+# fork 的产品版本位于 -ct-v 后，不能只比较长期不变的上游基线。
+release_is_newer() {
+    local target="${1#v}" current="${2#v}"
+    # 两段版本等价于第三段为零；两侧均为 fork 且产品版本相同时才比较上游基线。
+    awk -v target="$target" -v current="$current" '
+        function compare(left, right, a, b, i) {
+            split(left, a, "."); split(right, b, ".")
+            for (i = 1; i <= 3; i++) {
+                if (a[i]+0 > b[i]+0) return 1
+                if (a[i]+0 < b[i]+0) return -1
+            }
+            return 0
+        }
+        BEGIN {
+            nt = split(target, t, "-ct-v"); nc = split(current, c, "-ct-v")
+            numeric = "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$"
+            if (nt > 2 || nc > 2 || t[nt] !~ numeric || c[nc] !~ numeric) exit 1
+            if ((nt == 2 && t[1] !~ numeric) || (nc == 2 && c[1] !~ numeric)) exit 1
+            result = compare(t[nt], c[nc])
+            if (result == 0 && nt == 2 && nc == 2) result = compare(t[1], c[1])
+            exit (result > 0 ? 0 : 1)
+        }
+    '
+}
+
+# 资源下载始终匿名，禁用用户 curl 配置以免泄漏 API 令牌或改写请求目标。
+release_download_curl() {
+    UPDATE_GITHUB_TOKEN= GITHUB_TOKEN= GH_TOKEN= curl -q --globoff -fsSL --connect-timeout 10 --max-time 180 "$@"
+}
+
+# 同时兼容 fork 手工归档和历史 GoReleaser 根目录归档。
 download_and_extract() {
+    # latest 也来自远端标签，必须遵守与手动指定版本相同的路径边界。
+    if [[ ! "$LATEST_VERSION" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([-+][A-Za-z0-9][A-Za-z0-9.+-]*)?$ ]]; then
+        print_error "Invalid release tag: $LATEST_VERSION"
+        exit 1
+    fi
     local version_num=${LATEST_VERSION#v}
-    local archive_name="sub2api_${version_num}_${OS}_${ARCH}.tar.gz"
-    local download_url="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_VERSION}/${archive_name}"
-    local checksum_url="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_VERSION}/checksums.txt"
+    local archive_name="" candidate download_url checksum_url expected_checksum actual_checksum package_root
+    local release_url="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_VERSION}"
 
-    print_info "$(msg 'downloading') ${archive_name}..."
-
-    # Create temp directory
     TEMP_DIR=$(mktemp -d)
-    trap "rm -rf $TEMP_DIR" EXIT
+    trap 'rm -rf -- "$TEMP_DIR"' EXIT
 
-    # Download archive
-    if ! curl -sL "$download_url" -o "$TEMP_DIR/$archive_name"; then
+    # fork 当前资产带 v，历史 GoReleaser 资产去掉 v；两者都只访问同一发布标签。
+    for candidate in "sub2api_${LATEST_VERSION}_${OS}_${ARCH}.tar.gz" "sub2api_${version_num}_${OS}_${ARCH}.tar.gz"; do
+        download_url="${release_url}/${candidate}"
+        print_info "$(msg 'downloading') ${candidate}..."
+        if release_download_curl "$download_url" -o "$TEMP_DIR/$candidate"; then
+            archive_name="$candidate"
+            break
+        fi
+    done
+    if [ -z "$archive_name" ]; then
         print_error "$(msg 'download_failed')"
         exit 1
     fi
 
-    # Download and verify checksum
+    # 手工发布使用独立 sha256，历史发布使用 checksums.txt；禁止无校验安装。
     print_info "$(msg 'verifying_checksum')"
-    if curl -sL "$checksum_url" -o "$TEMP_DIR/checksums.txt" 2>/dev/null; then
-        local expected_checksum=$(grep "$archive_name" "$TEMP_DIR/checksums.txt" | awk '{print $1}')
-        local actual_checksum=$(sha256sum "$TEMP_DIR/$archive_name" | awk '{print $1}')
-
-        if [ "$expected_checksum" != "$actual_checksum" ]; then
-            print_error "$(msg 'checksum_failed')"
-            print_error "Expected: $expected_checksum"
-            print_error "Actual: $actual_checksum"
+    checksum_url="${release_url}/${archive_name}.sha256"
+    if ! release_download_curl "$checksum_url" -o "$TEMP_DIR/checksums.txt" 2>/dev/null; then
+        checksum_url="${release_url}/checksums.txt"
+        if ! release_download_curl "$checksum_url" -o "$TEMP_DIR/checksums.txt" 2>/dev/null; then
+            print_error "$(msg 'checksum_not_found')"
             exit 1
         fi
-        print_success "$(msg 'checksum_verified')"
-    else
-        print_warning "$(msg 'checksum_not_found')"
     fi
+    expected_checksum=$(awk -v name="$archive_name" '{ file=$2; sub(/^\*/, "", file); if (file == name) { print tolower($1); count++ } } END { if (count != 1) exit 1 }' "$TEMP_DIR/checksums.txt") || {
+        print_error "$(msg 'checksum_failed')"
+        exit 1
+    }
+    actual_checksum=$(sha256sum "$TEMP_DIR/$archive_name" | awk '{print $1}')
+    if [[ ! "$expected_checksum" =~ ^[0-9a-f]{64}$ ]] || [ "$expected_checksum" != "$actual_checksum" ]; then
+        print_error "$(msg 'checksum_failed')"
+        exit 1
+    fi
+    print_success "$(msg 'checksum_verified')"
 
-    # Extract
+    # 解压前拒绝绝对路径与父目录跳转；只接受根目录或同名顶层目录的二进制。
+    tar -tzf "$TEMP_DIR/$archive_name" > "$TEMP_DIR/archive-files.txt"
+    if grep -Eq '(^/|(^|/)\.\.(/|$))' "$TEMP_DIR/archive-files.txt"; then
+        print_error "Unsafe release archive paths"
+        exit 1
+    fi
     print_info "$(msg 'extracting')"
     tar -xzf "$TEMP_DIR/$archive_name" -C "$TEMP_DIR"
-
-    # Create install directory
+    package_root="$TEMP_DIR"
+    if [ ! -f "$package_root/sub2api" ]; then
+        package_root="$TEMP_DIR/${archive_name%.tar.gz}"
+    fi
+    if [ ! -f "$package_root/sub2api" ] || [ -L "$package_root/sub2api" ]; then
+        print_error "Release archive does not contain the expected sub2api binary"
+        exit 1
+    fi
     mkdir -p "$INSTALL_DIR"
-
-    # Copy binary
-    cp "$TEMP_DIR/sub2api" "$INSTALL_DIR/sub2api"
+    cp "$package_root/sub2api" "$INSTALL_DIR/sub2api"
     chmod +x "$INSTALL_DIR/sub2api"
 
-    # Copy deploy files if they exist in the archive
-    if [ -d "$TEMP_DIR/deploy" ]; then
-        cp -r "$TEMP_DIR/deploy/"* "$INSTALL_DIR/" 2>/dev/null || true
+    # 保留旧安装包附带部署文件的安装方式。
+    if [ -d "$package_root/deploy" ]; then
+        cp -r "$package_root/deploy/"* "$INSTALL_DIR/" 2>/dev/null || true
     fi
 
     print_success "$(msg 'binary_installed') $INSTALL_DIR/sub2api"
@@ -718,7 +776,7 @@ install_service() {
     cat > /etc/systemd/system/sub2api.service << EOF
 [Unit]
 Description=Sub2API - AI API Gateway Platform
-Documentation=https://github.com/TokenFlux/TokenRouter
+Documentation=https://github.com/codermyxiaoc/TokenRouter
 After=network.target postgresql.service redis.service
 Wants=postgresql.service redis.service
 
@@ -863,8 +921,15 @@ upgrade() {
     print_info "$(msg 'upgrading')"
 
     # Get current version
-    CURRENT_VERSION=$("$INSTALL_DIR/sub2api" --version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+    CURRENT_VERSION=$(get_current_version)
     print_info "$(msg 'current_version'): $CURRENT_VERSION"
+
+    # GitHub 发布可能落后于手工部署版本；自动升级不能变成隐式回退。
+    get_latest_version
+    if [ "$CURRENT_VERSION" != "unknown" ] && ! release_is_newer "$LATEST_VERSION" "$CURRENT_VERSION"; then
+        print_warning "No newer release: $CURRENT_VERSION (latest: $LATEST_VERSION). Use rollback -v for an explicit downgrade."
+        return 0
+    fi
 
     # Stop service
     if systemctl is-active --quiet sub2api; then
@@ -877,7 +942,6 @@ upgrade() {
     print_info "$(msg 'backup_created'): $INSTALL_DIR/sub2api.backup"
 
     # Download and install new version
-    get_latest_version
     download_and_extract
 
     # Set permissions

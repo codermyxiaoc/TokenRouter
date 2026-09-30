@@ -283,11 +283,11 @@ const planBadgeClass = computed(() => {
     return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
   }
   if (normalizedPlanType.value === 'team' ||
-    (props.platform === 'openai' && normalizedPlanType.value === 'selfservebusinessprolite')) {
+    (props.platform === 'openai' && ['selfservebusinessprolite', 'selfservebusinessusagebased', 'business', 'enterprise', 'ent26', 'enterprisecbpautomation', 'enterprisecbpusagebased', 'edu', 'eduplus', 'edupro'].includes(normalizedPlanType.value))) {
     return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
   }
   if (normalizedPlanType.value === 'pro' || normalizedPlanType.value === 'chatgptpro' ||
-    (props.platform === 'openai' && normalizedPlanType.value === 'prolite')) {
+    (props.platform === 'openai' && ['prolite', 'promax'].includes(normalizedPlanType.value))) {
     return 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300'
   }
   return typeClass.value

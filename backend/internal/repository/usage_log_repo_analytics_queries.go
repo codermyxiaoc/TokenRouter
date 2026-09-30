@@ -366,7 +366,7 @@ func (r *usageLogRepository) getAPIKeyUsageTrendFromAnalytics(ctx context.Contex
 }
 
 // getUserUsageTrendFromAnalytics 从组合聚合源计算最活跃用户趋势。
-func (r *usageLogRepository) getUserUsageTrendFromAnalytics(ctx context.Context, start, end time.Time, granularity string, limit int) ([]UserUsageTrendPoint, bool, error) {
+func (r *usageLogRepository) getUserUsageTrendFromAnalytics(ctx context.Context, start, end time.Time, granularity string, limit int, metric string) ([]UserUsageTrendPoint, bool, error) {
 	query, ok, err := r.buildUsageAnalyticsQuery(ctx, UsageLogFilters{}, start, end, false)
 	if err != nil || !ok {
 		return nil, false, err
@@ -383,7 +383,7 @@ func (r *usageLogRepository) getUserUsageTrendFromAnalytics(ctx context.Context,
 			FROM combined
 			-- 聚合表同时保留行为用户和付款主体，Top 用户按付款主体合并团队用量。
 			GROUP BY billing_user_id
-			ORDER BY SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) DESC
+			ORDER BY %s DESC, billing_user_id ASC
 			LIMIT $%d
 		)
 		SELECT
@@ -399,7 +399,7 @@ func (r *usageLogRepository) getUserUsageTrendFromAnalytics(ctx context.Context,
 		LEFT JOIN users u ON u.id = c.billing_user_id
 		WHERE c.billing_user_id IN (SELECT user_id FROM top_users)
 		GROUP BY 1, c.billing_user_id, u.email, u.username
-		ORDER BY 1 ASC, 6 DESC`, limitPosition, timezonePosition, safeDateFormat(granularity)), query.args...)
+		ORDER BY 1 ASC, 6 DESC`, userTrendRankExpression(metric), limitPosition, timezonePosition, safeDateFormat(granularity)), query.args...)
 	if err != nil {
 		return nil, false, err
 	}

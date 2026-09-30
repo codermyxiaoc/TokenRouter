@@ -1273,6 +1273,7 @@ func TestAPIContracts(t *testing.T) {
 								},
 						"custom_menu_items": [],
 						"cyber_session_block_enabled": false,
+					"cyber_policy_user_allowlist": "",
 						"cyber_session_block_ttl_seconds": 3600,
 					"custom_endpoints": [],
 					"payment_enabled": false,
@@ -1520,6 +1521,7 @@ func TestAPIContracts(t *testing.T) {
 					"usage_ranking_show_actual_cost": true,
 					"custom_menu_items": [],
 					"cyber_session_block_enabled": false,
+					"cyber_policy_user_allowlist": "",
 					"cyber_session_block_ttl_seconds": 3600,
 					"custom_endpoints": [],
 					"default_concurrency": 0,
@@ -2101,6 +2103,10 @@ func (stubApiKeyCache) GetCreateAttemptCount(ctx context.Context, userID int64) 
 
 func (stubApiKeyCache) IncrementCreateAttemptCount(ctx context.Context, userID int64) error {
 	return nil
+}
+
+func (stubApiKeyCache) IncrementCreateCount(context.Context, int64, time.Duration) (int64, error) {
+	return 1, nil
 }
 
 func (stubApiKeyCache) DeleteCreateAttemptCount(ctx context.Context, userID int64) error {
@@ -3093,7 +3099,7 @@ func (r *stubUsageLogRepo) GetAPIKeyUsageTrend(ctx context.Context, startTime, e
 	return nil, errors.New("not implemented")
 }
 
-func (r *stubUsageLogRepo) GetUserUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) ([]usagestats.UserUsageTrendPoint, error) {
+func (r *stubUsageLogRepo) GetUserUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int, metric string) ([]usagestats.UserUsageTrendPoint, error) {
 	return nil, errors.New("not implemented")
 }
 

@@ -95,6 +95,15 @@ var (
 		LongContextInputTokenThreshold: 272000, LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
 		SupportsServiceTier: true, LiteLLMProvider: "openai", Mode: "chat", SupportsPromptCaching: true,
 	}
+	// GPT-6.1 Sol 的缓存读取价独立于 6 Sol，缺目录时保留同一长上下文门槛。
+	openAIGPT61SolPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 2e-6, OutputCostPerToken: 10e-6,
+		CacheCreationInputTokenCost: 2.5e-6, CacheReadInputTokenCost: 0.1e-6,
+		InputCostPerTokenPriority: 4e-6, OutputCostPerTokenPriority: 20e-6,
+		CacheCreationInputTokenCostPriority: 5e-6, CacheReadInputTokenCostPriority: 0.2e-6,
+		LongContextInputTokenThreshold: 272000, LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
+		SupportsServiceTier: true, LiteLLMProvider: "openai", Mode: "chat", SupportsPromptCaching: true,
+	}
 	openAIGPT6LunaPricing = &LiteLLMModelPricing{
 		InputCostPerToken: 0.1e-6, OutputCostPerToken: 0.5e-6,
 		CacheCreationInputTokenCost: 0.125e-6, CacheReadInputTokenCost: 0.01e-6,
@@ -109,6 +118,13 @@ var (
 		CacheCreationInputTokenCost: 5e-6, CacheCreationInputTokenCostAbove1hr: 8e-6,
 		CacheReadInputTokenCost: 0.2e-6, SupportsPromptCaching: true,
 		SupportsServiceTier: true, LiteLLMProvider: "anthropic", Mode: "chat",
+	}
+	// Sonnet 5.5 保留独立的 5 分钟和 1 小时缓存写入价格。
+	claudeSonnet55FallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 2e-6, OutputCostPerToken: 10e-6,
+		CacheCreationInputTokenCost: 2.5e-6, CacheCreationInputTokenCostAbove1hr: 4e-6,
+		CacheReadInputTokenCost: 0.2e-6, SupportsPromptCaching: true,
+		LiteLLMProvider: "anthropic", Mode: "chat",
 	}
 	openAIGPT56SolPricing = &LiteLLMModelPricing{
 		InputCostPerToken:                   5e-06,   // $5 per MTok
@@ -686,7 +702,7 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 			continue
 		}
 
-		preserveCatalogPrices := isOpenAIGPT6SolModel(modelName) || isOpenAIGPT6LunaModel(modelName)
+		preserveCatalogPrices := isOpenAIGPT61SolModel(modelName) || isOpenAIGPT6SolModel(modelName) || isOpenAIGPT6LunaModel(modelName)
 		pricing := &LiteLLMModelPricing{
 			LiteLLMProvider:                             entry.LiteLLMProvider,
 			Mode:                                        entry.Mode,
@@ -1236,6 +1252,9 @@ func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing 
 
 	// 3. Claude 新型号使用专属静态兜底，避免误用旧 Opus 系列价格。
 	for _, candidate := range lookupCandidates {
+		if claude.IsSonnet55Model(candidate) {
+			return claudeSonnet55FallbackPricing
+		}
 		if claude.IsOpus55Model(candidate) {
 			return claudeOpus55FallbackPricing
 		}
@@ -1608,6 +1627,9 @@ func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 		for key, pricing := range s.pricingData {
 			keyLower := strings.ToLower(key)
 			// 旧 Opus 5 的子串匹配不能借用新增 5.5 的低价。
+			if claude.IsSonnet55Model(keyLower) && !claude.IsSonnet55Model(model) {
+				continue
+			}
 			if claude.IsOpus55Model(keyLower) && !claude.IsOpus55Model(model) {
 				continue
 			}
@@ -1676,6 +1698,8 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		product, fallback = "gpt-5.5-pro", openAIGPT55ProFallbackPricing
 	case isOpenAIGPT6AstraModel(model):
 		product, fallback = "gpt-6-astra", openAIGPT6AstraPricing
+	case isOpenAIGPT61SolModel(sameModel):
+		product, fallback = "gpt-6.1-sol", openAIGPT61SolPricing
 	case isOpenAIGPT6SolModel(sameModel):
 		product, fallback = "gpt-6-sol", openAIGPT6SolPricing
 	case isOpenAIGPT6LunaModel(sameModel):
@@ -1706,7 +1730,7 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		return fallback
 	}
 	// 新产品的未知变体不按其它 GPT 型号收费；完整目录中的显式条目仍优先。
-	if strings.HasPrefix(model, "gpt-6-sol-") || strings.HasPrefix(model, "gpt-6-luna-") {
+	if strings.HasPrefix(model, "gpt-6.1-sol-") || strings.HasPrefix(model, "gpt-6-sol-") || strings.HasPrefix(model, "gpt-6-luna-") {
 		return nil
 	}
 

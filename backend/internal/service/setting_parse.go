@@ -263,6 +263,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		// 风控中心默认关闭，避免升级后未配置审计 Key 时影响现有请求。
 		SettingKeyRiskControlEnabled:          "false",
 		SettingKeyCyberSessionBlockEnabled:    "false",
+		SettingKeyCyberPolicyUserAllowlist:    "",
 		SettingKeyCyberSessionBlockTTLSeconds: "3600",
 		SettingKeyAllowUserViewErrorRequests:  "false",
 	}
@@ -396,6 +397,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		CreativeEnabled:                        settings[SettingKeyCreativeEnabled] != "false",
 		RiskControlEnabled:                     settings[SettingKeyRiskControlEnabled] == "true",
 		CyberSessionBlockEnabled:               settings[SettingKeyCyberSessionBlockEnabled] == "true",
+		CyberPolicyUserAllowlist:               settings[SettingKeyCyberPolicyUserAllowlist],
 		DefaultUserAPIKeyLimit:                 DefaultUserAPIKeyLimit,
 	}
 	if seconds, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyCyberSessionBlockTTLSeconds])); err == nil && seconds > 0 {

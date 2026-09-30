@@ -581,6 +581,10 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// 风控中心总开关：控制菜单入口和网关内容审计是否执行。
 	updates[SettingKeyRiskControlEnabled] = strconv.FormatBool(settings.RiskControlEnabled)
 	updates[SettingKeyCyberSessionBlockEnabled] = strconv.FormatBool(settings.CyberSessionBlockEnabled)
+	if _, err := ParseCyberPolicyUserAllowlist(settings.CyberPolicyUserAllowlist); err != nil {
+		return nil, err
+	}
+	updates[SettingKeyCyberPolicyUserAllowlist] = settings.CyberPolicyUserAllowlist
 	if settings.CyberSessionBlockTTLSeconds > 0 {
 		updates[SettingKeyCyberSessionBlockTTLSeconds] = strconv.Itoa(settings.CyberSessionBlockTTLSeconds)
 	}
@@ -909,6 +913,11 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		value:     settings.OpenAIAllowClaudeCodeCodexPlugin,
 		expiresAt: time.Now().Add(openAIAllowCodexPluginCacheTTL).UnixNano(),
 	})
+	// 保存成功后固定新白名单；下一次数据库刷新失败也不得复活已移除的用户。
+	s.cyberSessionBlockMu.Lock()
+	allowlistedUsers, _ := ParseCyberPolicyUserAllowlist(settings.CyberPolicyUserAllowlist)
+	s.cyberSessionBlockCache.Store(&cachedCyberSessionBlockRuntime{allowlistedUsers: allowlistedUsers})
+	s.cyberSessionBlockMu.Unlock()
 	if s.onUpdate != nil {
 		s.onUpdate() // Invalidate cache after settings update
 	}

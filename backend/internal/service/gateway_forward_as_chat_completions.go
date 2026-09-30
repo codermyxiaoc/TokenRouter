@@ -41,11 +41,16 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	}
 	originalModel := ccReq.Model
 	clientStream := ccReq.Stream
-	includeUsage := ccReq.StreamOptions != nil && ccReq.StreamOptions.IncludeUsage
 	// 在协议转换前解析账号映射，思考能力必须依据真正的上游型号。
 	mappedModel := resolveAccountUpstreamModel(ctx, account, originalModel)
 	if mappedModel == "" {
 		mappedModel = originalModel
+	}
+	// 新型号约束按最终上游模型校验，避免别名绕过请求校验。
+	if err := ValidateSonnet55Request(body, mappedModel); err != nil {
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+		writeGatewayCCError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
 	}
 
 	// 2. Convert CC → Responses → Anthropic (chained conversion)
@@ -173,7 +178,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	var result *ForwardResult
 	var handleErr error
 	if clientStream {
-		result, handleErr = s.handleCCStreamingFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime, includeUsage)
+		result, handleErr = s.handleCCStreamingFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
 	} else {
 		result, handleErr = s.handleCCBufferedFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
 	}
@@ -349,7 +354,6 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	mappedModel string,
 	reasoningEffort *string,
 	startTime time.Time,
-	includeUsage bool,
 ) (*ForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
@@ -367,7 +371,6 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	anthState.Model = originalModel
 	ccState := apicompat.NewResponsesEventToChatState()
 	ccState.Model = originalModel
-	ccState.IncludeUsage = includeUsage
 
 	var usage ClaudeUsage
 	var firstTokenMs *int
@@ -433,6 +436,10 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			mergeAnthropicUsage(&usage, event.Message.Usage)
 		}
 
+		// 同步外发用量，避免转换器恢复供应商原始重叠输入总量。
+		syncAnthropicResponsesUsage(anthState, usage)
+		normalizeAnthropicEventUsageForResponses(event, usage)
+
 		// Chain: Anthropic event → Responses events → CC chunks
 		responsesEvents := apicompat.AnthropicEventToResponsesEvents(event, anthState)
 		for _, resEvt := range responsesEvents {
@@ -466,6 +473,9 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
 		}
+
+		// 转换前区分真实零用量与未提供用量；客户端选项不丢弃上游事实。
+		ccState.IncludeUsage = ccState.IncludeUsage || anthropicChatStreamHasUsage(&event, payload)
 
 		if processAnthropicEvent(&event) {
 			return resultWithUsage(), nil
@@ -511,4 +521,16 @@ func writeGatewayCCError(c *gin.Context, statusCode int, errType, message string
 			"message": message,
 		},
 	})
+}
+
+// anthropicChatStreamHasUsage 在转换器合成 usage 前区分真实零用量与未提供用量。
+func anthropicChatStreamHasUsage(event *apicompat.AnthropicStreamEvent, payload string) bool {
+	switch event.Type {
+	case "message_start":
+		return event.Message != nil && gjson.Get(payload, "message.usage").IsObject()
+	case "message_delta":
+		return event.Usage != nil
+	default:
+		return false
+	}
 }

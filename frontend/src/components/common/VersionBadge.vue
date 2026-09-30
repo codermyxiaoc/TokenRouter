@@ -10,7 +10,7 @@
             ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50'
             : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700'
         ]"
-        :title="hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
+        :title="versionWarning ? t('version.checkFailed') : hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
       >
         <span v-if="currentVersion" class="font-medium">v{{ currentVersion }}</span>
         <span
@@ -31,8 +31,7 @@
         <div
           v-if="dropdownOpen"
           ref="dropdownRef"
-          class="absolute left-0 z-50 mt-2 overflow-hidden whitespace-normal rounded-control border border-gray-200 bg-white shadow-lg transition-all duration-200 dark:border-dark-700 dark:bg-dark-800"
-          :class="rollbackPanelOpen && isReleaseBuild ? 'w-80' : 'w-64'"
+          class="absolute left-0 z-50 mt-2 max-h-[80vh] w-80 max-w-[calc(100vw-2rem)] overflow-y-auto whitespace-normal rounded-control border border-gray-200 bg-white shadow-lg transition-all duration-200 dark:border-dark-700 dark:bg-dark-800"
         >
           <!-- Header with refresh button -->
           <div
@@ -96,17 +95,17 @@
             <template v-else>
               <!-- Version display - centered and prominent -->
               <div class="mb-4 text-center">
-                <div class="inline-flex items-center gap-2">
+                <div class="inline-flex max-w-full items-center gap-2">
                   <span
                     v-if="currentVersion"
-                    class="text-2xl font-bold text-gray-900 dark:text-white"
+                    class="min-w-0 break-all text-xl font-bold text-gray-900 dark:text-white"
                     >v{{ currentVersion }}</span
                   >
                   <span v-else class="text-2xl font-bold text-gray-400 dark:text-dark-500">--</span>
                   <!-- Show check mark when up to date -->
                   <span
-                    v-if="!hasUpdate"
-                    class="flex h-5 w-5 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30"
+                    v-if="!hasUpdate && !versionWarning"
+                    class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30"
                   >
                     <svg
                       class="h-3 w-3 text-green-600 dark:text-green-400"
@@ -123,11 +122,19 @@
                 </div>
                 <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">
                   {{
-                    hasUpdate
+                    versionWarning
+                      ? t('version.checkFailed')
+                      : hasUpdate
                       ? t('version.latestVersion') + ': v' + latestVersion
                       : t('version.upToDate')
                   }}
                 </p>
+                <!-- 更新来源常驻展示，方便管理员核对程序与镜像属于同一个项目。 -->
+                <div class="mt-2 flex items-center justify-center gap-3 text-xs text-primary-600 dark:text-primary-400">
+                  <a :href="`https://github.com/${GITHUB_REPO}/releases`" target="_blank" rel="noopener noreferrer">GitHub</a>
+                  <a :href="`https://hub.docker.com/r/${DOCKER_IMAGE}/tags`" target="_blank" rel="noopener noreferrer">Docker Hub</a>
+                </div>
+                <p v-if="versionWarning" role="status" class="mt-2 break-words text-left text-xs text-amber-600 dark:text-amber-400">{{ versionWarning }}</p>
               </div>
 
               <!-- Priority 1: Update error (must check before hasUpdate) -->
@@ -355,8 +362,16 @@
                     ></path>
                   </svg>
                   <Icon v-else name="download" size="sm" :stroke-width="2" />
-                  {{ updating ? t('version.updating') : t('version.updateNow') }}
+                  {{ updating ? t('version.updating') : t('version.updateBinary') }}
                 </button>
+
+                <!-- Docker 更新通过拉取同版本镜像完成，保留数据库和其他依赖容器。 -->
+                <details v-if="dockerUpdateCommand" class="rounded-lg border border-gray-200 p-2 text-xs dark:border-dark-600">
+                  <summary class="cursor-pointer text-primary-600 dark:text-primary-400">{{ t('version.dockerUpdate') }}</summary>
+                  <p class="mt-2 text-gray-500 dark:text-dark-400">{{ t('version.dockerUpdateHint') }}</p>
+                  <code class="mt-2 block select-all whitespace-pre-wrap break-all rounded bg-gray-50 p-2 font-mono text-[10px] leading-relaxed dark:bg-dark-900">{{ dockerUpdateCommand }}</code>
+                  <button type="button" class="mt-2 text-primary-600 dark:text-primary-400" @click="copyToClipboard(dockerUpdateCommand)">{{ copied ? t('version.copied') : t('version.copyCommand') }}</button>
+                </details>
 
                 <!-- View release link -->
                 <a
@@ -581,6 +596,7 @@
                             </div>
 
                             <p
+                              v-if="manualTab === 'script'"
                               class="flex items-start gap-1.5 px-0.5 text-[11px] leading-4 text-amber-600 dark:text-amber-400"
                             >
                               <Icon
@@ -600,6 +616,7 @@
                             </p>
 
                             <button
+                              v-if="manualTab === 'script'"
                               @click="handleRollback"
                               :disabled="rollingBack"
                               class="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
@@ -667,9 +684,9 @@ import {
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
 
-const GITHUB_REPO = 'TokenFlux/TokenRouter'
-// CI 发布到 GHCR 的镜像 tag 不带 v 前缀，例如 ghcr.io/tokenflux/tokenrouter:0.1.146。
-const DOCKER_IMAGE = 'ghcr.io/tokenflux/tokenrouter'
+const GITHUB_REPO = 'codermyxiaoc/TokenRouter'
+// 当前 fork 的 DockerHub 标签与 GitHub 发布标签一致，均保留 v 前缀。
+const DOCKER_IMAGE = 'coderxiaoc/tokenrouter'
 
 const { t } = useI18n()
 
@@ -692,6 +709,7 @@ const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
+const versionWarning = computed(() => appStore.versionWarning)
 
 // Update process states (local to this component)
 const updating = ref(false)
@@ -724,20 +742,33 @@ const manualTabs = computed(() => [
 
 const scriptRollbackCommand = computed(() => {
   if (!selectedRollbackVersion.value) return ''
-  const tag = `v${selectedRollbackVersion.value}`
-  return `curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/${tag}/deploy/install.sh | sudo bash -s -- rollback ${tag}`
+  const tag = releaseTag(selectedRollbackVersion.value)
+  if (!tag) return ''
+  // 使用已修正来源的当前安装脚本，避免旧 tag 内的脚本再次下载原项目。
+  return `curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/deploy/install.sh | sudo bash -s -- rollback ${tag}`
 })
 
-const dockerRollbackCommand = computed(() => {
-  if (!selectedRollbackVersion.value) return ''
+function releaseTag(version: string): string {
+  const normalized = version.replace(/^v/, '')
+  // 仅允许正式版本，复制到终端的命令不接受任意 shell 内容。
+  return /^\d+\.\d+(?:\.\d+)?(?:-ct-v\d+\.\d+(?:\.\d+)?)?$/.test(normalized) ? `v${normalized}` : ''
+}
+
+function dockerDeploymentCommand(version: string): string {
+  const tag = releaseTag(version)
+  if (!tag) return ''
   return [
     `# ${t('version.dockerEditCompose')}`,
-    `image: ${DOCKER_IMAGE}:${selectedRollbackVersion.value}`,
+    `image: ${DOCKER_IMAGE}:${tag}`,
     '',
     `# ${t('version.dockerRecreate')}`,
-    'docker compose up -d'
+    'docker compose pull sub2api',
+    'docker compose up -d --no-deps sub2api'
   ].join('\n')
-})
+}
+
+const dockerRollbackCommand = computed(() => dockerDeploymentCommand(selectedRollbackVersion.value))
+const dockerUpdateCommand = computed(() => dockerDeploymentCommand(latestVersion.value))
 
 const activeManualCommand = computed(() =>
   manualTab.value === 'docker' ? dockerRollbackCommand.value : scriptRollbackCommand.value

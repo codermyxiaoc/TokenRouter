@@ -102,8 +102,10 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
 
-	// Claude Code only restriction
-	if apiKey.Group != nil && apiKey.Group.ClaudeCodeOnly {
+	// 非 Claude Code 兼容请求只允许进入已通过目标权限校验的传统降级组。
+	if apiKey.Group != nil && apiKey.Group.ClaudeCodeOnly &&
+		!h.allowsClaudeCodeCompatibilityFallback(c, apiKey, service.GroupClientProtocolOpenAIChatCompletions) {
+		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
 		h.chatCompletionsErrorResponse(c, http.StatusForbidden, "permission_error",
 			"This group is restricted to Claude Code clients (/v1/messages only)")
 		return

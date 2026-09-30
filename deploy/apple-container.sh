@@ -242,7 +242,9 @@ ensure_image_available() {
         return
     fi
     info "Pulling ${image}..."
-    container image pull --platform "${PLATFORM}" "${image}"
+    # 不回退到旧仓库或其它架构；部署者必须选择提供当前平台的镜像。
+    container image pull --platform "${PLATFORM}" "${image}" || \
+        die "Unable to pull ${image} for ${PLATFORM}. Configure an image published for ${PLATFORM}; no other repository or architecture will be substituted."
 }
 
 container_is_running() {
@@ -400,7 +402,7 @@ validate_env_file_security() {
 prepare_environment() {
     validate_env_file_security
 
-    APP_IMAGE="$(read_env_value APPLE_CONTAINER_SUB2API_IMAGE ghcr.io/tokenflux/tokenrouter:latest)"
+    APP_IMAGE="$(read_env_value APPLE_CONTAINER_SUB2API_IMAGE coderxiaoc/tokenrouter:v0.1.278-ct-v2.6)"
     POSTGRES_IMAGE="$(read_env_value APPLE_CONTAINER_POSTGRES_IMAGE postgres:18-alpine)"
     REDIS_IMAGE="$(read_env_value APPLE_CONTAINER_REDIS_IMAGE redis:8-alpine)"
     BIND_HOST="$(read_env_value BIND_HOST 0.0.0.0)"

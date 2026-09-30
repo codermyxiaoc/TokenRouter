@@ -29,6 +29,8 @@ Compose 的 `.env` 还包含只供部署工具插值的变量：`SUB2API_IMAGE` 
 <a id="configuration_sources"></a>
 ## 进程配置来源
 
+`api_key_create.max_per_user_per_hour`（环境变量 `API_KEY_CREATE_MAX_PER_USER_PER_HOUR`）默认 60，0 关闭每小时创建频率限制，负数拒绝启动；它独立于用户级 `api_key_limit` 的现存数量上限及网关请求限流。频率窗口按实际创建者计数，删除不返还，Redis 故障时放行；数据库数量校验仍在事务中执行。详见[身份与租户](../domains/identity_and_tenancy.md)。
+
 `config.load` 使用 Viper，最终优先级为：
 
 ```text

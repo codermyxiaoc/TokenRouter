@@ -332,6 +332,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		clientBeta = beta
 	}
+	clientBeta = filterSonnet55ToolsetBeta(clientBeta, body, model)
 	if containsBetaToken(clientBeta, claude.BetaFastMode) {
 		if blockErr := s.checkBetaPolicyBlockForTokens(ctx, []string{claude.BetaFastMode}, account, model); blockErr != nil {
 			return nil, nil, blockErr
@@ -379,6 +380,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
 	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
 	account.ApplyHeaderOverrides(req.Header)
+	filterSonnet55ToolsetBetaHeader(req.Header, body, model)
 
 	return req, body, nil
 }

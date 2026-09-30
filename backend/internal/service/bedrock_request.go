@@ -156,10 +156,17 @@ func PrepareBedrockRequestBodyWithTokens(body []byte, modelID string, betaTokens
 	// 参考 litellm: _convert_output_format_to_inline_schema()
 	body = convertOutputFormatToInlineSchema(body)
 
-	// 移除 output_config 字段（Bedrock Invoke 不支持）
+	// Sonnet 5.5 支持原生 effort，格式约束仍使用上面的 schema 内联兼容。
+	effort := gjson.GetBytes(body, "output_config.effort")
 	body, err = sjson.DeleteBytes(body, "output_config")
 	if err != nil {
 		return nil, fmt.Errorf("remove output_config field: %w", err)
+	}
+	if claude.IsSonnet55Model(modelID) && effort.Exists() {
+		body, err = sjson.SetBytes(body, "output_config.effort", effort.Value())
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// 移除工具定义中的 custom 字段
@@ -181,6 +188,7 @@ func PrepareBedrockRequestBodyWithTokens(body []byte, modelID string, betaTokens
 
 // ResolveBedrockBetaTokens computes the final Bedrock beta token list before policy filtering.
 func ResolveBedrockBetaTokens(betaHeader string, body []byte, modelID string) []string {
+	betaHeader = filterSonnet55ToolsetBeta(betaHeader, body, modelID)
 	betaTokens := parseAnthropicBetaHeader(betaHeader)
 	betaTokens = autoInjectBedrockBetaTokens(betaTokens, body, modelID)
 	return filterBedrockBetaTokens(betaTokens)
@@ -190,13 +198,18 @@ func ResolveBedrockBetaTokens(betaHeader string, body []byte, modelID string) []
 // Bedrock Invoke 不支持 output_format 参数，litellm 的做法是将 schema 追加到用户消息中
 // 参考: litellm AmazonAnthropicClaudeMessagesConfig._convert_output_format_to_inline_schema()
 func convertOutputFormatToInlineSchema(body []byte) []byte {
-	outputFormat := gjson.GetBytes(body, "output_format")
+	// 新版结构化输出优先读取 output_config.format，旧字段保持兼容。
+	outputFormat := gjson.GetBytes(body, "output_config.format")
+	if !outputFormat.Exists() {
+		outputFormat = gjson.GetBytes(body, "output_format")
+	}
 	if !outputFormat.Exists() || !outputFormat.IsObject() {
 		return body
 	}
 
 	// 先从请求体中移除 output_format
 	body, _ = sjson.DeleteBytes(body, "output_format")
+	body, _ = sjson.DeleteBytes(body, "output_config.format")
 
 	schema := outputFormat.Get("schema")
 	if !schema.Exists() {
@@ -632,6 +645,17 @@ func sanitizeBedrockThinking(body []byte, modelID string) []byte {
 
 	thinkingType := thinking.Get("type").String()
 	if thinkingType == "" {
+		return body
+	}
+	// 仅 CC 兼容开关授权转换旧参数，普通原生请求由统一校验直接拒绝。
+	if claude.IsSonnet55Model(modelID) {
+		switch thinkingType {
+		case "enabled":
+			body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
+			body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
+		case "disabled":
+			body, _ = sjson.SetBytes(body, "thinking.type", "between_tools")
+		}
 		return body
 	}
 

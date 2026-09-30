@@ -1,4 +1,4 @@
-import type { GroupClientProtocol, GroupPlatform } from '@/types'
+import type { Group, GroupClientProtocol, GroupPlatform } from '@/types'
 
 export const GROUP_CLIENT_PROTOCOL_ORDER: readonly GroupClientProtocol[] = [
   'anthropic_messages',
@@ -87,6 +87,31 @@ export function hasGroupClientProtocol(
   protocol: GroupClientProtocol
 ): boolean {
   return protocols.includes(protocol)
+}
+
+// 仅展示已验证整条降级链的非 Claude Code 入口；availableGroups 必须先按用户和套餐权限过滤。
+export function claudeCodeFallbackProtocols(
+  source: Pick<Group, 'id' | 'platform' | 'allowed_client_protocols' | 'fallback_group_id'>,
+  availableGroups: readonly Group[]
+): GroupClientProtocol[] {
+  if (source.platform !== 'anthropic' && source.platform !== 'antigravity') return []
+  const groups = new Map(availableGroups.map(group => [group.id, group]))
+  return effectiveGroupClientProtocols(source.platform, source.allowed_client_protocols).filter(protocol => {
+    // Gemini 原生入口没有对应的 Claude-only 兼容降级处理器。
+    if (protocol === 'gemini_generate_content') return false
+    const visited = new Set([source.id])
+    let nextID = source.fallback_group_id
+    while (nextID && nextID > 0 && !visited.has(nextID)) {
+      visited.add(nextID)
+      const group = groups.get(nextID)
+      if (!group || group.status !== 'active' ||
+        (group.platform !== 'anthropic' && group.platform !== 'antigravity') ||
+        !effectiveGroupClientProtocols(group.platform, group.allowed_client_protocols).includes(protocol)) return false
+      if (!group.claude_code_only) return true
+      nextID = group.fallback_group_id
+    }
+    return false
+  })
 }
 
 export function setGroupClientProtocol(

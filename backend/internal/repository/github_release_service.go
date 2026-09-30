@@ -47,7 +47,7 @@ func NewGitHubReleaseClient(proxyURL string, allowDirectOnProxyError bool) servi
 		sharedClient = &http.Client{Timeout: 30 * time.Second}
 	}
 	apiClient := cloneHTTPClient(sharedClient)
-	apiClient.CheckRedirect = githubAPICheckRedirect(apiClient.CheckRedirect)
+	apiClient.CheckRedirect = githubReleaseAssetCheckRedirect(githubAPICheckRedirect(apiClient.CheckRedirect))
 
 	// 下载客户端需要更长的超时时间
 	downloadClient, err := httpclient.GetClient(httpclient.Options{
@@ -62,6 +62,7 @@ func NewGitHubReleaseClient(proxyURL string, allowDirectOnProxyError bool) servi
 		downloadClient = &http.Client{Timeout: 10 * time.Minute}
 	}
 	downloadClient = cloneHTTPClient(downloadClient)
+	downloadClient.CheckRedirect = githubReleaseAssetCheckRedirect(downloadClient.CheckRedirect)
 
 	return &githubReleaseClient{
 		httpClient:         apiClient,
@@ -97,6 +98,33 @@ func githubAPICheckRedirect(previous func(*http.Request, []*http.Request) error)
 		}
 		return nil
 	}
+}
+
+// githubReleaseAssetCheckRedirect 约束本项目资产的跳转，避免仓库迁移或异常重定向下载到原版程序。
+// GitHub 的签名资产 CDN 可正常使用；其它 API 查询保留原有行为。
+func githubReleaseAssetCheckRedirect(previous func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 && isTokenRouterAssetURL(via[0].URL) {
+			allowed := req.URL != nil && req.URL.Scheme == "https" && req.URL.User == nil &&
+				(req.URL.Host == "objects.githubusercontent.com" || req.URL.Host == "release-assets.githubusercontent.com" ||
+					(isTokenRouterAssetURL(req.URL) && req.URL.Path == via[0].URL.Path))
+			if !allowed {
+				return errors.New("TokenRouter release asset redirected outside its trusted source")
+			}
+		}
+		if previous != nil {
+			return previous(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+}
+
+func isTokenRouterAssetURL(u *url.URL) bool {
+	return u != nil && u.Scheme == "https" && strings.EqualFold(u.Host, "github.com") && u.User == nil &&
+		strings.HasPrefix(u.Path, "/"+service.UpdateGitHubRepository+"/releases/download/")
 }
 
 // newAPIRequest 只为受信任的 GitHub API 地址附加更新令牌。

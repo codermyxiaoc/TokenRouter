@@ -1348,6 +1348,8 @@
       :base-url="publicSettings?.api_base_url || ''"
       :platform="selectedKey?.group?.platform || null"
       :allowed-client-protocols="selectedKey?.group?.allowed_client_protocols"
+      :claude-code-only="selectedKey?.group?.claude_code_only"
+      :fallback-client-protocols="useKeyFallbackProtocols"
       :composite-groups="selectedKey?.composite_groups || []"
       :smart-routing="selectedKey?.smart_routing || false"
       :smart-routing-groups="selectedKey?.smart_routing_groups || []"
@@ -1463,6 +1465,7 @@ import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 
 const { t } = useI18n()
 import { keysAPI, authAPI, usageAPI, userGroupsAPI } from '@/api'
+import { claudeCodeFallbackProtocols } from '@/utils/groupClientProtocols'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 	import DataTable from '@/components/common/DataTable.vue'
@@ -1686,6 +1689,10 @@ const showColumnDropdown = ref(false)
 const pendingCcsRow = ref<ApiKey | null>(null)
 const tfImportKey = ref<ApiKey | null>(null)
 const selectedKey = ref<ApiKey | null>(null)
+const useKeyFallbackGroups = ref<Group[]>([])
+const useKeyFallbackProtocols = computed(() => selectedKey.value?.group && !selectedKey.value.smart_routing
+  ? claudeCodeFallbackProtocols(selectedKey.value.group, useKeyFallbackGroups.value)
+  : [])
 const actionMenuKey = ref<ApiKey | null>(null)
 const actionMenuPosition = ref<{ top: number; left: number } | null>(null)
 const copiedKeyId = ref<number | null>(null)
@@ -2311,14 +2318,28 @@ const loadPublicSettings = async () => {
   }
 }
 
-const openUseKeyModal = (key: ApiKey) => {
+const openUseKeyModal = async (key: ApiKey) => {
   selectedKey.value = key
+  useKeyFallbackGroups.value = []
   showUseKeyModal.value = true
+  if (!key.group?.claude_code_only || key.smart_routing || !key.group.fallback_group_id) return
+  // 缺失指定套餐时保持保守展示，避免把账户其他套餐的分组误作可用降级目标。
+  if (key.billing_mode === 'subscription' && !key.preferred_subscription_id) return
+  try {
+    const available = await userGroupsAPI.getAvailable(
+      key.team_id ? 'team' : 'personal',
+      key.billing_mode === 'subscription' ? key.preferred_subscription_id! : undefined
+    )
+    if (showUseKeyModal.value && selectedKey.value?.id === key.id) useKeyFallbackGroups.value = available
+  } catch {
+    // 查询失败时只保留已知可用的 Claude Code 入口。
+  }
 }
 
 const closeUseKeyModal = () => {
   showUseKeyModal.value = false
   selectedKey.value = null
+  useKeyFallbackGroups.value = []
 }
 
 const openTfCliImportDialog = (key: ApiKey) => {

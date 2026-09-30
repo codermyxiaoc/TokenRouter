@@ -123,9 +123,13 @@ marketplace: {
     viewRelease: '查看发布',
     viewChangelog: '查看更新日志',
     refresh: '刷新',
+    checkFailed: '暂时无法确认最新版本，请刷新重试',
+    dockerUpdate: 'Docker 部署更新命令',
+    dockerUpdateHint: '在原部署目录操作；如 .env 设置了 SUB2API_IMAGE，请同步修改为下方镜像。',
     sourceMode: '源码构建',
     sourceModeHint: '源码构建请使用 git pull 更新',
     updateNow: '立即更新',
+    updateBinary: '更新二进制程序',
     updating: '正在更新...',
     updateComplete: '更新完成',
     updateFailed: '更新失败',
@@ -149,7 +153,7 @@ marketplace: {
     deployScript: '脚本部署',
     deployDocker: 'Docker',
     dockerEditCompose: '修改 docker-compose.yml 中的镜像版本',
-    dockerRecreate: '重新创建容器'
+    dockerRecreate: '拉取镜像，仅重建应用容器'
   },
 // Recharge / Subscription Page
   purchase: {

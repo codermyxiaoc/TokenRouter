@@ -26,6 +26,8 @@ OAuth 账号可受 Codex CLI-only、允许客户端、agent identity、privacy s
 
 身份解析在修剪空白前验证原始 User-Agent 的 HTTP Header 合法性；含 CR/LF 或非法控制字节的候选、规范身份和 override 均不能参与配对，继续使用已有合法身份或默认 Codex 身份。后台显示的 Pro、Business 套餐分级只是对原始 `plan_type` 的展示映射，不改写凭据或账号调度资格。
 
+套餐编辑候选覆盖 Go、Pro 100/200/500、Business、Enterprise 和 Education 的细分 SKU；状态标签可区分 Business Premium 与 Enterprise Automation，统计展示按产品族归并。`team` 与 `self_serve_business_usage_based` 即使同名显示为 Business，也保留各自原值和独立选项；未知 SKU、大小写及已存在的别名只参与展示匹配，未经用户更换不能被规范化值覆盖。
+
 OpenAI OAuth 账号的 `extra.codex_fingerprint_mode` 控制 Codex Responses 的设备指纹收敛，未配置、空值或无效值都默认 `off`，只有 `device`、`session`、`full` 是显式 opt-in：`device` 只统一 installation ID，`session` 进一步统一 session ID 并按客户端原始 session 稳定派生 thread ID，`full` 再把所有客户端收敛到同一 thread。session/full 的 turn ID 每个请求重新生成，但同一次请求的 HTTP 头、`client_metadata` 和内嵌 turn metadata 必须共用同一组 ID；HTTP 内部重试也不得重新派生。普通转换与 OAuth passthrough 都遵守该配置，透传大 body 只局部改写 `client_metadata`，不做整包解码；旧版 `/responses/compact` 保持既有协议且不应用额外收敛。管理员配置的真实 OpenAI device ID 优先于账号 ID 派生值。Spark 影子账号继承父账号模式、device ID 和稳定种子，不允许以影子 ID 分裂同一 OAuth 凭据的上游设备身份。
 
 OpenAI 兼容请求的显式粘性会话头按 `session-id`、`session_id`、`conversation_id`、OpenCode 会话头和 CodeBuddy 会话头依次读取；其中 `session-id` 是 Codex 客户端使用的连字符形式，优先于旧下划线形式。WebSocket 会话日志采用相同优先级，缺少显式会话头时才回退到 `prompt_cache_key`，避免重连时因头名差异漂移到其它账号。
@@ -203,6 +205,10 @@ Responses 的普通无改动路径优先检查必要顶层字段、复用原始�
 ## 模型与能力
 
 客户端模型先经过 Key、渠道和账号层映射。OpenAI 内置别名、reasoning effort 归一化、旧版 Compact 端点支持、图像/embedding 能力和传输能力会影响候选账号；模型列表只公开当前分组可请求的结果。
+
+`gpt-6.1-sol` 保持独立模型身份，支持 `low/medium/high/xhigh/max`，在 HTTP 与 WS 现有参数校验路径拒绝显式 `none/minimal`（包括模型后缀及账号映射目标），不自动降低或提高档位。普通目录、价卡和客户端配置接入沿用 fork 现有架构；未引入上游 Codex manifest、远程目录或专属 descriptor。价格及长上下文阈值见[模型目录与市场](model_catalog_and_marketplace.md)。
+
+Astra 的 Ultrafast 为独立服务档，对最终普通 token 价按 6 倍结算，不使用普通 Fast 渠道倍率。上游权威声明降为 Fast/priority/default/Flex 时按更低档计费；OAuth/Codex 的 default 回显仍遵守现有非权威规则，不因此误降档。
 
 `gpt-6-sol`、`gpt-6-luna` 使用独立模型身份，支持 `none/low/medium/high/xhigh/max`，官方默认 `medium`。原生 Responses 请求中的显式 `none` 在自定义 API Key 上游地址也保持原值；Messages 转换到 Responses 时，两款模型仅在有效档位为 `none` 时保留采样参数。目录和客户端配置扩展不改变旧默认模型，也不改变管理员选择的上游协议。官方要求带工具的 Chat Completions 使用 `reasoning_effort=none`；其余推理档位的工具调用应走 Responses，网关不静默降低推理强度以强行适配 Chat。依据：[Sol 模型说明](https://developers.openai.com/api/docs/models/gpt-6-sol)、[Luna 模型说明](https://developers.openai.com/api/docs/models/gpt-6-luna)。
 

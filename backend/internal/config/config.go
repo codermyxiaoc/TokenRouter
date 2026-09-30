@@ -90,6 +90,7 @@ type Config struct {
 	Pricing                 PricingConfig                 `mapstructure:"pricing"`
 	Gateway                 GatewayConfig                 `mapstructure:"gateway"`
 	APIKeyAuth              APIKeyAuthCacheConfig         `mapstructure:"api_key_auth_cache"`
+	APIKeyCreate            APIKeyCreateConfig            `mapstructure:"api_key_create"`
 	SubscriptionCache       SubscriptionCacheConfig       `mapstructure:"subscription_cache"`
 	SubscriptionMaintenance SubscriptionMaintenanceConfig `mapstructure:"subscription_maintenance"`
 	Dashboard               DashboardCacheConfig          `mapstructure:"dashboard_cache"`
@@ -1668,6 +1669,12 @@ type RateLimitConfig struct {
 	OAuth401CooldownMinutes int `mapstructure:"oauth_401_cooldown_minutes"` // OAuth 401临时不可调度冷却(分钟)
 }
 
+// APIKeyCreateConfig 限制用户创建密钥的频率；数量上限仍由用户配置和数据库事务执行。
+type APIKeyCreateConfig struct {
+	// MaxPerUserPerHour 按创建者累计一小时内创建尝试，0 表示不限制。
+	MaxPerUserPerHour int `mapstructure:"max_per_user_per_hour"`
+}
+
 // APIKeyAuthCacheConfig API Key 认证缓存配置
 type APIKeyAuthCacheConfig struct {
 	L1Size             int                    `mapstructure:"l1_size"`
@@ -2378,6 +2385,7 @@ func setDefaults() {
 	viper.SetDefault("api_key_auth_cache.invalid_abuse.window_seconds", 60)
 	viper.SetDefault("api_key_auth_cache.invalid_abuse.block_seconds", 60)
 	viper.SetDefault("api_key_auth_cache.invalid_abuse.capacity", 16384)
+	viper.SetDefault("api_key_create.max_per_user_per_hour", 60)
 
 	// Subscription auth L1 cache
 	viper.SetDefault("subscription_cache.l1_size", 16384)
@@ -2744,6 +2752,9 @@ func (c *Config) Validate() error {
 		if c.Server.H2C.MaxUploadBufferPerStream <= 0 {
 			return fmt.Errorf("server.h2c.max_upload_buffer_per_stream must be positive")
 		}
+	}
+	if c.APIKeyCreate.MaxPerUserPerHour < 0 {
+		return fmt.Errorf("api_key_create.max_per_user_per_hour must be non-negative")
 	}
 	if c.APIKeyAuth.InvalidAbuse.Enabled {
 		if c.APIKeyAuth.InvalidAbuse.Threshold < 10 {

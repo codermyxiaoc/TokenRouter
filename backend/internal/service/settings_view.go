@@ -195,6 +195,7 @@ type SystemSettings struct {
 	// RiskControlEnabled 控制风控中心入口和网关内容审计总开关。
 	RiskControlEnabled                   bool
 	CyberSessionBlockEnabled             bool
+	CyberPolicyUserAllowlist             string
 	CyberSessionBlockTTLSeconds          int
 	AffiliateEnabled                     bool
 	AffiliateRebateRate                  float64

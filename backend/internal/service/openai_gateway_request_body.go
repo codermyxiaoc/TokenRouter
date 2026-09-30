@@ -91,6 +91,10 @@ func shouldPreserveOpenAIResponsesNoneReasoningEffortForModel(account *Account, 
 	if shouldPreserveOpenAIResponsesNoneReasoningEffort(account) {
 		return true
 	}
+	// 6.1 Sol 的 none 是非法参数，保留到模型校验才能明确拒绝，不能先删成默认档位。
+	if isOpenAIGPT61SolModel(model) || (account != nil && isOpenAIGPT61SolModel(resolveOpenAIForwardModel(account, model, ""))) {
+		return true
+	}
 	return account != nil && account.IsOpenAIApiKey() &&
 		(isOpenAIGPT6SolModel(model) || isOpenAIGPT6LunaModel(model))
 }

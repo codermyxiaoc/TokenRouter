@@ -88,6 +88,7 @@ type BillingCache interface {
 
 // ModelPricing 模型价格配置（per-token价格，与LiteLLM格式一致）
 type ModelPricing struct {
+	UltrafastMultiplier                float64 // 模型专属 Ultrafast 倍率，不复用渠道普通 Fast 倍率。
 	InputPricePerToken                 float64 // 每token输入价格 (USD)
 	InputPricePerTokenPriority         float64 // priority service tier 下每token输入价格 (USD)
 	ImageInputPricePerToken            float64 // 图片输入 token 价格 (USD)，为 0 时回退到普通输入价格
@@ -177,6 +178,9 @@ func normalizedFastModeMultiplier(pricing *ModelPricing) (float64, bool) {
 // configuredServiceTierMultiplier 返回渠道显式层级倍率；未配置时沿用官方默认倍率。
 func configuredServiceTierMultiplier(serviceTier string, pricing *ModelPricing) float64 {
 	if pricing != nil {
+		if normalizeBillingServiceTier(serviceTier) == OpenAIFastTierUltrafast && pricing.UltrafastMultiplier > 0 {
+			return pricing.UltrafastMultiplier
+		}
 		switch normalizeBillingServiceTier(serviceTier) {
 		case "priority", "fast":
 			if multiplier, configured := normalizedFastModeMultiplier(pricing); configured {
@@ -593,7 +597,7 @@ func (s *BillingService) initFallbackPricing() {
 	}
 	// Sol/Luna 共用官方 272K 边界和 Fast 2 倍策略，但保留各自价格。
 	for model, price := range map[string]*LiteLLMModelPricing{
-		"gpt-6-sol": openAIGPT6SolPricing, "gpt-6-luna": openAIGPT6LunaPricing,
+		"gpt-6.1-sol": openAIGPT61SolPricing, "gpt-6-sol": openAIGPT6SolPricing, "gpt-6-luna": openAIGPT6LunaPricing,
 	} {
 		s.fallbackPrices[model] = &ModelPricing{
 			InputPricePerToken: price.InputCostPerToken, OutputPricePerToken: price.OutputCostPerToken,
@@ -979,6 +983,9 @@ func (s *BillingService) initFallbackPricing() {
 // getFallbackPricing 根据模型系列获取回退价格
 func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	modelLower := strings.ToLower(model)
+	if claude.IsSonnet55Model(modelLower) {
+		return &ModelPricing{InputPricePerToken: 2e-6, OutputPricePerToken: 10e-6, CacheCreationPricePerToken: 2.5e-6, CacheReadPricePerToken: 0.2e-6, CacheCreation5mPrice: 2.5e-6, CacheCreation1hPrice: 4e-6, SupportsCacheBreakdown: true}
+	}
 	if claude.IsOpus55Model(modelLower) {
 		return s.fallbackPrices["claude-opus-5-5"]
 	}
@@ -1151,7 +1158,7 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	// OpenAI 仅匹配已知 GPT/Codex 族，避免未知 OpenAI 型号误计价。
 	if normalized := normalizeKnownOpenAICodexModel(modelLower); normalized != "" {
 		switch normalized {
-		case "gpt-6-sol", "gpt-6-luna":
+		case "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna":
 			return s.fallbackPrices[normalized]
 		case "gpt-6-astra":
 			return s.fallbackPrices["gpt-6-astra"]
@@ -1272,7 +1279,7 @@ func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 			price1h := litellmPricing.CacheCreationInputTokenCostAbove1hr
 			enableBreakdown := price1h > 0 && price1h > price5m
 			// 只为新 Sol/Luna 保留目录字段来源，旧 GPT 的已部署补价策略保持原样。
-			preserveCatalogPrices := isOpenAIGPT6SolModel(model) || isOpenAIGPT6LunaModel(model)
+			preserveCatalogPrices := isOpenAIGPT61SolModel(model) || isOpenAIGPT6SolModel(model) || isOpenAIGPT6LunaModel(model)
 			return s.applyModelSpecificPricingPolicy(model, &ModelPricing{
 				InputPricePerToken:                         litellmPricing.InputCostPerToken,
 				InputPricePerTokenPriority:                 litellmPricing.InputCostPerTokenPriority,
@@ -1755,7 +1762,13 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		return applyDeepSeekOfficialPricing(model, pricing)
 	}
 	normalized := normalizeKnownOpenAICodexModel(model)
-	if isOpenAIGPT6SolModel(normalized) || isOpenAIGPT6LunaModel(normalized) {
+	if isOpenAIGPT6AstraModel(normalized) {
+		// 在最终普通价上应用 Ultrafast，不覆盖渠道价或显式零价。
+		cloned := *pricing
+		cloned.UltrafastMultiplier = 6
+		return &cloned
+	}
+	if isOpenAIGPT61SolModel(normalized) || isOpenAIGPT6SolModel(normalized) || isOpenAIGPT6LunaModel(normalized) {
 		// 目录与 override 的显式价格优先；只有缺失项才补官方 1.25x/2x。
 		// 每次克隆，避免渠道覆盖修改共享目录或静态回退价。
 		cloned := *pricing
@@ -1811,7 +1824,7 @@ func longContextMultiplierOrOne(multiplier float64) float64 {
 // 档的模型（如 gpt-5.5-pro、gpt-5.4-mini/nano）返回 0。
 func openAIModelFastPricingRatio(normalized string) float64 {
 	switch normalized {
-	case "gpt-6-sol", "gpt-6-luna", "gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+	case "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
 		return 2.0
 	case "gpt-5.5":
 		return 2.5

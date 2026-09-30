@@ -90,7 +90,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if err := json.Unmarshal(body, &anthropicReq); err != nil {
 		return nil, fmt.Errorf("parse anthropic request: %w", err)
 	}
-	if err := validateOpenAIReasoningEffort(body, anthropicReq.Model); err != nil {
+	if err := validateOpenAIReasoningEffort(body, anthropicReq.Model, resolveOpenAIForwardModel(account, anthropicReq.Model, defaultMappedModel)); err != nil {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}

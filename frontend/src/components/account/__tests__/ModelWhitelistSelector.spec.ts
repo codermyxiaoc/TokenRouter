@@ -65,6 +65,17 @@ function mountSelector(props: Record<string, unknown> = {}) {
 }
 
 describe('ModelWhitelistSelector', () => {
+  it.each([
+    ['openai', 'gpt-6.1-sol'], ['anthropic', 'claude-sonnet-5-5']
+  ])('展示并选择 %s 新型号 %s', async (platform, model) => {
+    const wrapper = mountSelector({ platform })
+    await wrapper.get('div.cursor-pointer').trigger('click')
+    const row = wrapper.findAll('[data-testid="model-option"]').find(candidate => candidate.text().includes(model))
+    expect(row).toBeTruthy()
+    await row!.get('[data-testid="select-model"]').trigger('click')
+    expect(wrapper.emitted('update:modelValue')).toEqual([[[model]]])
+  })
+
   beforeEach(() => {
     syncUpstreamModels.mockReset()
     syncUpstreamModelsPreview.mockReset()

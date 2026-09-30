@@ -22,6 +22,57 @@ vi.mock('@/composables/useClipboard', () => ({
 import UseKeyModal from '../UseKeyModal.vue'
 
 describe('UseKeyModal', () => {
+  it('Claude-only 隐藏未验证客户端，并且降级配置只使用双方启用的协议', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: { show: true, apiKey: 'sk-test', baseUrl: 'https://example.com', platform: 'anthropic',
+        claudeCodeOnly: true, allowedClientProtocols: ['anthropic_messages', 'openai_responses'] },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } }
+    })
+    expect(wrapper.text()).toContain('keys.useKeyModal.cliTabs.claudeCode')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.cliTabs.opencode')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.cliTabs.codexCli')
+    await wrapper.setProps({ fallbackClientProtocols: ['openai_responses'] })
+    const tab = wrapper.findAll('button').find(button => button.text().includes('keys.useKeyModal.cliTabs.opencode'))
+    await tab!.trigger('click')
+    expect(JSON.parse(wrapper.get('pre code').text()).provider.anthropic.npm).toBe('@ai-sdk/openai')
+    await wrapper.setProps({ smartRouting: true })
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.cliTabs.opencode')
+    await wrapper.setProps({ allowedClientProtocols: [] })
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.cliTabs.claudeCode')
+  })
+
+  it.each(['openai', 'anthropic', 'antigravity'] as const)('新模型只进入官方 %s OpenCode 预设', async platform => {
+    const wrapper = mount(UseKeyModal, {
+      props: { show: true, apiKey: 'sk-test', baseUrl: 'https://example.com', platform,
+        allowedClientProtocols: platform === 'openai' ? ['openai_responses'] : ['anthropic_messages'] },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } }
+    })
+    await wrapper.findAll('button').find(button => button.text().includes('keys.useKeyModal.cliTabs.opencode'))!.trigger('click')
+    const config = JSON.parse(wrapper.get('pre code').text())
+    const models = config.provider[platform === 'antigravity' ? 'antigravity-claude' : platform].models
+    if (platform === 'openai') {
+      expect(Object.keys(models['gpt-6.1-sol'].variants)).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+      expect(models['gpt-6-sol'].variants).toHaveProperty('none')
+    } else if (platform === 'anthropic') {
+      expect(models['claude-sonnet-5-5'].options).toEqual({ thinking: { type: 'adaptive' }, effort: 'high' })
+    } else {
+      expect(models).not.toHaveProperty('claude-sonnet-5-5')
+    }
+  })
+
+  it.each(['anthropic_messages', 'openai_responses'] as const)('Antigravity Claude-only 降级 %s 配置使用通用入口', async protocol => {
+    const wrapper = mount(UseKeyModal, {
+      props: { show: true, apiKey: 'sk-test', baseUrl: 'https://example.com', platform: 'antigravity',
+        claudeCodeOnly: true, allowedClientProtocols: [protocol], fallbackClientProtocols: [protocol] },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } }
+    })
+    await wrapper.findAll('button').find(button => button.text().includes('keys.useKeyModal.cliTabs.opencode'))!.trigger('click')
+    expect(wrapper.findAll('pre code')).toHaveLength(1)
+    const config = JSON.parse(wrapper.get('pre code').text())
+    expect(config.provider['antigravity-claude'].options.baseURL).toBe('https://example.com/v1')
+    expect(config.provider).not.toHaveProperty('antigravity-gemini')
+  })
+
   it('renders OpenCode platform setup with its catalog and current client protocols', async () => {
     const wrapper = mount(UseKeyModal, {
       props: { show: true, apiKey: 'sk-test', baseUrl: 'https://example.com/v1', platform: 'opencode_go',

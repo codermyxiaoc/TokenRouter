@@ -8,7 +8,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const updateCacheKey = "update:latest"
+// 缓存按发布仓库与协议隔离，旧程序仍写入 update:latest 时不会影响本 fork。
+const updateCacheKey = "update:latest:" + service.UpdateGitHubRepository + ":v2"
 
 type updateCache struct {
 	rdb *redis.Client

@@ -427,6 +427,7 @@
                 <div class="flex items-center gap-2">
                   <button
                     type="button"
+                    v-if="section.platform !== 'video'"
                     @click="syncLatestModels(sIdx)"
                     :disabled="syncingPlatform === section.platform"
                     class="text-xs text-gray-500 hover:text-primary-600 disabled:opacity-50"
@@ -582,6 +583,7 @@
                       :key="pIdx"
                       :entry="entry"
                       :platform="section.platform"
+                      hide-video-user-pricing
                       @update="rule.pricing.splice(pIdx, 1, $event)"
                       @remove="removeRulePricingEntry(sIdx, ruleIndex, pIdx)"
                     />
@@ -630,6 +632,7 @@
 </template>
 
 <script setup lang="ts">
+import { validVideoPrices, videoPricesFromAPI, videoPricesToAPI, validVideoImageInputPricing, videoImageInputPricingToAPI, videoImageInputPricingFromAPI, validVideoFallbackPrice, videoFallbackPriceToAPI, validVideoTokenPrepay, videoTokenPrepayToAPI, videoTokenPrepayFromAPI } from "@/components/admin/channel/videoPricing"
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -778,7 +781,7 @@ const billingModelSourceHint = computed(() => {
 let abortController: AbortController | null = null
 
 // ── Platform config ──
-const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go']
+const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'video']
 
 // ── Helpers ──
 function formatDate(value: string): string {
@@ -868,7 +871,8 @@ function toggleGroupInSection(sectionIdx: number, groupId: number) {
 function addPricingEntry(sectionIdx: number) {
   form.platforms[sectionIdx].model_pricing.push({
     models: [],
-    billing_mode: 'token',
+    billing_mode: form.platforms[sectionIdx].platform === 'video' ? 'video_token' : 'token',
+    video_prices: [],
     price_multiplier: null,
     fast_mode_multiplier: null,
     fast_multiplier: null,
@@ -1011,7 +1015,8 @@ function addAccountStatsRule(sectionIdx: number) {
 function addRulePricingEntry(sectionIdx: number, ruleIndex: number) {
   form.platforms[sectionIdx].account_stats_pricing_rules[ruleIndex].pricing.push({
     models: [],
-    billing_mode: 'token',
+    billing_mode: form.platforms[sectionIdx].platform === 'video' ? 'video_token' : 'token',
+    video_prices: [],
     price_multiplier: null,
     fast_mode_multiplier: null,
     fast_multiplier: null,
@@ -1135,6 +1140,7 @@ function accountStatsRulesToAPI(): AccountStatsPricingRule[] {
             platform: section.platform,
             models: p.models,
             billing_mode: p.billing_mode,
+            video_prices: videoPricesToAPI(p.video_prices),
             price_multiplier: toNullableNumber(p.price_multiplier),
             fast_mode_multiplier: toNullableNumber(p.fast_mode_multiplier),
             fast_multiplier: toNullableNumber(p.fast_multiplier),
@@ -1183,6 +1189,10 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
         platform: section.platform,
         models: entry.models,
         billing_mode: entry.billing_mode,
+        video_prices: videoPricesToAPI(entry.video_prices),
+        video_image_input_pricing: videoImageInputPricingToAPI(entry.video_image_input_pricing),
+        video_fallback_price: section.platform === 'video' && ['video', 'video_token', 'video_per_request'].includes(entry.billing_mode) ? videoFallbackPriceToAPI(entry.video_fallback_price) : null,
+        video_token_prepay: section.platform === 'video' && entry.billing_mode === 'video_token' ? videoTokenPrepayToAPI(entry.video_token_prepay) : null,
         price_multiplier: toNullableNumber(entry.price_multiplier),
         fast_mode_multiplier: toNullableNumber(entry.fast_mode_multiplier),
         fast_multiplier: toNullableNumber(entry.fast_multiplier),
@@ -1281,6 +1291,10 @@ function apiToForm(channel: Channel): PlatformSection[] {
       .map(p => ({
         models: p.models || [],
         billing_mode: p.billing_mode,
+        video_prices: videoPricesFromAPI(p.video_prices),
+        video_image_input_pricing: videoImageInputPricingFromAPI(p.video_image_input_pricing),
+        video_fallback_price: p.video_fallback_price ?? null,
+        video_token_prepay: videoTokenPrepayFromAPI(p.video_token_prepay),
         price_multiplier: p.price_multiplier ?? null,
         fast_mode_multiplier: null,
         fast_multiplier: p.fast_multiplier ?? p.fast_mode_multiplier ?? null,
@@ -1478,6 +1492,7 @@ function distributeRulesToPlatforms(apiRules: AccountStatsPricingRule[]) {
       pricing: (apiRule.pricing || []).map(p => ({
         models: [...(p.models || [])],
         billing_mode: p.billing_mode,
+        video_prices: videoPricesFromAPI(p.video_prices),
         price_multiplier: p.price_multiplier ?? null,
         fast_mode_multiplier: null,
         fast_multiplier: p.fast_multiplier ?? null,
@@ -1609,6 +1624,22 @@ async function handleSubmit() {
       ...section.account_stats_pricing_rules.flatMap(rule => rule.pricing),
     ]
     for (const entry of entries) {
+      if (!validVideoPrices(entry.video_prices)) {
+        appStore.showError(t("admin.channels.videoPricing.invalid"))
+        return
+      }
+      if (!validVideoFallbackPrice(entry.video_fallback_price)) {
+        appStore.showError(t('admin.channels.videoPricing.fallbackInvalid'))
+        return
+      }
+      if (!validVideoTokenPrepay(entry.video_token_prepay)) {
+        appStore.showError(t('admin.channels.videoTokenPrepay.invalid'))
+        return
+      }
+      if (!validVideoImageInputPricing(entry.video_image_input_pricing)) {
+        appStore.showError(t('admin.channels.videoImageInputPricing.invalid'))
+        return
+      }
       if (entry.models.length === 0 || toNullableNumber(entry.price_multiplier) === null) continue
       if (!hasExplicitPricing(entry)) {
         const models = entry.models.join(', ')

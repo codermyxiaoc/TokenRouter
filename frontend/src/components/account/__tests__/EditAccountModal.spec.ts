@@ -359,20 +359,166 @@ describe('EditAccountModal', () => {
   })
 
   // 模拟脱敏后的已存凭据，验证回填期间不会把自定义配置覆盖为预设。
+  // 编辑保存时移除历史 Token 上限，其他凭据继续保留。
+  it('round-trips Video bindings and removes the retired Token budget', async () => {
+    const account = { ...buildAccount(), platform: 'video', credentials: {
+      base_url: 'https://video.example.test', api_key: 'video-key', video_endpoints: ['kling'],
+      video_model_bindings: { 'kling-v3': 'kling' }, video_model_paths: { 'kling-v3': '/text-to-video/{model}' },
+      video_max_output_tokens: 240000, video_max_pending_tasks: 8, video_max_duration_seconds: 15,
+    } }
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
+    expect(fields.props('modelValue').bindings).toEqual([{ model: 'kling-v3', endpoint: 'kling', path: '/text-to-video/{model}' }])
+    expect(wrapper.find('[data-testid="video-max-output-tokens"]').exists()).toBe(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledOnce()
+    expect(updateAccountMock.mock.calls[0][1].credentials).toMatchObject({ video_endpoints: ['kling'], video_max_pending_tasks: 8,
+      video_max_duration_seconds: 15, video_model_paths: { 'kling-v3': '/text-to-video/{model}' } })
+    expect(wrapper.findComponent({ name: 'UpstreamUsageConfigEditor' }).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // 编辑时非法绑定同样不提交，既有密钥脱敏也不能绕过端点校验。
+  it.each([
+    [{ model: 'shared', endpoint: 'compat', path: '' }, { model: ' shared ', endpoint: 'compat', path: '' }],
+    [{ model: 'shared', endpoint: 'wan', path: '' }],
+    [{ model: 'shared', endpoint: 'kling', path: '/unsupported' }],
+  ])('does not update Video with invalid bindings %j', async (...bindings) => {
+    const account = { ...buildAccount(), platform: 'video', credentials_status: { has_api_key: true }, credentials: {
+      base_url: 'https://video.example.test', video_endpoints: ['compat', 'kling'],
+    } }
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
+    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), bindings })
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  // 缺少端点的账号编辑时仍需管理员选择，不能借保存动作隐式补入 compat。
+  it('does not infer compatibility when an existing Video account has no endpoint selection', async () => {
+    const account = { ...buildAccount(), platform: 'video', credentials: {
+      base_url: 'https://video.example.test', api_key: 'video-key',
+    } }
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(wrapper.getComponent({ name: 'VideoAccountFields' }).props('modelValue').endpoints).toEqual([])
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="video-endpoint-openai_videos"]').setValue(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledOnce()
+    expect(updateAccountMock.mock.calls[0][1].credentials.video_endpoints).toEqual(['openai_videos'])
+    wrapper.unmount()
+  })
+
+  // 旧账号即使持有已移除配置，保存时也不把它重新写出。
+  it.each([undefined, null, '', 240000])('removes a legacy Video Token limit %s on edit', async value => {
+    const account = { ...buildAccount(), platform: 'video', credentials: {
+      base_url: 'https://video.example.test', api_key: 'video-key', video_endpoints: ['compat'],
+      ...(value === undefined ? {} : { video_max_output_tokens: value }),
+    } }
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="video-max-output-tokens"]').exists()).toBe(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledOnce()
+    expect(updateAccountMock.mock.calls[0][1].credentials).not.toHaveProperty('video_max_output_tokens')
+    wrapper.unmount()
+  })
+
+  it('edits mixed string and array Video bindings while preserving standalone Kling paths', async () => {
+    const account = { ...buildAccount(), platform: 'video', credentials: {
+      base_url: 'https://video.example.test', api_key: 'video-key', video_endpoints: ['kling', 'compat', 'seedance'],
+      video_model_bindings: { shared: ['kling', 'compat'], legacy: 'seedance' },
+      video_model_paths: { shared: '/text-to-video/{model}', unbound: '/omni-video/{model}' },
+    } }
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
+    expect(fields.props('modelValue').bindings).toEqual([
+      { model: 'shared', endpoint: 'kling', path: '/text-to-video/{model}' },
+      { model: 'shared', endpoint: 'compat', path: '' },
+      { model: 'legacy', endpoint: 'seedance', path: '' },
+    ])
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledOnce()
+    expect(updateAccountMock.mock.calls[0][1].credentials).toMatchObject(account.credentials)
+    wrapper.unmount()
+  })
+
   it('preserves OpenCode Zen custom endpoints and rules on edit without a new API key', async () => {
     const account = { ...buildAccount(), platform: 'opencode_go', credentials_status: { has_api_key: true },
       credentials: { account_mode: 'zen', api_protocol: 'adaptive',
         base_url: 'https://custom.example.test/v1',
         api_base_urls: { chat_completions: 'https://custom.example.test/v1', responses: 'https://custom.example.test/responses', anthropic: 'https://custom.example.test/messages' },
-        protocol_rules: [{ pattern: 'private-*', protocol: 'responses' }] } }
+        protocol_rules: [{ pattern: 'private-*', protocol: 'responses' }] },
+      extra: { upstream_usage_query: { enabled: true, adapter: 'opencode_go' } } }
     updateAccountMock.mockResolvedValue(account)
     const wrapper = mountModal(account)
     await flushPromises()
+    // 历史误写的 GO 适配器不限制 Zen，回填到通用默认配置。
+    expect(wrapper.get<HTMLSelectElement>('[data-testid="upstream-usage-adapter"]').element.value).toBe('sub2api')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await flushPromises()
     const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
     expect(credentials).toMatchObject(account.credentials)
     expect(credentials).not.toHaveProperty('api_key')
+    expect(updateAccountMock.mock.calls[0][1].extra.upstream_usage_query.adapter).toBe('sub2api')
+  })
+
+  // 三种模式的通用查询设置均可保存回填，敏感钱包令牌不得回显或混入 Extra。
+  it.each([['opencode_go', 'zen'], ['minimax', 'payg'], ['zhipu', 'payg']] as const)(
+    'round-trips %s %s generic usage settings and preserves redacted wallet credentials', async (platform, mode) => {
+    const account = { ...buildAccount(), platform, credentials_status: { has_api_key: true },
+      credentials: { account_mode: mode, api_protocol: 'adaptive', base_url: 'https://relay.example.test/v1',
+        api_base_urls: { chat_completions: 'https://relay.example.test/v1', anthropic: 'https://relay.example.test/anthropic',
+          ...(platform !== 'zhipu' ? { responses: 'https://relay.example.test/responses' } : {}) } },
+      extra: { upstream_usage_query: { enabled: true, adapter: 'zivv', base_url: 'https://old-usage.example.test' } },
+    }
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(wrapper.get<HTMLSelectElement>('[data-testid="upstream-usage-adapter"]').element.value).toBe('zivv')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="upstream-usage-base-url"]').element.value).toBe('https://old-usage.example.test')
+    await wrapper.get('[data-testid="upstream-usage-adapter"]').setValue('new_api')
+    await wrapper.get('[data-testid="upstream-usage-base-url"]').setValue(' https://usage.example.test/root ')
+    await wrapper.get('[data-testid="upstream-usage-wallet-access-token"]').setValue(' wallet-pat ')
+    await wrapper.get('[data-testid="upstream-usage-wallet-user-id"]').setValue('42')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const saved = updateAccountMock.mock.calls[0][1]
+    expect(saved.credentials).toMatchObject({ ...account.credentials, new_api_user_access_token: 'wallet-pat', new_api_user_id: '42' })
+    expect(saved.extra.upstream_usage_query).toEqual({ enabled: true, adapter: 'new_api', base_url: 'https://usage.example.test/root' })
+    expect(JSON.stringify(saved.extra)).not.toContain('wallet-pat')
+    // 服务端返回的敏感凭据仅保留存在标记；再次保存留空不覆盖原令牌。
+    const redactedCredentials = { ...saved.credentials }
+    delete redactedCredentials.new_api_user_access_token
+    const reloaded = { ...account, ...saved, credentials: redactedCredentials,
+      credentials_status: { has_api_key: true, has_new_api_user_access_token: true } }
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true, account: reloaded })
+    await flushPromises()
+    expect(wrapper.get<HTMLSelectElement>('[data-testid="upstream-usage-adapter"]').element.value).toBe('new_api')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="upstream-usage-wallet-access-token"]').element.value).toBe('')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="upstream-usage-wallet-user-id"]').element.value).toBe('42')
+    expect(wrapper.html()).not.toContain('wallet-pat')
+    await wrapper.get('[data-testid="upstream-usage-base-url"]').setValue('')
+    await wrapper.get('[data-testid="upstream-usage-enabled"]').setValue(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const cleared = updateAccountMock.mock.calls[1][1]
+    expect(cleared.extra.upstream_usage_query).toEqual({ enabled: false, adapter: 'new_api' })
+    expect(cleared.credentials).toMatchObject(account.credentials)
+    expect(cleared.credentials).not.toHaveProperty('new_api_user_access_token')
+    wrapper.unmount()
   })
 
   it('treats legacy OpenCode accounts as GO and writes an explicitly empty rule list', async () => {
@@ -380,6 +526,7 @@ describe('EditAccountModal', () => {
     updateAccountMock.mockResolvedValue(account)
     const wrapper = mountModal(account)
     await flushPromises()
+    expect(wrapper.find('[data-testid="upstream-usage-adapter"]').exists()).toBe(false)
     for (const button of wrapper.findAll('[aria-label="admin.accounts.opencodeGo.protocolRules.remove"]')) {
       await button.trigger('click')
     }
@@ -388,6 +535,7 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
       account_mode: 'go', api_protocol: 'adaptive', base_url: 'https://opencode.ai/zen/go/v1', protocol_rules: []
     })
+    expect(updateAccountMock.mock.calls[0][1].extra.upstream_usage_query.adapter).toBe('opencode_go')
   })
 
   it('renders the shared account model rule copy', async () => {
@@ -481,6 +629,7 @@ describe('EditAccountModal', () => {
     checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
     expect(wrapper.text()).toContain('admin.accounts.cnProviders.accountMode.coding')
+    expect(wrapper.find('[data-testid="upstream-usage-adapter"]').exists()).toBe(mode === 'payg')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)

@@ -55,6 +55,9 @@ func (r *usageLogRepository) GetByID(ctx context.Context, id int64) (log *servic
 	if err = hydrateUsageBillingSubscriptions(ctx, r.sql, []*service.UsageLog{log}); err != nil {
 		return nil, err
 	}
+	if err = hydrateUsageVideoBilling(ctx, r.sql, []*service.UsageLog{log}); err != nil {
+		return nil, err
+	}
 	return log, nil
 }
 
@@ -331,6 +334,9 @@ func (r *usageLogRepository) queryUsageLogs(ctx context.Context, query string, a
 		logPointers[i] = &logs[i]
 	}
 	if err = hydrateUsageBillingSubscriptions(ctx, r.sql, logPointers); err != nil {
+		return nil, err
+	}
+	if err = hydrateUsageVideoBilling(ctx, r.sql, logPointers); err != nil {
 		return nil, err
 	}
 	return logs, nil

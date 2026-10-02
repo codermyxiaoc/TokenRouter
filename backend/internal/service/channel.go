@@ -11,16 +11,18 @@ import (
 type BillingMode string
 
 const (
-	BillingModeToken      BillingMode = "token"       // 按 token 区间计费
-	BillingModePerRequest BillingMode = "per_request" // 按次计费（支持上下文窗口分层）
-	BillingModeImage      BillingMode = "image"       // 图片计费（当前按次，预留 token 计费）
-	BillingModeVideo      BillingMode = "video"       // 视频生成计费（按视频生成次数）
+	BillingModeToken           BillingMode = "token"             // 按 token 区间计费
+	BillingModePerRequest      BillingMode = "per_request"       // 按次计费（支持上下文窗口分层）
+	BillingModeImage           BillingMode = "image"             // 图片计费（当前按次，预留 token 计费）
+	BillingModeVideo           BillingMode = "video"             // 视频生成按秒计费，保留历史价卡兼容
+	BillingModeVideoToken      BillingMode = "video_token"       // 视频生成 Token 计费，与聊天 Token 独立
+	BillingModeVideoPerRequest BillingMode = "video_per_request" // 独立视频平台按成功任务计费
 )
 
 // IsValid 检查 BillingMode 是否为合法值
 func (m BillingMode) IsValid() bool {
 	switch m {
-	case BillingModeToken, BillingModePerRequest, BillingModeImage, BillingModeVideo, "":
+	case BillingModeToken, BillingModePerRequest, BillingModeImage, BillingModeVideo, BillingModeVideoToken, BillingModeVideoPerRequest, "":
 		return true
 	}
 	return false
@@ -29,7 +31,7 @@ func (m BillingMode) IsValid() bool {
 // IsValidUsageFilter 检查 BillingMode 是否可用于使用记录筛选。
 func (m BillingMode) IsValidUsageFilter() bool {
 	switch m {
-	case BillingModeToken, BillingModePerRequest, BillingModeImage, BillingModeVideo, "":
+	case BillingModeToken, BillingModePerRequest, BillingModeImage, BillingModeVideo, BillingModeVideoToken, BillingModeVideoPerRequest, "":
 		return true
 	}
 	return false
@@ -109,8 +111,53 @@ type ChannelModelPricing struct {
 	PerRequestPrice   *float64            `json:"per_request_price"`
 	Intervals         []PricingInterval   `json:"intervals"`
 	TimePricing       *ChannelTimePricing `json:"time_pricing,omitempty"`
-	CreatedAt         time.Time           `json:"created_at,omitempty"`
-	UpdatedAt         time.Time           `json:"updated_at,omitempty"`
+	// VideoPrices 显式区分分辨率和是否输入参考视频；Token 模式单价单位为美元/百万 Token。
+	VideoPrices []VideoPriceTier `json:"video_prices,omitempty"`
+	// VideoFallbackPrice 仅在矩阵没有请求分辨率时回退，显式零价仍然有效。
+	VideoFallbackPrice *float64 `json:"video_fallback_price,omitempty"`
+	// VideoTokenPrepay 冻结原始固定秒价，用于 Token 视频提交前预扣。
+	VideoTokenPrepay *VideoTokenPrepayConfig `json:"video_token_prepay,omitempty"`
+	// VideoImageInputPricing 按超出免费张数的参考图片收取附加费；nil 表示禁用。
+	VideoImageInputPricing *VideoImageInputPricing `json:"video_image_input_pricing,omitempty"`
+	CreatedAt              time.Time               `json:"created_at,omitempty"`
+	UpdatedAt              time.Time               `json:"updated_at,omitempty"`
+}
+
+// VideoTokenPrepayConfig 的预扣单价单位为美元/秒，不参与最终视频价格倍率。
+type VideoTokenPrepayConfig struct {
+	PricePerSecond *float64 `json:"price_per_second"`
+}
+
+// Clone 隔离预扣配置的价格指针，防止编辑污染缓存或任务快照。
+func (p *VideoTokenPrepayConfig) Clone() *VideoTokenPrepayConfig {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	if p.PricePerSecond != nil {
+		price := *p.PricePerSecond
+		cp.PricePerSecond = &price
+	}
+	return &cp
+}
+
+// VideoImageInputPricing 是视频参考图片的按张附加价，单价单位为美元/张。
+type VideoImageInputPricing struct {
+	FreeImages int      `json:"free_images"`
+	Price      *float64 `json:"price"` // nil 为缺价，显式零价仍是有效配置。
+}
+
+// Clone 隔离价卡和单价指针，避免编辑或应用倍率时污染缓存与原始配置。
+func (p *VideoImageInputPricing) Clone() *VideoImageInputPricing {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	if p.Price != nil {
+		price := *p.Price
+		cp.Price = &price
+	}
+	return &cp
 }
 
 // ChannelTimePricing 渠道模型定价的分时倍率配置。
@@ -212,7 +259,12 @@ func (p *ChannelModelPricing) HasEffectivePricing() bool {
 		mode = BillingModeToken
 	}
 	switch mode {
+	case BillingModeVideoToken, BillingModeVideoPerRequest:
+		return hasVideoTierPrice(p.VideoPrices) || p.VideoFallbackPrice != nil
 	case BillingModePerRequest, BillingModeImage, BillingModeVideo:
+		if mode == BillingModeVideo && (hasVideoTierPrice(p.VideoPrices) || p.VideoFallbackPrice != nil) {
+			return true
+		}
 		if p.PerRequestPrice != nil {
 			return true
 		}
@@ -256,6 +308,10 @@ func (p *ChannelModelPricing) HasEffectivePricing() bool {
 // Clone 返回 ChannelModelPricing 的拷贝；模型、区间和分时配置切片彼此独立。
 func (p ChannelModelPricing) Clone() ChannelModelPricing {
 	cp := p
+	cp.VideoPrices = cloneVideoPriceTiers(p.VideoPrices)
+	cp.VideoFallbackPrice = multiplyPricePointer(p.VideoFallbackPrice, 1)
+	cp.VideoTokenPrepay = p.VideoTokenPrepay.Clone()
+	cp.VideoImageInputPricing = p.VideoImageInputPricing.Clone()
 	cp.ReasoningEffortMultipliers = cloneReasoningEffortMultipliers(p.ReasoningEffortMultipliers)
 	if p.Models != nil {
 		cp.Models = make([]string, len(p.Models))

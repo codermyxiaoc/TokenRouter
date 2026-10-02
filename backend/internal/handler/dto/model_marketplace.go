@@ -35,13 +35,21 @@ type ModelMarketplacePricing struct {
 	ImagePrice2K                  float64                           `json:"image_price_2k,omitempty"`
 	ImagePrice4K                  float64                           `json:"image_price_4k,omitempty"`
 	VideoPrices                   []ModelMarketplaceVideoPrice      `json:"video_prices,omitempty"`
+	VideoImageInputPricing        *service.VideoImageInputPricing   `json:"video_image_input_pricing,omitempty"`
+	VideoFallbackPrice            *float64                          `json:"video_fallback_price,omitempty"`
+	VideoFallbackPricing          *ModelMarketplaceVideoPrice       `json:"video_fallback_pricing,omitempty"`
+	VideoTokenPrepay              *service.VideoTokenPrepayConfig   `json:"video_token_prepay,omitempty"`
 }
 
 // ModelMarketplaceVideoPrice 的零价格不可省略，避免免费档位在前端被误判为未定价。
 type ModelMarketplaceVideoPrice struct {
-	Resolution string  `json:"resolution"`
-	Price      float64 `json:"price"`
-	Unit       string  `json:"unit"`
+	Resolution        string  `json:"resolution"`
+	HasReferenceVideo *bool   `json:"has_reference_video,omitempty"`
+	Price             float64 `json:"price"`
+	Unit              string  `json:"unit"`
+	// 显式 null 表示本档关闭，前端不得回退继承其它档位的模型级配置。
+	VideoImageInputPricing *service.VideoImageInputPricing `json:"video_image_input_pricing"`
+	VideoTokenPrepay       *service.VideoTokenPrepayConfig `json:"video_token_prepay"`
 }
 
 // ModelMarketplacePricingInterval 是前端模型广场展示用的上下文区间价格。
@@ -65,11 +73,19 @@ type ModelMarketplacePricingInterval struct {
 }
 
 type ModelMarketplaceModel struct {
-	ID               string                  `json:"id"`
-	DisplayName      string                  `json:"display_name"`
-	Pricing          ModelMarketplacePricing `json:"pricing"`
-	InputModalities  []string                `json:"input_modalities,omitempty"`
-	OutputModalities []string                `json:"output_modalities,omitempty"`
+	ID               string                          `json:"id"`
+	DisplayName      string                          `json:"display_name"`
+	Pricing          ModelMarketplacePricing         `json:"pricing"`
+	InputModalities  []string                        `json:"input_modalities,omitempty"`
+	OutputModalities []string                        `json:"output_modalities,omitempty"`
+	VideoEndpoints   []ModelMarketplaceVideoEndpoint `json:"video_endpoints,omitempty"`
+}
+
+// ModelMarketplaceVideoEndpoint 只向客户端公开本站可调用的创建路径。
+type ModelMarketplaceVideoEndpoint struct {
+	Method   string `json:"method"`
+	Path     string `json:"path"`
+	Protocol string `json:"protocol"`
 }
 
 type ModelMarketplaceCapacity struct {
@@ -122,12 +138,17 @@ func ModelMarketplaceGroupsFromService(groups []service.ModelMarketplaceGroup) [
 	for _, group := range groups {
 		models := make([]ModelMarketplaceModel, 0, len(group.Models))
 		for _, model := range group.Models {
+			endpoints := make([]ModelMarketplaceVideoEndpoint, 0, len(model.VideoEndpoints))
+			for _, endpoint := range model.VideoEndpoints {
+				endpoints = append(endpoints, ModelMarketplaceVideoEndpoint{Method: endpoint.Method, Path: endpoint.Path, Protocol: endpoint.Protocol})
+			}
 			models = append(models, ModelMarketplaceModel{
 				ID:               model.ID,
 				DisplayName:      model.DisplayName,
 				Pricing:          modelMarketplacePricingFromService(model.Pricing),
 				InputModalities:  model.InputModalities,
 				OutputModalities: model.OutputModalities,
+				VideoEndpoints:   endpoints,
 			})
 		}
 
@@ -198,7 +219,12 @@ func modelMarketplaceCapacityFromService(capacity *service.GroupCapacitySummary)
 func modelMarketplacePricingFromService(pricing service.ModelDisplayPricing) ModelMarketplacePricing {
 	videoPrices := make([]ModelMarketplaceVideoPrice, 0, len(pricing.VideoPrices))
 	for _, price := range pricing.VideoPrices {
-		videoPrices = append(videoPrices, ModelMarketplaceVideoPrice{Resolution: price.Resolution, Price: price.Price, Unit: price.Unit})
+		videoPrices = append(videoPrices, modelMarketplaceVideoPriceFromService(price))
+	}
+	var videoFallbackPricing *ModelMarketplaceVideoPrice
+	if pricing.VideoFallbackPricing != nil {
+		fallback := modelMarketplaceVideoPriceFromService(*pricing.VideoFallbackPricing)
+		videoFallbackPricing = &fallback
 	}
 	intervals := make([]ModelMarketplacePricingInterval, 0, len(pricing.ContextIntervals))
 	for _, interval := range pricing.ContextIntervals {
@@ -245,7 +271,22 @@ func modelMarketplacePricingFromService(pricing service.ModelDisplayPricing) Mod
 		ImagePrice2K:                  pricing.ImagePrice2K,
 		ImagePrice4K:                  pricing.ImagePrice4K,
 		VideoPrices:                   videoPrices,
+		VideoImageInputPricing:        pricing.VideoImageInputPricing.Clone(),
+		VideoFallbackPrice:            (service.ChannelModelPricing{VideoFallbackPrice: pricing.VideoFallbackPrice}).Clone().VideoFallbackPrice,
+		VideoFallbackPricing:          videoFallbackPricing,
+		VideoTokenPrepay:              pricing.VideoTokenPrepay.Clone(),
 	}
+}
+
+// modelMarketplaceVideoPriceFromService 深拷贝逐档合同，保持公开快照与服务缓存隔离。
+func modelMarketplaceVideoPriceFromService(price service.ModelDisplayVideoPrice) ModelMarketplaceVideoPrice {
+	var hasReference *bool
+	if price.HasReferenceVideo != nil {
+		value := *price.HasReferenceVideo
+		hasReference = &value
+	}
+	return ModelMarketplaceVideoPrice{Resolution: price.Resolution, HasReferenceVideo: hasReference, Price: price.Price, Unit: price.Unit,
+		VideoImageInputPricing: price.VideoImageInputPricing.Clone(), VideoTokenPrepay: price.VideoTokenPrepay.Clone()}
 }
 
 func ModelMarketplaceStatsFromService(stats *service.DashboardPublicStats) ModelMarketplaceStats {

@@ -51,14 +51,14 @@ func TestOpenCodeGoUpstreamUsageUsesFixedAdapterAndConfiguredHost(t *testing.T) 
 	}
 }
 
-func TestOpenCodeGoUpstreamUsageUnsupportedAndDisabledDoNotRequest(t *testing.T) {
+func TestOpenCodeGoUpstreamUsageDisabledDoesNotRequest(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		mode    string
 		enabled bool
 		want    error
 	}{
-		{"Zen 没有余额查询协议", AccountModeZen, true, ErrUpstreamUsageUnsupported},
+		{"Zen 查询开关关闭", AccountModeZen, false, ErrUpstreamUsageDisabled},
 		{"GO 查询开关关闭", AccountModeGo, false, ErrUpstreamUsageDisabled},
 	} {
 		t.Run(test.name, func(t *testing.T) {

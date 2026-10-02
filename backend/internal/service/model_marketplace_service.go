@@ -54,6 +54,8 @@ type ModelMarketplaceModel struct {
 	// 查询不到时为 nil，前端能力标签降级为本地规则。
 	InputModalities  []string
 	OutputModalities []string
+	// VideoEndpoints 仅投影本站可调用的创建路径，不包含账号地址或上游模型。
+	VideoEndpoints []ModelMarketplaceVideoEndpoint
 }
 
 type ModelMarketplaceService struct {
@@ -381,12 +383,21 @@ func parsePositiveMarketplaceSettingFloat(raw string) (float64, bool) {
 }
 
 func (s *ModelMarketplaceService) listPublicModelsForGroup(ctx context.Context, group *Group) []ModelMarketplaceModel {
+	if s.gatewayService != nil && group != nil && marketplaceSupportsVideoEndpoints(group.Platform) {
+		// 预取失败时按分组取得同一份账号快照，同时生成目录和端点，避免两次读取产生混合能力。
+		if accounts, err := s.gatewayService.listRequestableModelAccounts(ctx, &group.ID); err == nil {
+			return s.listPublicModelsForGroupWithAccounts(ctx, group, accounts)
+		}
+	}
+	// 读取失败保留原目录回退；没有真实账号快照时不补造视频端点。
 	return s.buildPublicModelsForGroup(ctx, group, s.resolveGroupModels(ctx, group))
 }
 
 // listPublicModelsForGroupWithAccounts 使用本次模型广场请求预取的分组账号。
 func (s *ModelMarketplaceService) listPublicModelsForGroupWithAccounts(ctx context.Context, group *Group, accounts []Account) []ModelMarketplaceModel {
-	return s.buildPublicModelsForGroup(ctx, group, s.resolveGroupModelsWithAccounts(ctx, group, accounts))
+	models := s.buildPublicModelsForGroup(ctx, group, s.resolveGroupModelsWithAccounts(ctx, group, accounts))
+	s.attachMarketplaceVideoEndpoints(ctx, group, models, accounts)
+	return models
 }
 
 func (s *ModelMarketplaceService) buildPublicModelsForGroup(ctx context.Context, group *Group, modelDefs []marketplaceModelDef) []ModelMarketplaceModel {
@@ -463,6 +474,13 @@ func (s *ModelMarketplaceService) getRequestableModelDisplayPricing(ctx context.
 func (s *ModelMarketplaceService) getPublicModelDisplayPricing(ctx context.Context, group *Group, model string, imageConfig *ImagePriceConfig, baseModelHints ...string) ModelDisplayPricing {
 	if s.billingService == nil {
 		return unknownDisplayPricing()
+	}
+	if group != nil && group.Platform == PlatformVideo {
+		resolver := NewModelPricingResolver(nil, s.billingService)
+		if s.gatewayService != nil && s.gatewayService.resolver != nil {
+			resolver = s.gatewayService.resolver
+		}
+		return resolver.VideoDisplayPricing(ctx, group, model)
 	}
 	if group != nil && group.Platform == PlatformGrok && strings.HasPrefix(strings.ToLower(xai.StripGrokProviderPrefix(model)), "grok-") && CanonicalGrokImagineVideoPriceFamily(model) != "" {
 		return s.getPublicVideoDisplayPricing(ctx, group, model)

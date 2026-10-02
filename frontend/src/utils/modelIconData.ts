@@ -1,10 +1,26 @@
+import volcengineIcon from '@/assets/icons/volcengine.svg'
+import klingIcon from '@/assets/icons/kling.svg'
+
 export interface IconData {
   color: string
   paths: string[]
+  // 彩色和渐变图标使用本地 SVG，保留原图效果且不依赖外部站点。
+  src?: string
 }
 
 // SVG 路径来自 @lobehub/icons 的 Mono.js 文件。
 export const modelIconData: Record<string, IconData> = {
+  // 火山引擎与可灵使用指定来源的原始彩色图标，品牌和模型展示共用。
+  volcengine: {
+    color: '#006EFF',
+    paths: [],
+    src: volcengineIcon,
+  },
+  kling: {
+    color: '#003EFF',
+    paths: [],
+    src: klingIcon,
+  },
   // OpenCode 官方单色几何标识。
   opencode: {
     color: 'currentColor',

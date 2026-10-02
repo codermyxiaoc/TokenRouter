@@ -258,6 +258,7 @@ func TestSubscriptionFocus_PostgresExtensionDoesNotEraseConcurrentConsumption(t 
 					sub.MonthlyLimitUSD, sub.MonthlyWindowStart, sub.MonthlyUsageUSD = float64Ptr(10), &old, 3
 				}
 				mustCreateSubscription(t, client, sub)
+				seedResetCounts(t, sub.ID)
 				repo := NewUserSubscriptionRepository(client)
 				paused := &focusPausedExpiryRepository{UserSubscriptionRepository: repo, entered: make(chan struct{}), resume: make(chan struct{})}
 				svc := service.NewSubscriptionService(nil, paused, nil, client, nil)
@@ -296,6 +297,13 @@ func TestSubscriptionFocus_PostgresExtensionDoesNotEraseConcurrentConsumption(t 
 				anchor, used := focusPersistedWindow(final, kind)
 				require.True(t, anchor.Equal(*resetAnchor), "延期必须保留并发手动重置已经写入的精确锚点")
 				require.Equal(t, 4.25, used, "延期时旧锚点 CAS 不匹配，必须保留新窗口已经实际产生的消费")
+				require.Equal(t, []int64{2, 3, 4}, resetCountValues(final), "手动重置和延期不额外增加自然次数")
+				// 同时核对三个代次，保证单次重置只隔离所选窗口的旧视频预占。
+				var generations [3]int64
+				require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT daily_reset_generation,weekly_reset_generation,monthly_reset_generation FROM user_subscriptions WHERE id=$1`, sub.ID).
+					Scan(&generations[0], &generations[1], &generations[2]))
+				expectedGenerations := map[string][3]int64{"daily": {1, 0, 0}, "weekly": {0, 1, 0}, "monthly": {0, 0, 1}}
+				require.Equal(t, expectedGenerations[kind], generations, "延期不得丢失或重复推进手动重置代次")
 			})
 		}
 	}

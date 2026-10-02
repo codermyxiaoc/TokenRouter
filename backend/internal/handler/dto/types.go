@@ -612,6 +612,11 @@ type UsageLog struct {
 	ImageSizeSource    *string        `json:"image_size_source"`
 	ImageSizeBreakdown map[string]int `json:"image_size_breakdown"`
 	MediaType          *string        `json:"media_type"`
+	// 视频时长字段兼容旧记录；精确计费明细优先使用任务历史快照。
+	VideoCount           int                               `json:"video_count"`
+	VideoResolution      *string                           `json:"video_resolution,omitempty"`
+	VideoDurationSeconds *int                              `json:"video_duration_seconds,omitempty"`
+	VideoBilling         *service.UsageVideoBillingDetails `json:"video_billing,omitempty"`
 
 	// User-Agent
 	UserAgent *string `json:"user_agent"`

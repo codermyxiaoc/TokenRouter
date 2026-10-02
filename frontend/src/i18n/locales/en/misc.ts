@@ -1,5 +1,31 @@
 export default {
 marketplace: {
+    videoEndpoints: {
+      title: 'Compatible endpoints',
+      names: {
+        openai: 'OpenAI Videos',
+        seedance: 'Seedance (Ark)',
+        kling: 'Kling',
+        wan: 'Wan',
+        minimax: 'MiniMax',
+        grok: 'Grok',
+      },
+      copy: 'Copy endpoint {path}',
+      hint: 'Use the request parameters required by the selected endpoint.',
+      modelPlaceholderHint: 'Replace {placeholder} in the path with the model ID above.',
+    },
+    videoFallbackPrice: 'Fallback for unconfigured resolutions',
+    videoTokenPrepay: {
+      title: 'Duration prepayment (not the final price)',
+      price: 'Fixed {price} USD/second, plus reference image fees',
+      hint: 'No multipliers apply to prepayment. Final billing uses actual Token usage and normal rates, with a refund or additional charge.',
+    },
+    videoImageInputPricing: {
+      title: 'Reference image surcharge',
+      fromFirst: '{price} USD per image, starting with the first image.',
+      afterFree: 'First {count} images free; {price} USD per extra image.',
+      fixedHint: 'Fixed per-image price with no multipliers. Charged only on successful settlement.',
+    },
     title: 'Model Marketplace',
     subtitle: 'View available models',
     backHome: 'Back Home',

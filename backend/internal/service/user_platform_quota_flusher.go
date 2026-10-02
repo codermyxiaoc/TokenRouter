@@ -147,6 +147,10 @@ func (s *UserPlatformQuotaUsageFlusher) flushOneBatch(parentCtx context.Context)
 	// 缺失或软删除目标由仓储 UPDATE 跳过，不通过快照重建配置。
 	snaps := make([]UserPlatformQuotaSnapshot, 0, len(keys))
 	for i, key := range keys {
+		// Video 的数据库用量是结算账本的一部分，不允许缓存绝对快照回写。
+		if key.Platform == PlatformVideo {
+			continue
+		}
 		e := entries[i]
 		if e == nil {
 			continue

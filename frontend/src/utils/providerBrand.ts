@@ -20,6 +20,8 @@ export type ProviderBrandKey =
   | 'ai360'
   | 'zeroone'
   | 'doubao'
+  | 'volcengine'
+  | 'kling'
   | 'xiaomi'
   | 'minimax'
   | 'opencode'
@@ -216,6 +218,24 @@ const providerBrands: Record<ProviderBrandKey, ProviderBrand> = {
     badgeClass: 'bg-blue-100 text-blue-900 ring-blue-200 dark:bg-blue-500/20 dark:text-blue-50 dark:ring-blue-400/30',
     iconWrapClass: 'bg-blue-50 text-blue-700 ring-blue-200 dark:bg-blue-500/15 dark:text-blue-200 dark:ring-blue-400/30',
   },
+  // 火山引擎作为独立展示品牌，避免分组供应商被归并为豆包。
+  volcengine: {
+    key: 'volcengine',
+    label: '火山引擎',
+    iconKey: 'volcengine',
+    iconColor: '#006EFF',
+    badgeClass: 'bg-blue-100 text-blue-900 ring-blue-200 dark:bg-blue-500/20 dark:text-blue-50 dark:ring-blue-400/30',
+    iconWrapClass: 'bg-blue-50 text-blue-700 ring-blue-200 dark:bg-blue-500/15 dark:text-blue-200 dark:ring-blue-400/30',
+  },
+  // 可灵作为供应商展示品牌，复用现有分组选择、标签和市场筛选。
+  kling: {
+    key: 'kling',
+    label: '可灵',
+    iconKey: 'kling',
+    iconColor: '#003EFF',
+    badgeClass: 'bg-cyan-100 text-cyan-900 ring-cyan-200 dark:bg-cyan-500/20 dark:text-cyan-50 dark:ring-cyan-400/30',
+    iconWrapClass: 'bg-cyan-50 text-cyan-700 ring-cyan-200 dark:bg-cyan-500/15 dark:text-cyan-200 dark:ring-cyan-400/30',
+  },
   xiaomi: {
     key: 'xiaomi',
     label: '小米',
@@ -313,6 +333,8 @@ const defaultProviderBrandKeys: ProviderBrandKey[] = [
   'ai360',
   'zeroone',
   'doubao',
+  'volcengine',
+  'kling',
   'xiaomi',
   'minimax',
   'opencode',
@@ -345,7 +367,9 @@ const providerBrandAliases: Record<ProviderBrandKey, string[]> = {
   tencent: ['腾讯', '腾讯混元', 'tencent', 'hunyuan', '混元'],
   ai360: ['360', 'ai360'],
   zeroone: ['零一万物', '01', 'zeroone', '01ai', 'yi'],
-  doubao: ['豆包', 'doubao', '字节', 'bytedance', 'volcengine', '火山引擎', 'seedream', 'seedance'],
+  doubao: ['豆包', 'doubao', '字节', 'bytedance', 'seedream', 'seedance'],
+  volcengine: ['火山引擎', '火山方舟', 'volcengine', 'volc engine'],
+  kling: ['可灵', 'kling', 'kling ai'],
   xiaomi: ['小米', 'xiaomi', 'mi', 'mimo', 'mi mo', 'xiaomimimo'],
   minimax: ['minimax', 'abab'],
   opencode: ['opencode', 'opencode_go', 'opencode zen', 'opencode go'],

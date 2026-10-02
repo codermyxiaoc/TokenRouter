@@ -123,6 +123,8 @@ vi.mock('vue-router', () => ({
 
 const AppLayoutStub = { template: '<div><slot /></div>' }
 const UsageFiltersStub = defineComponent({
+  props: ['modelValue'],
+  emits: ['update:modelValue', 'change'],
   setup(_, { expose }) {
     const userKeyword = ref('')
     let userSearchRevision = 0
@@ -207,6 +209,19 @@ describe('admin UsageView 路由筛选', () => {
   afterEach(() => {
     Object.keys(routeQuery).forEach((key) => delete routeQuery[key])
     vi.useRealTimers()
+  })
+
+  // 管理员筛选器的三种视频计费值必须贯穿到列表接口，不能止于组件事件。
+  it.each(['video', 'video_token', 'video_per_request'])('传递视频计费筛选 %s 到管理员列表', async billingMode => {
+    const wrapper = mountRouteFilteredUsageView()
+    await flushPromises()
+    const filter = wrapper.getComponent(UsageFiltersStub)
+    filter.vm.$emit('update:modelValue', { ...filter.props('modelValue'), billing_mode: billingMode })
+    await wrapper.vm.$nextTick()
+    filter.vm.$emit('change')
+    await flushPromises()
+    expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ billing_mode: billingMode, page: 1 }), expect.anything())
+    wrapper.unmount()
   })
 
   it('应用 user_id 请求筛选时回显路由用户', async () => {

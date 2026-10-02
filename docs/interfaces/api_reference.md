@@ -2,6 +2,16 @@
 
 本文只记录当前项目面向模型客户端的 AI 网关接口，依据 `backend/internal/server/routes/gateway.go`、网关 handler 和请求 DTO 整理。面板认证、用户、支付、工单及管理员接口不在本文范围内；上游转换细节见文末专题文档。
 
+## 站内文档页面
+
+前端 `/docs` 提供公开的 AI 网关文档，`/docs/:documentId` 是可分享、可恢复的稳定正文地址；后台模式仍沿用现有公开页面守卫，不绕过站点访问策略。登录用户使用 AppLayout，访客使用同主题的公开页面；首页、模型广场和用户/管理员个人导航均有入口，原有外部 `doc_url` 配置继续保留。
+
+结构化目录位于 `frontend/src/content/api-docs/`，按文本/模型、图片/语音、视频划分协议内容，共用 `types.ts` 和页面渲染组件。目录检索覆盖路径、别名、参数和平台，并按十二个具体上游平台筛选；同一 URL 可以有不同能力的使用指南，平台标签不替代账号能力和分组协议门禁。代码示例使用站内公开 API Base URL 或当前源站地址与占位环境变量，不读取用户 Key，也不在浏览器执行示例请求。JSON 和响应均以文本插值渲染，复制 MD 与界面读取同一份结构化内容。
+
+维护路由或协议时同时核对这里的工程参考与对应前端内容，包括 HTTP 方法、任务归属、别名、请求头、参数、响应与错误条件。不能把已注册的通配路径当作任意上游能力，也不能把厂商文档中的未注册接口加入可用清单；原生视频按各协议保真，统一入口不代表自动转换所有厂商参数。
+
+视频目录按端点协议细分为 OpenAI Videos、Seedance / 火山方舟、Kling、万相、MiniMax 和 Grok 子标题，正文导航显示对应协议。该分类独立于账号平台资格，搜索和平台筛选后隐藏空子分类，保留原文档地址与跨平台接口归属。
+
 ## 快速约定
 
 ### 地址、鉴权和请求头
@@ -82,6 +92,9 @@ Gemini 错误遵循 Google 格式：
 | `GET` | `/v1/images/tasks/{task_id}` 及无前缀别名 | 使用原 Key 查询异步图片结果 |
 | `POST/GET/DELETE` | `/v1/images/batches...` | Gemini / Vertex 批量图片任务 |
 | `POST/GET` | `/v1/videos...` 及无前缀别名 | Grok 视频创建、编辑、扩展、查询和内容下载 |
+| `POST/GET` | `/v1/videos`、`/v1/videos/{video_id}`、`/v1/videos/{video_id}/content` 及无前缀别名 | Video 分组创建 JSON 异步任务、查询和下载；与 Grok 同名端点按平台分流，见[OpenAI 视频入口](video_upstream.md#video_openai_content) |
+| `POST/GET/DELETE` | `/v1/video/generations`、`/video/generations` 及任务 ID 子路径；`GET/DELETE /v1/tasks/{task_id}` | 独立 Video 统一 URL，请求体使用已绑定上游的原生格式，见[协议与原生路径](video_upstream.md#video_protocols) |
+| `POST/GET` | Kling 模型路径及 `/tasks`、Wan `/api/v1/services/aigc/video-generation/video-synthesis` 与 `/api/v1/tasks/{id}`、MiniMax `/v2/video_generation` 与查询路径 | 独立 Video 原生协议；Kling 明确的 `/v1/videos/text2video`、`/v1/videos/omni-video` 不进入 Grok |
 | `POST/GET/PATCH/DELETE` | `/v1/tts`、`/v1/stt`、`/v1/custom-voices...` | Grok Voice |
 | `POST` | `/v1/systemone`、无前缀 `/systemone` | OpenCode Zen Jev System One |
 | `POST` | `/v1/alpha/search`、无前缀 `/alpha/search`、`/backend-api/codex/alpha/search` | OpenAI/Codex 搜索兼容入口 |
@@ -356,6 +369,30 @@ x-goog-api-key: <tokenrouter_api_key>
 失败任务的查询仍返回 HTTP 200，任务内 `status: failed`、`http_status` 和 `error` 表示执行失败原因。任务不存在、过期或归属不匹配返回 404。创建和完成时分别保留 24 小时查询记录；S3 图片链接有效期独立于任务保留期。已落库的完成结果可跨重启和 Redis 丢失继续查询。执行实例失联后会登记 `failed / 503`、`error.type: execution_interrupted`，表示上游结果不确定且可能已经计费；不会静默一直处理中。轮询和状态补偿不再次生成或收费；图片已经生成但结果存储失败时可能仍有真实用量扣费，不要看到失败就自动重复生成。未完成上游调用无法在进程重启后安全续跑。
 
 该方式让长耗时生成在后台执行，客户端通过短请求取结果；客户端需要实现提交、轮询与保存返回链接。详细权限、结果存储和计费边界见[异步图片与任务记录](../domains/media_tasks.md)。
+
+### Video 平台 OpenAI 兼容视频任务
+
+使用绑定 Video 分组的站内 API Key。账号勾选 **OpenAI Videos (/v1/videos)** 时请求上游同路径；**OpenAI Videos (/v1/video/generations)** 对应原有兼容路径。请求参数遵循实际上游，下面示例模型需要在当前账号及价卡中配置。
+
+```bash
+curl https://api.example.com/v1/videos \
+  -H "Authorization: Bearer $TOKENROUTER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"seedance-2.5","prompt":"A city at sunset","duration":10,"resolution":"720p","ratio":"16:9"}'
+```
+
+任务返回本站 `vid_` 开头的 ID，成功受理响应包含 `object: "video"`、`model`、`created_at`、`status` 和 `billing_status`。用原 Key 查询或下载：
+
+```http
+GET /v1/videos/{video_id}
+Authorization: Bearer <tokenrouter_api_key>
+
+GET /v1/videos/{video_id}/content
+Authorization: Bearer <tokenrouter_api_key>
+Range: bytes=0-1048575
+```
+
+`Range` 可省略。状态为 `queued`、`in_progress`、`completed`、`failed`；失败附带 `error`。`completed` 只表示上游生成完成，`billing_status: "settled"` 才表示结算成功。受理不明或过期等待核对时额外返回 `task_status`，不要自动重新提交。内容接口仅允许已完成且已结算任务，其他状态返回 `409`；不存在或不属于当前用户/Key 返回 `404`。查询与下载复用原任务，不再次生成。此新入口不提供 `DELETE`、集合列表或 multipart。
 
 ### Seedance 原生视频任务
 

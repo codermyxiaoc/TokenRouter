@@ -49,6 +49,9 @@
           >
             <Icon name="book" size="md" />
           </a>
+          <router-link v-else to="/docs" class="header-status-icon-button hidden sm:flex" :aria-label="t('apiDocs.title')" :title="t('apiDocs.title')">
+            <Icon name="book" size="md" />
+          </router-link>
 
           <!-- 模型广场在窄屏保留图标入口，避免移动端只能展开侧栏访问。 -->
           <router-link

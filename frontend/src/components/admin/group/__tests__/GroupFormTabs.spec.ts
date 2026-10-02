@@ -8,6 +8,16 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('GroupFormTabs', () => {
+  it('Video only mounts generic and pricing fields, excluding hidden text validation', async () => {
+    const wrapper = mount(GroupFormTabs, { props: { platform: 'video', idPrefix: 'video' },
+      slots: { protocol: '<input required value="" />', platform: '<input required value="" />' } })
+    expect(wrapper.find('[data-group-tab-button="protocol"]').exists()).toBe(false)
+    expect(wrapper.find('[data-group-tab-button="platform"]').exists()).toBe(false)
+    expect(wrapper.findAll('input')).toHaveLength(0)
+    expect(await wrapper.vm.validate()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('隐藏空页签并在平台变化时回到通用', async () => {
     const wrapper = mount(GroupFormTabs, { props: { platform: 'openai', idPrefix: 'create' } })
     await wrapper.get('[data-group-tab-button="platform"]').trigger('click')

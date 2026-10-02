@@ -81,7 +81,7 @@ func (h *MediaTaskHandler) preview(c *gin.Context, admin bool) {
 	}
 }
 
-// PreviewContent 用短期任务专属票据支持原生 video/Range，不向浏览器或媒体站点发送任何账户凭据。
+// PreviewContent 用任务专属票据支持原生 video/Range；上游认证仅留在服务端的固定内容请求中，浏览器不可见。
 func (h *MediaTaskHandler) PreviewContent(c *gin.Context) {
 	c.Header("Cache-Control", "private, no-store")
 	c.Header("Referrer-Policy", "no-referrer")

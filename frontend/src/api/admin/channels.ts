@@ -5,7 +5,26 @@
 
 import { apiClient } from '../client'
 
-export type BillingMode = 'token' | 'per_request' | 'image' | 'video'
+export type BillingMode = 'token' | 'per_request' | 'image' | 'video' | 'video_token' | 'video_per_request'
+
+// 视频矩阵的单位由 billing_mode 决定：video_token 为 USD/百万 Token，video 为 USD/秒，video_per_request 为 USD/任务。
+export interface VideoPriceEntry {
+  resolution: string
+  // 仅用于读取旧价卡，新配置按分辨率保存唯一单价。
+  has_reference_video?: boolean
+  price: number
+}
+
+// 参考图片按固定美元单价计费，不参与任何视频、分组或套餐倍率。
+export interface VideoImageInputPricing {
+  free_images: number
+  price: number
+}
+
+// Token 视频预扣采用固定美元秒价，终态仍按真实 Token 用量结算。
+export interface VideoTokenPrepay {
+  price_per_second: number
+}
 
 export interface PricingInterval {
   id?: number
@@ -42,6 +61,10 @@ export interface ChannelModelPricing {
   platform: string
   models: string[]
   billing_mode: BillingMode
+  video_prices?: VideoPriceEntry[]
+  video_image_input_pricing?: VideoImageInputPricing | null
+  video_fallback_price?: number | null
+  video_token_prepay?: VideoTokenPrepay | null
   // 可空表示完全沿用现有定价，不隐式写入 1 倍。
   price_multiplier?: number | null
   // 仅用于 OpenAI token 定价；可空表示沿用模型默认 Fast 定价。

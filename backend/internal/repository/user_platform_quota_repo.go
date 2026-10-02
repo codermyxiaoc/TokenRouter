@@ -222,23 +222,20 @@ func (r *userPlatformQuotaRepository) IncrementUsageWithReset(ctx context.Contex
 // 未命中活跃记录时返回 ErrUserPlatformQuotaNotFound。
 func (r *userPlatformQuotaRepository) ResetExpiredWindow(ctx context.Context, userID int64, platform string, window string, newStart time.Time) error {
 	client := clientFromContext(ctx, r.client)
-	upd := client.UserPlatformQuota.Update().
-		Where(
-			userplatformquota.UserIDEQ(userID),
-			userplatformquota.PlatformEQ(platform),
-			userplatformquota.DeletedAtIsNil(),
-		)
 	switch window {
-	case "daily":
-		upd = upd.SetDailyUsageUsd(0).SetDailyWindowStart(newStart)
-	case "weekly":
-		upd = upd.SetWeeklyUsageUsd(0).SetWeeklyWindowStart(newStart)
-	case "monthly":
-		upd = upd.SetMonthlyUsageUsd(0).SetMonthlyWindowStart(newStart)
+	case "daily", "weekly", "monthly":
 	default:
 		return fmt.Errorf("unknown window %q", window)
 	}
-	n, err := upd.Save(ctx)
+	// 此入口仅由管理员显式重置调用；列名前缀经过上方白名单，金额、起点及代次一次更新。
+	// 自然周期仍由 IncrementUsageWithReset/Video 预留推进，不能再次使用手动重置前的代次。
+	result, err := client.ExecContext(ctx, fmt.Sprintf(`UPDATE user_platform_quotas SET
+ %[1]s_usage_usd=0,%[1]s_window_start=$3,%[1]s_reset_generation=%[1]s_reset_generation+1,updated_at=NOW()
+ WHERE user_id=$1 AND platform=$2 AND deleted_at IS NULL`, window), userID, platform, newStart)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
 	if err != nil {
 		return err
 	}

@@ -3,7 +3,7 @@
 当前标准、本地目录和 standalone Compose 默认从 DockerHub 拉取：
 
 ```text
-coderxiaoc/tokenrouter:v0.1.278-ct-v2.7
+coderxiaoc/tokenrouter:v0.1.278-ct-v2.8
 ```
 
 在 `.env` 中设置 `SUB2API_IMAGE` 可选择其他已发布标签或镜像摘要。这些 Compose 保留 `pull_policy: always`，部署服务器无需源码。应用依赖 PostgreSQL 和 Redis；Compose 提供运行配置、持久化存储、健康检查和依赖启动顺序。
@@ -27,10 +27,10 @@ coderxiaoc/tokenrouter:v0.1.278-ct-v2.7
 
 ```bash
 docker login
-docker buildx build --platform linux/amd64 --build-arg VERSION=0.1.278-ct-v2.7 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v2.7 --load --file Dockerfile .
-docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v2.7 --version
-docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v2.7 --version
-docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.7
+docker buildx build --platform linux/amd64 --build-arg VERSION=0.1.278-ct-v2.8 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v2.8 --load --file Dockerfile .
+docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v2.8 --version
+docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v2.8 --version
+docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.8
 ```
 
 版本和 PostgreSQL 客户端检查不挂载现有数据，也不启动应用服务。程序内部版本号不带 `v`，镜像标签保留 `v` 前缀。根 `Dockerfile` 还支持 `COMMIT`、`DATE` 构建参数；发布下一版本时同时替换构建参数、镜像标签与部署端 `SUB2API_IMAGE`。以上命令只发布 `amd64`，不会同时生成 `arm64` 镜像。
@@ -43,8 +43,8 @@ docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.7
 
 ```bash
 set -e
-binary="$PWD/release/sub2api_v0.1.278-ct-v2.7_linux_amd64/sub2api"
-image=coderxiaoc/tokenrouter:v0.1.278-ct-v2.7
+binary="$PWD/release/sub2api_v0.1.278-ct-v2.8_linux_amd64/sub2api"
+image=coderxiaoc/tokenrouter:v0.1.278-ct-v2.8
 build_context="$(mktemp -d)"
 test -s "$binary"
 mkdir -p "$build_context/backend" "$build_context/deploy"
@@ -64,7 +64,7 @@ image_binary_hash="$(docker run --rm --entrypoint sha256sum "$image" /app/sub2ap
 test "$binary_hash" = "$image_binary_hash"
 ```
 
-核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v2.7`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
+核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v2.8`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
 
 ```bash
 docker login
@@ -89,7 +89,7 @@ nano .env
 在现有部署目录修改 `.env`，保留原有密码、JWT/TOTP 密钥以及其他配置：
 
 ```dotenv
-SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v2.7
+SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v2.8
 POSTGRES_BIND_HOST=127.0.0.1
 POSTGRES_PORT=5433
 ```
@@ -107,7 +107,7 @@ docker compose -f docker-compose.yml pull sub2api
 
 ```bash
 docker compose -f docker-compose.yml stop sub2api
-backup_dir="backups/pre-v2.7-$(date +%Y%m%d-%H%M%S)"
+backup_dir="backups/pre-v2.8-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$backup_dir"
 chmod 700 "$backup_dir"
 cp -p .env docker-compose.yml "$backup_dir/"
@@ -130,7 +130,21 @@ docker compose -f docker-compose.yml exec -T sub2api wget -q -O - http://127.0.0
 
 `--no-deps sub2api` 只更新应用，不替换 PostgreSQL 或 Redis。新应用启动时自动执行待应用迁移。沿用既有数据、配置和稳定安全密钥，完成升级后检查程序版本、健康状态、登录、网关调用和用量记录。
 
-### v2.7 升级检查
+### v2.8 升级检查
+
+从 `v0.1.278-ct-v2.7` 更新到 `v0.1.278-ct-v2.8` 新增迁移 289–293，最高迁移为 `293_video_fallback_and_token_prepay.sql`。本次交付 Ubuntu `linux/amd64` 二进制和同平台 DockerHub 镜像；Apple Container 的 `linux/arm64` 环境须选择实际已发布的兼容镜像，本次标签不提供该架构。
+
+独立 Video 平台新增持久任务和恢复器，支持按秒、输出 Token、按次计费，每分辨率使用一个单价，可配置参考图片附加费、缺省分辨率兜底价及 Token 固定秒价预扣。未设置独立视频倍率时沿用套餐对分组的倍率，独立倍率优先；已受理任务保留其价格快照。迁移只追加视频价卡、任务表和内部重置代次，不迁移旧 Grok/Seedance 任务，不改写已有余额、订阅有效期、额度窗口、自然重置次数及旧价卡。新增价卡配置默认为空或关闭，不会自动开启视频或 Token 预扣。
+
+升级前验证 PostgreSQL 与配置备份，排空在途请求，停止全部旧后端；先启动一个 v2.8 实例完成迁移和检查，再启动其余 v2.8 实例并更新前端。不要混跑旧实例：旧程序的订阅/平台额度手动重置不会推进新代次，会破坏 Video 旧预留退款与新用量的隔离。沿用原数据库、Redis、数据目录、Compose 项目和稳定安全密钥，不执行 `down -v`。
+
+全部实例升级后再配置并开放 Video 账号、分组、端点和价格；升级后核对迁移 289–293、版本及健康、既有余额和订阅数据、日/周/月重置与延期、任务归属和幂等、预扣退补差/失败释放及用量记录。Token 用量缺失或不可信的任务保持待对账，不能当作零价成功。新版同时修复 MiniMax 嵌套任务响应解析、视频任务身份校验/创建重定向重放，以及订阅手动重置与批量延期的锁等待；协议和资金边界见[独立视频任务](../docs/domains/video_tasks.md)。
+
+OpenCode Zen、MiniMax 按量及 GLM/Zhipu 按量账号可显式配置通用上游用量查询，原生 Coding/GO 查询和周期监控规则保持原样；手动通用查询结果不会参与周期停用或调度。已有账号配置继续保留，详见[上游用量](../docs/interfaces/upstream_usage.md)。
+
+回退旧应用前，先停止受理新 Video 任务，保留 v2.8 恢复器直到已有任务完成结算或确认释放，并核对不存在未处置的 Video 冻结额度。受理不明和待对账任务须按真实结果核对，不能删除任务行、迁移记录或直接改余额代替处理；旧程序没有新恢复器，回退不会自动退款。数据库迁移不会随镜像回退撤销，精确恢复升级前状态仍须按已验证的备份流程处理，且应先核对升级后的账务。详细迁移说明见[部署与数据库迁移](../docs/operations/deployment_and_migrations.md)。
+
+### v2.7 历史升级检查
 
 从 `v0.1.278-ct-v2.6` 更新到 `v0.1.278-ct-v2.7` 不新增或修改 SQL 迁移，最高迁移仍为 `288_affiliate_ledger_operation_id.sql`。本次新增用户与管理员任务记录的图片/视频预览，用户筛选改为用户名或邮箱搜索选择，模型改为可搜索的精确选择，并补齐仪表盘“实际消费”中英文文案。
 
@@ -256,7 +270,7 @@ v1.3 的 WS 执行状态按 API Key、原始线程/会话和 `request_kind` 隔�
 
 ## 镜像标签
 
-当前默认固定版本标签 `v0.1.278-ct-v2.7`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
+当前默认固定版本标签 `v0.1.278-ct-v2.8`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
 
 ## 相关链接
 

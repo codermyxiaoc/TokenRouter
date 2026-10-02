@@ -13,6 +13,11 @@ import (
 
 type mediaTaskRepository struct{ db *sql.DB }
 
+// GetVideoTask 仅按已经授权的展示归属读取持久结果，不触发查询、恢复或结算。
+func (r *mediaTaskRepository) GetVideoTask(ctx context.Context, task *service.MediaTask) (*service.VideoTaskRecord, error) {
+	return scanVideoTask(r.db.QueryRowContext(ctx, "SELECT "+videoTaskColumns+" FROM video_tasks WHERE id=$1 AND user_id=$2 AND api_key_id=$3", task.TaskID, task.UserID, task.APIKeyID))
+}
+
 func NewMediaTaskRepository(db *sql.DB) service.MediaTaskRepository {
 	return &mediaTaskRepository{db: db}
 }

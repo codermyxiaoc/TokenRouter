@@ -18,7 +18,8 @@ export const CONCRETE_PLATFORM_OPTIONS = [
   { value: 'zhipu', label: 'Zhipu' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'minimax', label: 'MiniMax' },
-  { value: 'opencode_go', label: 'OpenCode' }
+  { value: 'opencode_go', label: 'OpenCode' },
+  { value: 'video', label: 'Video' }
 ] as const satisfies readonly PlatformOption<AccountPlatform>[]
 
 // fork 尚未引入 Composite 分组，分组选项与具体平台目录保持一致。

@@ -32,9 +32,9 @@ MiniMax 模型价格复用已有模型目录和静态价格，保留分组、渠
 <a id="minimax_usage_and_limits"></a>
 ## 用量与额度
 
-Coding Plan 使用自动适配器 `minimax_coding`，固定只读查询 `/v1/api/openplatform/coding_plan/remains`，将上游窗口归一为 `PERCENT` 的 `5h` 与 `weekly` 限额。按量付费模式不提供余额接口适配，明确返回不支持，不向其它供应商接口尝试查询。
+Coding Plan 使用自动适配器 `minimax_coding`，固定只读查询 `/v1/api/openplatform/coding_plan/remains`，将上游窗口归一为 `PERCENT` 的 `5h` 与 `weekly` 限额。按量付费模式可像 OpenAI API Key 一样选择 Sub2API、New API 或 Zivv 通用查询协议及查询地址覆盖，前提是接入站点支持所选协议；没有新增 MiniMax 官方原生余额 API，也不自动回退到其它协议。
 
-手动查询、后台监控、身份绑定快照、失败保留最近成功结果及阈值停调均沿用 [API Key 上游用量查询](upstream_usage.md) 的规则。MiniMax 的上游套餐窗口与用户的 USD 平台额度分开处理。
+手动查询、Coding Plan 的后台监控、身份绑定快照、失败保留最近成功结果及阈值停调均沿用 [API Key 上游用量查询](upstream_usage.md) 的规则。按量通用查询只用于管理员展示，不参与后台监控或调度。MiniMax 的上游套餐窗口与用户的 USD 平台额度分开处理。
 
 迁移 `270_allow_minimax_user_platform_quotas.sql` 仅扩展用户平台额度的数据库 CHECK 约束，允许 `minimax`。已有用户不回填 MiniMax 限额，缺失行继续表示无限额；新用户和管理员保存时沿用当前平台额度默认值与全量保存规则。
 

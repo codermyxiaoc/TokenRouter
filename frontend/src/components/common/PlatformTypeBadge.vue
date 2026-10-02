@@ -97,6 +97,7 @@ const platformLabel = computed(() => {
   if (props.platform === 'deepseek') return 'DeepSeek'
   if (props.platform === 'minimax') return 'MiniMax'
   if (props.platform === 'opencode_go') return 'OpenCode'
+  if (props.platform === 'video') return 'Video'
   return 'Gemini'
 })
 
@@ -187,6 +188,7 @@ const planIconName = computed<'bolt' | null>(() => {
   return null
 })
 const platformClass = computed(() => {
+  if (props.platform === 'video') return 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
   if (props.platform === 'anthropic') {
     return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
   }
@@ -248,6 +250,7 @@ const typeClass = computed(() => {
   if (props.platform === 'minimax') {
     return 'bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400'
   }
+  if (props.platform === 'video') return 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400'
   if (props.platform === 'opencode_go') {
     return 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400'
   }

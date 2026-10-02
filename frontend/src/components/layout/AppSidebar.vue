@@ -143,6 +143,7 @@ import { useI18n } from 'vue-i18n'
 import { useAdminSettingsStore, useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
 import { sanitizeSvg } from '@/utils/sanitize'
 import { useBatchImageAccess } from '@/composables/useBatchImageAccess'
+import Icon from '@/components/icons/Icon.vue'
 
 interface NavItem {
   path: string
@@ -572,12 +573,15 @@ const flagCreativeStudioAccess = () => appStore.cachedPublicSettings?.creative_e
 const flagTeamAccess = () => appStore.cachedPublicSettings?.team_enabled !== false
 const flagTicketAccess = () => appStore.cachedPublicSettings?.ticket_enabled !== false
 const flagUsageRankingAccess = () => appStore.cachedPublicSettings?.usage_ranking_enabled !== false
+// 文档入口复用现有图标，不增加外部文档框架或图标依赖。
+const ApiDocsIcon = { render: () => h(Icon, { name: 'book', size: 'md' }) }
 
 // 普通用户导航项。
 const userNavItems = computed((): NavItem[] => {
   const items: NavItem[] = [
     { path: '/dashboard', label: t('nav.dashboard'), icon: DashboardIcon },
     { path: '/models', label: t('nav.modelMarketplace'), icon: ModelMarketplaceIcon },
+    { path: '/docs', label: t('apiDocs.title'), icon: ApiDocsIcon },
     { path: '/usage-ranking', label: t('nav.usageRanking'), icon: RankingIcon, hideInSimpleMode: true, featureFlag: flagUsageRankingAccess },
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/team', label: t('nav.team'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagTeamAccess },
@@ -635,6 +639,7 @@ const personalNavItems = computed((): NavItem[] => {
   const items: NavItem[] = [
     { path: '/dashboard', label: t('nav.dashboard'), icon: DashboardIcon },
     { path: '/models', label: t('nav.modelMarketplace'), icon: ModelMarketplaceIcon },
+    { path: '/docs', label: t('apiDocs.title'), icon: ApiDocsIcon },
     { path: '/usage-ranking', label: t('nav.usageRanking'), icon: RankingIcon, hideInSimpleMode: true, featureFlag: flagUsageRankingAccess },
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/team', label: t('nav.team'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagTeamAccess },

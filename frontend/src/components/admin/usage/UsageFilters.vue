@@ -158,6 +158,9 @@
         <div v-if="mode === 'usage'" class="w-full sm:w-auto sm:min-w-[200px]">
           <label class="input-label">{{ t('admin.usage.billingMode') }}</label>
           <Select v-model="filters.billing_mode" :options="billingModeOptions" @change="emitChange" />
+          <p v-if="filters.billing_mode === BILLING_MODE_VIDEO" class="mt-1 max-w-[240px] text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.usage.billingModeVideoFilterHint') }}
+          </p>
         </div>
 
         <!-- 原生 compaction 筛选仅适用于用量记录。 -->
@@ -219,6 +222,7 @@ import { adminAPI } from '@/api/admin'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { COMMON_ERROR_STATUS_CODES } from '@/utils/errorBadges'
+import { BILLING_MODE_VIDEO, getBillingModeFilterOptions } from '@/utils/billingMode'
 import type { SimpleApiKey, SimpleUser } from '@/api/admin/usage'
 
 type ModelValue = Record<string, any>
@@ -329,13 +333,7 @@ const statusCodeOptions = computed<SelectOption[]>(() => [
   ...COMMON_ERROR_STATUS_CODES.map((c) => ({ value: c, label: String(c) })),
 ])
 
-const billingModeOptions = ref<SelectOption[]>([
-  { value: null, label: t('admin.usage.allBillingModes') },
-  { value: 'token', label: t('admin.usage.billingModeToken') },
-  { value: 'per_request', label: t('admin.usage.billingModePerRequest') },
-  { value: 'image', label: t('admin.usage.billingModeImage') },
-  { value: 'video', label: t('admin.usage.billingModeVideo') }
-])
+const billingModeOptions = computed<SelectOption[]>(() => getBillingModeFilterOptions(t))
 
 const compactionOptions = computed<SelectOption[]>(() => [
   { value: null, label: t('usage.allCompactions') },

@@ -38,6 +38,8 @@ type MediaTaskVideoPreviewRecord struct {
 	Identity  MediaTaskPreviewIdentity `json:"identity"`
 	Media     MediaTaskVideoSnapshot   `json:"media"`
 	ExpiresAt time.Time                `json:"expires_at"`
+	// 仅在服务端根据持久任务计算，缓存及浏览器均不保存上游认证或内容地址。
+	UseContentEndpoint bool `json:"-"`
 }
 
 type MediaTaskPreviewTicket struct {
@@ -60,6 +62,16 @@ func ProvideMediaTaskService(repo MediaTaskRepository, cache MediaTaskPreviewCac
 	return s
 }
 
+// 生产装配只注入内容传输与账号读取，不给预览服务开放任务创建、轮询或结算入口。
+func ProvideMediaTaskServiceWithVideoContent(repo MediaTaskRepository, cache MediaTaskPreviewCache, upstream *VideoUpstreamService, accounts AccountRepository) *MediaTaskService {
+	s := ProvideMediaTaskService(repo, cache)
+	if upstream != nil {
+		s.videoContentTransport = upstream
+	}
+	s.videoAccounts = accounts
+	return s
+}
+
 func mediaTaskPreviewIdentity(task *MediaTask) MediaTaskPreviewIdentity {
 	return MediaTaskPreviewIdentity{ID: task.ID, Source: task.Source, TaskID: task.TaskID, UserID: task.UserID, APIKeyID: task.APIKeyID}
 }
@@ -71,7 +83,7 @@ func sameMediaTaskPreviewIdentity(a, b MediaTaskPreviewIdentity) bool {
 // ObserveMediaTaskVideoPreview 是完成响应的附属缓存；调用方应忽略其失败，避免影响原结算。
 func (s *MediaTaskService) ObserveMediaTaskVideoPreview(ctx context.Context, o MediaTaskObservation, media *MediaTaskVideoSnapshot) error {
 	if s == nil || s.previewCache == nil || media == nil || o.Status != "completed" ||
-		(o.Source != "grok_video" && o.Source != "seedance_video") || o.TaskID == "" || len(o.TaskID) > 255 || o.UserID <= 0 || o.APIKeyID <= 0 || !safeMediaPreviewURL(media.URL) {
+		(o.Source != "grok_video" && o.Source != "seedance_video" && o.Source != "video") || o.TaskID == "" || len(o.TaskID) > 255 || o.UserID <= 0 || o.APIKeyID <= 0 || !safeMediaPreviewURL(media.URL) {
 		return nil
 	}
 	// 地址还会在实际拨号时校验，缓存阶段不解析 DNS 或访问媒体服务。
@@ -98,8 +110,12 @@ func (s *MediaTaskService) videoPreview(ctx context.Context, task *MediaTask, pr
 		return preview, nil
 	}
 	identity := mediaTaskPreviewIdentity(task)
-	record, err := s.previewCache.GetVideo(ctx, identity)
-	if err != nil || record == nil || !sameMediaTaskPreviewIdentity(record.Identity, identity) || !safeMediaPreviewURL(record.Media.URL) {
+	record, err := s.videoPreviewRecord(ctx, identity)
+	if err == errMediaTaskVideoPreviewExpired {
+		preview.UnavailableReason = "expired"
+		return preview, nil
+	}
+	if err != nil || record == nil || !sameMediaTaskPreviewIdentity(record.Identity, identity) || (!record.UseContentEndpoint && !safeMediaPreviewURL(record.Media.URL)) {
 		return preview, nil
 	}
 	expires := time.Now().UTC().Add(mediaTaskPreviewTicketTTL)
@@ -126,7 +142,7 @@ func (s *MediaTaskService) videoPreview(ctx context.Context, task *MediaTask, pr
 	return preview, nil
 }
 
-// OpenPreviewContent 只下载票据绑定的缓存媒体地址，完全不访问模型状态接口或账务服务。
+// OpenPreviewContent 只读票据绑定的产物或固定内容路径，完全不访问模型状态接口或账务服务。
 func (s *MediaTaskService) OpenPreviewContent(ctx context.Context, token, method, byteRange string) (*http.Response, error) {
 	if s == nil || s.previewCache == nil || s.previewHTTP == nil || len(token) != 64 || (method != http.MethodGet && method != http.MethodHead) {
 		return nil, ErrMediaTaskNotFound
@@ -146,9 +162,21 @@ func (s *MediaTaskService) OpenPreviewContent(ctx context.Context, token, method
 	if err != nil || !sameMediaTaskPreviewIdentity(ticket.Identity, mediaTaskPreviewIdentity(task)) || task.Status != "completed" || (task.ExpiresAt != nil && !task.ExpiresAt.After(time.Now())) {
 		return nil, ErrMediaTaskNotFound
 	}
-	record, err := s.previewCache.GetVideo(ctx, ticket.Identity)
-	if err != nil || record == nil || !sameMediaTaskPreviewIdentity(record.Identity, ticket.Identity) || !record.ExpiresAt.After(time.Now()) || !safeMediaPreviewURL(record.Media.URL) {
+	record, err := s.videoPreviewRecord(ctx, ticket.Identity)
+	if err != nil || record == nil || !sameMediaTaskPreviewIdentity(record.Identity, ticket.Identity) || !record.ExpiresAt.After(time.Now()) || (!record.UseContentEndpoint && !safeMediaPreviewURL(record.Media.URL)) {
 		return nil, ErrMediaTaskNotFound
+	}
+	if record.UseContentEndpoint {
+		// 票据不能提供目标路径，必须再次读取原任务并复核已结算状态；HEAD 在处理器层只输出头。
+		video, err := s.readPreviewVideoTask(ctx, ticket.Identity)
+		if err != nil || video == nil || !s.canPreviewVideoContent(video) {
+			return nil, ErrMediaTaskNotFound
+		}
+		result, err := openVideoTaskContent(ctx, video, byteRange, s.videoAccounts, s.videoContentTransport, s.previewHTTP, s.previewSlots)
+		if err != nil {
+			return nil, ErrMediaTaskPreviewUnavailable
+		}
+		return result, nil
 	}
 	select {
 	case s.previewSlots <- struct{}{}:

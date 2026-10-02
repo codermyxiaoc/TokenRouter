@@ -38,6 +38,24 @@ beforeEach(() => { copyToClipboard.mockReset().mockResolvedValue(true) })
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers() })
 
 describe('MediaTaskPreviewDialog', () => {
+  // 预览共用任务费用规则，不能把待核对或已释放再次展示成普通处理中或待扣费。
+  it('预览保留真实生成终态并区分待核对和已释放', async () => {
+    const billing = { status: 'reconciliation' as const, mode: 'video_per_request' as const, resolution: '720p',
+      has_reference_video: false, unit_price: 5, unit: 'request' as const, duration_seconds: 15, reserved_amount: 5, pricing_source: 'channel' }
+    const videoTask = task({ source: 'video', media_type: 'video', status: 'completed', video_billing: billing })
+    const wrapper = mountDialog({ task: videoTask, preview: { items: [] } })
+    expect(wrapper.text()).toContain('mediaTasks.statuses.completed')
+    expect(wrapper.text()).toContain('mediaTasks.videoBilling.reconciliation')
+    expect(wrapper.text()).not.toContain('mediaTasks.pendingCost')
+    await wrapper.setProps({ task: { ...videoTask, status: 'processing' } })
+    expect(wrapper.text()).toContain('mediaTasks.statuses.reconciliation')
+    expect(wrapper.text()).not.toContain('mediaTasks.statuses.processing')
+    await wrapper.setProps({ task: { ...videoTask, status: 'failed', video_billing: { ...billing, status: 'released' } } })
+    expect(wrapper.text()).toContain('mediaTasks.statuses.failed')
+    expect(wrapper.text()).toContain('mediaTasks.videoBilling.notCharged')
+    expect(wrapper.text()).not.toContain('mediaTasks.pendingCost')
+  })
+
   it('通过真实图片尺寸补齐分辨率和宽高比，不从扩展名伪造文件格式', async () => {
     const wrapper = mountDialog()
     const image = wrapper.get('[data-testid="preview-image"]')
@@ -74,6 +92,12 @@ describe('MediaTaskPreviewDialog', () => {
     expect(download.attributes('href')).toBe(ticketPath)
     expect(download.attributes('download')).toBe('media-task-1-1.mp4')
     expect(download.attributes('rel')).toBe('noopener noreferrer')
+    // 独立视频价格使用五位展示，底层任务费用保持接口原值。
+    const billedTask = task({ source: 'video', media_type: 'video', actual_cost: 0.7059298 })
+    await wrapper.setProps({ task: billedTask })
+    expect(wrapper.text()).toContain('$0.70593')
+    expect(wrapper.text()).not.toContain('$0.7059298')
+    expect(billedTask.actual_cost).toBe(0.7059298)
   })
 
   it('切换图片、任务和用户角色时清除旧媒体和元数据', async () => {

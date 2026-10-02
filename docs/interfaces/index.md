@@ -8,15 +8,16 @@
 
 ## 文档
 
-- [AI 网关 API 参考](api_reference.md)：按当前网关路由、请求体和响应体整理的客户端调用参考，覆盖 OpenAI、Anthropic、Gemini、Grok、OpenCode 和 Seedance 接口。读取时机：编写模型客户端集成、调试网关请求或核对 AI 端点时读取。
+- [AI 网关 API 参考](api_reference.md)：当前网关方法、请求与响应，以及 `/docs` 站内文档的内容来源与页面契约，覆盖各上游平台和独立视频接口。读取时机：编写客户端集成、维护站内 API 文档、调试网关请求或核对 AI 端点时读取。
 - [Seedance / 火山方舟原生视频任务](seedance_upstream.md)：显式账号能力、原生异步任务、归属隔离和完成后 token 计费。读取时机：修改方舟视频路由、任务查询/删除、模型映射或异步结算时读取。
+- [独立 Video 上游](video_upstream.md)：Video API Key、同模型多端点自适应、统一 URL 与 Ark/Kling/Wan/MiniMax 原生协议保真。读取时机：修改视频账号、端点资格、原生路径、参数提取、取消确认或新旧视频分流时读取。
 - [本地插件与宿主服务](local_plugins.md)：插件安装运行、能力授权、命名空间 KV、账号目录和只读状态 UI。读取时机：修改插件生命周期、HostService、传输绑定、插件页面或部署兼容性时读取。
 
 - [HTTP 接口边界](http_api.md)：公共、用户、管理员、支付和网关路由族及认证/错误边界。读取时机：新增或移动路由、调整中间件、认证方式或公共响应语义时读取。
 - [配置边界](configuration.md)：默认值、YAML、环境变量、数据库运行时设置和首次初始化之间的边界。读取时机：新增配置项、修改加载优先级、设置页面或部署变量时读取。
 - [tf CLI 网页导入](tf_cli_web_import.md)：Keys 页、本机回环协议、会话证明、双重确认和浏览器安全头。读取时机：修改 Keys 导入入口、URL fragment、localhost fetch、CSP 或 tf-cli 协议时读取。
 - [CC Switch 导入](cc_switch_import.md)：Keys 页导入配置弹窗、全站模型搜索选择和应用/模型深链接映射。读取时机：修改 CCS 导入入口、模型选择、客户端应用或深链接参数时读取。
-- [上游账号能力矩阵](upstream_account_matrix.md)：十一个平台、七类账号和全部公开网关协议的正式支持、兼容保留与不支持边界。读取时机：新增平台/账号类型、修改创建导入校验、路由分派或能力承诺时读取。
+- [上游账号能力矩阵](upstream_account_matrix.md)：十二个平台、七类账号和全部公开网关协议的正式支持、兼容保留与不支持边界。读取时机：新增平台/账号类型、修改创建导入校验、路由分派或能力承诺时读取。
 - [API Key 上游用量查询](upstream_usage.md)：API Key 账号的适配器、管理员查询接口、归一化结果和浏览器缓存边界。读取时机：修改 API Key 用量查询、适配器协议、账号用量展示或查询安全策略时读取。
 - [Anthropic 上游](anthropic_upstream.md)：OAuth、Setup Token、API Key、Bedrock 模型区域路由、Vertex，以及 Messages/OpenAI 兼容转换和缓存/限流契约。读取时机：修改 Anthropic 认证、协议、模型区域、beta、thinking、缓存或错误分类时读取。
 - [OpenAI 上游](openai_upstream.md)：OAuth/API Key、Responses、Chat、Messages、Embeddings、Images、Realtime 和 Codex 传输契约。读取时机：修改 OpenAI 认证、endpoint capability、WebSocket、模型或配额调度时读取。

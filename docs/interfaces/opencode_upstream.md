@@ -44,12 +44,12 @@ Zen 402 沿已有余额不足临时冷却处理。GO 429 优先使用身份有�
 结算沿现有渠道模型映射、显式价格、订阅/余额、分组倍率和 Key 限额流程。Jev 1.13 的默认输入价为 `$0.042/M tokens`、输出免费，Jev 1.13 Free 的输入和输出均免费；上游返回的 `usage.input_tokens/output_tokens` 直接用于用量记录。真实上游为 Claude 时仍可使用系统默认 Claude 价格；客户端 Claude 别名映射到其它家族时，不能让无价 OpenCode 模型错误套用 Claude 兜底价。用户平台额度归属 `opencode_go`，不拆成 Zen/GO 两个账本。增量迁移 `277_allow_opencode_user_platform_quotas.sql` 仅扩展平台约束，不新增用户额度记录、不修改余额或订阅。
 
 <a id="opencode_usage_and_scheduling"></a>
-## GO 用量与调度
+## 用量查询与 GO 调度
 
-GO 自动使用内部 `opencode_go` 只读适配器，在配置的 GO API 根地址归一化到 `/v1/usage`（已有 `/v1` 时不重复追加），保留中继主机和路径。解析 rolling（五小时）、weekly、monthly 窗口并归一化为百分比。Zen 没有接入余额查询协议，明确返回不支持，不发送猜测的请求。
+GO 自动使用内部 `opencode_go` 只读适配器，在配置的 GO API 根地址归一化到 `/v1/usage`（已有 `/v1` 时不重复追加），保留中继主机和路径。解析 rolling（五小时）、weekly、monthly 窗口并归一化为百分比。Zen 可像 OpenAI API Key 一样选择 Sub2API、New API 或 Zivv 通用站点查询协议及查询地址覆盖，实际站点必须支持所选接口；不新增 Zen 官方原生余额协议。历史 Zen 的 `adapter=opencode_go` 仅在运行时回退为 `sub2api`，编辑保存时修正，不进入 GO 窗口查询。
 
 仅官方 `https://opencode.ai/zen/go[/v1]` GO 账号可以在 API Key、代理、TLS、认证头和完整查询配置一致时共享并发查询及 30 秒成功结果。共享缓存有界，每个调用方再次验证自身账号身份并返回独立结果；凭据变化使旧结果失效。Zen 与第三方中继不进入共享，查询目标不会被改为官方。保留现有周期监控及 CAS，没有并行引入上游独立活动防抖任务。
 
-手动查询只用于展示。既有 `gateway.cn_providers.monitor_enabled` 默认关闭；开启后可监控 GO 并保存统一、身份绑定的 `cn_usage_monitor_snapshot`。GO 的五小时/周/月阈值读取该快照，耗尽或多个阈值同时命中时选择最晚恢复时间。查询失败、凭据/代理/模式/端点变化后的旧快照不得用于停调；GO 调度元数据保留完整查询身份以维持与完整账号相同的校验。
+手动查询只用于展示，Zen 不具备周期监控或调度快照资格。既有 `gateway.cn_providers.monitor_enabled` 默认关闭；开启后可监控 GO 并保存统一、身份绑定的 `cn_usage_monitor_snapshot`。GO 的五小时/周/月阈值读取该快照，耗尽或多个阈值同时命中时选择最晚恢复时间。查询失败、凭据/代理/模式/端点变化后的旧快照不得用于停调；GO 调度元数据保留完整查询身份以维持与完整账号相同的校验。
 
 相关文档：[上游账号能力矩阵](upstream_account_matrix.md)、[上游用量查询](upstream_usage.md)、[智能路由 API Key](../domains/smart_routing_api_keys.md)、[用户平台额度](../domains/platform_quotas.md)。

@@ -1081,6 +1081,7 @@ affiliates: {
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
+        video: 'Video',
       },
       saving: '保存中...',
       noGroups: '暂无分组',

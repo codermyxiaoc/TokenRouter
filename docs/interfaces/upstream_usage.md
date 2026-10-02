@@ -14,7 +14,9 @@
 }
 ```
 
-普通 API Key 账号缺少对象时按 `enabled=true`、`adapter=sub2api` 处理，根地址复用账号现有 API Base URL。只有显式 `enabled=false` 才关闭查询。管理员可选的 `adapter` 只有 `sub2api`、`new_api` 或 `zivv`；Kimi、Zhipu、DeepSeek、MiniMax、OpenCode 忽略该字段并根据平台与 `account_mode` 选择固定内置适配器。`base_url` 只能覆盖查询根地址，不能携带用户信息、查询串或片段。后端继续使用现有 HTTPS、allowlist、私网地址和 URL 格式校验。
+普通 API Key 账号缺少对象时按 `enabled=true`、`adapter=sub2api` 处理，根地址复用账号现有 API Base URL。只有显式 `enabled=false` 才关闭查询。管理员可选的 `adapter` 只有 `sub2api`、`new_api` 或 `zivv`。OpenCode Zen、Zhipu payg、MiniMax payg 使用与 OpenAI API Key 相同的配置；已有原生查询的 Kimi、DeepSeek、Coding Plan 和 OpenCode GO 则忽略该字段，按平台与 `account_mode` 固定适配器。`base_url` 只能覆盖查询根地址，不能携带用户信息、查询串或片段。后端继续使用现有 HTTPS、allowlist、私网地址和 URL 格式校验。
+
+通用协议要求上游站点实际实现对应余额/用量接口，不代表新增厂商官方余额 API。三个新增按量模式缺少配置时使用 `sub2api`；历史 Zen 若保存了 `adapter=opencode_go`，运行时兼容为 `sub2api`，不查询 GO 套餐窗口、不迁移存量数据。创建及编辑表单允许选择通用协议、覆盖查询地址和配置 New API 钱包认证；修改查询配置不改变转发端点。
 
 API Key 永远从账号 `credentials` 读取。它不能写进 `extra`、接口响应、审计请求体、浏览器缓存或日志；用户也不能配置任意路径、方法、Header 模板或脚本。
 
@@ -43,7 +45,7 @@ New API 钱包若需要用户级认证，可在 `credentials` 中保存
 
 ### 国产供应商
 
-国产供应商适配器由账号身份自动选择，不能在管理表单中改成其它协议：
+已接入的国产供应商原生适配器由账号身份自动选择，不能在管理表单中改成其它协议：
 
 | 平台与模式 | 内部适配器 | 固定只读端点 | 归一化结果 |
 | --- | --- | --- | --- |
@@ -53,13 +55,13 @@ New API 钱包若需要用户级认证，可在 `credentials` 中保存
 | DeepSeek payg | `deepseek_balance` | `/user/balance` | 多币种 `balances[]`、主 `balance` 和 `available` |
 | MiniMax coding | `minimax_coding` | `/v1/api/openplatform/coding_plan/remains` | `PERCENT` 五小时与每周限额 |
 
-Zhipu payg、MiniMax payg 未接入公开余额协议，DeepSeek coding 也不是合法账号组合，因此查询明确返回不支持且不发送请求。Kimi/Zhipu/MiniMax 的 coding 周期把使用百分比归一化为上限 `100`、已用百分比和剩余百分比；DeepSeek 保留全部合法币种余额，任何一个币种仍高于监控阈值时都不会因另一个低余额币种停调。五个适配器只解析供应商固定 JSON 响应，不执行脚本、不接受自定义方法/路径，也不直接写数据库。MiniMax 使用 Bearer API Key，HTTP 200 中的业务错误、缺少窗口或无效百分比均不能写成成功快照，详情见 [MiniMax 上游](minimax_upstream.md#minimax_usage_and_limits)。
+Zhipu payg、MiniMax payg 可显式使用上述通用站点协议手动查询，但不具备原生周期监控资格；不能配置为其它供应商的原生适配器。DeepSeek coding 不是合法账号组合，查询仍返回不支持且不发送请求。Kimi/Zhipu/MiniMax 的 coding 周期把使用百分比归一化为上限 `100`、已用百分比和剩余百分比；DeepSeek 保留全部合法币种余额，任何一个币种仍高于监控阈值时都不会因另一个低余额币种停调。五个原生适配器只解析供应商固定 JSON 响应，不执行脚本、不接受自定义方法/路径，也不直接写数据库。MiniMax 使用 Bearer API Key，HTTP 200 中的业务错误、缺少窗口或无效百分比均不能写成成功快照，详情见 [MiniMax 上游](minimax_upstream.md#minimax_usage_and_limits)。
 
 适配器拒绝 HTTP 非成功、认证失败、限流、超时、重定向、超大响应体、缺字段或不一致数值。选择的适配器失败时不会自动回退到另一个协议，也不会修改账号配置。
 
 ### OpenCode GO
 
-GO 自动选择 `opencode_go` 适配器，按账号配置的 API 根地址归一化为 `/v1/usage`，不重复已有 `/v1` 且保留中继路径前缀，归一化五小时、周、月窗口；Zen 返回不支持。手动查询不改变调度；已有的显式周期监控开关可包含 GO，并使用同一身份绑定快照供 GO 阈值和 429 恢复判断，详见 [OpenCode 用量与调度](opencode_upstream.md#opencode_usage_and_scheduling)。
+GO 自动选择 `opencode_go` 适配器，按账号配置的 API 根地址归一化为 `/v1/usage`，不重复已有 `/v1` 且保留中继路径前缀，归一化五小时、周、月窗口；Zen 仅使用管理员选择的通用站点协议。手动查询不改变调度；已有的显式周期监控开关可包含 GO，并使用同一身份绑定快照供 GO 阈值和 429 恢复判断，详见 [OpenCode 用量与调度](opencode_upstream.md#opencode_usage_and_scheduling)。
 
 ## 管理员接口
 
@@ -72,11 +74,15 @@ GO 自动选择 `opencode_go` 适配器，按账号配置的 API 根地址归一
 
 ## 前端生命周期
 
-列表加载、滚动进入视口和自动刷新不会请求上游。管理员只能通过行内刷新按钮或批量操作触发手动查询；成功结果按管理员身份、账号 ID、`updated_at`、代理/Base URL、适配器和规范化配置写入 `sessionStorage` 五分钟，失败结果不缓存。强制刷新绕过缓存；账号保存、凭据/代理/Base URL/配置变化立即失效。该缓存只保存归一化结果，不保存任何凭据。存在有效 `extra.cn_usage_monitor_snapshot` 时，列表可以直接展示最近监控结果而不触发请求。
+API Key 账号（含 Kimi、Zhipu、DeepSeek、MiniMax、OpenCode 和 Video）统一按上游余额/周期用量、本地今日统计、本地配额、查询按钮的顺序展示。本地统计与配额只在具有相应数据或配置时显示；上游查询失败、关闭或不支持不隐藏本地数据。内容组件隐藏内部查询按钮，由用量栏底部提供唯一入口，查询中禁用，失败后仍可通过该按钮重试；OAuth/Setup Token 的专属窗口和重置入口保持原有规则。
+
+展示、按钮以及列表单次/批量查询共用资格：仅 API Key 支持，包含 Zhipu/MiniMax payg 和 OpenCode Zen；DeepSeek coding 非法组合仍不支持。显式 `extra.upstream_usage_query.enabled=false` 时关闭，缺少配置时默认启用；关闭后隐藏旧结果和查询按钮，批量操作跳过关闭或不支持的账号。这一展示同步不改变本地统计、额度或实际计费计算。查询失败展示结构化错误并可重试，不把上游缺少接口或认证失败伪装成零余额。
+
+列表加载、滚动进入视口和自动刷新不会请求上游。管理员只能通过行内刷新按钮或批量操作触发手动查询；成功结果按管理员身份、账号 ID、`updated_at`、代理/Base URL、适配器和规范化配置写入 `sessionStorage` 五分钟，失败结果不缓存。强制刷新绕过缓存；账号保存、凭据/代理/Base URL/配置变化立即失效。该缓存只保存归一化结果，不保存任何凭据。仅账号当前模式具有原生适配器且 `extra.cn_usage_monitor_snapshot.adapter` 匹配时，列表可展示最近监控结果；通用按量模式不消费遗留的 Coding/GO 快照。
 
 ## 国产供应商周期监控
 
-`gateway.cn_providers.monitor_enabled` 默认 `false`；启用后，后台只扫描 active、`type=apikey`、用量查询未关闭且具有固定适配器的 Kimi/Zhipu/DeepSeek/MiniMax 及 OpenCode GO 账号。首次探测等待一个完整周期，多实例通过共享 leader lock 保证同轮只有一个执行者；整轮有总预算，每个请求有独立超时，并发受配置限制，服务关闭会取消当前轮并等待退出。
+`gateway.cn_providers.monitor_enabled` 默认 `false`；启用后，后台只扫描 active、`type=apikey`、用量查询未关闭且具有固定适配器的 Kimi/Zhipu/DeepSeek/MiniMax 及 OpenCode GO 账号。Zhipu payg、MiniMax payg、OpenCode Zen 的通用手动查询不授予监控或调度快照资格。首次探测等待一个完整周期，多实例通过共享 leader lock 保证同轮只有一个执行者；整轮有总预算，每个请求有独立超时，并发受配置限制，服务关闭会取消当前轮并等待退出。
 
 成功或失败状态统一保存到 `extra.cn_usage_monitor_snapshot`。快照包含版本、适配器、完整查询身份 hash、最近成功的归一化数据、最近尝试时间和脱敏错误码；失败只更新尝试/错误，不抹掉最近成功数据。Repository 用账号 `updated_at` 做 CAS，并在同一 SQL 中写 scheduler outbox；凭据、平台、模式、协议、代理、Base URL、TLS 或查询配置变化会清理旧快照，读取方也必须重新计算身份 hash，不能消费旧身份数据。
 

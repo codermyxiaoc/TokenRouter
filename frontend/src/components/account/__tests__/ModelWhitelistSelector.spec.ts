@@ -86,6 +86,14 @@ describe('ModelWhitelistSelector', () => {
     copyToClipboard.mockResolvedValue(true)
   })
 
+  it('Video only permits explicit models and hides upstream text model discovery', () => {
+    const wrapper = mountSelector({ platform: 'video', accountId: 7 })
+    expect(wrapper.text()).not.toContain('admin.accounts.fillRelatedModels')
+    expect(wrapper.text()).not.toContain('admin.accounts.syncUpstreamModels')
+    expect(wrapper.findAll('[data-testid="model-option"]')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
   it('复制模型 ID 时不会选中模型', async () => {
     const wrapper = mountSelector()
     await wrapper.get('div.cursor-pointer').trigger('click')

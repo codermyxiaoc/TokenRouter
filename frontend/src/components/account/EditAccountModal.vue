@@ -80,7 +80,7 @@
                   ? 'https://generativelanguage.googleapis.com'
                   : account.platform === 'antigravity'
                     ? 'https://cloudcode-pa.googleapis.com'
-                    : account.platform === 'grok'
+                    : account.platform === 'video' ? 'https://api.example.com' : account.platform === 'grok'
                       ? 'https://api.x.ai/v1'
                       : 'https://api.anthropic.com'
             "
@@ -281,7 +281,7 @@
                     : 'AIza...'
                   : account.platform === 'antigravity'
                     ? 'sk-...'
-                    : account.platform === 'grok'
+                    : account.platform === 'video' ? 'sk-...' : account.platform === 'grok'
                       ? 'xai-...'
                       : 'sk-ant-...'
             "
@@ -298,6 +298,8 @@
           />
           <p class="input-hint">{{ t('admin.accounts.gemini.tier.aiStudioHint') }}</p>
         </div>
+
+        <VideoAccountFields v-if="account.platform === 'video'" v-model="videoAccountForm" />
 
         <!-- Model Restriction Section (不适用于 Antigravity) -->
         <div v-if="account.platform !== 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
@@ -1976,13 +1978,13 @@
       </div>
 
       <UpstreamUsageConfigEditor
-        v-if="account?.type === 'apikey'"
+        v-if="account?.type === 'apikey' && account.platform !== 'video'"
         :enabled="upstreamUsageEnabled"
         :adapter="upstreamUsageAdapter"
         :base-url="upstreamUsageBaseUrl"
         :wallet-access-token="upstreamUsageWalletAccessToken"
         :wallet-user-id="upstreamUsageWalletUserId"
-        :automatic-adapter="isCNApiKeyAccount"
+        :automatic-adapter="usesAutomaticUpstreamUsageAdapter"
         @update:enabled="upstreamUsageEnabled = $event"
         @update:adapter="upstreamUsageAdapter = $event"
         @update:base-url="upstreamUsageBaseUrl = $event"
@@ -2919,6 +2921,9 @@
 </template>
 
 <script setup lang="ts">
+import VideoAccountFields from '@/components/account/VideoAccountFields.vue'
+import { createVideoAccountForm, validateVideoAccountForm, videoAccountCredentials } from '@/components/account/videoAccountConfig'
+
 import { ref, reactive, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -2956,6 +2961,7 @@ import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import UpstreamUsageConfigEditor from '@/components/account/UpstreamUsageConfigEditor.vue'
+import { nativeUpstreamUsageAdapter } from '@/utils/upstreamUsage'
 import {
   ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY,
   applyAntigravityProjectID,
@@ -3046,6 +3052,7 @@ const handleOllamaCloudUsageUpdated = (state: OllamaCloudUsageState) => {
 // Platform-specific hint for Base URL
 const baseUrlHint = computed(() => {
   if (!props.account) return t('admin.accounts.baseUrlHint')
+  if (props.account.platform === 'video') return ''
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini' && geminiProviderType.value === 'third_party') {
     return t('admin.accounts.gemini.providerType.thirdPartyBaseUrlHint')
@@ -3123,6 +3130,10 @@ const adaptivePresetPlatform = computed(() => props.account?.platform === 'openc
 function currentOpenCodeOrCNMode(): CnAccountMode | OpenCodeAccountMode {
   return props.account?.platform === 'opencode_go' ? editOpenCodeAccountMode.value : editAccountMode.value
 }
+// 以当前编辑的模式判断原生适配器，不能把 Zen 或普通按量模式误归为套餐查询。
+const usesAutomaticUpstreamUsageAdapter = computed(() => !!props.account && nativeUpstreamUsageAdapter({
+  type: 'apikey', platform: props.account.platform, credentials: { account_mode: currentOpenCodeOrCNMode() }, extra: {},
+}) !== null)
 // 智谱团队版 Coding Plan 的组织/项目 ID，清空后随完整凭据更新一并移除。
 const editZhipuOrganization = ref('')
 const editZhipuProject = ref('')
@@ -3712,7 +3723,10 @@ const tempUnschedPresets = computed(() => [
 ])
 
 // Computed: default base URL based on platform
+const videoAccountForm = ref(createVideoAccountForm())
+
 const defaultBaseUrl = computed(() => {
+  if (props.account?.platform === 'video') return ''
   if (props.account?.platform === 'openai') return 'https://api.openai.com'
   if (props.account?.platform === 'gemini') return 'https://generativelanguage.googleapis.com'
   if (props.account?.platform === 'grok') return 'https://api.x.ai/v1'
@@ -4157,6 +4171,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Initialize API Key fields for apikey type
   if (newAccount.type === 'apikey' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
+    videoAccountForm.value = createVideoAccountForm(credentials)
     // 国产供应商：读取 account_mode 与 api_protocol 作为可编辑初始值
     // （编辑弹窗允许修正两者，用于修复早期存错默认值的账号）。
     if (newAccount.platform === 'kimi' || newAccount.platform === 'zhipu' || newAccount.platform === 'deepseek' || newAccount.platform === 'minimax' || newAccount.platform === 'opencode_go') {
@@ -4983,6 +4998,10 @@ const handleSubmit = async () => {
     if (props.account.type === 'apikey') {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const enteredBaseUrl = editBaseUrl.value.trim()
+      if (props.account.platform === 'video') {
+        const error = validateVideoAccountForm(videoAccountForm.value, enteredBaseUrl)
+        if (error) { appStore.showError(t(`admin.accounts.video.${error}`)); return }
+      }
       if (
         props.account.platform === 'gemini' &&
         geminiProviderType.value === 'third_party' &&
@@ -4997,8 +5016,11 @@ const handleSubmit = async () => {
       // API Key 类型始终提交 credentials，以便同步模型映射变更。
       const newCredentials: Record<string, unknown> = {
         ...currentCredentials,
+        ...(props.account.platform === 'video' ? videoAccountCredentials(videoAccountForm.value) : {}),
         base_url: newBaseUrl
       }
+      // 视频预扣在用户价卡配置，账号不再写回旧 Token 预算上限。
+      if (props.account.platform === 'video') delete newCredentials.video_max_output_tokens
 
       // 国产供应商：模式与协议写入凭据（决定额度/余额探测与转发端点/格式）。
       if (isCNApiKeyAccount.value) {
@@ -5046,14 +5068,16 @@ const handleSubmit = async () => {
         return
       }
 
-      // New API 用户访问令牌属于敏感凭据；留空表示沿用后端已保存的值。
-      if (upstreamUsageWalletAccessToken.value.trim()) {
-        newCredentials.new_api_user_access_token = upstreamUsageWalletAccessToken.value.trim()
-      }
-      if (upstreamUsageWalletUserId.value.trim()) {
-        newCredentials.new_api_user_id = upstreamUsageWalletUserId.value.trim()
-      } else {
-        delete newCredentials.new_api_user_id
+      // New API 用户访问令牌只写不回显；切至原生查询后不提交隐藏的钱包输入。
+      if (!usesAutomaticUpstreamUsageAdapter.value && upstreamUsageAdapter.value === 'new_api') {
+        if (upstreamUsageWalletAccessToken.value.trim()) {
+          newCredentials.new_api_user_access_token = upstreamUsageWalletAccessToken.value.trim()
+        }
+        if (upstreamUsageWalletUserId.value.trim()) {
+          newCredentials.new_api_user_id = upstreamUsageWalletUserId.value.trim()
+        } else {
+          delete newCredentials.new_api_user_id
+        }
       }
 
       if (props.account.platform === 'gemini') {
@@ -5682,7 +5706,7 @@ const handleSubmit = async () => {
       if (props.account.type === 'apikey') {
         const upstreamConfig: Record<string, unknown> = {
           enabled: upstreamUsageEnabled.value,
-          adapter: props.account?.platform === 'opencode_go' ? 'opencode_go' : upstreamUsageAdapter.value
+          adapter: props.account?.platform === 'opencode_go' && editOpenCodeAccountMode.value === 'go' ? 'opencode_go' : upstreamUsageAdapter.value
         }
         if (upstreamUsageBaseUrl.value.trim()) {
           upstreamConfig.base_url = upstreamUsageBaseUrl.value.trim()

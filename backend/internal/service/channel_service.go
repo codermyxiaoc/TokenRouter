@@ -726,6 +726,19 @@ func validatePricingBillingMode(pricing []ChannelModelPricing) error {
 }
 
 func checkBillingModeRequirements(p ChannelModelPricing) error {
+	if !p.BillingMode.IsValid() {
+		return infraerrors.BadRequest("INVALID_BILLING_MODE", "unsupported billing mode")
+	}
+	if p.BillingMode == BillingModeVideoToken && !strings.EqualFold(strings.TrimSpace(p.Platform), PlatformVideo) {
+		return infraerrors.BadRequest("VIDEO_TOKEN_UNSUPPORTED_PLATFORM", "video_token pricing requires the video platform")
+	}
+	// 独立任务按次计费不能进入其它平台的同步聊天或旧视频链路。
+	if p.BillingMode == BillingModeVideoPerRequest && !strings.EqualFold(strings.TrimSpace(p.Platform), PlatformVideo) {
+		return infraerrors.BadRequest("VIDEO_PER_REQUEST_UNSUPPORTED_PLATFORM", "video_per_request pricing requires the video platform")
+	}
+	if err := validateVideoPriceTiers(p); err != nil {
+		return infraerrors.BadRequest("INVALID_VIDEO_PRICE", err.Error())
+	}
 	// 新倍率只允许已知档位和有限正数；空映射不改变旧价卡语义。
 	for effort, multiplier := range p.ReasoningEffortMultipliers {
 		switch effort {
@@ -738,7 +751,7 @@ func checkBillingModeRequirements(p ChannelModelPricing) error {
 		}
 	}
 	if p.BillingMode == BillingModePerRequest || p.BillingMode == BillingModeImage || p.BillingMode == BillingModeVideo {
-		if p.PerRequestPrice == nil && len(p.Intervals) == 0 {
+		if p.PerRequestPrice == nil && len(p.Intervals) == 0 && !(p.BillingMode == BillingModeVideo && (hasVideoTierPrice(p.VideoPrices) || p.VideoFallbackPrice != nil)) {
 			return infraerrors.BadRequest(
 				"BILLING_MODE_MISSING_PRICE",
 				"per-request price or intervals required for per_request/image billing mode",
@@ -809,6 +822,9 @@ func checkBillingModeRequirements(p ChannelModelPricing) error {
 // hasExplicitPricingPrice 判断是否配置了实际价格，不把层级倍率当作基础价格。
 // 这样 price_multiplier 与旧版 fast_mode_multiplier 仍不能单独改变默认定价。
 func hasExplicitPricingPrice(p ChannelModelPricing) bool {
+	if p.BillingMode == BillingModeVideoToken || p.BillingMode == BillingModeVideoPerRequest || p.BillingMode == BillingModeVideo && (hasVideoTierPrice(p.VideoPrices) || p.VideoFallbackPrice != nil) {
+		return hasVideoTierPrice(p.VideoPrices) || p.VideoFallbackPrice != nil
+	}
 	mode := p.BillingMode
 	if mode == "" {
 		mode = BillingModeToken
@@ -853,7 +869,7 @@ func checkPricesNotNegative(p ChannelModelPricing) error {
 		{"per_request_price", p.PerRequestPrice},
 	}
 	for _, c := range checks {
-		if c.val != nil && *c.val < 0 {
+		if c.val != nil && !finiteNonNegative(*c.val) {
 			return infraerrors.BadRequest("NEGATIVE_PRICE", fmt.Sprintf("%s must be >= 0", c.field))
 		}
 	}
@@ -863,6 +879,14 @@ func checkPricesNotNegative(p ChannelModelPricing) error {
 // validateAccountStatsPricingEntries 校验账号统计定价，并拒绝仅用于实际请求计费的 Fast 倍率。
 func validateAccountStatsPricingEntries(pricing []ChannelModelPricing) error {
 	for _, p := range pricing {
+		// 回退价和预扣合同仅属于用户收费，不扩展现有账号统计成本语义。
+		if p.VideoFallbackPrice != nil || p.VideoTokenPrepay != nil {
+			return infraerrors.BadRequest("ACCOUNT_STATS_VIDEO_PRICING_UNSUPPORTED", "video fallback and token prepay are not supported for account stats pricing")
+		}
+		// 固定参考图片费属于用户收费合同，不能混入上游账号成本规则。
+		if p.VideoImageInputPricing != nil {
+			return infraerrors.BadRequest("ACCOUNT_STATS_VIDEO_IMAGE_PRICING_UNSUPPORTED", "video image input surcharge is not supported for account stats pricing")
+		}
 		if p.FastModeMultiplier != nil {
 			return infraerrors.BadRequest(
 				"ACCOUNT_STATS_FAST_MODE_MULTIPLIER_UNSUPPORTED",

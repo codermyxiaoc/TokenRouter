@@ -147,6 +147,9 @@
             <div class="w-full sm:w-auto sm:min-w-[200px]">
               <label class="input-label">{{ t('admin.usage.billingMode') }}</label>
               <Select v-model="filters.billing_mode" :options="billingModeOptions" @change="applyFilters" />
+              <p v-if="filters.billing_mode === BILLING_MODE_VIDEO" class="mt-1 max-w-[240px] text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.usage.billingModeVideoFilterHint') }}
+              </p>
             </div>
             <div class="w-full sm:w-auto sm:min-w-[220px]">
               <label class="input-label">{{ t('usage.compactionFilter') }}</label>
@@ -275,7 +278,7 @@ import Icon from '@/components/icons/Icon.vue'
 import UserErrorRequestsTable from '@/components/user/UserErrorRequestsTable.vue'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatReasoningEffortMapping } from '@/utils/format'
-import { getBillingModeLabel, getDisplayBillingMode as resolveDisplayBillingMode } from '@/utils/billingMode'
+import { BILLING_MODE_VIDEO, getBillingModeFilterOptions, getBillingModeLabel, getDisplayBillingMode as resolveDisplayBillingMode } from '@/utils/billingMode'
 import { getUsageBillingTypeLabel } from '@/utils/usageBillingType'
 import { getBillingSubscriptionsExport } from '@/utils/billingSubscriptions'
 import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
@@ -441,13 +444,7 @@ const billingTypeOptions = computed<SelectOption[]>(() => [
   { value: 0, label: t('admin.usage.billingTypeBalance') },
   { value: 1, label: t('admin.usage.billingTypeSubscription') },
 ])
-const billingModeOptions = computed<SelectOption[]>(() => [
-  { value: null, label: t('admin.usage.allBillingModes') },
-  { value: 'token', label: t('admin.usage.billingModeToken') },
-  { value: 'per_request', label: t('admin.usage.billingModePerRequest') },
-  { value: 'image', label: t('admin.usage.billingModeImage') },
-  { value: 'video', label: t('admin.usage.billingModeVideo') },
-])
+const billingModeOptions = computed<SelectOption[]>(() => getBillingModeFilterOptions(t))
 const compactionOptions = computed<SelectOption[]>(() => [
   { value: null, label: t('usage.allCompactions') },
   { value: true, label: t('usage.nativeCompactionV2') },
@@ -651,7 +648,7 @@ const getRequestTypeExportText = (log: UsageLog): string => {
 }
 
 const getDisplayBillingMode = (
-  row: Pick<UsageLog, 'billing_mode' | 'image_count'> | null | undefined
+  row: Pick<UsageLog, 'billing_mode' | 'image_count' | 'video_billing'> | null | undefined
 ): string | null | undefined => resolveDisplayBillingMode(row)
 
 const escapeCSVValue = (value: unknown): string => {

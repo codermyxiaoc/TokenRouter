@@ -216,6 +216,92 @@ describe('GroupsView duplicate action', () => {
     vi.restoreAllMocks()
   })
 
+  // Video 编辑的价卡保持百万 Token 单位，文本高级调度和协议不出现。
+  it.each([['video', false], ['video', true], ['video_token', false], ['video_token', true], ['video_per_request', false], ['video_per_request', true]] as const)('round-trips Video %s pricing, fallback-only=%s', async (billingMode, fallbackOnly) => {
+    const videoGroup = { ...sourceGroup, platform: 'video', scheduler_type: 'basic', allowed_client_protocols: [],
+      video_rate_independent: true, video_rate_multiplier: 1.25,
+      model_pricing: [{ platform: 'video', models: ['seedance-v2'], billing_mode: billingMode,
+        video_image_input_pricing: { free_images: 0, price: 0.05 }, video_fallback_price: 0, video_token_prepay: billingMode === 'video_token' ? { price_per_second: 0.3 } : null,
+        video_prices: fallbackOnly ? [] : [{ resolution: '480p', has_reference_video: false, price: 0 }, { resolution: '480P', has_reference_video: true, price: 0 }, { resolution: '720p', has_reference_video: true, price: 15 }] }] }
+    listGroups.mockResolvedValue({ items: [videoGroup], total: 1, page: 1, page_size: 20, pages: 1 })
+    updateGroup.mockResolvedValue(videoGroup)
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'common.edit')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-group-tab-button="protocol"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('admin.groups.form.schedulerType')
+    await wrapper.get('[data-group-tab-button="pricing"]').trigger('click')
+    const card = wrapper.getComponent({ name: 'PricingEntryCard' })
+    expect(card.props('platform')).toBe('video')
+    const expectedPrices = fallbackOnly ? [] : [{ resolution: '480p', price: 0 }, { resolution: '720p', price: 15 }]
+    expect(card.props('entry').video_prices).toEqual(expectedPrices)
+    expect(card.props('entry').video_image_input_pricing).toEqual({ free_images: 0, price: 0.05 })
+    expect(card.props('entry')).toMatchObject({ video_fallback_price: 0, video_token_prepay: billingMode === 'video_token' ? { price_per_second: 0.3 } : null })
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(showError).not.toHaveBeenCalled()
+    expect(updateGroup).toHaveBeenCalledOnce()
+    const request = updateGroup.mock.calls[0][1]
+    expect(request).toMatchObject({ scheduler_type: 'basic', video_rate_independent: true, video_rate_multiplier: 1.25, allowed_client_protocols: [] })
+    expect(request.model_pricing[0].video_prices).toEqual(expectedPrices)
+    expect(request.model_pricing[0].video_image_input_pricing).toEqual({ free_images: 0, price: 0.05 })
+    expect(request.model_pricing[0]).toMatchObject({ billing_mode: billingMode, video_fallback_price: 0, video_token_prepay: billingMode === 'video_token' ? { price_per_second: 0.3 } : null })
+    wrapper.unmount()
+  })
+
+  // 分组价卡也必须拒绝非法数值，并在重新读取接口后区分零预扣与关闭状态。
+  it('validates, saves and reloads zero or cleared Video user pricing', async () => {
+    const videoGroup = { ...sourceGroup, platform: 'video', scheduler_type: 'basic', allowed_client_protocols: [],
+      video_rate_independent: true, video_rate_multiplier: 4,
+      model_pricing: [{ platform: 'video', models: ['seedance-v2'], billing_mode: 'video_token', price_multiplier: 2,
+        video_fallback_price: 15 as number | null,
+        video_token_prepay: { price_per_second: 0.3 } as { price_per_second: number } | null,
+        video_prices: [{ resolution: '720p', has_reference_video: false, price: 15 }] }] }
+    listGroups.mockImplementation(async () => ({ items: [videoGroup], total: 1, page: 1, page_size: 20, pages: 1 }))
+    updateGroup.mockImplementation(async (_id, request) => {
+      videoGroup.model_pricing = JSON.parse(JSON.stringify(request.model_pricing))
+      return videoGroup
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    const open = async () => {
+      await wrapper.findAll('button').find(button => button.text() === 'common.edit')!.trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-group-tab-button="pricing"]').trigger('click')
+      return wrapper.getComponent({ name: 'PricingEntryCard' })
+    }
+    let card = await open()
+    const original = { ...card.props('entry') }
+    for (const invalid of [
+      { video_fallback_price: NaN },
+      { video_token_prepay: { price_per_second: -1 } },
+      { video_token_prepay: { price_per_second: '' } },
+    ]) {
+      card.vm.$emit('update', { ...original, ...invalid })
+      await wrapper.get('#edit-group-form').trigger('submit')
+      await flushPromises()
+      expect(updateGroup).not.toHaveBeenCalled()
+    }
+    // 负数由数字输入框原生有效性拦截，其余非法值由业务校验提示。
+    expect(showError).toHaveBeenCalledWith('admin.channels.videoPricing.fallbackInvalid')
+    expect(showError).toHaveBeenCalledWith('admin.channels.videoTokenPrepay.invalid')
+    card.vm.$emit('update', { ...original, video_fallback_price: '0', video_token_prepay: { price_per_second: '0' } })
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(updateGroup.mock.calls[0][1].model_pricing[0]).toMatchObject({ price_multiplier: 2,
+      video_fallback_price: 0, video_token_prepay: { price_per_second: 0 } })
+    card = await open()
+    expect(card.props('entry')).toMatchObject({ video_fallback_price: 0, video_token_prepay: { price_per_second: 0 } })
+    card.vm.$emit('update', { ...card.props('entry'), video_fallback_price: '', video_token_prepay: null })
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(updateGroup.mock.calls[1][1].model_pricing[0]).toMatchObject({ video_fallback_price: null, video_token_prepay: null })
+    card = await open()
+    expect(card.props('entry')).toMatchObject({ video_fallback_price: null, video_token_prepay: null })
+    wrapper.unmount()
+  })
+
   it('duplicates the selected group, reports success, and refreshes the list', async () => {
     const wrapper = mountView()
     await flushPromises()

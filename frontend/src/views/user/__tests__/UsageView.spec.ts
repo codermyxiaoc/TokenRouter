@@ -249,6 +249,22 @@ describe('user UsageView', () => {
     }))
   })
 
+  // 用户端的六种筛选原样传到查询接口，视频按秒另外说明兼容的记录范围。
+  it.each(['token', 'per_request', 'image', 'video', 'video_token', 'video_per_request'])(
+    'queries the original billing mode %s', async (mode) => {
+    const wrapper = mountUsageView()
+    await flushPromises()
+    const selector = wrapper.findAllComponents(Select).find(select =>
+      (select.props('options') as SelectOption[]).some(option => option.value === 'video_per_request'))!
+    expect(selector).toBeDefined()
+    selector.vm.$emit('update:modelValue', mode)
+    selector.vm.$emit('change')
+    await flushPromises()
+    expect(query.mock.calls.at(-1)?.[0]).toMatchObject({ billing_mode: mode })
+    expect(wrapper.text().includes('admin.usage.billingModeVideoFilterHint')).toBe(mode === 'video')
+    wrapper.unmount()
+  })
+
   it('loads logs, stats, model stats, and snapshot on first render', async () => {
     mountUsageView()
     await flushPromises()

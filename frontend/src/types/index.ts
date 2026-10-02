@@ -3,6 +3,7 @@
  */
 
 import type { SubscriptionPlan } from './payment'
+import type { VideoImageInputPricing, VideoTokenPrepay } from '@/api/admin/channels'
 
 // ==================== Common Types ====================
 
@@ -571,6 +572,7 @@ export type GroupPlatform =
   | 'deepseek'
   | 'minimax'
   | 'opencode_go'
+  | 'video'
 export type GroupSchedulerType = 'basic' | 'advanced'
 export type VideoModelPrices = Record<string, Record<string, number>>
 
@@ -599,7 +601,7 @@ export type GroupClientProtocol =
   | 'openai_responses'
   | 'openai_chat_completions'
   | 'gemini_generate_content'
-export type MarketplacePricingMode = 'token' | 'image' | 'video' | 'unknown'
+export type MarketplacePricingMode = 'token' | 'image' | 'video' | 'video_token' | 'video_per_request' | 'unknown'
 export type MarketplacePriceStatus = 'priced' | 'unpriced'
 
 export interface MarketplacePricingInterval {
@@ -644,21 +646,37 @@ export interface MarketplaceModelPricing {
   image_price_2k?: number
   image_price_4k?: number
   video_prices?: MarketplaceVideoPrice[]
+  video_image_input_pricing?: VideoImageInputPricing | null
+  video_fallback_price?: number | null
+  video_fallback_pricing?: MarketplaceVideoPrice | null
+  video_token_prepay?: VideoTokenPrepay | null
 }
 
 // 视频价卡使用显式单位，避免把历史按次渠道价格误标成每秒价格。
 export interface MarketplaceVideoPrice {
   resolution: string
   price: number
-  unit: 'second' | 'request'
+  unit: 'second' | 'request' | 'million_tokens'
+  has_reference_video?: boolean
+  // 缺字段兼容旧接口的全局规则；显式 null 表示本档位未开启，不能继承。
+  video_image_input_pricing?: VideoImageInputPricing | null
+  video_token_prepay?: VideoTokenPrepay | null
 }
 
 // 模型能力模态：模型广场接口从定价元数据下发，缺省时前端按模型 ID 规则兜底。
 export type ModelModality = 'text' | 'image' | 'audio' | 'video'
 
+// 只包含本站可调用的创建路径，不暴露账号地址或上游模型映射。
+export interface MarketplaceVideoEndpoint {
+  method: 'POST'
+  path: string
+  protocol: string
+}
+
 export interface MarketplaceModel {
   id: string
   display_name: string
+  video_endpoints?: MarketplaceVideoEndpoint[]
   pricing: MarketplaceModelPricing
   input_modalities?: ModelModality[]
   output_modalities?: ModelModality[]
@@ -1130,6 +1148,7 @@ export type AccountPlatform =
   | 'deepseek'
   | 'minimax'
   | 'opencode_go'
+  | 'video'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account' | 'cosy'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -1627,6 +1646,7 @@ export type UpstreamUsageAdapter =
   | 'deepseek_balance'
   | 'minimax_coding'
   | 'opencode_go'
+  | 'video'
 
 export interface UpstreamUsageQueryConfig {
   enabled: boolean
@@ -1979,6 +1999,22 @@ export interface BillingSubscription {
   amount_usd: number
 }
 
+// 使用记录中的视频计费事实来自任务快照，不读取当前价卡重算历史费用。
+export interface UsageVideoBillingDetails {
+  mode: 'video' | 'video_token' | 'video_per_request'
+  unit: 'second' | 'million_tokens' | 'request'
+  unit_price: number
+  duration_seconds: number
+  resolution: string
+  has_reference_video: boolean
+  tokens?: number
+  reference_image_count?: number
+  reference_image_free_count?: number
+  billable_reference_image_count?: number
+  reference_image_unit_price?: number
+  reference_image_cost?: number
+}
+
 export interface UsageLog {
   id: number
   user_id: number
@@ -2035,6 +2071,12 @@ export interface UsageLog {
   image_output_cost: number
   image_size_source: ImageSizeSource | null
   image_size_breakdown: ImageSizeBreakdown | null
+
+  // 旧视频记录可只有时长/分辨率，缺失计费快照时不得补造参考图或单价。
+  video_count?: number
+  video_resolution?: string | null
+  video_duration_seconds?: number | null
+  video_billing?: UsageVideoBillingDetails | null
 
   // User-Agent
   user_agent: string | null

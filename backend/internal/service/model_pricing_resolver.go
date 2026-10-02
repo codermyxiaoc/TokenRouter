@@ -98,7 +98,7 @@ func (r *ModelPricingResolver) Resolve(ctx context.Context, input PricingInput) 
 			if mode == "" {
 				mode = BillingModeToken
 			}
-			if mode == BillingModePerRequest || mode == BillingModeImage || mode == BillingModeVideo {
+			if mode == BillingModePerRequest || mode == BillingModeImage || mode == BillingModeVideo || mode == BillingModeVideoToken || mode == BillingModeVideoPerRequest {
 				// 按次/图片渠道价不依赖基础 token 定价，直接返回可避免先触发
 				// LiteLLM/OpenAI 的全局 fallback 查询，再被渠道价覆盖。
 				resolved := &ResolvedPricing{
@@ -199,7 +199,7 @@ func (r *ModelPricingResolver) resolveConfiguredPricing(config *ChannelModelPric
 		mode = BillingModeToken
 	}
 	resolved := &ResolvedPricing{Mode: mode, Source: source, channelPricing: config}
-	if mode == BillingModePerRequest || mode == BillingModeImage || mode == BillingModeVideo {
+	if mode == BillingModePerRequest || mode == BillingModeImage || mode == BillingModeVideo || mode == BillingModeVideoToken || mode == BillingModeVideoPerRequest {
 		r.applyRequestTierOverrides(config, resolved)
 		applyResolvedPriceMultiplier(resolved, config)
 		return resolved
@@ -296,7 +296,7 @@ func (r *ModelPricingResolver) applyChannelOverrides(ctx context.Context, groupI
 	switch resolved.Mode {
 	case BillingModeToken:
 		r.applyTokenOverrides(chPricing, resolved)
-	case BillingModePerRequest, BillingModeImage, BillingModeVideo:
+	case BillingModePerRequest, BillingModeImage, BillingModeVideo, BillingModeVideoToken, BillingModeVideoPerRequest:
 		r.applyRequestTierOverrides(chPricing, resolved)
 	}
 	applyResolvedPriceMultiplier(resolved, chPricing)
@@ -489,6 +489,15 @@ func multiplyChannelPricingFields(pricing *ChannelModelPricing, multiplier float
 	pricing.ImageInputPrice = multiplyPricePointer(pricing.ImageInputPrice, multiplier)
 	pricing.ImageOutputPrice = multiplyPricePointer(pricing.ImageOutputPrice, multiplier)
 	pricing.PerRequestPrice = multiplyPricePointer(pricing.PerRequestPrice, multiplier)
+	pricing.VideoPrices = cloneVideoPriceTiers(pricing.VideoPrices)
+	pricing.VideoFallbackPrice = multiplyPricePointer(pricing.VideoFallbackPrice, multiplier)
+	// 固定预扣秒价与附加图片价一样，不参与最终视频价格倍率。
+	pricing.VideoTokenPrepay = pricing.VideoTokenPrepay.Clone()
+	// 视频参考图片附加费固定收费，刻意不应用渠道的定价倍率。
+	pricing.VideoImageInputPricing = pricing.VideoImageInputPricing.Clone()
+	for i := range pricing.VideoPrices {
+		pricing.VideoPrices[i].Price = multiplyPricePointer(pricing.VideoPrices[i].Price, multiplier)
+	}
 	pricing.Intervals = multiplyPricingIntervals(pricing.Intervals, multiplier)
 }
 

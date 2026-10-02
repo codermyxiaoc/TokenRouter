@@ -89,6 +89,7 @@
         <p v-else class="text-sm text-gray-400 dark:text-dark-500">
           {{ t('marketplace.pricingUnavailable') }}
         </p>
+        <VideoPricingRulesSummary :pricing="model.pricing" />
       </div>
     </div>
   </div>
@@ -98,6 +99,8 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import VideoPricingRulesSummary from './VideoPricingRulesSummary.vue'
+import { videoPricingRows as buildVideoPricingRows } from './marketplaceVideoPricing'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 import type { MarketplaceModel, MarketplaceModelPricing, MarketplacePricingInterval } from '@/types'
 
@@ -278,16 +281,7 @@ function hasImagePricing(pricing: MarketplaceModelPricing): boolean {
 
 // 视频零价是有效免费档位，不沿用图片正价判定。
 function videoPricingRows(pricing: MarketplaceModelPricing): PricingRow[] {
-  return (pricing.video_prices ?? []).flatMap((item) => {
-    if (!Number.isFinite(item.price) || item.price < 0 || !['second', 'request'].includes(item.unit)) {
-      return []
-    }
-    return [{
-      key: item.resolution,
-      label: item.resolution,
-      value: `${formatPrice(item.price)} ${t(item.unit === 'second' ? 'marketplace.perSecond' : 'marketplace.perRequest')}`,
-    }]
-  })
+  return buildVideoPricingRows(pricing, t, formatPrice)
 }
 
 function pricingKind(pricing: MarketplaceModelPricing): 'token' | 'image' | 'video' | 'unpriced' {
@@ -297,7 +291,7 @@ function pricingKind(pricing: MarketplaceModelPricing): 'token' | 'image' | 'vid
   if (pricing.pricing_mode === 'image' && hasImagePricing(pricing)) {
     return 'image'
   }
-  if (pricing.pricing_mode === 'video' && videoPricingRows(pricing).length > 0) {
+  if (['video', 'video_token', 'video_per_request'].includes(pricing.pricing_mode) && videoPricingRows(pricing).length > 0) {
     return 'video'
   }
   if (pricing.pricing_mode === 'token') {

@@ -528,6 +528,7 @@ import TLSFingerprintRoutersModal from '@/components/admin/TLSFingerprintRouters
 import { fetchAllAccountIds } from '@/utils/accountSelection'
 import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
+import { effectiveUpstreamUsageAdapter, isUpstreamUsageQueryEnabled, supportsUpstreamUsageQuery as isUpstreamUsageAccount } from '@/utils/upstreamUsage'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import { sanitizeUrl } from '@/utils/url'
@@ -774,27 +775,6 @@ const accountSupportsBatchUsage = (account: Account) => {
   return false
 }
 
-const isUpstreamUsageAccount = (account: Account) =>
-  account.type === 'apikey' &&
-  !((account.platform === 'zhipu' || account.platform === 'minimax') && account.credentials?.account_mode !== 'coding') &&
-  !(account.platform === 'opencode_go' && account.credentials?.account_mode === 'zen')
-
-const effectiveUpstreamUsageAdapter = (account: Account) => {
-  if (account.platform === 'kimi') {
-    return account.credentials?.account_mode === 'coding' ? 'kimi_coding' : 'kimi_balance'
-  }
-  if (account.platform === 'zhipu') {
-    return account.credentials?.account_mode === 'coding' ? 'zhipu_coding' : ''
-  }
-  if (account.platform === 'opencode_go') return account.credentials?.account_mode === 'zen' ? '' : 'opencode_go'
-  if (account.platform === 'deepseek') return 'deepseek_balance'
-  if (account.platform === 'minimax') return account.credentials?.account_mode === 'coding' ? 'minimax_coding' : ''
-  const rawConfig = account.extra?.upstream_usage_query as Record<string, unknown> | undefined
-  return rawConfig?.adapter === 'new_api' || rawConfig?.adapter === 'zivv'
-    ? rawConfig.adapter
-    : 'sub2api'
-}
-
 // 缓存键需要区分不同 Base URL，但不应把可能包含内部路径信息的原文写进浏览器存储。
 const upstreamUsageCacheIdentity = (value: string) => {
   let hash = 2166136261
@@ -1032,7 +1012,7 @@ const hydrateUpstreamUsageCache = () => {
     hydratedUpstreamUsageAdminID = adminID
   }
   for (const account of accounts.value) {
-    if (!isUpstreamUsageAccount(account)) continue
+    if (!isUpstreamUsageQueryEnabled(account)) continue
     const cached = readUpstreamUsageCache(account)
     if (cached) {
       setUpstreamUsageState(account.id, cached, null, false)
@@ -1043,7 +1023,7 @@ const hydrateUpstreamUsageCache = () => {
 }
 
 const requestUpstreamUsage = async (account: Account, options?: { force?: boolean }) => {
-  if (!isUpstreamUsageAccount(account)) return
+  if (!isUpstreamUsageQueryEnabled(account)) return
   const key = String(account.id)
   const force = options?.force === true
   if (!force) {
@@ -1152,7 +1132,7 @@ const handleBulkQueryUpstreamUsage = async () => {
     const selectedAccounts = selectedAccountResults
       .filter((item): item is PromiseFulfilledResult<Account> => item.status === 'fulfilled')
       .map(item => item.value)
-      .filter(isUpstreamUsageAccount)
+      .filter(isUpstreamUsageQueryEnabled)
     if (selectedAccounts.length === 0) {
       appStore.showWarning(t('admin.accounts.upstreamUsage.noSupportedSelection'))
       return

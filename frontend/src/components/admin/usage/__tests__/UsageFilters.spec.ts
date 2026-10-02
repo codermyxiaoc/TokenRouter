@@ -31,6 +31,13 @@ const messages: Record<string, string> = {
   'admin.usage.billingModeToken': 'Token',
   'admin.usage.billingModePerRequest': 'Per Request',
   'admin.usage.billingModeImage': 'Image',
+  'admin.channels.billingMode.token': 'Token',
+  'admin.channels.billingMode.perRequest': '按次',
+  'admin.channels.billingMode.image': '图片（按次）',
+  'admin.channels.billingMode.videoSeconds': '视频（按秒）',
+  'admin.channels.billingMode.videoToken': '视频（按 Token）',
+  'admin.channels.billingMode.videoPerRequest': '视频（按次）',
+  'admin.usage.billingModeVideoFilterHint': '包含未细分计费单位的视频记录',
   'admin.usage.group': 'Group',
   'admin.usage.allGroups': 'All Groups',
   'common.refresh': 'Refresh',
@@ -267,6 +274,31 @@ describe('UsageFilters — model options come from prop (no dup request)', () =>
 })
 
 describe('UsageFilters — team options', () => {
+  // 共用名称后仍提交原有六种筛选值，避免把展示单位传给后端。
+  it.each([
+    ['token', 'Token'],
+    ['per_request', '按次'],
+    ['image', '图片（按次）'],
+    ['video', '视频（按秒）'],
+    ['video_token', '视频（按 Token）'],
+    ['video_per_request', '视频（按次）'],
+  ])('emits the original billing mode %s with the channel label', async (mode, label) => {
+    const wrapper = mountFilters()
+    await flushPromises()
+    const selector = wrapper.findAllComponents({ name: 'Select' }).find(select =>
+      (select.props('options') as Array<{ value: string }>).some(option => option.value === 'video_per_request'))!
+    expect(selector).toBeDefined()
+    expect(selector.props('options')).toContainEqual({ value: mode, label })
+    expect(selector.props('options')).toHaveLength(7)
+    selector.vm.$emit('update:modelValue', mode)
+    selector.vm.$emit('change')
+    await flushPromises()
+    expect(wrapper.props('modelValue')).toMatchObject({ billing_mode: mode })
+    expect(wrapper.emitted('change')).toHaveLength(1)
+    expect(wrapper.text().includes(messages['admin.usage.billingModeVideoFilterHint']!)).toBe(mode === 'video')
+    wrapper.unmount()
+  })
+
   it('loads admin teams into the project Select options', async () => {
     mockTeamsList.mockResolvedValueOnce([
       { id: 9, name: 'Platform Team' },

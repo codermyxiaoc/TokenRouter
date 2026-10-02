@@ -290,10 +290,11 @@ func TestCNUpstreamUsageAdaptersPreserveConfiguredHostAndNormalizeResults(t *tes
 	}
 }
 
-func TestCNUpstreamUsageUnsupportedPayGDoesNotSendRequest(t *testing.T) {
+func TestCNUpstreamUsageUnsupportedModeDoesNotSendRequest(t *testing.T) {
 	account := &Account{
-		ID: 15, Platform: PlatformZhipu, Type: AccountTypeAPIKey, Status: StatusActive,
-		Credentials: map[string]any{"api_key": "zhipu-key", "account_mode": AccountModePayG},
+		ID: 15, Platform: PlatformDeepseek, Type: AccountTypeAPIKey, Status: StatusActive,
+		// DeepSeek 不支持 Coding Plan，开放三个按量模式不能扩大到非法账号组合。
+		Credentials: map[string]any{"api_key": "deepseek-key", "account_mode": AccountModeCoding},
 	}
 	repo := &upstreamUsageAccountRepoStub{account: account}
 	upstream := &upstreamUsageHTTPStub{}

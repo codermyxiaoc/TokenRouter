@@ -42,6 +42,18 @@ const routes: RouteRecordRaw[] = [
       title: 'Home'
     }
   },
+  // 接口文档与模型广场使用相同公开访问边界，正文按稳定 ID 支持直达。
+  {
+    path: '/docs/:documentId?',
+    name: 'ApiDocs',
+    component: () => import('@/views/ApiDocsView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'API Documentation',
+      titleKey: 'apiDocs.title',
+      descriptionKey: 'apiDocs.subtitle',
+    },
+  },
   // 模型广场需要保持公开访问，首页和侧边栏都直接链接到这里。
   {
     path: '/models',

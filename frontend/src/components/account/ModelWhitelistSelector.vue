@@ -96,6 +96,7 @@
     <div class="mb-4 flex flex-wrap gap-2">
       <button
         type="button"
+        v-if="!normalizedPlatforms.includes('video') || normalizedPlatforms.length > 1"
         @click="fillRelated"
         class="rounded-lg border border-blue-200 px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-900/30"
       >

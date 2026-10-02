@@ -104,7 +104,7 @@ func resolveSmartRoutingAPIKeyRequest(c *gin.Context, apiKeyService *service.API
 		if forcedPlatform != "" && group.Platform != forcedPlatform {
 			continue
 		}
-		if isSeedanceCreateRequest(c.Request.Method, c.Request.URL.Path) && group.Platform != service.PlatformOpenAI {
+		if isSeedanceCreateRequest(c.Request.Method, c.Request.URL.Path) && group.Platform != service.PlatformOpenAI && group.Platform != service.PlatformVideo {
 			continue
 		}
 		if execution != nil && execution.visited[group.ID] {
@@ -169,6 +169,9 @@ func resolveSmartRoutingAPIKeyRequest(c *gin.Context, apiKeyService *service.API
 
 // smartRoutingRequestModel 严格要求非空字符串模型；探针和缺省模型不能借用首组。
 func smartRoutingRequestModel(c *gin.Context) (string, error) {
+	if model := videoRequestPathModel(c.Request); model != "" {
+		return compositeModelFromRequest(c.Request)
+	}
 	missing := infraerrors.BadRequest("SMART_ROUTING_MODEL_REQUIRED", "Smart routing requires a non-empty model")
 	invalid := infraerrors.BadRequest("SMART_ROUTING_INVALID_REQUEST", "Smart routing requires exactly one model field")
 	if isGeminiNativeModelEndpoint(c.Request.URL.Path) {
@@ -268,6 +271,9 @@ func smartRoutingBodyError(err, missing error) error {
 // smartRoutingModelEndpoint 显式列出能在认证阶段确定模型的入口。
 func smartRoutingModelEndpoint(c *gin.Context) bool {
 	path := strings.TrimSuffix(c.Request.URL.Path, "/")
+	if route, ok := service.MatchVideoGatewayRoute(c.Request.Method, path); ok && route.Create {
+		return true
+	}
 	if isSeedanceCreateRequest(c.Request.Method, path) {
 		return true
 	}

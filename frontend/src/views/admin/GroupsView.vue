@@ -161,6 +161,7 @@
                               ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400'
                               : value === 'minimax'
                                 ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
+                              : value === 'video' ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
                               : value === 'opencode_go'
                                 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
                                 : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
@@ -518,7 +519,7 @@
               <p class="input-hint">{{ t("admin.groups.defaultGroup.hint") }}</p>
             </div>
             <h4 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.groups.tabs.scheduling') }}</h4>
-            <div>
+            <div v-if="createForm.platform !== 'video'">
               <label class="input-label">{{
                 t("admin.groups.form.schedulerType")
               }}</label>
@@ -610,7 +611,7 @@
               />
               <p class="input-hint">{{ t("admin.groups.copyAccounts.hint") }}</p>
             </div>
-            <div>
+            <div v-if="createForm.platform !== 'video'">
               <label class="input-label">{{
                 t("admin.groups.unavailableFallback.title")
               }}</label>
@@ -623,7 +624,7 @@
                 {{ t("admin.groups.unavailableFallback.hint") }}
               </p>
             </div>
-            <div>
+            <div v-if="createForm.platform !== 'video'">
               <div class="relative mb-1.5 flex items-center gap-1">
                 <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
                   {{ t("admin.groups.sessionIsolation.title") }}
@@ -646,7 +647,7 @@
               </div>
               <p class="input-hint">{{ t("admin.groups.sessionIsolation.hint") }}</p>
             </div>
-            <div class="border-t pt-4" data-group-field="probe">
+            <div v-if="createForm.platform !== 'video'" class="border-t pt-4" data-group-field="probe">
               <div class="mb-3 flex items-center justify-between gap-3">
                 <div>
                   <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -1204,7 +1205,7 @@
                   <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t("admin.groups.modelPricing.title") }}</h4>
                   <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t("admin.groups.modelPricing.description") }}</p>
                 </div>
-                <button type="button" class="btn btn-secondary shrink-0 whitespace-nowrap" @click="addGroupPricing(createForm.model_pricing)">
+                <button type="button" class="btn btn-secondary shrink-0 whitespace-nowrap" @click="addGroupPricing(createForm.model_pricing, createForm.platform)">
                   <Icon name="plus" size="sm" class="mr-1" />{{ t("admin.groups.modelPricing.add") }}
                 </button>
               </div>
@@ -1385,7 +1386,7 @@
                 {{ t(videoPricingI18nKey("title")) }}
               </label>
               <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
-                {{ t(videoPricingI18nKey("description")) }}
+                {{ t(createForm.platform === 'video' ? 'admin.channels.videoPricing.groupHint' : videoPricingI18nKey("description")) }}
               </p>
               <div class="mb-4 flex items-center justify-between gap-4">
                 <label for="create-group-video-rate-independent" class="min-w-0 text-sm text-gray-700 dark:text-gray-300">{{ t(videoPricingI18nKey('independentMultiplier')) }}</label>
@@ -1412,6 +1413,7 @@
                   placeholder="1"
                 />
               </div>
+              <template v-if="createForm.platform !== 'video'">
               <div class="grid grid-cols-3 gap-3">
                 <div>
                   <label class="input-label">480p ($/s)</label>
@@ -1502,6 +1504,7 @@
                   </div>
                 </div>
               </div>
+              </template>
             </div>
             <div
               v-if="createForm.platform === 'openai'"
@@ -2213,7 +2216,7 @@
               <p class="input-hint">{{ t("admin.groups.defaultGroup.hint") }}</p>
             </div>
             <h4 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.groups.tabs.scheduling') }}</h4>
-            <div>
+            <div v-if="editForm.platform !== 'video'">
               <label class="input-label">{{
                 t("admin.groups.form.schedulerType")
               }}</label>
@@ -2307,7 +2310,7 @@
                 {{ t("admin.groups.copyAccounts.hintEdit") }}
               </p>
             </div>
-            <div>
+            <div v-if="editForm.platform !== 'video'">
               <label class="input-label">{{
                 t("admin.groups.unavailableFallback.title")
               }}</label>
@@ -2320,7 +2323,7 @@
                 {{ t("admin.groups.unavailableFallback.hint") }}
               </p>
             </div>
-            <div>
+            <div v-if="editForm.platform !== 'video'">
               <div class="relative mb-1.5 flex items-center gap-1">
                 <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
                   {{ t("admin.groups.sessionIsolation.title") }}
@@ -2343,7 +2346,7 @@
               </div>
               <p class="input-hint">{{ t("admin.groups.sessionIsolation.hint") }}</p>
             </div>
-            <div class="border-t pt-4" data-group-field="probe">
+            <div v-if="editForm.platform !== 'video'" class="border-t pt-4" data-group-field="probe">
               <div class="mb-3 flex items-center justify-between gap-3">
                 <div>
                   <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -2930,7 +2933,7 @@
                   <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t("admin.groups.modelPricing.title") }}</h4>
                   <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t("admin.groups.modelPricing.description") }}</p>
                 </div>
-                <button type="button" class="btn btn-secondary shrink-0 whitespace-nowrap" @click="addGroupPricing(editForm.model_pricing)">
+                <button type="button" class="btn btn-secondary shrink-0 whitespace-nowrap" @click="addGroupPricing(editForm.model_pricing, editForm.platform)">
                   <Icon name="plus" size="sm" class="mr-1" />{{ t("admin.groups.modelPricing.add") }}
                 </button>
               </div>
@@ -3111,7 +3114,7 @@
                 {{ t(videoPricingI18nKey("title")) }}
               </label>
               <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
-                {{ t(videoPricingI18nKey("description")) }}
+                {{ t(editForm.platform === 'video' ? 'admin.channels.videoPricing.groupHint' : videoPricingI18nKey("description")) }}
               </p>
               <div class="mb-4 flex items-center justify-between gap-4">
                 <label for="edit-group-video-rate-independent" class="min-w-0 text-sm text-gray-700 dark:text-gray-300">{{ t(videoPricingI18nKey('independentMultiplier')) }}</label>
@@ -3138,6 +3141,7 @@
                   placeholder="1"
                 />
               </div>
+              <template v-if="editForm.platform !== 'video'">
               <div class="grid grid-cols-3 gap-3">
                 <div>
                   <label class="input-label">480p ($/s)</label>
@@ -3228,6 +3232,7 @@
                   </div>
                 </div>
               </div>
+              </template>
             </div>
             <div
               v-if="editForm.platform === 'openai'"
@@ -3841,6 +3846,7 @@
                                   ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400'
                                   : group.platform === 'minimax'
                                     ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
+                              : group.platform === 'video' ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
                               : group.platform === 'opencode_go'
                                 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
                                       : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
@@ -3921,6 +3927,7 @@
 </template>
 
 <script setup lang="ts">
+import { validVideoPrices, videoPricesFromAPI, videoPricesToAPI, validVideoImageInputPricing, videoImageInputPricingToAPI, videoImageInputPricingFromAPI, validVideoFallbackPrice, videoFallbackPriceToAPI, validVideoTokenPrepay, videoTokenPrepayToAPI, videoTokenPrepayFromAPI } from "@/components/admin/channel/videoPricing";
 import { ref, reactive, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/app";
@@ -4037,9 +4044,10 @@ import {
 } from "./groupsVideoModelPricing";
 
 // 分组模型价格复用渠道价格卡，但 token 区间由内置长上下文规则统一管理。
-const emptyGroupPricing = (): PricingFormEntry => ({
+const emptyGroupPricing = (platform?: string): PricingFormEntry => ({
   models: [],
-  billing_mode: "token",
+  billing_mode: platform === "video" ? "video_token" : "token",
+  video_prices: [],
   price_multiplier: null,
   fast_mode_multiplier: null,
   input_price: null,
@@ -4054,8 +4062,8 @@ const emptyGroupPricing = (): PricingFormEntry => ({
   time_pricing: createDefaultTimePricingForm(),
 });
 
-const addGroupPricing = (entries: PricingFormEntry[]) =>
-  entries.push(emptyGroupPricing());
+const addGroupPricing = (entries: PricingFormEntry[], platform: string) =>
+  entries.push(emptyGroupPricing(platform));
 
 const groupPricingFromAPI = (
   pricing: ChannelModelPricing[] | undefined,
@@ -4063,6 +4071,10 @@ const groupPricingFromAPI = (
   (pricing || []).map((entry) => ({
     models: entry.models || [],
     billing_mode: entry.billing_mode || "token",
+    video_prices: videoPricesFromAPI(entry.video_prices),
+    video_image_input_pricing: videoImageInputPricingFromAPI(entry.video_image_input_pricing),
+    video_fallback_price: entry.video_fallback_price ?? null,
+    video_token_prepay: videoTokenPrepayFromAPI(entry.video_token_prepay),
     price_multiplier: entry.price_multiplier ?? null,
     fast_mode_multiplier: entry.fast_mode_multiplier ?? null,
     fast_multiplier: entry.fast_multiplier ?? null,
@@ -4091,6 +4103,10 @@ const groupPricingToAPI = (
       platform,
       models: entry.models,
       billing_mode: entry.billing_mode,
+      video_prices: videoPricesToAPI(entry.video_prices),
+      video_image_input_pricing: videoImageInputPricingToAPI(entry.video_image_input_pricing),
+      video_fallback_price: platform === 'video' && ['video', 'video_token', 'video_per_request'].includes(entry.billing_mode) ? videoFallbackPriceToAPI(entry.video_fallback_price) : null,
+      video_token_prepay: platform === 'video' && entry.billing_mode === 'video_token' ? videoTokenPrepayToAPI(entry.video_token_prepay) : null,
       price_multiplier: toNullableNumber(entry.price_multiplier),
       fast_mode_multiplier: toNullableNumber(entry.fast_mode_multiplier),
       fast_multiplier: toNullableNumber(entry.fast_multiplier),
@@ -5023,7 +5039,7 @@ const resetAvailabilityProbeFormState = (
 const buildAvailabilityProbeConfig = (
   form: typeof createForm | typeof editForm,
 ): GroupAvailabilityProbeConfig => {
-  if (!form.availability_probe_enabled) {
+  if (form.platform === "video" || !form.availability_probe_enabled) {
     return { enabled: false };
   }
 
@@ -5702,6 +5718,22 @@ const validateGroupForm = async (target: "create" | "edit"): Promise<boolean> =>
     await tabs?.revealField('[data-group-field="reasoning"] [role="alert"]');
     return false;
   }
+  if (form.model_pricing.some(entry => !validVideoPrices(entry.video_prices))) {
+    appStore.showError(t("admin.channels.videoPricing.invalid"));
+    return false;
+  }
+  if (form.model_pricing.some(entry => !validVideoFallbackPrice(entry.video_fallback_price))) {
+    appStore.showError(t('admin.channels.videoPricing.fallbackInvalid'));
+    return false;
+  }
+  if (form.model_pricing.some(entry => !validVideoTokenPrepay(entry.video_token_prepay))) {
+    appStore.showError(t('admin.channels.videoTokenPrepay.invalid'));
+    return false;
+  }
+  if (form.model_pricing.some(entry => !validVideoImageInputPricing(entry.video_image_input_pricing))) {
+    appStore.showError(t('admin.channels.videoImageInputPricing.invalid'));
+    return false;
+  }
   try {
     buildAvailabilityProbeConfig(form);
   } catch (error) {
@@ -5723,7 +5755,8 @@ const handleCreateGroup = async () => {
     // 构建请求数据，包含模型路由配置
     const requestData = {
       ...createForm,
-      allowed_client_protocols: [...createForm.allowed_client_protocols],
+      ...(createForm.platform === "video" ? { scheduler_type: "basic" as const, advanced_scheduler_overrides: {}, session_isolation_enabled: false, unavailable_fallback_group_id: null } : {}),
+      allowed_client_protocols: createForm.platform === "video" ? [] : [...createForm.allowed_client_protocols],
       display_brand: normalizeDisplayBrand(createForm.display_brand),
       model_pricing: groupPricingToAPI(
         createForm.model_pricing,
@@ -5999,20 +6032,21 @@ const handleUpdateGroup = async () => {
     // 转换 fallback_group_id: null -> 0 (后端使用 0 表示清除)
     const payload = {
       ...editForm,
-      allowed_client_protocols: [...editForm.allowed_client_protocols],
+      ...(editForm.platform === "video" ? { scheduler_type: "basic" as const, advanced_scheduler_overrides: {}, session_isolation_enabled: false, unavailable_fallback_group_id: null } : {}),
+      allowed_client_protocols: editForm.platform === "video" ? [] : [...editForm.allowed_client_protocols],
       display_brand: normalizeDisplayBrand(editForm.display_brand),
       model_pricing: groupPricingToAPI(
         editForm.model_pricing,
         editForm.platform,
       ),
       fallback_group_id:
-        editForm.fallback_group_id === null ? 0 : editForm.fallback_group_id,
+        editForm.platform === "video" || editForm.fallback_group_id === null ? 0 : editForm.fallback_group_id,
       fallback_group_id_on_invalid_request:
-        editForm.fallback_group_id_on_invalid_request === null
+        editForm.platform === "video" || editForm.fallback_group_id_on_invalid_request === null
           ? 0
           : editForm.fallback_group_id_on_invalid_request,
       unavailable_fallback_group_id:
-        editForm.unavailable_fallback_group_id === null
+        editForm.platform === "video" || editForm.unavailable_fallback_group_id === null
           ? 0
           : editForm.unavailable_fallback_group_id,
       model_routing: convertRoutingRulesToApiFormat(

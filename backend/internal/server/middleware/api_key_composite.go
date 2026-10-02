@@ -68,19 +68,23 @@ func resolveCompositeAPIKeyRequest(c *gin.Context, apiKeyService *service.APIKey
 	if err != nil {
 		return nil, err
 	}
-	SetCompositeModelContext(c, originalModel, actualModel)
+	SetCompositeModelContext(c, originalModel, actualModel, selected.Group)
 	return selected, nil
 }
 
 // SetCompositeModelContext 记录客户端模型和内部真实模型，供日志及响应恢复使用。
-func SetCompositeModelContext(c *gin.Context, clientModel, actualModel string) {
+func SetCompositeModelContext(c *gin.Context, clientModel, actualModel string, groups ...*service.Group) {
 	if c == nil {
 		return
 	}
 	c.Set("composite_client_model", clientModel)
 	c.Set("composite_actual_model", actualModel)
 	// Ark 响应保持供应商原生格式；模型映射只记入请求与计费上下文。
-	if c.Request == nil || !isSeedanceTaskAPIPath(c.Request.URL.Path) {
+	var group *service.Group
+	if len(groups) > 0 {
+		group = groups[0]
+	}
+	if c.Request == nil || !isVideoPayloadPreservingPath(c.Request.URL.Path, group) {
 		c.Writer = &compositeModelResponseWriter{
 			ResponseWriter: c.Writer,
 			clientModel:    clientModel,
@@ -131,7 +135,7 @@ func isCompositeKeyNoModelEndpoint(method, path string) bool {
 	if isCompositeKeyModelListEndpoint(method, path) || isAPIKeyUsageRequest(method, path) {
 		return true
 	}
-	return isAsyncImageTaskRead(method, path) || isBatchImageBillingBypassRequest(method, path) || isGrokVideoTaskRead(method, path) || isSeedanceTaskManagementRequest(method, path)
+	return isVideoTaskManagementRequest(method, path) || isAsyncImageTaskRead(method, path) || isBatchImageBillingBypassRequest(method, path) || isGrokVideoTaskRead(method, path) || isSeedanceTaskManagementRequest(method, path)
 }
 
 // isCompositeKeyModelListEndpoint 识别复合 Key 需要聚合映射的模型列表入口。
@@ -169,7 +173,7 @@ func isCompositeKeyBillingBypassEndpoint(method, path string) bool {
 	if isAPIKeyUsageRequest(method, path) {
 		return true
 	}
-	return isAsyncImageTaskRead(method, path) || isBatchImageBillingBypassRequest(method, path) || isGrokVideoTaskRead(method, path) || isSeedanceTaskManagementRequest(method, path)
+	return isVideoTaskManagementRequest(method, path) || isAsyncImageTaskRead(method, path) || isBatchImageBillingBypassRequest(method, path) || isGrokVideoTaskRead(method, path) || isSeedanceTaskManagementRequest(method, path)
 }
 
 // isGrokVideoTaskRead 识别不携带模型、仅通过任务归属查询的 Grok 视频入口。
@@ -242,6 +246,16 @@ func rewriteCompositeGeminiParams(c *gin.Context, actualModel string) {
 
 // compositeModelFromRequest 读取 JSON 或 multipart 请求的顶层 model。
 func compositeModelFromRequest(request *http.Request) (string, error) {
+	if model := videoRequestPathModel(request); model != "" {
+		body, err := readAndRestoreRequestBody(request)
+		if err != nil {
+			return "", err
+		}
+		if _, err := service.ParseVideoRequestModel(body, model); err != nil {
+			return "", err
+		}
+		return model, nil
+	}
 	mediaType, _, _ := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if strings.HasPrefix(mediaType, "multipart/") {
 		return multipartModel(request)
@@ -258,6 +272,9 @@ func compositeModelFromRequest(request *http.Request) (string, error) {
 }
 
 func rewriteCompositeRequestModel(request *http.Request, actualModel string) error {
+	if videoRequestPathModel(request) != "" {
+		return rewriteVideoRequestPathModel(request, actualModel)
+	}
 	mediaType, _, _ := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if strings.HasPrefix(mediaType, "multipart/") {
 		return rewriteMultipartModel(request, actualModel)
@@ -278,7 +295,11 @@ func rewriteCompositeRequestModel(request *http.Request, actualModel string) err
 // 同一分组的前缀会被剥离；跨分组模型会使一次请求需要多套路由，因此明确拒绝。
 func rewriteCompositeAdditionalModels(request *http.Request, apiKey *service.APIKey, selected *service.APIKeyCompositeGroup) error {
 	// Ark 的扩展字段不是 Responses 工具声明，不能套用其附加模型转换。
-	if isSeedanceTaskAPIPath(request.URL.Path) {
+	var group *service.Group
+	if selected != nil {
+		group = selected.Group
+	}
+	if isVideoPayloadPreservingPath(request.URL.Path, group) {
 		return nil
 	}
 	mediaType, _, _ := mime.ParseMediaType(request.Header.Get("Content-Type"))
@@ -445,7 +466,7 @@ func abortCompositeKeyError(c *gin.Context, err error) {
 }
 
 func isOpenAICompositeEndpoint(path string) bool {
-	return isSeedanceTaskAPIPath(path) || strings.Contains(path, "/chat/completions") || strings.Contains(path, "/responses") ||
+	return isVideoGatewayAPIPath(path) || strings.Contains(path, "/chat/completions") || strings.Contains(path, "/responses") ||
 		strings.Contains(path, "/embeddings") || strings.Contains(path, "/images/") ||
 		strings.Contains(path, "/videos/") || strings.Contains(path, "/alpha/search") ||
 		strings.Contains(path, "/live") || strings.Contains(path, "/realtime/") ||

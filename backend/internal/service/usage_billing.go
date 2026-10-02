@@ -43,17 +43,19 @@ type UsageBillingCommand struct {
 	// 批量预占可关闭套餐倍率覆盖，并要求返回后续结算所需的基础金额明细。
 	DisablePlanGroupRateMultiplier bool
 	IncludeAllocationPricing       bool
-	AccountType                    string
-	Model                          string
-	ServiceTier                    string
-	ReasoningEffort                string
-	BillingType                    int8
-	InputTokens                    int
-	OutputTokens                   int
-	CacheCreationTokens            int
-	CacheReadTokens                int
-	ImageCount                     int
-	MediaType                      string
+	// PreserveZeroRateAllocation 仅供视频预占记录免费订阅覆盖的基础用量，普通同步与图片路径保持原行为。
+	PreserveZeroRateAllocation bool `json:"-"`
+	AccountType                string
+	Model                      string
+	ServiceTier                string
+	ReasoningEffort            string
+	BillingType                int8
+	InputTokens                int
+	OutputTokens               int
+	CacheCreationTokens        int
+	CacheReadTokens            int
+	ImageCount                 int
+	MediaType                  string
 
 	APIKeyQuotaCost     float64
 	APIKeyRateLimitCost float64
@@ -258,6 +260,21 @@ type BatchImageBalanceHoldCommand struct {
 	// CreativeEntity 标记计费实体是创作台任务（creative_runs）而非批量图片作业（batch_image_jobs）。
 	// 仅影响任务行上的预记标记与预占快照落表位置，不参与幂等指纹计算。
 	CreativeEntity bool
+	// VideoEntity 只供独立视频任务使用，旧图片命令与指纹保持不变。
+	VideoEntity           bool
+	VideoAccountID        int64
+	VideoLeaseToken       string
+	VideoAccountQuotaCost float64
+	// VideoDeferredBilling 冻结未设 Token 上限的后结算模式，不能将零预留解释为免费。
+	VideoDeferredBilling bool `json:",omitempty"`
+	// VideoTokenPrepay 仅标记按秒固定预扣的新 Token 任务，与延后零预扣模式互斥。
+	// 预扣时长独立冻结，终态上游更新视频时长不会改变原预扣账本。
+	VideoTokenPrepay           bool    `json:",omitempty"`
+	VideoPrepayDurationSeconds float64 `json:",omitempty"`
+	// 视频参考图片费用按固定单价分配，不能叠加价卡、分组、订阅或余额倍率。
+	// 延后计费保留已知固定费快照，但创建时仍不预留任何资金。
+	VideoFixedAmountUSD       float64 `json:",omitempty"`
+	VideoActualFixedAmountUSD float64 `json:",omitempty"`
 	// ReservedAt 用于只回退仍属于原窗口的预记额度。
 	ReservedAt time.Time
 }
@@ -342,6 +359,16 @@ func buildBatchImageBalanceHoldFingerprint(c *BatchImageBalanceHoldCommand) stri
 	if payloadHash := strings.TrimSpace(c.RequestPayloadHash); payloadHash != "" {
 		raw += "|" + payloadHash
 	}
+	// 仅新模式增加指纹片段，保证既有视频、图片任务的重试指纹保持不变。
+	if c.VideoDeferredBilling {
+		raw += "|video_deferred_billing"
+	}
+	if c.VideoTokenPrepay {
+		raw += fmt.Sprintf("|video_token_prepay|%0.10f", c.VideoPrepayDurationSeconds)
+	}
+	if c.VideoFixedAmountUSD != 0 || c.VideoActualFixedAmountUSD != 0 {
+		raw += fmt.Sprintf("|video_fixed|%0.10f|%0.10f", c.VideoFixedAmountUSD, c.VideoActualFixedAmountUSD)
+	}
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }
@@ -399,6 +426,9 @@ func PlanBatchImageBillingCapture(cmd *BatchImageBalanceHoldCommand) (*BatchImag
 	if cmd == nil {
 		return plan, nil
 	}
+	if cmd.VideoEntity && !cmd.VideoDeferredBilling && cmd.VideoFixedAmountUSD > 0 {
+		return planVideoFixedBillingCapture(cmd)
+	}
 	if cmd.PricingSnapshotVersion >= 2 && cmd.BaseAmountUSD > 0 {
 		return planBatchImageBaseAmountCapture(cmd)
 	}
@@ -435,12 +465,82 @@ func PlanBatchImageBillingCapture(cmd *BatchImageBalanceHoldCommand) (*BatchImag
 	return plan, nil
 }
 
+// VideoImageInputBillingComponent 标记不参与任何倍率的视频参考图片费用。
+const VideoImageInputBillingComponent = "video_image_input"
+
+// planVideoFixedBillingCapture 分别收敛视频与图片预占，防止一种费用挪用另一种费用的倍率或预算。
+func planVideoFixedBillingCapture(cmd *BatchImageBalanceHoldCommand) (*BatchImageBillingCapturePlan, error) {
+	if cmd.VideoActualFixedAmountUSD < 0 || math.IsNaN(cmd.VideoActualFixedAmountUSD) || math.IsInf(cmd.VideoActualFixedAmountUSD, 0) ||
+		cmd.VideoActualFixedAmountUSD-cmd.VideoFixedAmountUSD > batchImageCostEpsilon {
+		return nil, ErrBatchImageSettlementCostExceedsHold
+	}
+	video, fixed := *cmd, *cmd
+	video.VideoFixedAmountUSD, video.VideoActualFixedAmountUSD = 0, 0
+	fixed.VideoFixedAmountUSD, fixed.VideoActualFixedAmountUSD = 0, 0
+	video.SubscriptionHoldAllocations, fixed.SubscriptionHoldAllocations = nil, nil
+	fixedSubscription := 0.0
+	for _, allocation := range cmd.SubscriptionHoldAllocations {
+		if allocation.Component == VideoImageInputBillingComponent {
+			fixed.SubscriptionHoldAllocations = append(fixed.SubscriptionHoldAllocations, allocation)
+			fixedSubscription += allocation.AmountUSD
+		} else {
+			video.SubscriptionHoldAllocations = append(video.SubscriptionHoldAllocations, allocation)
+		}
+	}
+	totalBalance := EffectiveBatchImageBalanceHoldAmount(cmd)
+	fixed.BaseAmountUSD = QuantizeUsageBillingAmount(cmd.VideoFixedAmountUSD)
+	fixed.ActualBaseAmountUSD = QuantizeUsageBillingAmount(cmd.VideoActualFixedAmountUSD)
+	fixed.BalanceHoldAmount = QuantizeUsageBillingAmount(math.Max(fixed.BaseAmountUSD-fixedSubscription, 0))
+	if fixed.BalanceHoldAmount-totalBalance > batchImageCostEpsilon {
+		return nil, ErrBatchImageSettlementCostExceedsHold
+	}
+	fixed.HoldAmount = fixedSubscription + fixed.BalanceHoldAmount
+	fixed.BalanceRateMultiplier, fixed.SettlementRateScale = 1, 1
+	video.BalanceHoldAmount = math.Max(totalBalance-fixed.BalanceHoldAmount, 0)
+	// 显式拆开 HoldAmount，避免余额为零时退回旧全余额兼容分支。
+	video.HoldAmount = video.BalanceHoldAmount
+	for _, allocation := range video.SubscriptionHoldAllocations {
+		video.HoldAmount += allocation.AmountUSD
+	}
+	video.ActualAmount = 0
+	videoPlan, err := PlanBatchImageBillingCapture(&video)
+	if err != nil {
+		return nil, err
+	}
+	fixedPlan, err := planBatchImageBaseAmountCapture(&fixed)
+	if err != nil {
+		return nil, err
+	}
+	for i := range fixedPlan.BillingAllocations {
+		fixedPlan.BillingAllocations[i].Component = VideoImageInputBillingComponent
+	}
+	videoPlan.BalanceHoldAmount = totalBalance
+	videoPlan.ActualAmountUSD += fixedPlan.ActualAmountUSD
+	videoPlan.SubscriptionAmountUSD += fixedPlan.SubscriptionAmountUSD
+	videoPlan.BalanceAmountUSD += fixedPlan.BalanceAmountUSD
+	videoPlan.BillingAllocations = append(videoPlan.BillingAllocations, fixedPlan.BillingAllocations...)
+	videoPlan.SubscriptionReleases = append(videoPlan.SubscriptionReleases, fixedPlan.SubscriptionReleases...)
+	return videoPlan, nil
+}
+
 // planBatchImageBaseAmountCapture 按预占时记录的各来源倍率覆盖实际基础金额。
 func planBatchImageBaseAmountCapture(cmd *BatchImageBalanceHoldCommand) (*BatchImageBillingCapturePlan, error) {
 	plan := &BatchImageBillingCapturePlan{BalanceHoldAmount: EffectiveBatchImageBalanceHoldAmount(cmd)}
 	remainingBase := math.Max(cmd.ActualBaseAmountUSD, 0)
 	settlementScale := math.Max(cmd.SettlementRateScale, 0)
 	for _, allocation := range cmd.SubscriptionHoldAllocations {
+		if cmd.VideoEntity && allocation.Type == domain.BillingAllocationTypeSubscription && allocation.SubscriptionID != nil &&
+			allocation.AmountUSD == 0 && allocation.RateMultiplier == 0 && allocation.BaseAmountUSD > 0 {
+			// 零价覆盖也属于原资金合同，不能在捕获时重新当作按量余额收费。
+			covered := math.Min(remainingBase, allocation.BaseAmountUSD)
+			if covered > 0 {
+				kept := cloneBatchImageBillingAllocation(allocation, 0)
+				kept.BaseAmountUSD = covered
+				plan.BillingAllocations = append(plan.BillingAllocations, kept)
+				remainingBase -= covered
+			}
+			continue
+		}
 		if allocation.Type != domain.BillingAllocationTypeSubscription || allocation.AmountUSD <= 0 || allocation.SubscriptionID == nil {
 			continue
 		}

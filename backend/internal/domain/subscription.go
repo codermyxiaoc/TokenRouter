@@ -20,6 +20,8 @@ const (
 type BillingAllocation struct {
 	Type      BillingAllocationType `json:"type"`
 	AmountUSD float64               `json:"amount_usd"`
+	// Component 仅隔离视频参考图片固定费，历史分配缺省保持原有语义。
+	Component string `json:"component,omitempty"`
 	// BaseAmountUSD 和 RateMultiplier 用于还原分来源计费，旧记录缺省时仍按 AmountUSD 兼容。
 	BaseAmountUSD  float64 `json:"base_amount_usd,omitempty"`
 	RateMultiplier float64 `json:"rate_multiplier,omitempty"`

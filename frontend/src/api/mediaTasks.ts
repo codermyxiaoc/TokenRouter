@@ -2,7 +2,34 @@ import { apiClient } from './client'
 
 export const mediaTaskTypes = ['image', 'video'] as const
 export const mediaTaskStatuses = ['queued', 'processing', 'completed', 'failed', 'cancelled', 'expired'] as const
-export const mediaTaskSources = ['async_image', 'grok_video', 'seedance_video'] as const
+export const mediaTaskSources = ['async_image', 'grok_video', 'seedance_video', 'video'] as const
+
+// 视频任务费用由后端预留与结算状态返回，前端不据任务成功自行推算。
+export interface VideoTaskBilling {
+  status: 'pending' | 'reserved' | 'settled' | 'released' | 'reconciliation'
+  mode: 'video' | 'video_token' | 'video_per_request'
+  resolution: string
+  has_reference_video: boolean
+  unit_price: number
+  unit: 'second' | 'million_tokens' | 'request'
+  tokens?: number
+  duration_seconds: number
+  reserved_amount: number
+  // 留空 Token 预算的付费任务不预留金额，终态按可信实际用量结算。
+  deferred_billing?: boolean
+  // 固定秒价只决定预扣预算，实际金额由真实 Token 结算结果返回。
+  token_prepay?: boolean
+  prepay_price_per_second?: number
+  prepay_duration_seconds?: number
+  actual_amount?: number
+  // 仅配置参考图片附加费时返回；单价为固定美元金额，不应用倍率。
+  reference_image_count?: number
+  billable_reference_image_count?: number
+  reference_image_free_count?: number
+  reference_image_unit_price?: number
+  reference_image_cost?: number
+  pricing_source: string
+}
 
 export interface MediaTask {
   id: number
@@ -29,6 +56,7 @@ export interface MediaTask {
   expires_at: string | null
   actual_cost: string | number | null
   billing_mode: string | null
+  video_billing?: VideoTaskBilling
 }
 
 export interface MediaTaskFilters {

@@ -219,6 +219,75 @@ describe('ModelMarketplaceView', () => {
     copyToClipboard.mockClear()
   })
 
+  // 兼容入口来自分组内模型的后端能力投影，与定价是否可展示无关，也不能给文字模型补视频入口。
+  it('shows and copies only advertised video endpoints within the model card', async () => {
+    const video = marketplaceModel('video-alias', 'Video Alias', unpricedPricing)
+    video.video_endpoints = [
+      { method: 'POST', path: '/v1/videos', protocol: 'openai_videos' },
+      { method: 'POST', path: '/omni-video/{model}', protocol: 'kling' },
+    ]
+    getMarketplaceModels.mockResolvedValue([marketplaceGroup(1, 'Video', [video, marketplaceModel('gpt-5.5', 'Text', tokenPricing)])])
+    const wrapper = await mountMarketplace()
+    expect(wrapper.find('[data-testid="model-video-endpoints"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="marketplace-group-pricing-toggle"]').trigger('click')
+    const cards = wrapper.findAll('article')
+    const endpoints = cards[0].get('[data-testid="model-video-endpoints"]')
+    expect(endpoints.findAll('[data-testid="model-video-endpoint"]')).toHaveLength(2)
+    expect(endpoints.text()).toContain('POST')
+    expect(endpoints.text()).toContain('/v1/videos')
+    expect(endpoints.text()).toContain('/omni-video/{model}')
+    expect(endpoints.text()).toContain('marketplace.videoEndpoints.modelPlaceholderHint')
+    expect(endpoints.text()).not.toContain('/v1/video/generations')
+    expect(cards[0].text()).toContain('marketplace.pricingUnavailable')
+    expect(cards[1].find('[data-testid="model-video-endpoints"]').exists()).toBe(false)
+    await endpoints.findAll('[data-testid="model-video-endpoint"]')[0].trigger('click')
+    expect(copyToClipboard).toHaveBeenCalledWith('/v1/videos')
+    wrapper.unmount()
+  })
+
+  // 折叠的完整价卡之外也提示固定附加费，避免用户只看到视频基础价格。
+  it.each(['video', 'video_per_request'] as const)('uses the %s fallback contract for compact rows, filtering and scoped notices', async pricingMode => {
+    const video = marketplaceModel('fallback-video', 'Fallback Video', {
+      pricing_mode: pricingMode, price_status: 'priced', video_prices: [],
+      video_fallback_price: 99,
+      video_fallback_pricing: { resolution: '', price: 0, unit: pricingMode === 'video_per_request' ? 'request' : 'million_tokens', video_token_prepay: { price_per_second: 0 }, video_image_input_pricing: null },
+      video_image_input_pricing: { free_images: 0, price: 9 },
+    })
+    getMarketplaceModels.mockResolvedValue([marketplaceGroup(1, 'Video', [video])])
+    const wrapper = await mountMarketplace()
+    await wrapper.get('[data-testid="marketplace-group-pricing-toggle"]').trigger('click')
+    const card = wrapper.get('article')
+    expect(card.get('dl').text()).toContain(pricingMode === 'video_per_request' ? '0.0000 点 marketplace.perRequest' : '0.0000 点 / 1M Token')
+    expect(card.get('dl').text()).not.toContain('99')
+    expect(card.find('[data-testid="video-image-pricing-summary"]').exists()).toBe(false)
+    if (pricingMode === 'video') expect(card.get('[data-testid="video-pricing-rule-scope"]').text()).toContain('marketplace.videoFallbackPrice')
+    else expect(card.find('[data-testid="video-token-prepay-summary"]').exists()).toBe(false)
+    expect(card.get('[data-testid="model-pricing-toggle"]').exists()).toBe(true)
+    const pricingSelect = wrapper.findAllComponents(SelectStub).find((select) =>
+      (select.props('options') as Array<{ value: string }>).some((option) => option.value === 'video'))!
+    pricingSelect.vm.$emit('update:modelValue', 'video')
+    await nextTick()
+    expect(wrapper.findAll('article')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('shows fallback-only Video prices with fixed image and prepayment rules', async () => {
+    const video = marketplaceModel('video-model', 'Video Model', {
+      pricing_mode: 'video_token', price_status: 'priced',
+      video_prices: [], video_fallback_price: 0, video_token_prepay: { price_per_second: 0.3 },
+      video_image_input_pricing: { free_images: 2, price: 0.05 },
+    })
+    getMarketplaceModels.mockResolvedValue([marketplaceGroup(1, 'Video', [video])])
+    const wrapper = await mountMarketplace()
+    await wrapper.get('[data-testid="marketplace-group-pricing-toggle"]').trigger('click')
+    const summary = wrapper.findAll('article')[0].get('[data-testid="video-image-pricing-summary"]')
+    expect(summary.text()).toContain('marketplace.videoImageInputPricing.afterFree')
+    expect(summary.text()).toContain('marketplace.videoImageInputPricing.fixedHint')
+    expect(wrapper.findAll('article')[0].text()).toContain('marketplace.videoFallbackPrice')
+    expect(wrapper.findAll('article')[0].get('[data-testid="video-token-prepay-summary"]').text()).toContain('marketplace.videoTokenPrepay.hint')
+    wrapper.unmount()
+  })
+
   it('视频模型按秒展示价格并可筛选，分组仍默认收起', async () => {
     const video = marketplaceModel('grok-imagine-video-1.5', 'Grok Imagine Video 1.5', {
       pricing_mode: 'video',

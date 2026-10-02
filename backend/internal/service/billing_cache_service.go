@@ -563,6 +563,10 @@ func (s *BillingCacheService) QueueUpdateAPIKeyRateLimitUsage(apiKeyID int64, co
 //
 // Redis 写失败用 ALERT 级 log；DB 持久化由 caller 单独 goroutine 兜底（gateway_service.go）。
 func (s *BillingCacheService) IncrementUserPlatformQuotaUsage(userID int64, platform string, cost float64) {
+	// Video 由持久化任务捕获事务直接累计，禁止再次累加或写入绝对值刷写队列。
+	if platform == PlatformVideo {
+		return
+	}
 	if s.cache == nil {
 		return
 	}
@@ -1001,7 +1005,10 @@ func (s *BillingCacheService) checkUserPlatformQuotaEligibility(
 		ok       bool
 		cacheErr error
 	)
-	if s.cache != nil {
+	if platform == PlatformVideo {
+		// Video 额度与任务账本同事务提交；跳过 Redis 读写，避免旧镜像覆盖真实扣费。
+		cacheErr = errBillingCacheUnavailable
+	} else if s.cache != nil {
 		entry, ok, cacheErr = s.cache.GetUserPlatformQuotaCache(ctx, userID, platform)
 	} else {
 		// 标记为"cache 故障"分支：跳过 HIT 路径、不回填、走 DB 一次性检查

@@ -171,17 +171,6 @@
       </OpenAIQuotaResetCell>
     </template>
 
-    <!-- 内置供应商的用量组件同时负责查询入口及不支持模式提示。 -->
-    <template v-else-if="usesEmbeddedUpstreamUsage">
-      <AccountUpstreamUsageCell
-        :account="account"
-        :result="upstreamUsage"
-        :error="upstreamUsageError"
-        :loading="upstreamUsageLoading"
-        :request="requestUpstreamUsage"
-      />
-    </template>
-
     <!-- Antigravity OAuth accounts: fetch usage from API -->
     <template v-else-if="account.platform === 'antigravity' && account.type === 'oauth'">
       <!-- 账户类型徽章 -->
@@ -663,7 +652,7 @@
       v-else-if="account.platform === 'gemini' && account.type !== 'apikey'"
       :account="account"
     />
-    <!-- Key/Bedrock accounts: show today stats + optional quota bars -->
+    <!-- API Key（含国产平台和 OpenCode）统一展示上游用量、本地统计及本地配额。 -->
     <div v-else class="space-y-1">
       <AccountUpstreamUsageCell
         v-if="account.type === 'apikey'"
@@ -747,7 +736,8 @@
       >-</div>
     </div>
   </div>
-  <div v-if="account.type === 'apikey' && !usesEmbeddedUpstreamUsage" class="mt-0.5 flex items-center gap-1.5">
+  <!-- 查询入口统一放在统计及配额之后，内容组件不再重复显示按钮。 -->
+  <div v-if="isUpstreamUsageQueryEnabled(account)" class="mt-0.5 flex items-center gap-1.5">
     <AccountUpstreamUsageQueryButton
       :account="account"
       :loading="upstreamUsageLoading"
@@ -783,6 +773,7 @@ import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
 import AccountUpstreamUsageCell from './AccountUpstreamUsageCell.vue'
 import AccountUpstreamUsageQueryButton from './AccountUpstreamUsageQueryButton.vue'
+import { isUpstreamUsageQueryEnabled } from '@/utils/upstreamUsage'
 
 // 模块级缓存供所有 AccountUsageCell 实例共享
 const _usageCache = new Map<number, { data: AccountUsageInfo; ts: number }>()
@@ -863,15 +854,8 @@ const upstreamUsageDisabled = computed(() => {
   return config?.enabled === false
 })
 
-// 内置用量组件自带查询按钮，外层不重复提供入口，避免绕过子组件的不支持模式判断。
-const usesEmbeddedUpstreamUsage = computed(() =>
-  props.account.type === 'apikey' &&
-  ['kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go'].includes(props.account.platform)
-)
-
 // Show usage windows for OAuth and Setup Token accounts
 const showUsageWindows = computed(() => {
-  if (usesEmbeddedUpstreamUsage.value) return true
   // API Key 的上游余额由独立子组件按需查询；不能沿用 OAuth/Gemini
   // 用量模型在列表加载或进入视口时主动请求上游。
   if (props.account.type === 'apikey') return false

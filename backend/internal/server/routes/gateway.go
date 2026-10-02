@@ -245,6 +245,10 @@ func RegisterGatewayRoutes(
 		}
 	}
 	videoGenerationHandler := func(c *gin.Context) {
+		if shouldHandleVideoPlatformRequest(c) {
+			h.Video.Handle(c)
+			return
+		}
 		if getGroupPlatform(c) == service.PlatformGrok {
 			h.OpenAIGateway.GrokVideoGeneration(c)
 			return
@@ -258,6 +262,10 @@ func RegisterGatewayRoutes(
 		})
 	}
 	videoStatusHandler := func(c *gin.Context) {
+		if shouldHandleVideoPlatformRequest(c) {
+			h.Video.OpenAIVideos(c, h.OpenAIGateway.GrokVideoStatus)
+			return
+		}
 		apiKey, _ := middleware.GetAPIKeyFromContext(c)
 		if getGroupPlatform(c) == service.PlatformGrok || (apiKey != nil && (apiKey.IsComposite || apiKey.SmartRouting)) {
 			h.OpenAIGateway.GrokVideoStatus(c)
@@ -272,6 +280,10 @@ func RegisterGatewayRoutes(
 		})
 	}
 	videoContentHandler := func(c *gin.Context) {
+		if shouldHandleVideoPlatformRequest(c) {
+			h.Video.OpenAIVideos(c, h.OpenAIGateway.GrokVideoContent)
+			return
+		}
 		apiKey, _ := middleware.GetAPIKeyFromContext(c)
 		if getGroupPlatform(c) == service.PlatformGrok || (apiKey != nil && (apiKey.IsComposite || apiKey.SmartRouting)) {
 			h.OpenAIGateway.GrokVideoContent(c)
@@ -574,13 +586,17 @@ func RegisterGatewayRoutes(
 		h.Gateway.Responses(c)
 	}
 	// 方舟原生异步视频使用独立路由，复用 Key、分组、审计与请求体大小限制。
+	videoGroupRequired := middleware.RequireGroupAssignment(settingService, func(c *gin.Context, status int, message string) {
+		c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"type": "video_error", "message": message}})
+	})
+	registerVideoRoutes(r, h, bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), videoGroupRequired)
 	for _, prefix := range []string{"/api/v3", "/v3", "/v1", ""} {
 		for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
 			path := prefix + "/contents/generations/tasks"
 			if method != http.MethodPost {
 				path += "/:task_id"
 			}
-			r.Handle(method, path, bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.OpenAIGateway.SeedanceTasks)
+			r.Handle(method, path, bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, func(c *gin.Context) { h.Video.Seedance(c, h.OpenAIGateway.SeedanceTasks) })
 		}
 	}
 	r.POST("/responses", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, responsesProtocolGate, responsesHandler)

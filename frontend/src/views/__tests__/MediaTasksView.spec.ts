@@ -35,21 +35,79 @@ function mountView(admin = false) {
 describe('MediaTasksView', () => {
   beforeEach(() => { list.mockReset(); get.mockReset(); models.mockReset(); preview.mockReset(); api.mockReset(); api.mockReturnValue({ list, get, models, preview }); list.mockResolvedValue(result([])); models.mockResolvedValue(['gpt-image-2', 'image-model']); preview.mockResolvedValue({ items: [] }) })
 
+  // 同一账务状态须覆盖桌面、手机及详情；已知生成终态不被待核对覆盖。
+  it.each([false, true])('Video 待核对与释放在 admin=%s 的各入口保持一致', async admin => {
+    const billing = { status: 'reconciliation' as const, mode: 'video_per_request' as const, resolution: '720p',
+      has_reference_video: false, unit_price: 5, unit: 'request' as const, duration_seconds: 15, reserved_amount: 5, pricing_source: 'channel' }
+    const unknown = task({ source: 'video', status: 'processing', video_billing: billing })
+    list.mockResolvedValue(result([
+      unknown,
+      task({ id: 2, source: 'video', status: 'failed', video_billing: billing }),
+      task({ id: 3, source: 'video', status: 'failed', video_billing: { ...billing, status: 'released' } }),
+      task({ id: 4, source: 'video', status: 'completed', video_billing: billing }),
+      task({ id: 5, source: 'grok_video', status: 'processing', video_billing: billing }),
+    ]))
+    get.mockResolvedValue(unknown)
+    const wrapper = mountView(admin)
+    await flushPromises()
+    const cards = wrapper.findAll('[data-testid="mobile-task-card"]')
+    const rows = wrapper.findAll('[data-testid="desktop-task-list"] tbody tr')
+    for (const entries of [cards, rows]) {
+      expect(entries[0].text()).toContain('mediaTasks.statuses.reconciliation')
+      expect(entries[0].text()).not.toContain('mediaTasks.statuses.processing')
+      expect(entries[0].text()).not.toContain('mediaTasks.pendingCost')
+      expect(entries[1].text()).toContain('mediaTasks.statuses.failed')
+      expect(entries[1].text()).toContain('mediaTasks.videoBilling.reconciliation')
+      expect(entries[2].text()).toContain('mediaTasks.videoBilling.notCharged')
+      expect(entries[2].text()).not.toContain('mediaTasks.pendingCost')
+      expect(entries[3].text()).toContain('mediaTasks.statuses.completed')
+      expect(entries[3].text()).toContain('mediaTasks.videoBilling.reconciliation')
+      expect(entries[4].text()).toContain('mediaTasks.statuses.processing')
+      expect(entries[4].text()).toContain('mediaTasks.pendingCost')
+    }
+    expect(wrapper.getComponent('#media-status').props('options')).not.toContainEqual(expect.objectContaining({ value: 'reconciliation' }))
+    await cards[0].findAll('button').find(button => button.text() === 'mediaTasks.details')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="detail"]').text()).toContain('mediaTasks.statuses.reconciliation')
+    expect(wrapper.get('[data-testid="detail"]').text()).not.toContain('mediaTasks.statuses.processing')
+    expect(unknown.status).toBe('processing')
+    wrapper.unmount()
+  })
+
   it('完成任务仍可待确认，明确零费用显示为零且无写操作', async () => {
-    list.mockResolvedValue(result([task(), task({ id: 2, task_id: 'zero-cost', actual_cost: '0' })]))
+    list.mockResolvedValue(result([task({ source: 'video' }), task({ id: 2, task_id: 'zero-cost', actual_cost: '0' }),
+      task({ id: 3, task_id: 'video-rounded', source: 'video', actual_cost: '0.70592980' })]))
     const wrapper = mountView()
     await flushPromises()
     expect(wrapper.text()).toContain('mediaTasks.pendingCost')
     expect(wrapper.text()).toContain('$0.00')
+    expect(wrapper.get('[data-testid="mobile-task-list"]').text()).toContain('$0.70593')
+    expect(wrapper.text()).not.toContain('$0.7059298')
     expect(wrapper.text()).toContain('mediaTasks.billingHint')
     expect(wrapper.find('#media-user').exists()).toBe(false)
     expect(wrapper.findAll('button').map(button => button.text())).not.toContain('common.delete')
-    get.mockResolvedValue(task({ actual_cost: '0.125', error_message: '<script>alert(1)</script>' }))
+    get.mockResolvedValue(task({ source: 'video', actual_cost: '0.70592980', error_message: '<script>alert(1)</script>' }))
     await wrapper.findAll('button').find(button => button.text() === 'mediaTasks.details')!.trigger('click')
     await flushPromises()
     expect(get).toHaveBeenCalledWith(1)
-    expect(wrapper.get('[data-testid="detail"]').text()).toContain('$0.125')
+    expect(wrapper.get('[data-testid="detail"]').text()).toContain('$0.70593')
     expect(wrapper.find('[data-testid="detail"] script').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // 普通用户和管理员均能按独立 Video 来源筛选，不能误查旧 Grok 视频。
+  it.each([false, true])('Video 来源筛选在 admin=%s 使用对应入口', async admin => {
+    const wrapper = mountView(admin)
+    await flushPromises()
+    const source = wrapper.getComponent('#media-source')
+    expect(source.props('options')).toContainEqual({ value: 'video', label: 'mediaTasks.sources.video' })
+    source.vm.$emit('update:modelValue', 'video')
+    await wrapper.vm.$nextTick()
+    source.vm.$emit('change', 'video')
+    await flushPromises()
+    expect(api).toHaveBeenLastCalledWith(admin)
+    expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ source: 'video', page: 1 }))
+    if (!admin) expect(list.mock.lastCall?.[0]).not.toHaveProperty('user_id')
     wrapper.unmount()
   })
 
@@ -100,9 +158,9 @@ describe('MediaTasksView', () => {
     wrapper.unmount()
   })
 
-  it('个人入口不展示管理员用户摘要或用户详情字段', async () => {
+  it.each(['grok_video', 'video'] as const)('%s 个人入口不展示管理员用户摘要或账号详情字段', async source => {
     // 即便拿到带用户摘要的对象，个人页面也不渲染管理员字段。
-    const item = task({ user: { id: 10, username: '不应展示的名称', email: 'hidden@example.com' } })
+    const item = task({ source, user: { id: 10, username: '不应展示的名称', email: 'hidden@example.com' } })
     list.mockResolvedValue(result([item]))
     get.mockResolvedValue(item)
     const wrapper = mountView()
@@ -114,6 +172,7 @@ describe('MediaTasksView', () => {
     await flushPromises()
     expect(wrapper.text()).not.toContain('不应展示的名称')
     expect(wrapper.text()).not.toContain('hidden@example.com')
+    expect(wrapper.get('[data-testid="detail"]').text()).not.toContain('mediaTasks.accountId')
     wrapper.unmount()
   })
 

@@ -476,19 +476,25 @@ func (r *userSubscriptionRepository) ActivateWindows(ctx context.Context, id int
 
 func (r *userSubscriptionRepository) ResetUsageWindows(ctx context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, newWindowStart time.Time) error {
 	return r.mutateWithResetCountSettlement(ctx, id, false, func(txCtx context.Context, client *dbent.Client, row *dbent.UserSubscription) error {
-		update := client.UserSubscription.UpdateOneID(id)
-		setSubscriptionResetCountMutation(update.Mutation(), row)
-		if resetDaily {
-			// 日额度按配置时区零点刷新，周/月保留实际手动重置时刻。
-			update.SetDailyUsageUsd(0).SetDailyWindowStart(timezone.StartOfDay(newWindowStart))
-		}
-		if resetWeekly {
-			update.SetWeeklyUsageUsd(0).SetWeeklyWindowStart(newWindowStart)
-		}
-		if resetMonthly {
-			update.SetMonthlyUsageUsd(0).SetMonthlyWindowStart(newWindowStart)
-		}
-		_, err := update.Save(txCtx)
+		// 窗口、自然次数和手动代次必须一次写入，避免同事务第二次更新触发用户外键锁，
+		// 与批量延期已持有的用户锁相互等待；同日零点未变时仍推进代次以隔离旧视频预占。
+		// 未选窗口直接保留数据库值，避免重写用量损失精度；日锚点归零，周/月保留操作时刻。
+		_, err := client.ExecContext(txCtx, `UPDATE user_subscriptions SET
+ daily_usage_usd=CASE WHEN $2 THEN 0 ELSE daily_usage_usd END,
+ weekly_usage_usd=CASE WHEN $3 THEN 0 ELSE weekly_usage_usd END,
+ monthly_usage_usd=CASE WHEN $4 THEN 0 ELSE monthly_usage_usd END,
+ daily_window_start=CASE WHEN $2 THEN $5 ELSE daily_window_start END,
+ weekly_window_start=CASE WHEN $3 THEN $6 ELSE weekly_window_start END,
+ monthly_window_start=CASE WHEN $4 THEN $6 ELSE monthly_window_start END,
+ daily_reset_generation=daily_reset_generation+CASE WHEN $2 THEN 1 ELSE 0 END,
+ weekly_reset_generation=weekly_reset_generation+CASE WHEN $3 THEN 1 ELSE 0 END,
+ monthly_reset_generation=monthly_reset_generation+CASE WHEN $4 THEN 1 ELSE 0 END,
+ daily_reset_count=$7, weekly_reset_count=$8, monthly_reset_count=$9,
+ reset_counted_at=$10, updated_at=$11
+ WHERE id=$1`, id, resetDaily, resetWeekly, resetMonthly,
+			timezone.StartOfDay(newWindowStart), newWindowStart,
+			row.DailyResetCount, row.WeeklyResetCount, row.MonthlyResetCount,
+			row.ResetCountedAt, time.Now())
 		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 	})
 }

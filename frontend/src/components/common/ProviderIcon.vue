@@ -1,6 +1,17 @@
 <template>
+  <!-- 本地图标保留品牌原始配色和渐变。 -->
+  <img
+    v-if="iconInfo?.src"
+    :src="iconInfo.src"
+    :width="size"
+    :height="size"
+    :style="{ width: size, height: size }"
+    class="provider-icon"
+    alt=""
+    aria-hidden="true"
+  />
   <svg
-    v-if="iconInfo"
+    v-else-if="iconInfo"
     :width="size"
     :height="size"
     viewBox="0 0 24 24"

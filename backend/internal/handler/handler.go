@@ -64,6 +64,7 @@ type Handlers struct {
 	PaymentWebhook   *PaymentWebhookHandler
 	MediaTask        *MediaTaskHandler
 	AsyncImage       *AsyncImageHandler
+	Video            *VideoHandler
 	BatchImage       *BatchImageHandler
 	Creative         *CreativeHandler
 	Team             *TeamHandler

@@ -89,6 +89,9 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 
 func defaultModelsListCandidateIDs(platform string) []string {
 	switch platform {
+	case PlatformVideo:
+		// 视频模型只来自显式账号配置，不能继承 Claude 文本默认目录。
+		return []string{}
 	case PlatformOpenAI:
 		return openai.DefaultModelIDs()
 	case PlatformGemini:
@@ -153,6 +156,14 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	schedulerType, err := NormalizeGroupSchedulerType(input.SchedulerType)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_SCHEDULER_TYPE", "%v", err)
+	}
+	if platform == PlatformVideo {
+		if schedulerType != GroupSchedulerTypeBasic {
+			return nil, infraerrors.BadRequest("VIDEO_SCHEDULER_UNSUPPORTED", "Video groups currently support basic scheduling only")
+		}
+		input.AdvancedSchedulerOverrides = GroupAdvancedSchedulerOverrides{}
+		input.FallbackGroupID, input.FallbackGroupIDOnInvalidRequest, input.UnavailableFallbackGroupID = nil, nil, nil
+		input.AvailabilityProbeConfig = GroupAvailabilityProbeConfig{}
 	}
 	if err := s.validateGroupAdvancedSchedulerOverridesForWrite(ctx, input.AdvancedSchedulerOverrides); err != nil {
 		return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_ADVANCED_SCHEDULER_OVERRIDES", "%v", err)
@@ -389,6 +400,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		MaxReasoningEffortOverLimit:     maxReasoningEffortOverLimit,
 		ReasoningEffortMappings:         reasoningEffortMappings,
 	}
+	sanitizeVideoGroup(group)
 	sanitizeGroupMessagesDispatchFields(group)
 	sanitizeGroupOpenAIFast(group)
 	if group.Platform != PlatformOpenAI {
@@ -571,7 +583,22 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		group.Description = *input.Description
 	}
 	if input.Platform != "" {
+		if input.Platform != previousPlatform && (input.Platform == PlatformVideo || previousPlatform == PlatformVideo) {
+			accounts, err := s.accountRepo.ListByGroup(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			if len(accounts) > 0 {
+				return nil, infraerrors.BadRequest("VIDEO_GROUP_PLATFORM_MISMATCH", "Remove existing accounts before changing a group to or from video")
+			}
+		}
 		group.Platform = input.Platform
+	}
+	if group.Platform == PlatformVideo {
+		input.AdvancedSchedulerOverrides = nil
+		input.FallbackGroupID, input.FallbackGroupIDOnInvalidRequest, input.UnavailableFallbackGroupID = nil, nil, nil
+		input.AvailabilityProbeConfig = nil
+		sanitizeVideoGroup(group)
 	}
 	if input.SchedulerType != nil {
 		schedulerType, normalizeErr := NormalizeGroupSchedulerType(*input.SchedulerType)
@@ -585,6 +612,13 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_ADVANCED_SCHEDULER_OVERRIDES", "%v", validationErr)
 		}
 		group.AdvancedSchedulerOverrides = CloneGroupAdvancedSchedulerOverrides(*input.AdvancedSchedulerOverrides)
+	}
+	if group.Platform == PlatformVideo {
+		if input.SchedulerType != nil && *input.SchedulerType != "basic" {
+			return nil, infraerrors.BadRequest("VIDEO_SCHEDULER_UNSUPPORTED", "Video groups currently support basic scheduling only")
+		}
+		group.SchedulerType = GroupSchedulerTypeBasic
+		group.AdvancedSchedulerOverrides = GroupAdvancedSchedulerOverrides{}
 	}
 	if input.AllowedClientProtocols != nil {
 		group.AllowedClientProtocols, err = normalizeExplicitGroupClientProtocols(group.Platform, *input.AllowedClientProtocols)
@@ -864,6 +898,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		}
 		group.ReasoningEffortMappings = reasoningEffortMappings
 	}
+	sanitizeVideoGroup(group)
 	sanitizeGroupMessagesDispatchFields(group)
 	sanitizeGroupOpenAIFast(group)
 	if group.Platform != PlatformOpenAI {

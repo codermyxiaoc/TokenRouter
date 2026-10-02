@@ -1,6 +1,6 @@
 # Seedance / 火山方舟原生视频任务
 
-本文覆盖 Ark 异步视频任务的账号准入、原生协议、任务归属和完成后计费。Seedance 复用 OpenAI API Key 账号和媒体任务基础设施，不新增平台枚举，也不改变 Grok 视频的按秒计费规则。
+本文覆盖旧 OpenAI API Key 账号的 Ark 异步视频任务准入、原生协议、任务归属和完成后计费。这条 Seedance 能力继续复用 OpenAI 账号与媒体任务基础设施，不改变 Grok 视频的按秒计费规则。新增 `platform=video` 的 Ark 端点由[独立 Video 上游](video_upstream.md)拥有，两条链路按创建分组和已保存的任务归属分流。
 
 <a id="seedance_task_lifecycle"></a>
 ## 账号与任务生命周期

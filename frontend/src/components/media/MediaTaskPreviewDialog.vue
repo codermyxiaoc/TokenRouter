@@ -78,7 +78,8 @@
       <aside v-show="!expanded" class="min-w-0 border-t border-gray-200 p-5 dark:border-dark-700 lg:border-l lg:border-t-0 sm:p-6" data-testid="preview-information">
         <div class="mb-5 flex flex-wrap items-center gap-2">
           <span class="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600 dark:bg-dark-800 dark:text-gray-300"><Icon :name="task.media_type === 'video' ? 'modalityVideo' : 'modalityImage'" size="sm" />{{ label('types', task.media_type) }}</span>
-          <span class="rounded-full px-2.5 py-1 text-xs font-medium" :class="statusClass">{{ label('statuses', task.status) }}</span>
+          <span class="rounded-full px-2.5 py-1 text-xs font-medium" :class="statusClass">{{ label('statuses', getMediaTaskDisplayStatus(task)) }}</span>
+          <span v-if="isVideoTaskReconciliation(task) && getMediaTaskDisplayStatus(task) !== 'reconciliation'" class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">{{ t('mediaTasks.videoBilling.reconciliation') }}</span>
         </div>
         <h4 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('mediaTasks.preview.mediaInfo') }}</h4>
         <dl class="mt-3 grid grid-cols-2 gap-2" data-testid="preview-properties">
@@ -105,6 +106,7 @@
           <summary class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">{{ t('mediaTasks.preview.moreDetails') }}</summary>
           <dl class="mt-4 space-y-3 text-sm"><div v-for="field in moreFields" :key="field.key" class="min-w-0"><dt class="text-xs text-gray-500 dark:text-gray-400">{{ t(`mediaTasks.${field.key}`) }}</dt><dd class="mt-1 break-all text-gray-900 dark:text-gray-100">{{ field.value }}</dd></div></dl>
         </details>
+        <VideoTaskBillingDetails v-if="task.video_billing" :billing="task.video_billing" />
         <div v-if="task.error_message" class="mt-4 rounded-lg bg-red-50 p-3 text-sm dark:bg-red-950/30"><p class="text-xs text-red-600 dark:text-red-400">{{ t('mediaTasks.error') }}</p><p class="mt-1 whitespace-pre-wrap break-words text-red-700 [overflow-wrap:anywhere] dark:text-red-300">{{ task.error_message }}</p></div>
         <p class="mt-5 border-t border-gray-100 pt-4 text-xs leading-5 text-gray-500 dark:border-dark-700 dark:text-gray-400">{{ t('mediaTasks.billingHint') }}</p>
       </aside>
@@ -113,6 +115,8 @@
 </template>
 
 <script setup lang="ts">
+import { getBillingModeLabel } from '@/utils/billingMode'
+import VideoTaskBillingDetails from './VideoTaskBillingDetails.vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -121,6 +125,7 @@ import { useClipboard } from '@/composables/useClipboard'
 import type { MediaTask, MediaTaskPreview } from '@/api/mediaTasks'
 import { formatBytes } from '@/utils/format'
 import { mediaAspectRatio, mediaDownloadName, mediaDuration, mediaFormat, mediaPreviewUrl } from './mediaTaskPreview'
+import { formatMediaTaskCost, getMediaTaskDisplayStatus, isVideoTaskReconciliation } from './mediaTaskCost'
 
 const props = withDefaults(defineProps<{
   show: boolean
@@ -209,13 +214,11 @@ function label(kind: string, value: string) {
   const key = `mediaTasks.${kind}.${value}`
   return te(key) ? t(key) : value || '—'
 }
-function formatCost(value: MediaTask['actual_cost']) {
-  // 未关联到账本的费用不能显示为免费；明确的零费用仍保留。
-  if (value === null || value === undefined || value === '') return t('mediaTasks.pendingCost')
-  const amount = Number(value)
-  return Number.isFinite(amount) ? `$${amount.toFixed(10).replace(/0+$/, '').replace(/\.$/, '.00')}` : t('mediaTasks.pendingCost')
-}
+const formatCost = (task: MediaTask) => formatMediaTaskCost(task, t('mediaTasks.pendingCost'), {
+  released: t('mediaTasks.videoBilling.notCharged'), reconciliation: t('mediaTasks.videoBilling.reconciliation'),
+})
 const statusClass = computed(() => {
+  if (props.task && getMediaTaskDisplayStatus(props.task) === 'reconciliation') return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
   if (props.task?.status === 'completed') return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
   if (props.task?.status === 'failed') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (['queued', 'processing'].includes(props.task?.status || '')) return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
@@ -229,7 +232,7 @@ const userTitle = computed(() => {
 const taskFields = computed(() => props.task ? [
   { key: 'task', value: props.task.task_id },
   { key: 'model', value: props.task.model || '—' },
-  { key: 'cost', value: formatCost(props.task.actual_cost) },
+  { key: 'cost', value: formatCost(props.task) },
   { key: 'createdAt', value: formatTime(props.task.created_at) },
   { key: 'completedAt', value: formatTime(props.task.completed_at) },
 ] : [])
@@ -238,7 +241,7 @@ const moreFields = computed(() => {
   if (!task) return []
   return [
     { key: 'source', value: label('sources', task.source) }, { key: 'platform', value: task.platform || '—' },
-    { key: 'upstreamStatus', value: task.upstream_status || '—' }, { key: 'billingMode', value: task.billing_mode || '—' },
+    { key: 'upstreamStatus', value: task.upstream_status || '—' }, { key: 'billingMode', value: task.video_billing ? getBillingModeLabel(task.video_billing.mode, t) : task.billing_mode || '—' },
     { key: 'group', value: task.group_name || task.group_id || '—' }, { key: 'apiKeyId', value: task.api_key_id },
     { key: 'requestId', value: task.request_id || '—' }, { key: 'httpStatus', value: task.http_status || '—' },
     ...(props.admin ? [{ key: 'accountId', value: task.account_id ?? '—' }] : []),

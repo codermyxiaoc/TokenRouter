@@ -1053,6 +1053,79 @@ describe('user KeysView column settings', () => {
     )
   })
 
+  // 普通 Video Key 的三个资金模式均可选择视频分组，订阅上下文不叠加用户倍率。
+  it.each(['auto', 'balance', 'subscription'] as const)('creates a Video key with %s billing', async billingMode => {
+    getUserGroupRates.mockResolvedValue({ 77: 0.5 })
+    getAvailableGroups.mockImplementation((_scope, subscriptionID?: number) => Promise.resolve([
+      { id: 77, name: 'Video group', platform: 'video', rate_multiplier: subscriptionID === 88 ? 1.25 : 3 },
+    ]))
+    getBillingOptions.mockResolvedValue([{ id: 88, plan_name: 'Video Plan', groups_restricted: true, applicable_groups: [77] }])
+    const wrapper = await mountView()
+    await getButtonByText(wrapper, 'Create API Key').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-tour="key-form-name"]').setValue('Video key')
+    const mode = wrapper.getComponent('[data-test="api-key-billing-mode"]')
+    mode.vm.$emit('update:modelValue', billingMode)
+    mode.vm.$emit('change', billingMode)
+    await flushPromises()
+    if (billingMode === 'subscription') {
+      const subscription = wrapper.getComponent('[data-test="api-key-preferred-subscription"]')
+      subscription.vm.$emit('update:modelValue', 88)
+      subscription.vm.$emit('change', 88)
+      await flushPromises()
+    }
+    const group = wrapper.getComponent('[data-tour="key-form-group"]')
+    expect(group.props('options')).toEqual([expect.objectContaining({
+      value: 77, platform: 'video', rate: billingMode === 'subscription' ? 1.25 : 3,
+      userRate: billingMode === 'subscription' ? null : 0.5,
+    })])
+    group.vm.$emit('update:modelValue', 77)
+    await wrapper.get('form#key-form').trigger('submit')
+    await flushPromises()
+    expect(createKey).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Video key', group_id: 77, billing_mode: billingMode,
+      preferred_subscription_id: billingMode === 'subscription' ? 88 : null,
+    }))
+    expect(showError).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  // 视频和文本候选可混排，但切到指定套餐后必须裁剪套餐外视频分组并保持剩余顺序。
+  it('keeps Video in smart routing while enforcing the selected subscription scope and rates', async () => {
+    const available = [
+      { id: 77, name: 'Video allowed', platform: 'video', rate_multiplier: 3 },
+      { id: 78, name: 'Video excluded', platform: 'video', rate_multiplier: 4 },
+      { id: 42, name: 'Text allowed', platform: 'openai', rate_multiplier: 2 },
+    ]
+    getUserGroupRates.mockResolvedValue({ 77: 0.5 })
+    getAvailableGroups.mockImplementation((_scope, subscriptionID?: number) => Promise.resolve(subscriptionID === 88
+      ? [{ ...available[0], rate_multiplier: 1.25 }, available[2]] : available))
+    getBillingOptions.mockResolvedValue([{ id: 88, plan_name: 'Mixed Video Plan', groups_restricted: true, applicable_groups: [77, 42] }])
+    const wrapper = await mountView()
+    await getButtonByText(wrapper, 'Create API Key').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="smart-routing-toggle"]').setValue(true)
+    for (const id of [78, 77, 42]) {
+      await wrapper.getComponent('[data-test="smart-routing-add-group"]').vm.$emit('update:modelValue', id)
+    }
+    await wrapper.getComponent('[data-test="api-key-billing-mode"]').vm.$emit('change', 'subscription')
+    await wrapper.getComponent('[data-test="api-key-preferred-subscription"]').vm.$emit('change', 88)
+    await flushPromises()
+    const routing = wrapper.getComponent({ name: 'SmartRoutingGroupEditor' })
+    expect(routing.props('modelValue')).toEqual([77, 42])
+    expect(routing.props('groups')).toEqual(expect.arrayContaining([expect.objectContaining({ id: 77, platform: 'video', rate_multiplier: 1.25 })]))
+    expect(routing.props('userGroupRates')).toEqual({})
+    await wrapper.get('[data-test="smart-routing-up-1"]').trigger('click')
+    await wrapper.get('form#key-form').trigger('submit')
+    await flushPromises()
+    expect(createKey).toHaveBeenCalledWith(expect.objectContaining({
+      smart_routing: true, smart_routing_group_ids: [42, 77], group_id: undefined,
+      billing_mode: 'subscription', preferred_subscription_id: 88,
+    }))
+    expect(showError).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('submits the selected Fast mode policy when creating a key', async () => {
     getAvailableGroups.mockResolvedValueOnce([{
       id: 42,

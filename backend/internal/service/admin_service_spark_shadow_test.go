@@ -730,6 +730,14 @@ type sparkShadowValidatingGroupRepoStub struct {
 	existing map[int64]bool
 }
 
+// 分组写入同时验证平台隔离，存在性替身需要提供所属平台。
+func (s *sparkShadowValidatingGroupRepoStub) GetByID(_ context.Context, id int64) (*Group, error) {
+	if !s.existing[id] {
+		return nil, ErrGroupNotFound
+	}
+	return &Group{ID: id, Platform: PlatformOpenAI}, nil
+}
+
 func (s *sparkShadowValidatingGroupRepoStub) ExistsByIDs(_ context.Context, ids []int64) (map[int64]bool, error) {
 	out := make(map[int64]bool, len(ids))
 	for _, id := range ids {

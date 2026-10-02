@@ -112,6 +112,13 @@ func ProvideOpenAIGatewayHandler(
 }
 
 // ProvideSystemHandler creates admin.SystemHandler with UpdateService
+// ProvideVideoHandler 将持久任务服务注入协议边界，测试仍可使用轻量生命周期替身。
+func ProvideVideoHandler(tasks *service.VideoTaskService, gateway *OpenAIGatewayHandler) *VideoHandler {
+	h := NewVideoHandler(tasks)
+	h.gateway = gateway
+	return h
+}
+
 func ProvideSystemHandler(updateService *service.UpdateService, lockService *service.SystemOperationLockService) *admin.SystemHandler {
 	return admin.NewSystemHandler(updateService, lockService)
 }
@@ -168,6 +175,7 @@ func ProvideHandlers(
 	mediaTaskHandler *MediaTaskHandler,
 	mediaTaskService *service.MediaTaskService,
 	asyncImageHandler *AsyncImageHandler,
+	videoHandler *VideoHandler,
 	batchImageHandler *BatchImageHandler,
 	creativeHandler *CreativeHandler,
 	teamHandler *TeamHandler,
@@ -197,6 +205,7 @@ func ProvideHandlers(
 		PaymentWebhook:   paymentWebhookHandler,
 		MediaTask:        mediaTaskHandler,
 		AsyncImage:       asyncImageHandler,
+		Video:            videoHandler,
 		BatchImage:       batchImageHandler,
 		Creative:         creativeHandler,
 		Team:             teamHandler,
@@ -224,6 +233,7 @@ var ProviderSet = wire.NewSet(
 	NewPaymentHandler,
 	NewPaymentWebhookHandler,
 	NewAsyncImageHandler,
+	ProvideVideoHandler,
 	NewMediaTaskHandler,
 	NewBatchImageHandler,
 	NewCreativeHandler,

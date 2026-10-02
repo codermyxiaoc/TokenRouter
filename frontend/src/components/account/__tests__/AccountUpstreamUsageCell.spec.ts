@@ -41,15 +41,17 @@ const mountCell = (props: Record<string, unknown> = {}) => mount(AccountUpstream
 })
 
 describe('AccountUpstreamUsageCell', () => {
-  it('OpenCode GO only queries on click, while Zen has no balance query', async () => {
+  it('OpenCode GO 和 Zen 均只能在手动点击时查询', async () => {
     const request = vi.fn()
     const wrapper = mountCell({ account: { ...account(), platform: 'opencode_go', credentials: { account_mode: 'go' } }, request })
     expect(request).not.toHaveBeenCalled()
     await wrapper.get('button').trigger('click')
     expect(request).toHaveBeenCalledTimes(1)
     await wrapper.setProps({ account: { ...account(), platform: 'opencode_go', credentials: { account_mode: 'zen' } } })
-    expect(wrapper.find('button').exists()).toBe(false)
-    expect(wrapper.text()).toContain('admin.accounts.cnProviders.noBalanceEndpoint')
+    expect(request).toHaveBeenCalledTimes(1)
+    await wrapper.get('button').trigger('click')
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).not.toContain('admin.accounts.cnProviders.noBalanceEndpoint')
   })
 
   it('OpenCode GO renders window percentages without exposing wire unit names', () => {
@@ -350,15 +352,39 @@ describe('AccountUpstreamUsageCell', () => {
     expect(request).not.toHaveBeenCalled()
   })
 
-  it.each(['zhipu', 'minimax'] as const)('%s payg 明确显示不支持且不提供查询按钮', (platform) => {
+  it.each([
+    ['zhipu', 'payg', 'zhipu_coding'],
+    ['minimax', 'payg', 'minimax_coding'],
+    ['opencode_go', 'zen', 'opencode_go'],
+  ] as const)('%s %s 支持通用查询且不展示旧套餐快照', async (platform, mode, oldAdapter) => {
+    const request = vi.fn()
+    const testAccount = {
+      ...account(), platform, credentials: { account_mode: mode },
+      extra: { cn_usage_monitor_snapshot: {
+        version: 1, adapter: oldAdapter, mode: 'limits', unit: 'PERCENT',
+        observed_at: '2026-08-23T00:00:00Z',
+        limits: [{ name: '5h', used: 75, limit: 100, remaining: 25 }],
+      } },
+    }
     const wrapper = mountCell({
-      account: {
-        ...account(),
-        platform,
-        credentials: { account_mode: 'payg' }
-      }
+      request, account: testAccount,
     })
-    expect(wrapper.text()).toContain('admin.accounts.cnProviders.noBalanceEndpoint')
+    expect(wrapper.findAll('.usage-bar')).toHaveLength(0)
+    expect(wrapper.text()).not.toContain('admin.accounts.cnProviders.noBalanceEndpoint')
+    expect(request).not.toHaveBeenCalled()
+    await wrapper.get('button').trigger('click')
+    expect(request).toHaveBeenCalledWith(testAccount, { force: true })
+    await wrapper.setProps({ result: {
+      account_id: 17, adapter: 'sub2api', provider: 'sub2api', mode: 'balance',
+      unit: 'USD', observed_at: '2026-10-02T00:00:00Z', balance: { remaining: 12.5 },
+    } })
+    expect(wrapper.text()).toContain('12.5 USD')
+    // 关闭查询后即使仍有旧成功结果，也不得显示余额或提供查询入口。
+    await wrapper.setProps({ account: { ...testAccount, extra: {
+      ...testAccount.extra, upstream_usage_query: { enabled: false },
+    } } })
+    expect(wrapper.text()).not.toContain('12.5 USD')
     expect(wrapper.find('button').exists()).toBe(false)
+    expect(request).toHaveBeenCalledTimes(1)
   })
 })

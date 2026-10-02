@@ -70,6 +70,9 @@
               <router-link to="/models" class="transition hover:text-gray-950 dark:hover:text-white">
                 {{ t('home.nav.models') }}
               </router-link>
+              <router-link to="/docs" class="transition hover:text-gray-950 dark:hover:text-white">
+                {{ t('apiDocs.title') }}
+              </router-link>
               <a
                 v-if="docUrl"
                 :href="docUrl"
@@ -312,6 +315,8 @@
                 <!-- ID 独占整行，避免跟随标题列被右侧能力图标挤窄。 -->
                 <ModelIdLabel :model-id="model.id" class="mt-1" />
 
+                <ModelVideoEndpoints :endpoints="model.video_endpoints" />
+
                 <!-- 价格预览改为无边框列表，避免卡片里再嵌套一层卡片。 -->
                 <div class="mt-4">
                   <template v-if="compactPricingRows(model.pricing).length > 0">
@@ -331,6 +336,7 @@
                   </p>
 
                   <!-- 完整定价改为卡片内抽屉式浮窗，展开/收起与区间、fast mode 切换收敛在组件内部。 -->
+                  <VideoPricingRulesSummary :pricing="model.pricing" />
                   <ModelPricingPanel :model="model" />
                 </div>
               </article>
@@ -352,6 +358,9 @@ import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import GroupAvailabilityBar from '@/components/marketplace/GroupAvailabilityBar.vue'
 import ModelCapabilityTags from '@/components/marketplace/ModelCapabilityTags.vue'
 import ModelPricingPanel from '@/components/marketplace/ModelPricingPanel.vue'
+import ModelVideoEndpoints from '@/components/marketplace/ModelVideoEndpoints.vue'
+import VideoPricingRulesSummary from '@/components/marketplace/VideoPricingRulesSummary.vue'
+import { videoPricingRows as buildVideoPricingRows } from '@/components/marketplace/marketplaceVideoPricing'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
@@ -544,7 +553,7 @@ function pricingKind(pricing: MarketplaceModelPricing): Exclude<PricingFilter, '
   if (pricing.pricing_mode === 'image' && hasImagePricing(pricing)) {
     return 'image'
   }
-  if (pricing.pricing_mode === 'video' && videoPricingRows(pricing).length > 0) {
+  if (['video', 'video_token', 'video_per_request'].includes(pricing.pricing_mode) && videoPricingRows(pricing).length > 0) {
     return 'video'
   }
   if (pricing.pricing_mode === 'token') {
@@ -697,6 +706,10 @@ function groupBrandIconModel(group: MarketplaceGroup): string {
       return 'yi'
     case 'xiaomi':
       return 'mimo'
+    // 品牌别名统一到彩色图标键，避免分组名称附加说明后回退为文字。
+    case 'volcengine':
+    case 'kling':
+      return brandKey
     default:
       return groupBrandSource(group)
   }
@@ -830,16 +843,7 @@ function compactPricingRows(pricing: MarketplaceModelPricing): PricingRow[] {
 
 // 视频价卡与详情使用相同的实际单位，显式零价仍展示。
 function videoPricingRows(pricing: MarketplaceModelPricing): PricingRow[] {
-  return (pricing.video_prices ?? []).flatMap((item) => {
-    if (!Number.isFinite(item.price) || item.price < 0 || !['second', 'request'].includes(item.unit)) {
-      return []
-    }
-    return [{
-      key: item.resolution,
-      label: item.resolution,
-      value: `${formatPrice(item.price)} ${t(item.unit === 'second' ? 'marketplace.perSecond' : 'marketplace.perRequest')}`,
-    }]
-  })
+  return buildVideoPricingRows(pricing, t, formatPrice)
 }
 
 function imagePricingRows(pricing: MarketplaceModelPricing): PricingRow[] {

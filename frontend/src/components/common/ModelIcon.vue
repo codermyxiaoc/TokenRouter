@@ -1,6 +1,16 @@
 <template>
+  <!-- 与供应商徽标共用彩色资源，避免模型广场回退为首字母。 -->
+  <img
+    v-if="iconInfo?.src"
+    :src="iconInfo.src"
+    :width="size"
+    :height="size"
+    :style="{ width: size, height: size }"
+    class="model-icon"
+    alt=""
+  />
   <svg
-    v-if="iconInfo"
+    v-else-if="iconInfo"
     :width="size"
     :height="size"
     viewBox="0 0 24 24"
@@ -31,6 +41,10 @@ const fallbackText = computed(() => props.model.charAt(0).toUpperCase())
 
 const iconKey = computed(() => {
   const modelLower = props.model.toLowerCase()
+
+  // 支持供应商品牌标识和可灵视频模型名称。
+  if (modelLower === 'volcengine' || modelLower === '火山引擎' || modelLower === '火山方舟') return 'volcengine'
+  if (modelLower.includes('kling') || modelLower.includes('可灵')) return 'kling'
 
   // OpenAI 模型
   if (modelLower.startsWith('gpt') || modelLower.startsWith('codex') ||

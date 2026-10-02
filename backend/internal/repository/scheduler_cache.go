@@ -973,7 +973,9 @@ func filterSchedulerCredentials(credentials map[string]any) map[string]any {
 	}
 	// 精简候选也执行账号阈值校验，不能丢失账号对全局阈值的覆盖。
 	// Seedance 资格要求显式自定义地址，候选投影必须保留该字段，不能只保留能力开关。
-	keys := []string{"model_mapping", "compact_model_mapping", "model_whitelist", "openai_workload_capabilities", "base_url", "api_key", "project_id", "oauth_type", "plan_type", "account_scheduling_threshold"}
+	keys := []string{"model_mapping", "compact_model_mapping", "model_whitelist", "openai_workload_capabilities", "base_url", "api_key", "project_id", "oauth_type", "plan_type", "account_scheduling_threshold",
+		// 视频智能选组需要完整协议和模型绑定，但不需要预算快照或额外凭据。
+		"video_endpoints", "video_model_bindings", "video_base_urls", "video_model_paths"}
 	filtered := make(map[string]any)
 	for _, key := range keys {
 		if value, ok := credentials[key]; ok && value != nil {

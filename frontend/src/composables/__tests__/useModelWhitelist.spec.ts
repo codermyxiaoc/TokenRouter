@@ -17,6 +17,11 @@ import {
 } from '../useModelWhitelist'
 
 describe('useModelWhitelist', () => {
+  it('Video has no text model or mapping defaults', () => {
+    expect(getModelsByPlatform('video')).toEqual([])
+    expect(getPresetMappingsByPlatform('video')).toEqual([])
+  })
+
   it('OpenCode 内置目录与现有平台隔离，并仅列出已登记图片型号', () => {
     const models = getModelsByPlatform('opencode_go')
     expect(models).toContain('gpt-5.6-luna')

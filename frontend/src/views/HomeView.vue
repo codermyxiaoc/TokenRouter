@@ -35,6 +35,9 @@
             <router-link to="/models" class="transition hover:text-gray-950 dark:hover:text-white">
               {{ t('home.nav.models') }}
             </router-link>
+            <router-link to="/docs" class="transition hover:text-gray-950 dark:hover:text-white">
+              {{ t('apiDocs.title') }}
+            </router-link>
             <a
               v-if="docUrl"
               :href="docUrl"

@@ -42,6 +42,9 @@ vi.mock('@/api/admin', () => ({
     tlsFingerprintProfiles: {
       list: vi.fn().mockResolvedValue([]),
     },
+    tlsFingerprintRouters: {
+      list: vi.fn().mockResolvedValue([]),
+    },
   },
 }))
 
@@ -220,6 +223,125 @@ describe('CreateAccountModal OpenAI account options', () => {
       .mockResolvedValue({ credentials: { model_whitelist: [] }, extra: {} })
   })
 
+  // Video 使用真实提交路径，防止平台选择后仍带入 Claude 默认端点或 OAuth 类型。
+  it('creates an independent Video API key with its explicit endpoint budget', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
+    expect(wrapper.text()).toContain('admin.accounts.video.apiKeyOnly')
+    expect(wrapper.find('input[value="oauth"]').exists()).toBe(false)
+    expect(wrapper.find('input[value="setup-token"]').exists()).toBe(false)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Video account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('video-secret')
+    await wrapper.get('[data-testid="create-account-base-url"]').setValue('https://video.example.test')
+    await wrapper.get('[data-testid="video-endpoint-compat"]').setValue(true)
+    const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
+    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), maxDurationSeconds: 15 })
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledOnce()
+    const payload = createAccountMock.mock.calls[0][0]
+    expect(payload).toMatchObject({ platform: 'video', type: 'apikey', credentials: {
+      api_key: 'video-secret', base_url: 'https://video.example.test', video_endpoints: ['compat'],
+      video_max_pending_tasks: 10, video_max_duration_seconds: 15,
+    } })
+    expect(payload.credentials).not.toHaveProperty('video_max_output_tokens')
+    expect(payload.credentials).not.toHaveProperty('api_protocol')
+    expect(wrapper.findComponent({ name: 'UpstreamUsageConfigEditor' }).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // 新建 Video 完全不提交已移除的 Token 上限。
+  it('creates Video without a Token budget field', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Unlimited Video')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('video-secret')
+    await wrapper.get('[data-testid="create-account-base-url"]').setValue('https://video.example.test')
+    await wrapper.get('[data-testid="video-endpoint-seedance"]').setValue(true)
+    expect(wrapper.find('[data-testid="video-max-output-tokens"]').exists()).toBe(false)
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledOnce()
+    expect(createAccountMock.mock.calls[0][0].credentials).toMatchObject({
+      video_endpoints: ['seedance'],
+      video_max_duration_seconds: null, video_max_pending_tasks: 10,
+    })
+    expect(createAccountMock.mock.calls[0][0].credentials).not.toHaveProperty('video_max_output_tokens')
+    wrapper.unmount()
+  })
+
+  it.each([true, false])('submits Video multi-endpoint routing with explicit bindings=%s', async bound => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Adaptive Video')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('video-secret')
+    await wrapper.get('[data-testid="create-account-base-url"]').setValue('https://video.example.test')
+    const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
+    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), endpoints: ['compat', 'seedance'], bindings: bound ? [
+      { model: 'shared', endpoint: 'compat', path: '' },
+      { model: 'shared', endpoint: 'seedance', path: '' },
+    ] : [] })
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledOnce()
+    expect(createAccountMock.mock.calls[0][0].credentials).toMatchObject({
+      video_endpoints: ['compat', 'seedance'],
+      video_model_bindings: bound ? { shared: ['compat', 'seedance'] } : {},
+      video_model_paths: {},
+    })
+    wrapper.unmount()
+  })
+
+  // 非法绑定必须在真实提交入口拦截，不能只依赖配置工具函数校验。
+  it.each([
+    [{ model: 'shared', endpoint: 'compat', path: '' }, { model: ' shared ', endpoint: 'compat', path: '' }],
+    [{ model: 'shared', endpoint: 'wan', path: '' }],
+    [{ model: 'shared', endpoint: 'kling', path: '/unsupported' }],
+  ])('does not create Video with invalid bindings %j', async (...bindings) => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Invalid Video')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('video-secret')
+    await wrapper.get('[data-testid="create-account-base-url"]').setValue('https://video.example.test')
+    const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
+    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), endpoints: ['compat', 'kling'], bindings })
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('does not create Video with a missing endpoint address', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Video account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('video-secret')
+    await wrapper.get('[data-testid="video-endpoint-compat"]').setValue(true)
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  // Base URL 和密钥不能代替显式选择，创建和重开弹窗都保持兼容入口关闭。
+  it('does not create Video until an endpoint is explicitly selected', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Video account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('video-secret')
+    await wrapper.get('[data-testid="create-account-base-url"]').setValue('https://video.example.test')
+    expect(wrapper.getComponent({ name: 'VideoAccountFields' }).props('modelValue').endpoints).toEqual([])
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="video-endpoint-openai_videos"]').setValue(true)
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
+    expect(wrapper.getComponent({ name: 'VideoAccountFields' }).props('modelValue').endpoints).toEqual([])
+    wrapper.unmount()
+  })
+
   // 使用真实表单提交校验模式、端点和清空规则的后端契约。
   it('creates OpenCode Zen with adaptive endpoints and explicit model rules', async () => {
     const wrapper = mountModal()
@@ -235,14 +357,52 @@ describe('CreateAccountModal OpenAI account options', () => {
       api_base_urls: { chat_completions: 'https://opencode.ai/zen/v1', responses: 'https://opencode.ai/zen/v1', anthropic: 'https://opencode.ai/zen' }
     })
     expect(payload.credentials.protocol_rules).toContainEqual({ pattern: 'claude-*', protocol: 'anthropic' })
-    expect(payload.extra.upstream_usage_query.adapter).toBe('opencode_go')
+    expect(payload.extra.upstream_usage_query.adapter).toBe('sub2api')
+  })
+
+  // 三种普通按量账号复用通用查询配置，钱包令牌只进入敏感凭据。
+  it.each([
+    ['OpenCode', 'opencode_go', 'zen'], ['MiniMax', 'minimax', 'payg'], ['Zhipu GLM', 'zhipu', 'payg'],
+  ] as const)('creates %s with generic upstream usage settings without changing routing', async (label, platform, mode) => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, label)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue(`${label} usage`)
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('relay-api-key')
+    const routingURL = wrapper.get<HTMLInputElement>('[data-testid="cn-adaptive-base-url-chat_completions"]').element.value
+    const selector = wrapper.get('[data-testid="upstream-usage-adapter"]')
+    expect(selector.findAll('option').map(option => option.attributes('value'))).toEqual(['sub2api', 'new_api', 'zivv'])
+    await selector.setValue('new_api')
+    await wrapper.get('[data-testid="upstream-usage-base-url"]').setValue(' https://usage.example.test/root ')
+    await wrapper.get('[data-testid="upstream-usage-wallet-access-token"]').setValue(' wallet-pat ')
+    await wrapper.get('[data-testid="upstream-usage-wallet-user-id"]').setValue('42')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const payload = createAccountMock.mock.calls[0][0]
+    expect(payload).toMatchObject({ platform, type: 'apikey', credentials: {
+      account_mode: mode, api_protocol: 'adaptive', base_url: routingURL, api_key: 'relay-api-key',
+      new_api_user_access_token: 'wallet-pat', new_api_user_id: '42',
+    } })
+    expect(payload.extra.upstream_usage_query).toEqual({ enabled: true, adapter: 'new_api', base_url: 'https://usage.example.test/root' })
+    expect(JSON.stringify(payload.extra)).not.toContain('wallet-pat')
+    wrapper.unmount()
+  })
+
+  it.each(['Kimi', 'DeepSeek'])('%s keeps its native balance adapter in the create form', async label => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, label)
+    expect(wrapper.getComponent({ name: 'UpstreamUsageConfigEditor' }).props('automaticAdapter')).toBe(true)
+    expect(wrapper.find('[data-testid="upstream-usage-adapter"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('switches OpenCode GO defaults while preserving a custom endpoint, and submits cleared rules', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenCode')
+    await wrapper.get('[data-testid="upstream-usage-adapter"]').setValue('new_api')
+    await wrapper.get('[data-testid="upstream-usage-wallet-access-token"]').setValue('hidden-wallet-pat')
     await wrapper.get('[data-testid="cn-adaptive-base-url-anthropic"]').setValue('https://custom.example.test/messages')
     await selectButtonByText(wrapper, 'admin.accounts.opencodeGo.accountMode.go')
+    expect(wrapper.find('[data-testid="upstream-usage-adapter"]').exists()).toBe(false)
     expect(wrapper.get<HTMLInputElement>('[data-testid="cn-adaptive-base-url-responses"]').element.value).toBe('https://opencode.ai/zen/go/v1')
     expect(wrapper.get<HTMLInputElement>('[data-testid="cn-adaptive-base-url-anthropic"]').element.value).toBe('https://custom.example.test/messages')
     for (const button of wrapper.findAll('[aria-label="admin.accounts.opencodeGo.protocolRules.remove"]')) {
@@ -253,6 +413,8 @@ describe('CreateAccountModal OpenAI account options', () => {
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await flushPromises()
     expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({ account_mode: 'go', protocol_rules: [] })
+    expect(createAccountMock.mock.calls[0][0].extra.upstream_usage_query.adapter).toBe('opencode_go')
+    expect(createAccountMock.mock.calls[0][0].credentials).not.toHaveProperty('new_api_user_access_token')
   })
 
   it('submits the explicit OpenAI text protocol defaults with the new configuration shape', async () => {
@@ -412,6 +574,7 @@ describe('CreateAccountModal OpenAI account options', () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'MiniMax')
     if (mode === 'coding') await selectButtonByText(wrapper, 'admin.accounts.cnProviders.accountMode.coding')
+    expect(wrapper.find('[data-testid="upstream-usage-adapter"]').exists()).toBe(mode === 'payg')
     await wrapper.get('form#create-account-form input[type="text"]').setValue('MiniMax account')
     await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-minimax')
     await wrapper.get('form#create-account-form').trigger('submit.prevent')

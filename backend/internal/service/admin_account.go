@@ -411,6 +411,9 @@ func normalizeAccountConcurrency(platform, accountType string, concurrency int) 
 // 旧记录缺少 mode/protocol 时由 Account 方法按 payg + chat_completions 读取，避免无关编辑
 // 把兼容数据强制改写；新建记录则显式保存默认值，方便前端和监控选择适配器。
 func normalizeCNProviderCredentials(account *Account, isCreate bool) error {
+	if account != nil && account.Platform == PlatformVideo {
+		return normalizeVideoCredentials(account)
+	}
 	if account != nil && account.IsOpenCodeGo() {
 		return normalizeOpenCodeCredentials(account, isCreate)
 	}
@@ -617,6 +620,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	}
 
 	// 检查混合渠道风险（除非用户已确认）
+	if err := s.validateVideoGroupBindings(ctx, input.Platform, groupIDs); err != nil {
+		return nil, err
+	}
 	if len(groupIDs) > 0 && !input.SkipMixedChannelCheck {
 		if err := s.checkMixedChannelRisk(ctx, 0, input.Platform, groupIDs); err != nil {
 			return nil, err
@@ -913,10 +919,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 
 	// 先验证分组是否存在（在任何写操作之前）
 	if input.GroupIDs != nil {
-		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
+		if err := s.validateVideoGroupBindings(ctx, account.Platform, *input.GroupIDs); err != nil {
 			return nil, err
 		}
-
 		// 检查混合渠道风险（除非用户已确认）
 		if !input.SkipMixedChannelCheck {
 			if err := s.checkMixedChannelRisk(ctx, account.ID, account.Platform, *input.GroupIDs); err != nil {
@@ -1028,11 +1033,6 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if len(input.AccountIDs) == 0 {
 		return result, nil
 	}
-	if input.GroupIDs != nil {
-		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
-			return nil, err
-		}
-	}
 	openAISettings, err := normalizeBulkOpenAISettings(input)
 	if err != nil {
 		return nil, err
@@ -1043,12 +1043,23 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
 	hasOpenAIConfigPatch := hasOpenAIConfigurationPatch(input.Credentials, input.Extra)
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasOpenAIConfigPatch {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || input.GroupIDs != nil || needMixedChannelCheck || hasOpenAIConfigPatch {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
 		}
 		cachedTargets = loaded
+	}
+	if input.GroupIDs != nil {
+		platforms := make([]string, 0, len(cachedTargets))
+		for _, account := range cachedTargets {
+			if account != nil {
+				platforms = append(platforms, account.Platform)
+			}
+		}
+		if err := s.validateVideoGroupBindingsForPlatforms(ctx, platforms, *input.GroupIDs); err != nil {
+			return nil, err
+		}
 	}
 	if hasOpenAIConfigPatch {
 		targetsByID := make(map[int64]*Account, len(cachedTargets))
@@ -1397,7 +1408,7 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	groupIDs := opts.GroupIDs
 	if len(groupIDs) > 0 {
 		if s.groupRepo != nil {
-			if err := s.validateGroupIDsExist(ctx, groupIDs); err != nil {
+			if err := s.validateVideoGroupBindings(ctx, parent.Platform, groupIDs); err != nil {
 				return nil, err
 			}
 		}

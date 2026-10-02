@@ -278,6 +278,17 @@ func (s *SmartRoutingService) listSmartRoutingCatalogAccounts(ctx context.Contex
 
 // smartRoutingGroupEndpointEligible 对齐公开路由分派，防止探针或媒体请求选中无法承接端点的平台。
 func smartRoutingGroupEndpointEligible(platform, endpoint string) bool {
+	if route, ok := MatchVideoGatewayRoute("POST", endpoint); ok {
+		if route.Protocol == "openai_videos" {
+			// 共享 OpenAI 视频入口仍允许既有 Grok 分组参与智能选号。
+			return platform == PlatformVideo || platform == PlatformGrok
+		}
+		return platform == PlatformVideo || (route.Protocol == "seedance" && platform == PlatformOpenAI)
+	}
+	// 独立视频分组只能承接已注册的视频创建入口，不能因同名模型截获文本或图片请求。
+	if platform == PlatformVideo {
+		return false
+	}
 	switch {
 	case strings.HasSuffix(strings.TrimSuffix(endpoint, "/"), "/contents/generations/tasks"):
 		return platform == PlatformOpenAI
@@ -323,6 +334,14 @@ func smartRoutingAccountCatalogContains(account *Account, model string) bool {
 
 // smartRoutingAccountEndpointEligible 保留账号类型和端点能力边界；跨平台协议准入另由路由层检查。
 func smartRoutingAccountEndpointEligible(ctx context.Context, account *Account, model, endpoint string) bool {
+	if route, ok := MatchVideoGatewayRoute("POST", endpoint); ok && account.Platform == PlatformVideo {
+		cfg, err := account.VideoConfiguration()
+		if err != nil || len(cfg.Endpoints) == 0 {
+			return false
+		}
+		_, err = cfg.SelectEndpoint(account.GetMappedModel(model), route.Protocol, route.Native)
+		return err == nil
+	}
 	// Seedance 能力必须由 OpenAI API Key 账号显式声明，不能被默认文本能力替代。
 	if strings.HasSuffix(strings.TrimSuffix(endpoint, "/"), "/contents/generations/tasks") {
 		return account.Platform == PlatformOpenAI && isOpenAICompatibleAccountEligibleForRequest(ctx, account, PlatformOpenAI, model, false, OpenAIEndpointCapabilitySeedance)

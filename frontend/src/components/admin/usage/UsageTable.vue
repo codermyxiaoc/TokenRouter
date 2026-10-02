@@ -137,6 +137,9 @@
           <span class="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium" :class="getBillingModeBadgeClass(getDisplayBillingMode(row))">
             {{ getBillingModeLabel(getDisplayBillingMode(row), t) }}
           </span>
+          <div v-if="videoUsageSummary(row)" class="mt-1 text-xs text-gray-500 dark:text-gray-400" data-testid="video-usage-summary">
+            {{ videoUsageSummary(row) }}
+          </div>
         </template>
 
         <template #cell-tokens="{ row }">
@@ -502,20 +505,22 @@
               <span class="text-gray-400">{{ t('admin.usage.inputCost') }}</span>
               <span class="font-medium text-white">{{ formatDetailedUsdAmount(tooltipData.input_cost) }}</span>
             </div>
-            <div v-if="tooltipData && hasImageInputCost(tooltipData)" class="flex items-center justify-between gap-4">
-              <span class="text-gray-400">{{ t('usage.imageInputCost') }}</span>
+            <div v-if="tooltipData && hasImageInputCost(tooltipData) && !(isVideoUsage(tooltipData) && tooltipData.video_billing?.reference_image_cost != null)" class="flex items-center justify-between gap-4">
+              <span class="text-gray-400">{{ t(isVideoUsage(tooltipData) ? 'usage.videoReferenceImageCost' : 'usage.imageInputCost') }}</span>
               <span class="font-medium text-fuchsia-300">{{ formatDetailedUsdAmount(tooltipData.image_input_cost) }}</span>
             </div>
             <div v-if="tooltipData && tooltipData.output_cost > 0" class="flex items-center justify-between gap-4">
-              <span class="text-gray-400">{{ t('admin.usage.outputCost') }}</span>
+              <span class="text-gray-400">{{ t(isVideoUsage(tooltipData) ? 'usage.videoOutputCost' : 'admin.usage.outputCost') }}</span>
               <span class="font-medium text-white">{{ formatDetailedUsdAmount(tooltipData.output_cost) }}</span>
             </div>
             <div v-if="tooltipData && hasImageOutputCost(tooltipData)" class="flex items-center justify-between gap-4">
               <span class="text-gray-400">{{ t('usage.imageOutputCost') }}</span>
               <span class="font-medium text-pink-300">{{ formatDetailedUsdAmount(tooltipData.image_output_cost) }}</span>
             </div>
+            <!-- 视频使用独立快照展示单位和参考图，不落入按次价格分支。 -->
+            <VideoUsagePricingDetails v-if="tooltipData && isVideoUsage(tooltipData)" :row="tooltipData" />
             <!-- 按 token 计费：显示每百万 token 单价。 -->
-            <template v-if="tooltipData && !isImageUsage(tooltipData) && (!tooltipData.billing_mode || tooltipData.billing_mode === BILLING_MODE_TOKEN)">
+            <template v-else-if="tooltipData && !isImageUsage(tooltipData) && (!tooltipData.billing_mode || tooltipData.billing_mode === BILLING_MODE_TOKEN)">
               <div v-if="tooltipData && textInputTokens(tooltipData) > 0" class="flex items-center justify-between gap-4">
                 <span class="text-gray-400">{{ t('usage.inputTokenPrice') }}</span>
                 <span class="font-medium text-sky-300">{{ formatTokenPricePerMillion(tooltipData.input_cost, textInputTokens(tooltipData)) }} {{ t('usage.perMillionTokens') }}</span>
@@ -600,8 +605,9 @@
             <span class="font-semibold text-cyan-300">{{ getUsageServiceTierLabel(tooltipData?.service_tier, t) }}</span>
           </div>
           <div class="flex items-center justify-between gap-6">
-            <span class="text-gray-400">{{ t('usage.rate') }}</span>
-            <span class="font-semibold text-blue-400">{{ formatMultiplier(tooltipData?.rate_multiplier || 1) }}x</span>
+            <span class="text-gray-400">{{ t(isVideoUsage(tooltipData) ? 'usage.videoRate' : 'usage.rate') }}</span>
+            <!-- 零倍率是有效结算结果，只有缺失倍率才回退为 1。 -->
+            <span class="font-semibold text-blue-400">{{ formatMultiplier(tooltipData?.rate_multiplier ?? 1) }}x</span>
           </div>
           <div v-if="showStandardCost" class="flex items-center justify-between gap-6">
             <span class="text-gray-400">{{ t('usage.original') }}</span>
@@ -670,6 +676,7 @@ import {
   getDisplayBillingMode,
   imageUnitPrice,
   isImageUsage,
+  isVideoUsage,
 } from '@/utils/billingMode'
 import {
   formatImageBillingSize,
@@ -694,12 +701,13 @@ function accountBilled(row: { total_cost?: number | null; account_stats_cost?: n
 
 import DataTable from '@/components/common/DataTable.vue'
 import BillingSubscriptionSummary from '@/components/common/BillingSubscriptionSummary.vue'
+import VideoUsagePricingDetails from './VideoUsagePricingDetails.vue'
 import { getUsageBillingTypeBadgeClass, getUsageBillingTypeLabel } from '@/utils/usageBillingType'
 import EmptyState from '@/components/common/EmptyState.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { fetchBatch, getEntry } from '@/utils/ipGeoLookup'
-import type { AdminUsageLog } from '@/types'
+import type { AdminUsageLog, UsageLog } from '@/types'
 import type { Column } from '@/components/common/types'
 
 interface Props {
@@ -744,6 +752,19 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const { balanceUnitSymbol, usdUnitSymbol, formatBalanceAmount, formatUsdAmount } = useBalanceDisplay()
 const { copyToClipboard } = useClipboard()
+
+// 列表摘要仅展示已知历史用量，Token 视频也保留参考图信息便于直接核对。
+const videoUsageSummary = (row: UsageLog): string => {
+  if (!isVideoUsage(row)) return ''
+  const b = row.video_billing
+  const parts: string[] = []
+  const resolution = b?.resolution || row.video_resolution
+  const duration = b?.duration_seconds ?? row.video_duration_seconds
+  if (resolution) parts.push(resolution)
+  if (duration != null && duration > 0) parts.push(`${duration.toLocaleString()} ${t('usage.videoSecondUnit')}`)
+  if (b?.reference_image_count != null) parts.push(`${t('usage.videoReferenceImages')} ${b.reference_image_count}${t('usage.imageUnit')}`)
+  return parts.join(' · ')
+}
 const copiedRequestId = ref<string | null>(null)
 const showAccountBilling = props.showAccountBilling
 const showStandardCost = props.showStandardCost

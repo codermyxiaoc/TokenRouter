@@ -287,14 +287,14 @@ describe('SubscriptionsView', () => {
     wrapper.unmount()
   })
 
-  it('shows resolved group rates independently for each plan, including a free default group', async () => {
+  it.each(['openai', 'video'] as const)('shows resolved %s group rates independently for each plan, including a free default group', async platform => {
     mockGetMySubscriptions.mockResolvedValue([
       subscriptionWithGroups({
         id: 101,
         name: 'Plan Alpha',
         group_rate_multipliers: { 42: 0.65 },
         applicable_groups: [
-          { id: 42, name: 'Shared group', platform: 'openai', rate_multiplier: 0.65 },
+          { id: 42, name: 'Shared group', platform, rate_multiplier: 0.65 },
           { id: 43, name: 'Default group', platform: 'anthropic', rate_multiplier: 2.5 },
           { id: 44, name: 'Free group', platform: 'gemini', rate_multiplier: 0 }
         ]
@@ -303,7 +303,7 @@ describe('SubscriptionsView', () => {
         id: 202,
         name: 'Plan Beta',
         group_rate_multipliers: { 42: 1.75 },
-        applicable_groups: [{ id: 42, name: 'Shared group', platform: 'openai', rate_multiplier: 1.75 }]
+        applicable_groups: [{ id: 42, name: 'Shared group', platform, rate_multiplier: 1.75 }]
       })
     ])
 

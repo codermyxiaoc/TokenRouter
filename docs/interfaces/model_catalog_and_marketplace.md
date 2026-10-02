@@ -6,6 +6,7 @@
 
 - [目录解析](#目录解析)：修改 `/models`、默认模型或可请求交集时读取。
 - [市场可见性](#市场可见性)：修改公开分组过滤、品牌或排序时读取。
+- [视频兼容端点](#marketplace_video_endpoints)：修改模型卡片的可调用视频入口投影时读取。
 - [目录元数据查询](#目录元数据查询)：修改名称写法、档位别名及能力来源时读取。
 - [价格展示](#价格展示)：修改渠道价格、倍率或未知价格时读取。
 - [容量与可用性](#容量与可用性)：修改公开容量或探测时间序列时读取。
@@ -28,7 +29,20 @@ DeepSeek 在没有有效账号映射和独立模型白名单时，才按内置�
 
 展示品牌优先使用 `display_brand`，为空时回退 Group name。Group description、platform、倍率、图片独立倍率和模型数作为公开产品投影。
 
+分组供应商选项与市场品牌展示共用前端品牌目录。“火山引擎”是独立选项，`Volcengine`、`火山方舟` 同样识别为该品牌，使用自身图标和蓝色标签；“可灵”同样作为独立选项，兼容 `Kling`、`Kling AI` 品牌名称及可灵模型名，使用青色标签。“豆包”及其模型名称别名继续保留原品牌。火山引擎与可灵图标分别来自指定的 [Volcengine SVG](https://apis.artsapi.com/assets/icons/lobe/volcengine.svg) 和 [Kling SVG](https://apis.artsapi.com/assets/icons/lobe/kling.svg)，保留原始配色和渐变并随前端静态资源打包，不依赖浏览器加载第三方图标。`display_brand` 只控制展示和品牌筛选，不改变上游平台、视频端点选择或计费规则。
+
 模型级投影附带 `input_modalities`/`output_modalities` 能力元数据，按下述目录查询规则解析。查询不到的模型不下发这两个字段，由前端能力标签降级为本地模型 ID 规则。能力查表失败不阻塞价格展示。
+
+<a id="marketplace_video_endpoints"></a>
+## 视频兼容端点
+
+视频模型可附带 `video_endpoints`，每项包含 `method`、本站相对 `path` 和 `protocol`，只描述创建任务的入口。模型广场在模型 ID 下展示端点名称、方法与路径并支持复制；标题按协议显示 OpenAI Videos、Seedance、Kling、Wan、MiniMax 或 Grok，两种 OpenAI 入口通过各自路径区分。没有能力投影时不按模型名补齐端点。端点信息独立于定价，价格未知的可请求视频仍可展示入口。客户端调用仍须使用该分组的有效 Key，请求参数沿用所选端点的供应商约定。
+
+独立 Video 平台复用本次目录解析使用的可调度账号集合，按客户端模型、渠道映射、账号模型映射和最终模型绑定计算能力；聚合多个合格账号的可用入口并去重，不返回账号 ID、上游 Base URL、密钥或内部模型名。`/v1/video/generations` 仅在账号明确勾选且模型允许 `compat` 时展示，`/v1/videos` 同样要求 `openai_videos`；原生单端点或另一个 OpenAI 入口均不授予隐式兼容能力。只有协议资格及地址、路径配置均有效时才展示对应入口，判断复用实际转发规则。Kling 原生路径里的 `{model}` 保持模板，页面提示使用卡片上的公开模型 ID。
+
+旧 Grok 视频与 OpenAI 账号的 Seedance 能力继续受原分组媒体开关、账号资格和视频模型识别约束；不能因为文本账号打开了 Seedance 能力，就给该账号所有文字模型声明视频入口。旧 OpenAI 的普通 Token 定价不一定含视频模态，仅在账号显式启用 Seedance 时，允许按映射后的最终上游模型 `doubao-seedance-`/`seedance-` 名称族补足识别；任意接入点 ID 或客户端别名不据此推断。旧平台也不使用独立 Video 的统一端点替代自身原生链路。
+
+此投影只读取配置，不调用生成、连接测试或上游查询，也不修改实际选号、路由、计费及任务记录。旧聊天和图片模型的展示不变；可用入口表示配置兼容，不保证上游临时容量或下一次请求成功。具体协议见[独立 Video 上游](video_upstream.md#video_protocols)。
 
 <a id="model_catalog_metadata_lookup"></a>
 ## 目录元数据查询
@@ -81,6 +95,12 @@ GPT 6 Astra 的 `ultrafast` 对最终普通 token 价应用固定 6 倍，包括
 Grok 分组内的 Grok Imagine 视频模型使用 `pricing_mode=video` 和 `video_prices` 返回 480p、720p、1080p 的实际单价，每项包含 `resolution`、`price` 和 `unit`。市场先使用目录解析后的定价模型，按视频结算相同的逐档顺序选择价格：分组逐模型 `video` 价卡、分组 `video_model_prices`/`video_price_*`、渠道视频或历史按次价格、内置视频默认价；应用视频独立倍率，未启用时使用普通分组倍率。这里复用现有单价解析和统一费用计算，不修改实际结算。其他平台保持原有展示路径，尤其不能绕过 Qoder 的手动定价要求。
 
 `unit=second` 表示每秒，历史渠道 `per_request`/`image` 兼容配置保持 `unit=request`，不得把按次费用标为每秒。同一视频模型的不同分辨率可能分别来自分组按秒覆盖和渠道按次价，单位随每档独立返回。显式零价必须下发并显示为免费；非法或歧义价格保持未知。前端卡片、详细价卡和视频类型筛选均读取该投影；分组定价仍默认收起，用户点击后再展开。
+
+独立 Video 平台通过相同 `video_prices` 投影展示严格匹配后的实际单价，每个分辨率一行，不再输出 `has_reference_video` 定价条件。前端兼容旧服务返回的双行，按分辨率合并且不展示有无参考视频价格标签。`pricing_mode=video_token` 与 `unit=million_tokens` 表示每百万视频 Token，`video`/`second` 表示每秒，`video_per_request`/`request` 表示每个成功任务一次。可展示显式配置的其它数字分辨率，包括历史按秒层级，缺价档位不补零；全部缺价时保持 `unpriced`。展示与任务报价使用同一解析器及视频倍率，不回退聊天模型目录价格，按次参考图片附加费也单独显示固定单价。
+
+同一模型混用分组旧秒价与渠道 Token 价时，以各行 `unit` 为单位依据，不能用模型级 `pricing_mode` 改写其它档位。每行的 `video_token_prepay` 和 `video_image_input_pricing` 来自该行完整报价，关闭时明确返回 `null`，不会从其它档位或渠道拼接。前端按对应分辨率展示说明；只有规则相同的档位才能合并说明。固定预扣秒价与图片附加单价保持原值，不再次应用展示倍率。
+
+`video_fallback_pricing` 单独携带兜底单价、单位及上述两项配置，`resolution` 为空；它只解释未匹配分辨率的报价，不能冒充已配置档位。兼容保留的模型级附加费、预扣字段分别只在所有展示档位及兜底的对应规则一致时返回；旧标量 `video_fallback_price` 仅在模型级模式能正确表达其单位时返回。新版前端优先使用逐档和结构化兜底字段，旧服务未返回这些字段时才沿用全局说明；显式 `null` 不触发全局回退。该展示扩展不改变价卡优先级、任务快照或资金结算。
 
 <a id="group_availability_probe"></a>
 ## 容量与可用性

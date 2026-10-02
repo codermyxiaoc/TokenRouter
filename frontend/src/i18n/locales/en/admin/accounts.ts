@@ -1,6 +1,40 @@
 export default {
 // Accounts
     accounts: {
+      video: {
+  "endpoints": {
+    "compat": "OpenAI Videos (/v1/video/generations)",
+    "openai_videos": "OpenAI Videos (/v1/videos)",
+    "seedance": "Seedance",
+    "kling": "Kling",
+    "wan": "Wan",
+    "minimax": "MiniMax"
+  },
+  "bindingPathInvalid": "Kling paths must use a supported template. Other endpoints cannot configure a Kling path.",
+  "bindingEndpointDisabled": "The binding targets a disabled endpoint. Enable that endpoint first.",
+  "bindingDuplicate": "The same model and endpoint pair cannot be repeated",
+  "bindingModelRequired": "A model binding needs a model name",
+  "routingHint": "Select each OpenAI Videos endpoint separately by its path. Model endpoint restrictions must also allow that endpoint. Only selected routes allowed by the model are available; native routes follow the same protocol matching rule.",
+  "title": "Video endpoints",
+  "description": "Select the protocols your upstream supports. No endpoints are enabled by default; OpenAI compatibility routes also require explicit selection.",
+  "endpointUrl": "Endpoint URL override",
+  "endpointWithPath": "{name} ({path})",
+  "endpointUrlHint": "Leave blank to use Base URL. Every enabled endpoint needs a URL.",
+  "modelBindings": "Model endpoint restrictions (optional)",
+  "modelBindingsHint": "Use the mapped upstream model name. Add multiple different endpoints for the same model. Unbound models inherit the enabled account endpoints.",
+  "modelPlaceholder": "Upstream model name",
+  "klingPathHint": "Kling uses the native operation path in the request, so model path templates may be left empty. Enabling Kling does not enable OpenAI compatibility routes.",
+  "maxPendingTasks": "Maximum pending tasks",
+  "maxDurationSeconds": "Automatic duration reserve (seconds)",
+  "budgetHint": "The automatic duration limit estimates the task budget without changing upstream generation parameters. Configure Token prepayment in the user video pricing card.",
+  "nativePath": "Use request native path",
+  "apiKeyOnly": "Video supports API keys only. Configure model names explicitly; text and paid video tests are unavailable.",
+  "endpointsRequired": "Select at least one endpoint",
+  "baseUrlRequired": "Provide a URL for every endpoint or a default Base URL",
+  "pendingInvalid": "Maximum pending tasks must be an integer from 1 to 1000",
+  "budgetInvalid": "The automatic duration limit must be positive",
+  "keyGuide": "The gateway Base URL is shown below. Check the model marketplace for the video model's enabled endpoints, call the matching route, then query status with the returned task ID. OpenAI compatibility routes require explicit administrator selection. Chat client configuration is unavailable."
+},
       title: 'Account Management',
       description: 'Manage AI platform accounts and credentials',
       createAccount: 'Create Account',
@@ -132,6 +166,7 @@ export default {
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
+        video: 'Video',
       },
       cnProviders: {
         accountMode: {

@@ -36,7 +36,7 @@ func applyAPIKeyModelRedirect(c *gin.Context, apiKey *service.APIKey) {
 		return
 	}
 	_ = rewriteAPIKeyAdditionalModels(c.Request, apiKey)
-	setAPIKeyModelRedirectContext(c, sourceModel, targetModel)
+	setAPIKeyModelRedirectContext(c, sourceModel, targetModel, apiKey.Group)
 }
 
 // apiKeyRequestModel 读取当前协议的主模型；没有模型的管理类入口直接跳过。
@@ -54,7 +54,7 @@ func rewriteAPIKeyAdditionalModels(request *http.Request, apiKey *service.APIKey
 	if request == nil || apiKey == nil {
 		return nil
 	}
-	if isSeedanceTaskAPIPath(request.URL.Path) {
+	if isVideoPayloadPreservingPath(request.URL.Path, apiKey.Group) {
 		return nil
 	}
 	mediaType, _, _ := mime.ParseMediaType(request.Header.Get("Content-Type"))
@@ -74,7 +74,7 @@ func rewriteAPIKeyAdditionalModels(request *http.Request, apiKey *service.APIKey
 }
 
 // setAPIKeyModelRedirectContext 保存日志模型并安装响应恢复写入器。
-func setAPIKeyModelRedirectContext(c *gin.Context, sourceModel, targetModel string) {
+func setAPIKeyModelRedirectContext(c *gin.Context, sourceModel, targetModel string, groups ...*service.Group) {
 	clientModel := strings.TrimSpace(sourceModel)
 	responseModel := clientModel
 	if compositeClient, compositeActual, ok := GetCompositeModelFromContext(c); ok {
@@ -89,7 +89,11 @@ func setAPIKeyModelRedirectContext(c *gin.Context, sourceModel, targetModel stri
 	}
 	c.Request = c.Request.WithContext(ctx)
 	// Seedance 只改写出站模型，返回的 task id/model 等原生字段不能被别名替换。
-	if isSeedanceTaskAPIPath(c.Request.URL.Path) {
+	var group *service.Group
+	if len(groups) > 0 {
+		group = groups[0]
+	}
+	if isVideoPayloadPreservingPath(c.Request.URL.Path, group) {
 		return
 	}
 	c.Writer = &apiKeyModelResponseWriter{

@@ -1,6 +1,6 @@
 # 上游账号能力矩阵
 
-本文统一记录 TokenRouter 十一个平台、七类账号和公开网关协议的当前支持边界。它是账号能力的路由入口，不替代各平台专题中的认证、转换、限流和诊断细节，也不把数据导入器能够保存的历史组合视为正式支持。
+本文统一记录 TokenRouter 十二个平台、七类账号和公开网关协议的当前支持边界。它是账号能力的路由入口，不替代各平台专题中的认证、转换、限流和诊断细节，也不把数据导入器能够保存的历史组合视为正式支持。
 
 ## 章节导航
 
@@ -12,7 +12,7 @@
 
 ## 判定口径
 
-后端常量定义十一个平台 `anthropic`、`openai`、`gemini`、`antigravity`、`grok`、`qoder`、`kimi`、`zhipu`、`deepseek`、`minimax`、`opencode_go`，以及七类账号 `oauth`、`setup-token`、`apikey`、`upstream`、`bedrock`、`service_account`、`cosy`。矩阵使用以下等级：
+后端常量定义十二个平台 `anthropic`、`openai`、`gemini`、`antigravity`、`grok`、`qoder`、`kimi`、`zhipu`、`deepseek`、`minimax`、`opencode_go`、`video`，以及七类账号 `oauth`、`setup-token`、`apikey`、`upstream`、`bedrock`、`service_account`、`cosy`。矩阵使用以下等级：
 
 - **正式支持**：管理端有创建或授权流程，平台运行时也有对应凭据、转发和维护契约。
 - **兼容保留**：通用创建/导入层可以保存，或旧运行路径仍会识别，但管理端不推荐该组合；不能据此推导完整平台能力。
@@ -36,8 +36,9 @@
 | DeepSeek | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 | MiniMax | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 | OpenCode Zen / GO | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| Video | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 
-API Key 账号可以在管理员列表配置并手动查询上游用量。普通兼容上游缺省使用 Sub2API 适配器，New API 和 Zivv 必须显式选择；Kimi、Zhipu、DeepSeek、MiniMax 则由平台与 `account_mode` 自动选择固定只读适配器，Zhipu payg 和 MiniMax payg 因没有接入公开余额协议而明确不支持。手动查询协议错误只影响展示，不改变转发资格。API Key 行同时保留 TokenRouter 本地今日统计/本地配额和上游余额/周期限额两个来源；只有显式开启的 CN 周期监控可以把同一查询结果写入统一快照并形成身份绑定的临时停调，详见[API Key 上游用量查询](upstream_usage.md)。
+除独立 Video 平台外，API Key 账号可以在管理员列表配置并手动查询上游用量。普通兼容上游以及 OpenCode Zen、Zhipu payg、MiniMax payg 缺省使用 Sub2API 适配器，New API 和 Zivv 必须显式选择；实际站点须支持所选协议。Kimi、DeepSeek、Coding Plan 与 OpenCode GO 的原生查询仍按平台和模式固定适配器。手动查询协议错误只影响展示，不改变转发资格。API Key 行同时保留 TokenRouter 本地今日统计/本地配额和上游余额/周期限额两个来源；只有显式开启且具备原生协议资格的 CN/GO 周期监控可以写统一快照并形成身份绑定的临时停调，三个新增按量模式不进入监控，详见[API Key 上游用量查询](upstream_usage.md)。
 
 Kimi、Zhipu 和 DeepSeek 只接受 `type=apikey`。`credentials.account_mode` 为 `payg` 或 `coding`，其中 DeepSeek 不支持 `coding`；`credentials.api_protocol` 支持 `chat_completions`、`anthropic` 和 `adaptive`，Kimi、DeepSeek 还支持 `responses`。历史账号缺少这两个字段时分别按 `payg` 和 `chat_completions` 读取。自定义 `base_url`、代理、TLS 指纹与受保护的 Header Override 沿用共同传输边界，平台身份不能从中继 URL 反推。
 
@@ -57,10 +58,22 @@ OpenCode 以 `opencode_go` 平台和 `account_mode=zen|go` 接入，按映射后
 - [Qoder 原生上游](qoder_upstream.md)
 - [MiniMax 上游](minimax_upstream.md)
 - [OpenCode 上游](opencode_upstream.md)
+- [独立 Video 上游](video_upstream.md)
 
 Kimi、Zhipu、DeepSeek 的账号类型、模式与协议矩阵暂由本页和[API Key 上游用量查询](upstream_usage.md)共同拥有；新增独立认证、OAuth 或供应商专属管理 API 前必须先建立对应平台专题。
 
 <a id="public_gateway_protocols"></a>
+<a id="video_account"></a>
+### 独立 Video 账号与管理表单
+
+`platform=video` 只接受 API Key，账号只绑定 Video 分组。`video_endpoints` 选择 `compat`、`openai_videos`、`seedance`、`kling`、`wan`、`minimax`；创建不默认勾选任何端点，编辑保留明确保存的选择，缺失配置不补默认能力。`base_url` 为共享端点，`video_base_urls` 可逐端点覆盖。`video_model_bindings` 的键是映射后的上游模型名，值兼容旧单端点字符串和多端点数组，未绑定模型继承账号端点。原生请求只使用同协议上游；统一 `/v1/video/generations` 必须明确启用 `compat`，`/v1/videos` 必须明确启用 `openai_videos`，并同时满足模型绑定。两个入口互不回退，也不默认兼容原生端点；遗留 `video_model_paths` 不授予入口资格。已受理任务仍沿用冻结的协议。API Key、模型白名单/映射、Header Override、代理、本地配额、优先级和并发设置保留；不提供 OAuth、文本协议、文本连接测试、定时测试或上游用量查询配置。
+
+创建和编辑共用 `VideoAccountFields.vue` 与 `videoAccountConfig.ts`。`video_max_pending_tasks` 默认 10、范围 1–1000；可选 `video_max_duration_seconds` 不改变生成参数，仅供需要预扣的自动时长任务估算预算。账号不再提供 Token 预留上限，遗留字段不影响新任务并在保存时清理；已受理任务继续按自身快照结算。Token 模型预扣开关和固定秒价改由用户模型价卡设置，完成后按实际 Token 退补差。具体资金边界见[视频任务结算](../domains/video_tasks.md#video_task_billing)。
+
+Video 分组管理只展示通用权益与视频定价，不提供文本高级调度、探活、聊天协议和跨组降级设置。视频定价复用分组 `model_pricing` 与渠道 `model_pricing`，`video_prices` 每个 `resolution` 只设置一个 `price`，不区分有无参考视频。`video_token` 为美元/百万 Token，`video` 为美元/秒，`video_per_request` 为美元/成功任务；空价不提交，显式 0 保留为免费。分辨率只显示已配置及手动新增的档位，另可显式设置兜底价。旧双条件行加载时按分辨率合并，保存使用新单价格式。分组价优先于渠道，`video_rate_independent` / `video_rate_multiplier` 沿用跟随分组或独立视频倍率语义；显式按次或 Token 报价不借用旧 Grok 秒价字段。三种模式均可配置不参与倍率的参考图片附加费，Token 秒价预扣开关仅适用于 Token 模式，按次直接预留一次费用。
+
+管理端导入导出继续使用通用账号数据格式，完整保留视频凭据字段，不将 Video 转成 Gemini 或 OpenAI。任务记录沿用媒体任务界面与受控预览，新增 `source=video` 和 `video_billing` 计费状态、预留与实际金额。详情不根据任务成功自行推算已扣费，缺失实际金额与显式零消费分别展示。
+
 ## 公开网关协议
 
 文本生成协议是否可进入处理器由分组的 `allowed_client_protocols` 控制。支持集合、新建默认值和迁移值如下；默认值只决定初始选择，所有协议都可关闭：
@@ -78,11 +91,13 @@ Kimi、Zhipu、DeepSeek 的账号类型、模式与协议矩阵暂由本页和[A
 | DeepSeek | Messages、Responses、Chat | 三项全部启用 | 不适用，新增平台 |
 | MiniMax | Messages、Responses、Chat | 三项全部启用 | 不适用，新增平台 |
 | OpenCode Zen / GO | Messages、Responses、Chat | 三项全部启用 | 不适用，新增平台 |
+| Video | 无文本协议 | 空集合 | 不适用，新增平台 |
 
 集合顺序固定为 Messages、Responses、Chat、Gemini，空集合对所有平台都合法。准入只控制文本生成协议；Live、WebSocket、Embedding、图片和视频继续使用独立能力规则。
 
 | 协议族或入口 | 当前平台边界 | 专题路由 |
 | --- | --- | --- |
+| 独立视频：`/v1/video/generations`、`/v1/videos` 及原生视频路径 | Video API Key 与 Video 分组；原生请求参数保真，同模型多端点按入站协议自适应；Ark 路径兼容保留 OpenAI Seedance，`/v1/videos` 按平台与 Grok 分流 | [独立 Video 上游](video_upstream.md) |
 | Anthropic Messages：`/v1/messages` | 十一个平台均有平台分派；最终分组允许 Messages 时按平台转换或原生转发 | 各平台契约；共同链路见[网关请求生命周期](../architecture/gateway_request_lifecycle.md) |
 | Anthropic token count：`/v1/messages/count_tokens`、`/messages/count_tokens` | Anthropic、OpenAI、Gemini 进入各自统计路径，Grok、OpenCode 与四个 CN 平台使用本地估算；Antigravity、Qoder 明确返回 `404`，Anthropic Bedrock 账号也不支持 | 各平台契约；客户端仍应保留本地估算回退 |
 | OpenAI Responses：`/v1/responses`、`/responses` 及允许的子路径 | 十一个平台在最终分组允许 Responses 时进入平台适配；Kimi/Zhipu 不要求账号拥有上游原生 Responses，DeepSeek、MiniMax 可显式使用其 `/responses`；Qoder 不支持 Responses 子路径和 WebSocket | 各平台契约；WebSocket/Realtime 重点见 [OpenAI 上游](openai_upstream.md) |
@@ -93,6 +108,7 @@ Kimi、Zhipu、DeepSeek 的账号类型、模式与协议矩阵暂由本页和[A
 | 同步图片生成/编辑 | 仅 OpenAI 与 Grok；分组图片开关和账号能力继续收窄范围 | [OpenAI 上游](openai_upstream.md)、[Grok / xAI 上游](grok_upstream.md) |
 | 批量图片作业 | Gemini/Vertex 使用独立任务生命周期；供应商范围由批量图片领域契约定义 | [批量图片作业](../domains/batch_image_jobs.md) |
 | Grok 视频生成、编辑、扩展、查询和下载 | Grok 原生视频入口；复合 Key 可凭持久任务绑定查询既有任务 | [Grok / xAI 上游](grok_upstream.md) |
+| 独立 Video 统一及供应商原生视频入口 | 仅 Video API Key 与 Video 分组，持久任务保存创建归属、预算及结算状态；文本协议集合为空 | [独立 Video 账号与管理表单](#video_account) |
 | Seedance 原生视频创建、查询、删除 | OpenAI API Key、自定义 Base URL、显式 `seedance` 能力；查询按创建归属固定账号 | [Seedance 上游](seedance_upstream.md) |
 | Gemini v1beta：`/v1beta/models/*` | Gemini/Antigravity 分组允许 Gemini 协议时承接生成、流式生成和 token 统计；模型列表 GET 不受开关影响 | [Gemini 上游](gemini_upstream.md)、[Antigravity 上游](antigravity_upstream.md) |
 | Antigravity 专用入口：`/antigravity/*` | 强制只选择 Antigravity 账号，不参与混合调度 | [Antigravity 上游](antigravity_upstream.md) |
@@ -111,7 +127,7 @@ Kimi、Zhipu、DeepSeek 的账号类型、模式与协议矩阵暂由本页和[A
 4. OAuth-only、隐私状态、客户端限制、transport capability 和站点/区域等平台策略通过。
 5. 并发槽、等待队列和粘性约束允许本次选择。
 
-管理员账号连接测试的 `test_endpoint` 是仅作用于本次测试的诊断选择，不增加账号的正式网关能力，也不改写已保存的协议。兼容 API Key 可以分别验证 Chat Completions、Responses、Messages；OAuth 等专用凭据仍限制为已有原生协议，Zhipu 不提供原生 Responses，OpenCode Jev 保留独立 System One。具体选项和回退规则见[管理员账号连接测试](http_api.md#account_connection_tests)。
+独立 Video 不提供管理员连接或定时生成测试，避免文本探测和隐式付费视频生成。管理员账号连接测试的 `test_endpoint` 是仅作用于本次测试的诊断选择，不增加账号的正式网关能力，也不改写已保存的协议。兼容 API Key 可以分别验证 Chat Completions、Responses、Messages；OAuth 等专用凭据仍限制为已有原生协议，Zhipu 不提供原生 Responses，OpenCode Jev 保留独立 System One。具体选项和回退规则见[管理员账号连接测试](http_api.md#account_connection_tests)。
 
 账号选择和快照一致性见[账号调度与缓存一致性](../architecture/account_scheduling_and_cache.md)，分组/渠道策略见[网关策略控制](../domains/gateway_policy_controls.md)，凭据和健康恢复见[账号维护](../operations/account_maintenance.md)。
 

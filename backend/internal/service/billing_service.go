@@ -1420,20 +1420,24 @@ func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing
 
 // CostInput 统一计费输入
 type CostInput struct {
-	Ctx             context.Context
-	Model           string
-	GroupID         *int64 // 用于渠道定价查找
-	Group           *Group
-	Tokens          UsageTokens
-	RequestCount    int     // 按次计费时使用
-	UsageUnits      float64 // 音频等连续计量单位（分钟/小时/百万字符）
-	SizeTier        string  // 按次/图片模式的层级标签（"1K","2K","4K","HD" 等）
-	RateMultiplier  float64
-	PricingAt       time.Time             // 渠道分时定价使用的计费时刻
-	ServiceTier     string                // "priority","flex","" 等
-	ReasoningEffort string                // 最终转发的推理档位，按已配置档位倍率及旧 Max 回退结算
-	Resolver        *ModelPricingResolver // 定价解析器
-	Resolved        *ResolvedPricing      // 可选：预解析的定价结果（避免重复 Resolve 调用）
+	Ctx                      context.Context
+	Model                    string
+	GroupID                  *int64 // 用于渠道定价查找
+	Group                    *Group
+	Tokens                   UsageTokens
+	RequestCount             int     // 按次计费时使用
+	UsageUnits               float64 // 音频等连续计量单位（分钟/小时/百万字符）
+	SizeTier                 string  // 按次/图片模式的层级标签（"1K","2K","4K","HD" 等）
+	VideoResolution          string  // 视频专用分辨率，不使用图片或聊天上下文档位
+	HasReferenceVideo        bool
+	VideoTokens              *int64 // nil 表示缺少可信用量，显式零值可以结算为免费
+	VideoReferenceImageCount *int   // 仅视频固定附加费使用，未知图片数量不能作为零张收费
+	RateMultiplier           float64
+	PricingAt                time.Time             // 渠道分时定价使用的计费时刻
+	ServiceTier              string                // "priority","flex","" 等
+	ReasoningEffort          string                // 最终转发的推理档位，按已配置档位倍率及旧 Max 回退结算
+	Resolver                 *ModelPricingResolver // 定价解析器
+	Resolved                 *ResolvedPricing      // 可选：预解析的定价结果（避免重复 Resolve 调用）
 }
 
 // CalculateCostUnified 统一计费入口，支持三种计费模式。
@@ -1466,7 +1470,15 @@ func (s *BillingService) CalculateCostUnified(input CostInput) (*CostBreakdown, 
 	var breakdown *CostBreakdown
 	var err error
 	switch resolved.Mode {
-	case BillingModePerRequest, BillingModeImage, BillingModeVideo:
+	case BillingModeVideoToken, BillingModeVideoPerRequest:
+		breakdown, err = calculateVideoMatrixCost(input, resolved)
+	case BillingModeVideo:
+		if resolved.channelPricing != nil && (len(resolved.channelPricing.VideoPrices) > 0 || resolved.channelPricing.VideoImageInputPricing != nil || resolved.channelPricing.VideoFallbackPrice != nil) {
+			breakdown, err = calculateVideoMatrixCost(input, resolved)
+		} else {
+			breakdown, err = s.calculatePerRequestCost(resolved, input)
+		}
+	case BillingModePerRequest, BillingModeImage:
 		breakdown, err = s.calculatePerRequestCost(resolved, input)
 	default: // BillingModeToken
 		breakdown, err = s.calculateTokenCost(resolved, input)
@@ -2049,13 +2061,21 @@ type ModelDisplayPricing struct {
 	ImagePrice2K                  float64
 	ImagePrice4K                  float64
 	VideoPrices                   []ModelDisplayVideoPrice
+	VideoImageInputPricing        *VideoImageInputPricing
+	VideoFallbackPrice            *float64
+	VideoFallbackPricing          *ModelDisplayVideoPrice
+	VideoTokenPrepay              *VideoTokenPrepayConfig
 }
 
 // ModelDisplayVideoPrice 保留视频分辨率和计费单位，兼容按秒及历史按次渠道价格。
 type ModelDisplayVideoPrice struct {
-	Resolution string
-	Price      float64
-	Unit       string
+	Resolution        string
+	HasReferenceVideo *bool // 仅兼容历史双条件展示，新视频分辨率单价保持 nil。
+	Price             float64
+	Unit              string
+	// 附加费和预扣跟随各档实际合同，不能从模型首个档位继承。
+	VideoImageInputPricing *VideoImageInputPricing
+	VideoTokenPrepay       *VideoTokenPrepayConfig
 }
 
 // ModelDisplayPricingInterval 是按上下文 token 区间展示的模型价格。

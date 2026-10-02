@@ -15,6 +15,15 @@ vi.mock('vue-i18n', async () => {
 })
 
 describe('PlatformTypeBadge', () => {
+  it('Video renders its own icon and label without Gemini fallback', () => {
+    const wrapper = mount(PlatformTypeBadge, { props: { platform: 'video', type: 'apikey' } })
+    expect(wrapper.text()).toContain('Video')
+    expect(wrapper.text()).not.toContain('Gemini')
+    expect(wrapper.html()).toContain('violet')
+    expect(wrapper.find('[data-testid="video-platform-icon"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it.each([
     ['pro', 'Pro 200', 'bg-violet-100'],
     ['CHATGPTPRO', 'Pro 200', 'bg-violet-100'],

@@ -310,6 +310,9 @@ func (r *usageBillingRepository) applyBatchImageBalanceHold(
 	if r == nil || r.db == nil {
 		return nil, errors.New("usage billing repository db is nil")
 	}
+	if (cmd.VideoDeferredBilling || cmd.VideoTokenPrepay || cmd.VideoPrepayDurationSeconds != 0 || cmd.VideoFixedAmountUSD != 0 || cmd.VideoActualFixedAmountUSD != 0) && !cmd.VideoEntity {
+		return nil, service.ErrVideoTaskConflict
+	}
 	cmd.Normalize()
 	if cmd.RequestID == "" {
 		return nil, service.ErrUsageBillingRequestIDRequired
@@ -349,13 +352,31 @@ func (r *usageBillingRepository) applyBatchImageBalanceHoldOnce(
 		return nil, err
 	}
 	if !applied {
+		if cmd.VideoEntity && (cmd.VideoDeferredBilling || cmd.VideoTokenPrepay || cmd.VideoFixedAmountUSD > 0) && operation == batchImageAllowanceCapture {
+			return readVideoBillingCaptureResult(ctx, tx, cmd)
+		}
 		return batchImageBillingResultForCommand(cmd, operation), nil
 	}
 	if err := lockUsageBillingUser(ctx, tx, cmd.UserID); err != nil {
 		return nil, err
 	}
 
-	result, err := apply(ctx, tx, cmd)
+	if cmd.VideoEntity {
+		if err := guardVideoBudgetOperation(ctx, tx, cmd, operation); err != nil {
+			return nil, err
+		}
+	}
+	// 未配置 Token 预算的视频仅在完成时按实际金额严格分配，不能套用旧图片的零预占兜底。
+	deferredCapture := cmd.VideoEntity && cmd.VideoDeferredBilling && operation == batchImageAllowanceCapture
+	prepayCapture := cmd.VideoEntity && cmd.VideoTokenPrepay && operation == batchImageAllowanceCapture
+	var result *service.BatchImageBalanceHoldResult
+	if prepayCapture {
+		result, err = captureVideoTokenPrepayBudget(ctx, tx, cmd)
+	} else if deferredCapture {
+		result, err = captureDeferredVideoBudget(ctx, tx, cmd)
+	} else {
+		result, err = apply(ctx, tx, cmd)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -363,8 +384,15 @@ func (r *usageBillingRepository) applyBatchImageBalanceHoldOnce(
 		result = &service.BatchImageBalanceHoldResult{}
 	}
 	result.Applied = true
-	if err := applyBatchImageAllowance(ctx, tx, cmd, operation); err != nil {
-		return nil, err
+	if !deferredCapture && !prepayCapture {
+		if err := applyBatchImageAllowance(ctx, tx, cmd, operation); err != nil {
+			return nil, err
+		}
+	}
+	if cmd.VideoEntity {
+		if err := finishVideoBudgetOperation(ctx, tx, cmd, operation, result); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -419,7 +447,7 @@ func applyBatchImageAllowance(ctx context.Context, tx *sql.Tx, cmd *service.Batc
 		if cmd.AllowanceReserved {
 			adjustment := cmd.HoldAmount - cmd.ActualAmount
 			if adjustment > 0 {
-				if err := rollbackBatchImageAllowanceBestEffort(ctx, tx, cmd.BatchID, func() error {
+				if err := rollbackTaskAllowance(ctx, tx, cmd, func() error {
 					if err := releaseBatchImageAPIKeyAllowance(ctx, tx, cmd.APIKeyID, adjustment, cmd.ReservedAt); err != nil {
 						return err
 					}
@@ -442,7 +470,7 @@ func applyBatchImageAllowance(ctx context.Context, tx *sql.Tx, cmd *service.Batc
 		return setBatchImageAllowanceReserved(ctx, tx, cmd, false)
 	case batchImageAllowanceRelease:
 		if cmd.AllowanceReserved {
-			if err := rollbackBatchImageAllowanceBestEffort(ctx, tx, cmd.BatchID, func() error {
+			if err := rollbackTaskAllowance(ctx, tx, cmd, func() error {
 				if err := releaseBatchImageAPIKeyAllowance(ctx, tx, cmd.APIKeyID, cmd.HoldAmount, cmd.ReservedAt); err != nil {
 					return err
 				}
@@ -455,6 +483,14 @@ func applyBatchImageAllowance(ctx context.Context, tx *sql.Tx, cmd *service.Batc
 	default:
 		return nil
 	}
+}
+
+// 独立视频任务有持久重试器，额度回退失败时应一起回滚并等待恢复；旧图片保持原行为。
+func rollbackTaskAllowance(ctx context.Context, tx *sql.Tx, cmd *service.BatchImageBalanceHoldCommand, rollback func() error) error {
+	if cmd.VideoEntity {
+		return rollback()
+	}
+	return rollbackBatchImageAllowanceBestEffort(ctx, tx, cmd.BatchID, rollback)
 }
 
 // rollbackBatchImageAllowanceBestEffort 用保存点隔离额度回退故障。
@@ -500,8 +536,14 @@ func setBatchImageAllowanceReserved(ctx context.Context, tx *sql.Tx, cmd *servic
 }
 
 // batchImageBillingEntityTable 返回计费命令对应的任务表与标识列。
-// 表名只能取白名单内的两个值：批量图片作业用 batch_image_jobs，创作台任务用 creative_runs。
+// 表名只取白名单：批量图片作业、创作台任务和独立视频任务使用各自的实体表。
 func batchImageBillingEntityTable(cmd *service.BatchImageBalanceHoldCommand) (table string, idColumn string, err error) {
+	if cmd != nil && cmd.VideoEntity {
+		if cmd.CreativeEntity {
+			return "", "", service.ErrVideoTaskConflict
+		}
+		return "video_tasks", "id", nil
+	}
 	if cmd != nil && cmd.CreativeEntity {
 		return "creative_runs", "run_id", nil
 	}
@@ -509,8 +551,11 @@ func batchImageBillingEntityTable(cmd *service.BatchImageBalanceHoldCommand) (ta
 }
 
 // batchImageHoldClaimRequestID 返回预占认领（dedup）记录的 request id：
-// 创作台任务用 creative_hold 前缀，批量图片作业沿用 batch_image_hold 前缀。
+// 创作台任务用 creative_hold，视频用 video_hold，批量图片沿用 batch_image_hold 前缀。
 func batchImageHoldClaimRequestID(cmd *service.BatchImageBalanceHoldCommand) string {
+	if cmd != nil && cmd.VideoEntity {
+		return "video_hold:" + strings.TrimSpace(cmd.BatchID)
+	}
 	if cmd != nil && cmd.CreativeEntity {
 		return service.CreativeHoldRequestID(strings.TrimSpace(cmd.BatchID))
 	}
@@ -1063,6 +1108,12 @@ func allocateUsageBillingSubscriptions(ctx context.Context, tx *sql.Tx, cmd *ser
 				rateMultiplier = usageBillingSubscriptionRateMultiplier(row, cmd.GroupID, cmd.SubscriptionRateMultiplier, cmd.SubscriptionRateMultiplierScale)
 			}
 			if rateMultiplier <= 0 {
+				if cmd.PreserveZeroRateAllocation {
+					// 视频捕获依赖基础用量快照，免费订阅覆盖也必须保留；其他业务仍保持原分配形状。
+					subscriptionID, planID := row.ID, row.PlanID
+					allocations = append(allocations, domain.BillingAllocation{Type: domain.BillingAllocationTypeSubscription,
+						SubscriptionID: &subscriptionID, PlanID: &planID, BaseAmountUSD: remaining})
+				}
 				remaining = 0
 				break
 			}
@@ -1304,6 +1355,16 @@ func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, am
 // reserveUsageBillingBatchImageBilling 先预占订阅额度，再冻结未覆盖的按量余额。
 func reserveUsageBillingBatchImageBilling(ctx context.Context, tx *sql.Tx, cmd *service.BatchImageBalanceHoldCommand) (*service.BatchImageBalanceHoldResult, error) {
 	result := &service.BatchImageBalanceHoldResult{}
+	if cmd != nil && cmd.VideoEntity && cmd.VideoTokenPrepay {
+		return reserveVideoTokenPrepayBudget(ctx, tx, cmd)
+	}
+	if cmd != nil && cmd.VideoEntity && cmd.VideoFixedAmountUSD > 0 {
+		if cmd.VideoDeferredBilling {
+			// 无 Token 预算的任务连同已知图片附加费一起延后结算。
+			return result, nil
+		}
+		return reserveVideoFixedBudget(ctx, tx, cmd)
+	}
 	if cmd == nil || (cmd.HoldAmount <= 0 && cmd.BaseAmountUSD <= 0) {
 		return result, nil
 	}
@@ -1319,6 +1380,7 @@ func reserveUsageBillingBatchImageBilling(ctx context.Context, tx *sql.Tx, cmd *
 		BalanceRateMultiplier:           cmd.BalanceRateMultiplier,
 		DisablePlanGroupRateMultiplier:  cmd.DisablePlanGroupRateMultiplier,
 		IncludeAllocationPricing:        cmd.PricingSnapshotVersion >= 2,
+		PreserveZeroRateAllocation:      cmd.VideoEntity,
 	}
 	allocationCommand.Normalize()
 	remainingBase, subscriptionAmount, allocations, err := allocateUsageBillingSubscriptions(ctx, tx, allocationCommand)
@@ -1472,6 +1534,9 @@ func releaseBatchImageSubscriptionAllocations(ctx context.Context, tx *sql.Tx, c
 	if cmd == nil {
 		return nil
 	}
+	if cmd.VideoEntity {
+		return releaseVideoSubscriptionAllocations(ctx, tx, cmd, allocations)
+	}
 	for _, allocation := range allocations {
 		if allocation.Type != domain.BillingAllocationTypeSubscription || allocation.SubscriptionID == nil || allocation.AmountUSD <= 0 {
 			continue
@@ -1543,11 +1608,15 @@ func batchImageBillingResultForCommand(cmd *service.BatchImageBalanceHoldCommand
 	}
 	result.HoldAmountUSD = result.SubscriptionAmountUSD + result.BalanceAmountUSD
 	result.EstimatedAmountUSD = result.HoldAmountUSD
-	if cmd.PricingSnapshotVersion >= 2 && cmd.BaseAmountUSD > 0 {
+	if !cmd.VideoTokenPrepay && cmd.PricingSnapshotVersion >= 2 && (cmd.BaseAmountUSD > 0 || cmd.VideoFixedAmountUSD > 0) {
 		captureCommand := *cmd
 		captureCommand.ActualBaseAmountUSD = cmd.BaseAmountUSD
+		captureCommand.VideoActualFixedAmountUSD = cmd.VideoFixedAmountUSD
 		if plan, err := service.PlanBatchImageBillingCapture(&captureCommand); err == nil {
 			result.EstimatedAmountUSD = plan.ActualAmountUSD
+			if cmd.VideoFixedAmountUSD > 0 {
+				result.BillingAllocations = plan.BillingAllocations
+			}
 		}
 	}
 	return result

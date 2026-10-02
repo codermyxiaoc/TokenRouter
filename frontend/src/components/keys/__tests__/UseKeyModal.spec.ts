@@ -22,6 +22,28 @@ vi.mock('@/composables/useClipboard', () => ({
 import UseKeyModal from '../UseKeyModal.vue'
 
 describe('UseKeyModal', () => {
+  // 引导保留部署前缀、消除版本后缀，空白配置回退本站，不假设任何兼容入口已启用。
+  it.each([
+    { baseUrl: 'https://example.test', expected: 'https://example.test' },
+    { baseUrl: 'https://example.test/v1/', expected: 'https://example.test' },
+    { baseUrl: 'https://example.test/', expected: 'https://example.test' },
+    { baseUrl: 'https://example.test/v1', expected: 'https://example.test' },
+    { baseUrl: ' https://example.test/gateway/v1/ ', expected: 'https://example.test/gateway' },
+    { baseUrl: 'https://example.test/gateway/', expected: 'https://example.test/gateway' },
+    { baseUrl: '', expected: window.location.origin },
+    { baseUrl: '   ', expected: window.location.origin },
+  ])('Video shows only the gateway URL for "$baseUrl" without assuming a route', ({ baseUrl, expected }) => {
+    const wrapper = mount(UseKeyModal, { props: { show: true, platform: 'video', apiKey: 'sk-video', baseUrl },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } } })
+    expect(wrapper.get('[data-testid="video-key-guide"] code').text()).toBe(expected)
+    expect(wrapper.text()).not.toContain('/v1/video/generations')
+    expect(wrapper.text()).not.toContain('/v1/videos')
+    expect(wrapper.text()).not.toContain('sk-video')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.cliTabs')
+    expect(wrapper.text()).not.toContain('Gemini')
+    wrapper.unmount()
+  })
+
   it('Claude-only 隐藏未验证客户端，并且降级配置只使用双方启用的协议', async () => {
     const wrapper = mount(UseKeyModal, {
       props: { show: true, apiKey: 'sk-test', baseUrl: 'https://example.com', platform: 'anthropic',
@@ -165,7 +187,8 @@ describe('UseKeyModal', () => {
         platform: null,
         compositeGroups: [
           { group_id: 7, prefix: 'GPT', group: { id: 7, name: 'OpenAI', platform: 'openai' } },
-          { group_id: 8, prefix: 'Claude', group: { id: 8, name: 'Anthropic', platform: 'anthropic' } }
+          { group_id: 8, prefix: 'Claude', group: { id: 8, name: 'Anthropic', platform: 'anthropic' } },
+          { group_id: 9, prefix: 'Video', group: { id: 9, name: 'Video', platform: 'video' } }
         ]
       },
       global: {
@@ -182,13 +205,17 @@ describe('UseKeyModal', () => {
 
     expect(wrapper.text()).toContain('GPT/gpt-5')
     expect(wrapper.text()).toContain('Claude/claude-sonnet-4')
+    expect(wrapper.text()).toContain('Video/video-model')
+    expect(wrapper.text()).not.toContain('Video/claude-sonnet-4')
     // 每个示例的复制按钮必须复制带前缀模型，而不是内部真实模型。
     const copyButtons = wrapper.findAll('button').filter((button) =>
       button.text().includes('keys.useKeyModal.copy')
     )
-    expect(copyButtons).toHaveLength(2)
+    expect(copyButtons).toHaveLength(3)
     await copyButtons[1]!.trigger('click')
     expect(copyToClipboardMock).toHaveBeenCalledWith('Claude/claude-sonnet-4', 'keys.copied')
+    await copyButtons[2]!.trigger('click')
+    expect(copyToClipboardMock).toHaveBeenCalledWith('Video/video-model', 'keys.copied')
   })
 
   it('renders Grok Build and OpenCode setup for Grok groups', async () => {

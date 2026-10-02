@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CONCRETE_PLATFORM_OPTIONS, GROUP_PLATFORM_OPTIONS } from '@/constants/platforms'
 
+// 独立 Video 必须出现在账号和分组筛选中，同时保留原有平台的顺序。
 const concretePlatforms = [
   'anthropic',
   'openai',
@@ -12,7 +13,8 @@ const concretePlatforms = [
   'zhipu',
   'deepseek',
   'minimax',
-  'opencode_go'
+  'opencode_go',
+  'video'
 ]
 
 describe('platform option catalogs', () => {

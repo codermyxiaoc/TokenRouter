@@ -339,6 +339,19 @@
         </div>
 
         <!-- 图片或视频计费模式。 -->
+        <div
+          v-else-if="entry.billing_mode === 'video_token' || entry.billing_mode === 'video_per_request' || (platform === 'video' && entry.billing_mode === 'video')"
+        >
+          <VideoPricingMatrix :model-value="entry.video_prices" :mode="entry.billing_mode" @update:model-value="emit('update', { ...entry, video_prices: $event })" />
+          <label v-if="platform === 'video' && !hideVideoUserPricing" class="mt-4 block" data-testid="video-fallback-price-field">
+            <span class="input-label">{{ t('admin.channels.videoPricing.fallbackPrice') }} <span class="text-xs text-gray-400">{{ entry.billing_mode === 'video_token' ? '$/1M Token' : entry.billing_mode === 'video_per_request' ? t('admin.channels.videoPricing.perRequestUnit') : '$/s' }}</span></span>
+            <input class="input" type="number" min="0" step="any" data-testid="video-fallback-price" :value="entry.video_fallback_price" :placeholder="t('admin.channels.videoPricing.unconfigured')" @input="emitField('video_fallback_price', ($event.target as HTMLInputElement).value)" />
+            <span class="input-hint block">{{ t('admin.channels.videoPricing.fallbackHint') }}</span>
+          </label>
+          <VideoTokenPrepay v-if="platform === 'video' && entry.billing_mode === 'video_token' && !hideVideoUserPricing" :model-value="entry.video_token_prepay" @update:model-value="emit('update', { ...entry, video_token_prepay: $event })" />
+          <p v-if="entry.billing_mode === 'video_per_request' && !hideVideoUserPricing" class="input-hint mt-3">{{ t('admin.channels.videoPricing.perRequestHint') }}</p>
+          <VideoImageInputPricing v-if="platform === 'video' && !hideVideoUserPricing" :model-value="entry.video_image_input_pricing" @update:model-value="emit('update', { ...entry, video_image_input_pricing: $event })" />
+        </div>
         <div v-else-if="entry.billing_mode === 'image' || entry.billing_mode === 'video'">
           <!-- Default image price (per-request, same as per_request mode) -->
           <label class="mt-3 block text-xs font-medium text-gray-500 dark:text-gray-400">
@@ -380,6 +393,9 @@
 </template>
 
 <script setup lang="ts">
+import VideoPricingMatrix from './VideoPricingMatrix.vue'
+import VideoTokenPrepay from './VideoTokenPrepay.vue'
+import VideoImageInputPricing from './VideoImageInputPricing.vue'
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
@@ -401,11 +417,13 @@ const props = withDefaults(defineProps<{
   hideTokenIntervals?: boolean
   enableTimePricing?: boolean
   enableTierMultipliers?: boolean
+  hideVideoUserPricing?: boolean
 }>(), {
   showFastModeMultiplier: false,
   hideTokenIntervals: false,
   enableTimePricing: false,
   enableTierMultipliers: false,
+  hideVideoUserPricing: false,
 })
 
 const emit = defineEmits<{
@@ -416,7 +434,11 @@ const emit = defineEmits<{
 // Collapse state: entries with existing models default to collapsed
 const collapsed = ref(props.entry.models.length > 0)
 
-const billingModeOptions = computed(() => [
+const billingModeOptions = computed(() => props.platform === 'video' ? [
+  { value: 'video_token', label: t('admin.channels.billingMode.videoToken') },
+  { value: 'video', label: t('admin.channels.billingMode.videoSeconds') },
+  { value: 'video_per_request', label: t('admin.channels.billingMode.videoPerRequest') },
+] : [
   { value: 'token', label: 'Token' },
   { value: 'per_request', label: t('admin.channels.billingMode.perRequest', '按次') },
   { value: 'image', label: t('admin.channels.billingMode.image', '图片（按次）') },
@@ -465,6 +487,10 @@ function onBillingModeUpdate(billingMode: BillingMode) {
   emit('update', {
     ...props.entry,
     billing_mode: billingMode,
+    video_prices: ['video', 'video_token', 'video_per_request'].includes(billingMode) ? props.entry.video_prices : [],
+    video_image_input_pricing: ['video', 'video_token', 'video_per_request'].includes(billingMode) ? props.entry.video_image_input_pricing : null,
+    video_fallback_price: ['video', 'video_token', 'video_per_request'].includes(billingMode) ? props.entry.video_fallback_price : null,
+    video_token_prepay: billingMode === 'video_token' ? props.entry.video_token_prepay : null,
     fast_mode_multiplier: billingMode === 'token' ? props.entry.fast_mode_multiplier : null,
     fast_multiplier: billingMode === 'token' ? props.entry.fast_multiplier : null,
     flex_multiplier: billingMode === 'token' ? props.entry.flex_multiplier : null,
@@ -521,6 +547,8 @@ function removeInterval(idx: number) {
 async function onModelsUpdate(newModels: string[]) {
   const oldModels = props.entry.models
   emit('update', { ...props.entry, models: newModels })
+  // 视频只能显式配置矩阵价格，不使用文本默认价自动填充。
+  if (props.platform === 'video') return
 
   // 只在新增模型且当前无价格时自动填充
   const addedModels = newModels.filter(m => !oldModels.includes(m))

@@ -1024,6 +1024,28 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 // 若不存在白名单，则请求模型空间不受限制，返回 nil 表示调用方应回退到默认模型列表。
 func (a *Account) GetConfiguredRequestModels() []string {
 	mapping := a.GetModelMapping()
+	if a.Platform == PlatformVideo {
+		models := map[string]string{}
+		for model := range mapping {
+			if a.IsModelSupported(model) {
+				models[model] = model
+			}
+		}
+		if cfg, err := a.VideoConfiguration(); err == nil {
+			for model := range cfg.ModelBindings {
+				if a.IsModelSupported(model) {
+					models[model] = model
+				}
+			}
+		}
+		whitelist, _ := resolveFinalModelWhitelist(a.Platform, a.Credentials, mapping)
+		for model := range whitelist {
+			if a.IsModelSupported(model) {
+				models[model] = model
+			}
+		}
+		return sortedModelMappingSources(models)
+	}
 	whitelist, _ := resolveFinalModelWhitelist(a.Platform, a.Credentials, mapping)
 	if a.Platform == PlatformQoder {
 		return configuredQoderRequestModels(mapping, whitelist)

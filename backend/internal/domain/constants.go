@@ -37,6 +37,7 @@ const (
 	PlatformMiniMax     = "minimax"
 	PlatformOpenCodeGo  = "opencode_go" // OpenCode 平台，账号模式区分 Zen 与 GO。
 	PlatformComposite   = "composite"
+	PlatformVideo       = "video" // 独立视频平台只接受显式视频端点的 API Key 账号。
 )
 
 // 国产供应商账号模式决定默认端点与主动用量适配器。

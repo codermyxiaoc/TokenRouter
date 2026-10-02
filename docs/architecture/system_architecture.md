@@ -85,6 +85,8 @@
 
 `ProvideImageTaskService` 启动异步图片状态补偿循环，接受的任务另有执行心跳；`provideCleanup` 在数据库和 Redis 关闭前调用幂等 `Stop` 等待循环退出。完成结果保存于 PostgreSQL，实例中断只登记执行结果不确定，不重新调用模型；恢复及保留边界见[异步图片与任务记录](../domains/media_tasks.md)。
 
+`ProvideVideoTaskService` 启动独立 Video 持久恢复器，每五秒限量领取到期租约，只轮询原任务和补结算，不重发生成 POST。关闭时先取消循环并等待当前有界执行退出，再关闭数据库；多实例依赖任务租约及账务行锁。细节见[独立视频平台任务](../domains/video_tasks.md)。
+
 ## 数据所有权
 
 | 存储 | 所有权与使用方式 | 失败或丢失影响 |

@@ -79,6 +79,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil,                              // batchImageWorker
 		nil,                              // creativeWorker
 		service.NewImageTaskService(nil), // 异步图片租约与补偿循环
+		&service.VideoTaskService{},      // 独立视频恢复器允许幂等关闭
 		pricingSvc,
 		emailQueueSvc,
 		billingCacheSvc,

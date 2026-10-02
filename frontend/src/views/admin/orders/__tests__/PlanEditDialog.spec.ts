@@ -6,6 +6,7 @@ import PlanEditDialog from '../PlanEditDialog.vue'
 import { useAppStore } from '@/stores/app'
 import { formatPaymentAmount } from '@/components/payment/currency'
 import type { AdminPaymentConfig } from '@/api/admin/payment'
+import type { SubscriptionPlan } from '@/types'
 
 const mockCreatePlan = vi.fn()
 const mockUpdatePlan = vi.fn()
@@ -247,6 +248,39 @@ describe('PlanEditDialog', () => {
         group_rate_multipliers: { 1: 1.25 }
       })
     )
+  })
+
+  // Video 分组与文本分组共用套餐选择；创建、回读及清空覆盖倍率不能丢失分组。
+  it('creates and edits a Video plan with a separate group multiplier', async () => {
+    mockGetAllIncludingInactive.mockResolvedValue([
+      { id: 12, name: 'Video subscription group', platform: 'video', status: 'active', rate_multiplier: 3 },
+      { id: 1, name: 'Text group', platform: 'openai', status: 'active', rate_multiplier: 2 },
+    ])
+    mockCreatePlan.mockResolvedValue({})
+    mockUpdatePlan.mockResolvedValue({})
+    const wrapper = mountDialog()
+    await flushPromises()
+    const inputs = wrapper.findAll('input')
+    await inputs[0].setValue('Video Plan')
+    await inputs[2].setValue('20')
+    await inputs[4].setValue('30')
+    await wrapper.get('input[type="checkbox"][value="12"]').setValue(true)
+    await wrapper.get('input[type="number"][placeholder="3x"]').setValue('1.25')
+    await wrapper.get('form').trigger('submit.prevent')
+    await flushPromises()
+    expect(mockCreatePlan).toHaveBeenCalledOnce()
+    const payload = mockCreatePlan.mock.calls[0][0]
+    expect(payload).toMatchObject({ group_ids: [12], group_rate_multipliers: { 12: 1.25 } })
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true, plan: { ...payload, id: 77, features: [] } as SubscriptionPlan })
+    await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('input[type="checkbox"][value="12"]').element.checked).toBe(true)
+    expect(wrapper.get<HTMLInputElement>('input[type="number"][placeholder="3x"]').element.value).toBe('1.25')
+    await wrapper.get('input[type="number"][placeholder="3x"]').setValue('')
+    await wrapper.get('form').trigger('submit.prevent')
+    await flushPromises()
+    expect(mockUpdatePlan).toHaveBeenCalledWith(77, expect.objectContaining({ group_ids: [12], group_rate_multipliers: {} }))
+    wrapper.unmount()
   })
 
   it('shows the CNY charge preview when the subscription rate is enabled', async () => {

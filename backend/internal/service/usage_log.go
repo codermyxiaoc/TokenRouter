@@ -209,6 +209,8 @@ type UsageLog struct {
 	VideoCount           int
 	VideoResolution      *string
 	VideoDurationSeconds *int
+	// VideoBilling 按任务历史价格快照批量补充，不参与扣费或持久化使用记录。
+	VideoBilling *UsageVideoBillingDetails
 
 	CreatedAt time.Time
 

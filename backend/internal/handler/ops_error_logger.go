@@ -786,6 +786,18 @@ func (w *opsCaptureWriter) Written() bool {
 	defer state.mu.RUnlock()
 	return rw.Written()
 }
+
+// SetWriteDeadline 在有效租约内转发写期限，防止旧请求通过复用状态修改新连接。
+func (w *opsCaptureWriter) SetWriteDeadline(deadline time.Time) error {
+	state, rw := w.beginDelegatedCall()
+	if state == nil {
+		return errors.New("response writer released")
+	}
+	state.mu.Unlock()
+	defer finishDelegatedCall(state)
+	return http.NewResponseController(rw).SetWriteDeadline(deadline)
+}
+
 func (w *opsCaptureWriter) Flush() {
 	state, rw := w.beginDelegatedCall()
 	if state == nil {

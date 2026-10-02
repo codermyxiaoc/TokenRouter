@@ -1,5 +1,31 @@
 export default {
 marketplace: {
+    videoEndpoints: {
+      title: '兼容端点',
+      names: {
+        openai: 'OpenAI Videos',
+        seedance: 'Seedance（火山方舟）',
+        kling: 'Kling（可灵）',
+        wan: 'Wan（万相）',
+        minimax: 'MiniMax',
+        grok: 'Grok',
+      },
+      copy: '复制端点 {path}',
+      hint: '请求参数请遵循对应端点的平台约定。',
+      modelPlaceholderHint: '路径中的 {placeholder} 请替换为上方模型 ID。',
+    },
+    videoFallbackPrice: '未配置分辨率的兜底价',
+    videoTokenPrepay: {
+      title: '按时长预扣（非最终价格）',
+      price: '固定 {price} USD/秒，另加参考图片附加费',
+      hint: '预扣不参与任何倍率；完成后按真实 Token 用量及正常倍率结算，多退少补。',
+    },
+    videoImageInputPricing: {
+      title: '参考图片附加费',
+      fromFirst: '从第一张开始，每张 {price} USD。',
+      afterFree: '前 {count} 张免费，超出部分每张 {price} USD。',
+      fixedHint: '每张单价固定，不参与任何倍率，仅在任务成功结算后收费。',
+    },
     title: '模型广场',
     subtitle: '查看可用模型',
     backHome: '返回首页',

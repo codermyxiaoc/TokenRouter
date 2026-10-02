@@ -49,6 +49,16 @@ const getBodyText = () => document.body.textContent ?? ''
 const getBodyButtons = () => Array.from(document.body.querySelectorAll('button'))
 
 describe('AccountActionMenu — spark shadow 按钮可见性', () => {
+  it('Video hides text tests, scheduled tests and advanced scoring but keeps management actions', () => {
+    const wrapper = mount(AccountActionMenu, { props: { show: true, account: makeAccount({ platform: 'video', type: 'apikey' }), position }, attachTo: document.body })
+    expect(getBodyText()).not.toContain('admin.accounts.testConnection')
+    expect(getBodyText()).not.toContain('admin.scheduledTests.schedule')
+    expect(getBodyText()).not.toContain('admin.accounts.advancedSchedulerScore.action')
+    expect(getBodyText()).toContain('admin.accounts.viewStats')
+    expect(getBodyText()).toContain('admin.accounts.duplicateAccount')
+    wrapper.unmount()
+  })
+
   it('删除位于菜单末尾，传递当前账号并关闭菜单', async () => {
     const account = makeAccount({ type: 'apikey' })
     const wrapper = mount(AccountActionMenu, {

@@ -243,8 +243,19 @@
             <PlatformIcon platform="opencode_go" size="sm" />
             OpenCode
           </button>
+          <button
+            type="button"
+            data-testid="select-video-platform"
+            class="flex h-9 flex-1 items-center justify-center gap-2 rounded-md px-4 py-1.5 text-sm font-medium transition-all"
+            :class="form.platform === 'video' ? 'bg-white text-violet-600 shadow-sm dark:bg-dark-600 dark:text-violet-400' : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'"
+            @click="form.platform = 'video'; form.type = 'apikey'; accountCategory = 'apikey'"
+          >
+            <PlatformIcon platform="video" size="sm" /> Video
+          </button>
         </div>
       </div>
+
+      <p v-if="form.platform === 'video'" class="input-hint">{{ t('admin.accounts.video.apiKeyOnly') }}</p>
 
       <!-- Account Type Selection (Anthropic) -->
       <div v-if="form.platform === 'anthropic'">
@@ -1691,7 +1702,7 @@
                     : 'https://generativelanguage.googleapis.com'
                   : form.platform === 'grok'
                     ? 'https://api.x.ai/v1'
-                    : form.platform === 'opencode_go' ? defaultCNBaseUrl(form.platform, openCodeAccountMode, apiProtocol) : 'https://api.anthropic.com'
+                    : form.platform === 'video' ? 'https://api.example.com' : form.platform === 'opencode_go' ? defaultCNBaseUrl(form.platform, openCodeAccountMode, apiProtocol) : 'https://api.anthropic.com'
             "
           />
           <p v-if="baseUrlHint" class="input-hint">{{ baseUrlHint }}</p>
@@ -1750,11 +1761,13 @@
                     : 'AIza...'
                   : form.platform === 'grok'
                     ? 'xai-...'
-                    : form.platform === 'opencode_go' ? 'sk-...' : 'sk-ant-...'
+                    : form.platform === 'opencode_go' || form.platform === 'video' ? 'sk-...' : 'sk-ant-...'
             "
           />
           <p v-if="apiKeyHint" class="input-hint">{{ apiKeyHint }}</p>
         </div>
+
+        <VideoAccountFields v-if="form.platform === 'video'" v-model="videoAccountForm" />
 
         <!-- Gemini API Key tier selection -->
         <div v-if="form.platform === 'gemini' && geminiProviderType === 'official'" data-testid="create-gemini-tier">
@@ -2388,13 +2401,13 @@
       </div>
 
       <UpstreamUsageConfigEditor
-        v-if="form.type === 'apikey'"
+        v-if="form.type === 'apikey' && form.platform !== 'video'"
         :enabled="upstreamUsageEnabled"
         :adapter="upstreamUsageAdapter"
         :base-url="upstreamUsageBaseUrl"
         :wallet-access-token="upstreamUsageWalletAccessToken"
         :wallet-user-id="upstreamUsageWalletUserId"
-        :automatic-adapter="isCNPlatform"
+        :automatic-adapter="usesAutomaticUpstreamUsageAdapter"
         @update:enabled="upstreamUsageEnabled = $event"
         @update:adapter="upstreamUsageAdapter = $event"
         @update:base-url="upstreamUsageBaseUrl = $event"
@@ -4271,6 +4284,9 @@
 </template>
 
 <script setup lang="ts">
+import VideoAccountFields from '@/components/account/VideoAccountFields.vue'
+import { createVideoAccountForm, validateVideoAccountForm, videoAccountCredentials } from '@/components/account/videoAccountConfig'
+
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -4335,6 +4351,7 @@ import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtoc
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import UpstreamUsageConfigEditor from '@/components/account/UpstreamUsageConfigEditor.vue'
+import { nativeUpstreamUsageAdapter } from '@/utils/upstreamUsage'
 import {
   applyAntigravityProjectID,
   applyHeaderOverride,
@@ -4416,7 +4433,7 @@ const baseUrlHint = computed(() => {
     return t('admin.accounts.gemini.providerType.thirdPartyBaseUrlHint')
   }
   if (form.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
-  if (form.platform === 'grok' || form.platform === 'opencode_go') return ''
+  if (form.platform === 'grok' || form.platform === 'opencode_go' || form.platform === 'video') return ''
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -4426,7 +4443,7 @@ const apiKeyHint = computed(() => {
     return t('admin.accounts.gemini.providerType.thirdPartyApiKeyHint')
   }
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
-  if (form.platform === 'grok' || form.platform === 'opencode_go') return ''
+  if (form.platform === 'grok' || form.platform === 'opencode_go' || form.platform === 'video') return ''
   return t('admin.accounts.apiKeyHint')
 })
 
@@ -4576,6 +4593,7 @@ const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_acco
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
+const videoAccountForm = ref(createVideoAccountForm())
 const upstreamUsageEnabled = ref(true)
 const upstreamUsageAdapter = ref<UpstreamUsageAdapter>('sub2api')
 const upstreamUsageBaseUrl = ref('')
@@ -4590,6 +4608,10 @@ const isOpenCodeGoPlatform = computed(() => form.platform === 'opencode_go')
 function currentOpenCodeOrCNMode(): CnAccountMode | OpenCodeAccountMode {
   return isOpenCodeGoPlatform.value ? openCodeAccountMode.value : accountMode.value
 }
+// 原生余额与套餐窗口继续自动查询；Zen 和普通按量模式允许配置通用适配器。
+const usesAutomaticUpstreamUsageAdapter = computed(() => nativeUpstreamUsageAdapter({
+  type: 'apikey', platform: form.platform, credentials: { account_mode: currentOpenCodeOrCNMode() }, extra: {},
+}) !== null)
 // 智谱团队版 Coding Plan 的组织/项目 ID，仅在创建团队账号时写入凭据。
 const zhipuOrganization = ref('')
 const zhipuProject = ref('')
@@ -5456,6 +5478,7 @@ watch(
       // MiniMax 仅支持 API Key，筛选入口打开时也必须初始化协议端点。
       if (form.platform === 'minimax') selectCNPlatform('minimax')
       if (form.platform === 'opencode_go') selectOpenCodeGoPlatform()
+      if (form.platform === 'video') { form.type = 'apikey'; accountCategory.value = 'apikey'; apiKeyBaseUrl.value = ''; upstreamUsageEnabled.value = false }
       // Load TLS fingerprint profiles
       adminAPI.tlsFingerprintProfiles.list()
         .then(profiles => { tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name })) })
@@ -5541,6 +5564,13 @@ watch(
           : newPlatform === 'grok'
             ? 'https://api.x.ai/v1'
             : 'https://api.anthropic.com'
+    if (newPlatform === 'video') {
+      upstreamUsageEnabled.value = false
+      form.type = 'apikey'
+      accountCategory.value = 'apikey'
+      apiKeyBaseUrl.value = ''
+      videoAccountForm.value = createVideoAccountForm()
+    }
     if (newPlatform === 'opencode_go') {
       form.type = 'apikey'
       accountCategory.value = 'apikey'
@@ -6076,6 +6106,7 @@ const resetForm = () => {
   adaptiveBaseUrls.value = { chat_completions: '', anthropic: '', responses: '' }
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
+  videoAccountForm.value = createVideoAccountForm()
   upstreamUsageEnabled.value = true
   upstreamUsageAdapter.value = 'sub2api'
   upstreamUsageBaseUrl.value = ''
@@ -6654,6 +6685,10 @@ const handleSubmit = async () => {
   }
 
   const enteredBaseUrl = apiKeyBaseUrl.value.trim()
+  if (form.platform === 'video') {
+    const error = validateVideoAccountForm(videoAccountForm.value, enteredBaseUrl)
+    if (error) { appStore.showError(t(`admin.accounts.video.${error}`)); return }
+  }
   if (
     form.platform === 'gemini' &&
     geminiProviderType.value === 'third_party' &&
@@ -6675,11 +6710,12 @@ const handleSubmit = async () => {
 
   // Build credentials with optional model mapping
   const credentials: Record<string, unknown> = {
-    base_url: enteredBaseUrl || defaultBaseUrl,
+    base_url: form.platform === 'video' ? enteredBaseUrl : enteredBaseUrl || defaultBaseUrl,
+    ...(form.platform === 'video' ? videoAccountCredentials(videoAccountForm.value) : {}),
     api_key: apiKeyValue.value.trim()
   }
   // New API 钱包是用户级余额；访问令牌只写入 Credentials，不进入 Extra。
-  if (upstreamUsageAdapter.value === 'new_api') {
+  if (!usesAutomaticUpstreamUsageAdapter.value && upstreamUsageAdapter.value === 'new_api') {
     if (upstreamUsageWalletAccessToken.value.trim()) {
       credentials.new_api_user_access_token = upstreamUsageWalletAccessToken.value.trim()
     }
@@ -7032,7 +7068,7 @@ const createAccountAndFinish = async (
     if (type === 'apikey') {
       const upstreamConfig: Record<string, unknown> = {
         enabled: upstreamUsageEnabled.value,
-        adapter: form.platform === 'opencode_go' ? 'opencode_go' : upstreamUsageAdapter.value
+        adapter: form.platform === 'opencode_go' && openCodeAccountMode.value === 'go' ? 'opencode_go' : upstreamUsageAdapter.value
       }
       if (upstreamUsageBaseUrl.value.trim()) {
         upstreamConfig.base_url = upstreamUsageBaseUrl.value.trim()

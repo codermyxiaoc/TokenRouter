@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 
 import PricingEntryCard from '../PricingEntryCard.vue'
-import { createDefaultTimePricingForm, isValidReasoningEffortMultipliers, reasoningEffortMultipliersToAPI, type PricingFormEntry } from '../types'
+import { createDefaultTimePricingForm, hasExplicitPricing, isValidReasoningEffortMultipliers, reasoningEffortMultipliersToAPI, type PricingFormEntry } from '../types'
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -56,6 +56,72 @@ function mountCard(showFastModeMultiplier: boolean) {
 }
 
 describe('PricingEntryCard', () => {
+  // 按次沿用视频完整价卡而非普通请求价格，离开 Token 模式时不得遗留固定秒价预扣。
+  it('switches Video Token pricing to per-task with fixed image fees and no Token prepayment', async () => {
+    const entry = makeEntry({ billing_mode: 'video_token', video_prices: [{ resolution: '768p', has_reference_video: false, price: 2 }],
+      video_fallback_price: 3, video_image_input_pricing: { free_images: 5, price: 0.15 }, video_token_prepay: { price_per_second: 0.3 } })
+    const wrapper = mount(PricingEntryCard, { props: { entry, platform: 'video' }, global: { stubs: { Icon: true, IntervalRow: true, ModelTagInput: true, Select: true } } })
+    wrapper.getComponent({ name: 'Select' }).vm.$emit('update:modelValue', 'video_per_request')
+    await wrapper.vm.$nextTick()
+    const updated = wrapper.emitted('update')!.at(-1)![0] as PricingFormEntry
+    expect(updated).toMatchObject({ billing_mode: 'video_per_request', video_prices: entry.video_prices,
+      video_image_input_pricing: entry.video_image_input_pricing, video_fallback_price: 3, video_token_prepay: null })
+    await wrapper.setProps({ entry: updated })
+    expect(wrapper.text()).toContain('admin.channels.videoPricing.perRequestUnit')
+    expect(wrapper.text()).toContain('admin.channels.videoPricing.perRequestHint')
+    expect(wrapper.text()).not.toContain('$/s')
+    expect(wrapper.find('[data-testid="video-token-prepay"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="video-image-input-pricing"]').exists()).toBe(true)
+    expect(hasExplicitPricing({ ...updated, video_prices: [], video_fallback_price: 0 })).toBe(true)
+    expect(hasExplicitPricing({ ...updated, video_prices: [], video_fallback_price: null, per_request_price: 5 })).toBe(false)
+    await wrapper.setProps({ platform: 'grok' })
+    const options = wrapper.getComponent({ name: 'Select' }).props('options') as Array<{ value: string }>
+    expect(options.map(value => value.value)).not.toContain('video_per_request')
+    expect(options.map(value => value.value)).toContain('per_request')
+    wrapper.unmount()
+  })
+
+  it('Video offers only video modes and preserves the matrix when models change', async () => {
+    const entry = makeEntry({ billing_mode: 'video_token', input_price: null, output_price: null, video_prices: [{ resolution: '720p', has_reference_video: false, price: 15 }] })
+    const wrapper = mount(PricingEntryCard, { props: { entry, platform: 'video' }, global: { stubs: { Icon: true, IntervalRow: true, ModelTagInput: true, Select: true } } })
+    const options = wrapper.getComponent({ name: 'Select' }).props('options') as Array<{ value: string }>
+    expect(options.map(value => value.value)).toEqual(['video_token', 'video', 'video_per_request'])
+    expect(wrapper.find('[data-testid="video-pricing-matrix"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="video-image-input-pricing"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="video-fallback-price"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="video-token-prepay"]').exists()).toBe(true)
+    expect(wrapper.get('[role="switch"]').attributes('aria-checked')).toBe('false')
+    wrapper.getComponent({ name: 'ModelTagInput' }).vm.$emit('update:models', ['video-model'])
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('update')).toHaveLength(1)
+    expect(wrapper.emitted('update')![0][0]).toMatchObject({ models: ['video-model'], video_prices: entry.video_prices })
+    await wrapper.setProps({ hideVideoUserPricing: true })
+    expect(wrapper.find('[data-testid="video-image-input-pricing"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="video-fallback-price"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="video-token-prepay"]').exists()).toBe(false)
+    await wrapper.setProps({ hideVideoUserPricing: false, platform: 'grok' })
+    expect(wrapper.find('[data-testid="video-image-input-pricing"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // 兜底价可单独生效；切换计费单位时预扣不得变成隐藏的秒计费规则。
+  it('accepts fallback-only pricing and clears prepayment when leaving Token video mode', async () => {
+    const entry = makeEntry({ billing_mode: 'video_token', video_prices: [], video_fallback_price: 0, video_token_prepay: { price_per_second: 0.3 } })
+    expect(hasExplicitPricing(entry)).toBe(true)
+    expect(hasExplicitPricing({ ...entry, billing_mode: 'video' })).toBe(true)
+    const wrapper = mount(PricingEntryCard, { props: { entry, platform: 'video' }, global: { stubs: { Icon: true, IntervalRow: true, ModelTagInput: true, Select: true } } })
+    expect(wrapper.get<HTMLInputElement>('[data-testid="video-fallback-price"]').element.value).toBe('0')
+    wrapper.getComponent({ name: 'Select' }).vm.$emit('update:modelValue', 'video')
+    await wrapper.vm.$nextTick()
+    const updated = wrapper.emitted('update')!.at(-1)![0] as PricingFormEntry
+    expect(updated).toMatchObject({ video_fallback_price: 0, video_token_prepay: null })
+    await wrapper.setProps({ entry: updated })
+    expect(wrapper.find('[data-testid="video-token-prepay"]').exists()).toBe(false)
+    wrapper.getComponent({ name: 'Select' }).vm.$emit('update:modelValue', 'token')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('update')!.at(-1)![0]).toMatchObject({ video_fallback_price: null, video_token_prepay: null })
+  })
+
   it('编辑其它档位保留旧 Max，修改或清空 Max 后不再回退到旧值', async () => {
     const wrapper = mount(PricingEntryCard, {
       props: { entry: makeEntry({ max_reasoning_effort_multiplier: 3 }), enableTierMultipliers: true },

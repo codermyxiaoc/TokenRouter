@@ -1,11 +1,6 @@
 <template>
   <div class="space-y-1" data-testid="account-upstream-usage">
-    <div v-if="unsupportedCNQuery" class="flex min-h-5 items-center justify-end gap-1">
-      <span class="text-[9px] text-gray-400 dark:text-gray-500">
-        {{ t('admin.accounts.cnProviders.noBalanceEndpoint') }}
-      </span>
-    </div>
-    <div v-else-if="!queryEnabled" class="flex min-h-5 items-center justify-end gap-1">
+    <div v-if="!queryEnabled" class="flex min-h-5 items-center justify-end gap-1">
       <span class="text-[9px] text-gray-400 dark:text-gray-500">
         {{ t('admin.accounts.upstreamUsage.disabled') }}
       </span>
@@ -84,6 +79,7 @@ import type {
 } from '@/types'
 import Icon from '@/components/icons/Icon.vue'
 import UsageProgressBar from './UsageProgressBar.vue'
+import { isUpstreamUsageQueryEnabled, nativeUpstreamUsageAdapter } from '@/utils/upstreamUsage'
 
 const props = withDefaults(defineProps<{
   account: Account
@@ -103,24 +99,17 @@ const props = withDefaults(defineProps<{
 const { t } = useI18n()
 
 // 查询按钮只负责发出管理员显式操作，组件挂载和滚动不会触发请求。
-const unsupportedCNQuery = computed(() =>
-  ((props.account.platform === 'zhipu' || props.account.platform === 'minimax') && props.account.credentials?.account_mode !== 'coding') ||
-  (props.account.platform === 'opencode_go' && props.account.credentials?.account_mode === 'zen')
-)
-
-const queryEnabled = computed(() => {
-  if (unsupportedCNQuery.value) return false
-  const config = props.account.extra?.upstream_usage_query as Record<string, unknown> | undefined
-  return config?.enabled !== false
-})
+const queryEnabled = computed(() => isUpstreamUsageQueryEnabled(props.account))
 
 // 未执行本次会话的手动查询时，可展示后台监控最近一次成功快照；组件挂载不会发请求。
 const monitorResult = computed<UpstreamUsageQueryResult | null>(() => {
-  if (!['kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go'].includes(props.account.platform)) return null
+  // 通用查询不消费原生套餐快照，避免切换账号模式后显示旧窗口。
+  const nativeAdapter = nativeUpstreamUsageAdapter(props.account)
+  if (!nativeAdapter) return null
   const raw = props.account.extra?.cn_usage_monitor_snapshot
   if (!raw || typeof raw !== 'object') return null
   const snapshot = raw as Record<string, unknown>
-  if (snapshot.version !== 1 || typeof snapshot.adapter !== 'string' ||
+  if (snapshot.version !== 1 || snapshot.adapter !== nativeAdapter ||
     typeof snapshot.observed_at !== 'string' || !Number.isFinite(Date.parse(snapshot.observed_at))) return null
   return {
     account_id: props.account.id,

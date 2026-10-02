@@ -341,7 +341,16 @@ func EffectiveUpstreamUsageConfig(account *Account) (UpstreamUsageQueryConfig, e
 		if !ok || strings.TrimSpace(parsed) == "" {
 			return UpstreamUsageQueryConfig{}, ErrUpstreamUsageConfigInvalid
 		}
-		if !account.IsCNProvider() && !account.IsOpenCodeGo() {
+		if supportsGenericPayGUpstreamUsage(account) {
+			config.Adapter = strings.TrimSpace(parsed)
+			// 历史 Zen 表单会写入 GO 适配器；仅归一化为通用默认值，不进入 GO 窗口协议。
+			if account.IsOpenCodeZen() && config.Adapter == UpstreamUsageAdapterOpenCodeGo {
+				config.Adapter = upstreamUsageDefaultAdapter
+			}
+			if !isGenericUpstreamUsageAdapter(config.Adapter) {
+				return UpstreamUsageQueryConfig{}, ErrUpstreamUsageUnsupported
+			}
+		} else if !account.IsCNProvider() && !account.IsOpenCodeGo() {
 			config.Adapter = strings.TrimSpace(parsed)
 		}
 	}
@@ -504,11 +513,9 @@ func (s *UpstreamUsageService) QueryAccount(ctx context.Context, accountID int64
 	if !queryConfig.Enabled {
 		return nil, ErrUpstreamUsageDisabled
 	}
-	// 国产供应商及 OpenCode 不允许把协议适配器误选成通用站点适配器；按平台和
-	// account_mode 自动选择只读适配器，保留现有查询开关与身份指纹语义。
+	// 有原生协议的模式仍由生效配置固定适配器；仅无原生协议的三个按量模式开放通用手查。
 	if account.IsCNProvider() || account.IsOpenCodeGo() {
-		queryConfig.Adapter = cnUpstreamUsageAdapterName(account)
-		if queryConfig.Adapter == "" {
+		if cnUpstreamUsageAdapterName(account) == "" && !supportsGenericPayGUpstreamUsage(account) {
 			return nil, ErrUpstreamUsageUnsupported
 		}
 	}
@@ -560,8 +567,24 @@ func (s *UpstreamUsageService) QueryAccount(ctx context.Context, accountID int64
 	}
 }
 
+// supportsGenericPayGUpstreamUsage 只开放手动查询，不授予原生周期监控或调度快照资格。
+func supportsGenericPayGUpstreamUsage(account *Account) bool {
+	return account != nil && (account.IsOpenCodeZen() ||
+		((account.Platform == PlatformZhipu || account.Platform == PlatformMiniMax) && account.GetAccountMode() == AccountModePayG))
+}
+
+// isGenericUpstreamUsageAdapter 限制按量模式只能选择公开的通用站点协议。
+func isGenericUpstreamUsageAdapter(adapter string) bool {
+	for _, registration := range upstreamUsageAdapterRegistry {
+		if registration.Name == adapter {
+			return !registration.Automatic
+		}
+	}
+	return false
+}
+
 func cnUpstreamUsageAdapterName(account *Account) string {
-	// GO 使用独立订阅窗口协议；Zen 没有已接入的余额接口，不能回退到通用站点查询。
+	// 此选择器仅定义原生协议及监控资格；Zen 的通用手查不能进入 GO 窗口协议。
 	if account != nil && account.IsOpenCodeGoPlan() {
 		return UpstreamUsageAdapterOpenCodeGo
 	}
@@ -586,7 +609,7 @@ func cnUpstreamUsageAdapterName(account *Account) string {
 	case PlatformDeepseek:
 		return UpstreamUsageAdapterDeepseekBalance
 	default:
-		// 智谱与 MiniMax payg 没有已接入的余额协议，明确返回“不支持”而不发请求。
+		// 智谱与 MiniMax payg 没有原生余额协议，通用手查也不能获得周期监控资格。
 		return ""
 	}
 }

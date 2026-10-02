@@ -338,6 +338,38 @@ riskControl: {
     },
 // Channel Management
     channels: {
+      videoTokenPrepay: {
+        title: 'Prepay by duration',
+        hint: 'Prepay duration × a fixed USD price per second, plus reference image fees, with no channel, video, group, plan or balance multipliers. Final billing uses actual Token usage and normal rates, with a refund or additional charge. When disabled, billing occurs on completion.',
+        price: 'Fixed prepay price per second (USD)',
+        invalid: 'Enter a finite non-negative prepay price per second when enabled.',
+      },
+      videoImageInputPricing: {
+        title: 'Reference image surcharge',
+        hint: 'Reference image fees apply only when a video task settles successfully. The per-image USD price is fixed and ignores video, group, and plan multipliers. Disabled means no surcharge.',
+        mode: 'Billing rule',
+        fromFirst: 'Charge from the first image',
+        afterFree: 'First N images free, charge only extra images',
+        freeImages: 'Free image count',
+        price: 'Fixed price per image (USD)',
+        invalid: 'The free image count must be a nonnegative integer and the per-image price must be a finite nonnegative number.',
+      },
+      videoPricing: {
+        perRequestUnit: '$/request',
+        perRequestHint: 'Charge once per successful video task, regardless of duration or token count. Reserve the task price and fixed reference image fees on submission; release on failure or confirmed cancellation. Queries and downloads incur no additional charge.',
+        fallbackPrice: 'Fallback price (optional)',
+        fallbackHint: 'Applies to resolutions without a configured price. Leave blank to disable; 0 means free.',
+        fallbackInvalid: 'Video fallback price must be finite and non-negative.',
+
+  "hint": "Set one price per resolution: USD per second, per million Tokens, or per successful task for the selected billing mode. Blank means unconfigured; 0 is free.",
+  "price": "Unit price",
+  "unconfigured": "Unconfigured",
+  "empty": "No resolutions yet. Add any resolutions that need specific prices.",
+  "resolutionPlaceholder": "Resolution, e.g. 2160p or 2K",
+  "addResolution": "Add resolution",
+  "invalid": "Video prices must be nonnegative with one price per resolution",
+  "groupHint": "Set one model price per resolution, with group prices taking precedence over channel prices. Video rates can follow the group multiplier or use an independent multiplier."
+},
       title: 'Channel Management',
       description: 'Manage channels and custom model pricing',
       searchChannels: 'Search channels...',
@@ -403,6 +435,9 @@ riskControl: {
         actions: 'Actions'
       },
       billingMode: {
+        videoToken: "Video (per Token)",
+        videoSeconds: "Video (per second)",
+        videoPerRequest: "Video (per request)",
         token: 'Token',
         perRequest: 'Per Request',
         image: 'Image (Per Request)',

@@ -44,6 +44,15 @@ const messages: Record<string, string> = {
   'usage.serviceTierFlex': 'Flex',
   'usage.serviceTierStandard': 'Standard',
   'usage.rate': 'Rate',
+  'usage.videoRate': 'Video multiplier',
+  'usage.videoOutputCost': 'Video cost',
+  'usage.videoReferenceImageCost': 'Reference image cost (no multiplier)',
+  'usage.videoReferenceImages': 'Reference images',
+  'usage.videoSecondUnit': 's',
+  'usage.videoPerSecond': '/ s',
+  'usage.videoSecondPrice': 'Price per second',
+  'usage.videoTokenPrice': 'Video token price',
+  'usage.videoPricingNotRecorded': 'Historical pricing details not recorded',
   'usage.accountMultiplier': 'Account rate',
   'usage.original': 'Original',
   'usage.userBilled': 'User billed',
@@ -68,6 +77,10 @@ const messages: Record<string, string> = {
   'admin.usage.billingModeToken': 'Token',
   'admin.usage.billingModePerRequest': 'Per request',
   'admin.usage.billingModeImage': 'Image',
+  'admin.usage.billingModeVideo': 'Video',
+  'admin.usage.billingModeVideoSecond': 'Video (per second)',
+  'admin.usage.billingModeVideoRequest': 'Video (per request)',
+  'admin.channels.billingMode.videoToken': 'Video (per token)',
   'admin.usage.billingTypeBalance': 'Balance',
   'admin.usage.billingTypeSubscription': 'Subscription',
   'admin.usage.billingTypeMixed': 'Subscription + Balance',
@@ -303,6 +316,95 @@ describe('admin UsageTable tooltip', () => {
       height: 20,
       toJSON: () => ({}),
     } as DOMRect)
+  })
+
+  // 管理员与用户使用同一表格，快照单价和固定图费在两种视图中都保持一致。
+  it.each([true, false])('shows per-second video and reference images with account detail=%s', async showAccountBilling => {
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [{ ...baseImageRow, model: 'MiniMax-H3-Max', billing_mode: 'video', image_count: 0,
+          output_cost: 2.125, image_input_cost: 0.3, total_cost: 2.425, actual_cost: 4.55, rate_multiplier: 2,
+          video_duration_seconds: 6, video_resolution: '720p', video_billing: {
+            mode: 'video', unit: 'second', unit_price: 0.425, duration_seconds: 5, resolution: '768p', has_reference_video: false,
+            reference_image_count: 7, reference_image_free_count: 5, billable_reference_image_count: 2,
+            reference_image_unit_price: 0.15, reference_image_cost: 0.3,
+          } }],
+        columns: [], showAccountBilling,
+      },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    expect(wrapper.text()).toContain('Video (per second)')
+    expect(wrapper.get('[data-testid="video-usage-summary"]').text()).toBe('768p · 5 s · Reference images 7 images')
+    await wrapper.findAll('.group.relative').at(-1)!.trigger('mouseenter')
+    await nextTick()
+    const tooltip = wrapper.get('[data-testid="cost-detail-tooltip"]')
+    expect(tooltip.get('[data-testid="video-usage-videoSecondPrice"]').text()).toContain('$0.42500000 / s')
+    expect(tooltip.get('[data-testid="video-usage-videoReferenceImageCost"]').text()).toContain('$0.30000000')
+    expect(tooltip.text()).not.toContain('usage.unitPrice')
+    expect(tooltip.text()).toContain('$4.55000000')
+    expect(tooltip.text().includes('Account billed')).toBe(showAccountBilling)
+    wrapper.unmount()
+  })
+
+  it('keeps legacy video neutral and does not invent a per-second unit price', async () => {
+    const wrapper = mount(UsageTable, {
+      props: { data: [{ ...baseImageRow, billing_mode: 'video', image_count: 0, video_duration_seconds: 5,
+        video_resolution: '720p', output_cost: 2.125, total_cost: 2.125 }], columns: [] },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    expect(wrapper.text()).not.toContain('Video (per second)')
+    expect(wrapper.get('[data-testid="video-usage-summary"]').text()).toBe('720p · 5 s')
+    await wrapper.findAll('.group.relative').at(-1)!.trigger('mouseenter')
+    await nextTick()
+    const tooltip = wrapper.get('[data-testid="cost-detail-tooltip"]')
+    expect(tooltip.text()).toContain('Historical pricing details not recorded')
+    expect(tooltip.text()).not.toContain('usage.unitPrice')
+    expect(tooltip.text()).not.toContain('$0.425')
+    expect(tooltip.find('[data-testid="video-usage-videoReferenceImages"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // 零视频倍率仍可产生固定图片费，倍率显示不能把它误写成 1 倍。
+  it.each([
+    { rate: 0, label: '0.0x' },
+    { rate: undefined, label: '1.00x' },
+  ])('preserves the actual video rate $rate while showing the billed image fee', async ({ rate, label }) => {
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [{ ...baseImageRow, billing_mode: 'video_token', image_count: 0, image_input_cost: 0.5,
+          output_cost: 1, total_cost: 1.5, actual_cost: 0.5, rate_multiplier: rate }],
+        columns: [],
+      },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    await wrapper.findAll('.group.relative').at(-1)!.trigger('mouseenter')
+    await nextTick()
+    const tooltip = wrapper.get('[data-testid="cost-detail-tooltip"]')
+    const field = (name: string) => tooltip.findAll('span').find(span => span.text() === name)?.element.nextElementSibling?.textContent
+    expect(field('Video multiplier')).toBe(label)
+    expect(field('User billed')).toBe('$0.50000000')
+    wrapper.unmount()
+  })
+
+  // 用户实扣直接取结算事实，固定图片费不乘视频倍率；账号统计仍用自己的总成本倍率。
+  it.each([0, 0.5, 3])('keeps fixed image charges and account statistics separate at video rate %s', async rate => {
+    const actual = 2 * rate + 0.3
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [{ ...baseImageRow, billing_mode: 'video_token', image_count: 0, image_input_cost: 0.3,
+          output_cost: 2, total_cost: 2.3, actual_cost: actual, rate_multiplier: rate, account_rate_multiplier: 4 }],
+        columns: [],
+      },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    await wrapper.findAll('.group.relative').at(-1)!.trigger('mouseenter')
+    await nextTick()
+    const tooltip = wrapper.get('[data-testid="cost-detail-tooltip"]')
+    const field = (name: string) => tooltip.findAll('span').find(span => span.text() === name)?.element.nextElementSibling?.textContent
+    expect(field('Reference image cost (no multiplier)')).toBe('$0.30000000')
+    expect(field('User billed')).toBe(`$${actual.toFixed(8)}`)
+    expect(field('Account billed')?.trim()).toBe('$9.20000000')
+    wrapper.unmount()
   })
 
   it('marks only usage rows that actually applied long-context billing', () => {

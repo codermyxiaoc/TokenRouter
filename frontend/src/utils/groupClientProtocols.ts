@@ -13,6 +13,8 @@ interface GroupClientProtocolPolicy {
 }
 
 const GROUP_CLIENT_PROTOCOL_POLICIES: Record<GroupPlatform, GroupClientProtocolPolicy> = {
+  // Video 为独立视频平台，不开放任何文本协议。
+  video: { supported: [], defaults: [] },
   anthropic: {
     supported: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
     defaults: ['anthropic_messages']

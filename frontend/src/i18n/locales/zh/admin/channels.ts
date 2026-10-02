@@ -338,6 +338,38 @@ riskControl: {
     },
 // Channel Management
     channels: {
+      videoTokenPrepay: {
+        title: '按时长预扣',
+        hint: '开启后按生成时长 × 固定 USD 秒价预扣，并加上参考图片附加费；不参与渠道、视频、分组、套餐或余额倍率。完成后按真实 Token 用量及正常倍率结算，多退少补；关闭时完成后结算。',
+        price: '每秒固定预扣价（USD）',
+        invalid: '开启预扣后，每秒预扣价必须填写非负有限数值。',
+      },
+      videoImageInputPricing: {
+        title: '参考图片附加费',
+        hint: '仅对成功结算的视频任务收取参考图片费用。每张单价固定，不参与视频、分组或套餐倍率；关闭时不收取附加费。',
+        mode: '收费方式',
+        fromFirst: '从第一张开始收费',
+        afterFree: '前 N 张免费，超出部分收费',
+        freeImages: '免费图片张数',
+        price: '每张固定单价（USD）',
+        invalid: '免费图片张数必须为非负整数，每张单价必须填写非负有限数值。',
+      },
+      videoPricing: {
+        perRequestUnit: '$/次',
+        perRequestHint: '每个成功视频任务收取一次费用，与时长和 Token 数无关。提交时预留一次价格及固定参考图片附加费，失败或确认取消后释放；查询和下载不重复收费。',
+        fallbackPrice: '兜底单价（可选）',
+        fallbackHint: '用于未配置单价的分辨率，留空关闭，0 表示免费。',
+        fallbackInvalid: '视频兜底单价必须为非负有限数值。',
+
+  "hint": "每个分辨率配置一个单价。按秒使用美元/秒，按 Token 使用美元/百万 Token，按次使用美元/成功任务。留空表示未配置，0 表示免费。",
+  "price": "单价",
+  "unconfigured": "未配置",
+  "empty": "暂无分辨率，请按需添加分辨率配置价格。",
+  "resolutionPlaceholder": "自定义分辨率，如 2160p、2K",
+  "addResolution": "添加分辨率",
+  "invalid": "视频价格必须非负，同一分辨率只能配置一个单价",
+  "groupHint": "模型价卡按分辨率配置单价，优先于渠道价格。视频倍率默认跟随分组倍率，也可独立设置。"
+},
       title: '渠道管理',
       description: '管理渠道和自定义模型定价',
       searchChannels: '搜索渠道...',
@@ -403,6 +435,9 @@ riskControl: {
         actions: '操作'
       },
       billingMode: {
+        videoToken: "视频（按 Token）",
+        videoSeconds: "视频（按秒）",
+        videoPerRequest: "视频（按次）",
         token: 'Token',
         perRequest: '按次',
         image: '图片（按次）',

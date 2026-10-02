@@ -1,6 +1,40 @@
 export default {
 // Accounts Management
     accounts: {
+      video: {
+  "endpoints": {
+    "compat": "OpenAI Videos（/v1/video/generations）",
+    "openai_videos": "OpenAI Videos（/v1/videos）",
+    "seedance": "Seedance",
+    "kling": "Kling",
+    "wan": "Wan",
+    "minimax": "MiniMax"
+  },
+  "bindingPathInvalid": "Kling 路径必须选择受支持的模板，其他端点不能配置 Kling 路径",
+  "bindingEndpointDisabled": "模型绑定指向了未启用的端点，请先启用该端点",
+  "bindingDuplicate": "同一模型不能重复绑定同一个端点",
+  "bindingModelRequired": "模型绑定的模型名不能为空",
+  "routingHint": "两个 OpenAI Videos 入口需按各自路径分别勾选；配置模型端点限制时也必须包含对应端点。仅可调用已勾选且模型允许的入口，原生入口同样按对应协议选择。",
+  "title": "视频端点配置",
+  "description": "请按上游实际支持的协议勾选视频端点，默认不启用任何端点。OpenAI 兼容入口也需要明确勾选。",
+  "endpointUrl": "端点地址覆盖",
+  "endpointWithPath": "{name}（{path}）",
+  "endpointUrlHint": "留空使用上方 Base URL。每个已启用端点必须有可用地址。",
+  "modelBindings": "模型端点限制（可选）",
+  "modelBindingsHint": "填写映射后的上游模型名。同一模型可添加多个不同端点；未配置绑定的模型继承账号已勾选的端点。",
+  "modelPlaceholder": "上游模型名",
+  "klingPathHint": "Kling 使用请求中的原生操作路径，模型路径模板可留空；启用 Kling 不会自动开放 OpenAI 兼容入口。",
+  "maxPendingTasks": "最大在途任务数",
+  "maxDurationSeconds": "自动时长预留上限（秒）",
+  "budgetHint": "自动时长上限仅用于估算任务预算，不修改上游生成参数。按 Token 计费的预扣规则在用户视频价卡中配置。",
+  "nativePath": "使用请求原生路径",
+  "apiKeyOnly": "Video 仅支持 API Key，模型列表需显式配置，不运行文本或付费视频测试。",
+  "endpointsRequired": "请至少选择一个视频端点",
+  "baseUrlRequired": "请为每个视频端点设置地址或填写默认 Base URL",
+  "pendingInvalid": "最大在途任务数必须是 1–1000 的整数",
+  "budgetInvalid": "自动时长上限必须为正数",
+  "keyGuide": "下方为网关 Base URL。请从模型广场确认该视频模型已启用的端点，再调用对应路径并通过任务 ID 查询状态。OpenAI 兼容入口需管理员明确启用，不提供聊天客户端配置。"
+},
       title: '账号管理',
       description: '管理 AI 平台账号和 Cookie',
       createAccount: '添加账号',
@@ -484,6 +518,7 @@ export default {
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
+        video: 'Video',
       },
       cnProviders: {
         accountMode: {

@@ -25,7 +25,7 @@ func TestMiniMaxUpstreamUsagePreservesConfiguredHost(t *testing.T) {
 			if test.baseURL != "" {
 				account.Credentials["base_url"] = test.baseURL
 			}
-			// 手动选择通用适配器也不能改变 MiniMax 账号的供应商身份。
+			// 手动选择通用适配器也不能改变 MiniMax Coding 账号的原生窗口协议。
 			account.Extra[UpstreamUsageQueryExtraKey] = map[string]any{"adapter": UpstreamUsageAdapterSub2API}
 			upstream := &cnUsageMonitorHTTP{body: minimaxUsageFixture}
 			service := NewUpstreamUsageService(&upstreamUsageAccountRepoStub{account: account}, upstream, testUpstreamUsageConfig(), nil)
@@ -52,8 +52,10 @@ func TestMiniMaxUpstreamUsagePreservesConfiguredHost(t *testing.T) {
 	}
 }
 
-func TestMiniMaxUpstreamUsagePayGUnsupportedWithoutRequest(t *testing.T) {
+func TestMiniMaxUpstreamUsagePayGRejectsCodingAdapterWithoutRequest(t *testing.T) {
 	account := newCNUsageMonitorAccount(82, PlatformMiniMax, AccountModePayG)
+	// 按量账号可使用通用查询，但不能借用原生编程套餐协议。
+	account.Extra[UpstreamUsageQueryExtraKey] = map[string]any{"adapter": UpstreamUsageAdapterMiniMaxCoding}
 	upstream := &cnUsageMonitorHTTP{}
 	service := NewUpstreamUsageService(&upstreamUsageAccountRepoStub{account: account}, upstream, testUpstreamUsageConfig(), nil)
 	_, err := service.QueryAccount(context.Background(), account.ID)

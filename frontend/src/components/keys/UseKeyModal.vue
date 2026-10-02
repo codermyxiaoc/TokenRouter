@@ -57,6 +57,11 @@
         </div>
       </div>
 
+      <div v-else-if="platform === 'video'" class="space-y-3" data-testid="video-key-guide">
+        <p class="text-sm text-gray-600 dark:text-gray-400">{{ t('admin.accounts.video.keyGuide') }}</p>
+        <code class="block break-all rounded-lg bg-gray-100 p-3 text-sm dark:bg-dark-700">{{ videoBaseUrl }}</code>
+      </div>
+
       <!-- Platform-specific content -->
       <template v-else>
         <!-- Description -->
@@ -354,6 +359,9 @@ const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
 const { t } = useI18n()
+const originUrl = window.location.origin
+// 视频入口由账号和模型能力决定，使用说明只展示根地址，不臆造兼容路径。
+const videoBaseUrl = computed(() => (props.baseUrl.trim() || originUrl).replace(/\/+$/, '').replace(/\/v1$/, ''))
 const { copyToClipboard: clipboardCopy } = useClipboard()
 
 const copiedIndex = ref<number | null>(null)
@@ -371,7 +379,9 @@ const compositeExamples = computed(() => (props.compositeGroups || []).map((bind
         ? 'grok-4'
         : platform === 'qoder'
           ? 'auto'
-          : 'claude-sonnet-4'
+          : platform === 'video'
+            ? 'video-model'
+            : 'claude-sonnet-4'
   return {
     groupId: binding.group_id,
     groupName: binding.group?.name || `#${binding.group_id}`,
@@ -410,6 +420,7 @@ const openCodeProtocolPriority: Record<GroupPlatform, readonly GroupClientProtoc
   zhipu: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
   deepseek: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
   minimax: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
+  video: [],
   opencode_go: ['openai_chat_completions', 'openai_responses', 'anthropic_messages']
 }
 
@@ -1095,6 +1106,7 @@ function generateCompatibleCodexFiles(
     model: string
     contextWindow: number
   }> = {
+    video: { provider: 'tokenrouter_video', name: 'TokenRouter Video', model: '', contextWindow: 0 },
     anthropic: {
       provider: 'tokenrouter_anthropic',
       name: 'TokenRouter Anthropic',

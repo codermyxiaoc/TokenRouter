@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import AccountUsageCell from '../AccountUsageCell.vue'
 import OpenAIQuotaResetCell from '../OpenAIQuotaResetCell.vue'
 import type { OpenAIQuotaResetResult } from '@/api/admin/accounts'
-import type { Account, AccountUsageInfo } from '@/types'
+import type { Account, AccountUsageInfo, UpstreamUsageQueryResult } from '@/types'
 
 const { getUsage } = vi.hoisted(() => ({
   getUsage: vi.fn()
@@ -72,6 +72,104 @@ describe('AccountUsageCell', () => {
         dispatchEvent: vi.fn(),
       }))
     })
+  })
+
+  // 上游是否支持查询不能决定本站今日统计和本地配额是否可见。
+  it.each([
+    ['kimi', 'payg', 'kimi_balance'],
+    ['kimi', 'coding', 'kimi_coding'],
+    ['zhipu', 'payg', 'sub2api'],
+    ['zhipu', 'coding', 'zhipu_coding'],
+    ['deepseek', 'payg', 'deepseek_balance'],
+    ['minimax', 'payg', 'sub2api'],
+    ['minimax', 'coding', 'minimax_coding'],
+    ['opencode_go', 'zen', 'sub2api'],
+    ['opencode_go', 'go', 'opencode_go'],
+  ] as const)('%s %s 同时保留本站统计、本地配额及已支持的上游用量', async (platform, mode, adapter) => {
+    const requestUpstreamUsage = vi.fn()
+    const requestBatchedUsage = vi.fn()
+    const account = makeAccount({
+      id: 9500, platform, type: 'apikey', credentials: { account_mode: mode },
+      quota_daily_limit: 20, quota_daily_used: 10,
+      quota_weekly_limit: 100, quota_weekly_used: 25,
+      quota_limit: 200, quota_used: 20,
+    })
+    const upstreamUsage: UpstreamUsageQueryResult | null = adapter ? {
+      account_id: account.id, adapter, provider: platform, observed_at: '2026-10-02T00:00:00Z',
+      ...(mode === 'payg' || mode === 'zen'
+        ? { mode: 'balance', unit: 'CNY', balance: { remaining: 88 } }
+        : { mode: 'limits', unit: 'PERCENT', limits: [{ name: '5h', used: 42, limit: 100, remaining: 58 }] }),
+    } : null
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account, requestUpstreamUsage, requestBatchedUsage, upstreamUsage,
+        todayStats: { requests: 42, tokens: 200, cost: 12.345, standard_cost: 12.345, user_cost: 6.789 },
+      },
+      global: { stubs: {
+        UsageProgressBar: {
+          props: ['label', 'utilization'],
+          template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>',
+        },
+        AccountQuotaInfo: true,
+      } },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('42 req')
+    expect(wrapper.text()).toContain('A $12.35')
+    expect(wrapper.text()).toContain('U $6.79')
+    expect(wrapper.text()).toContain('1d|50')
+    expect(wrapper.text()).toContain('7d|25')
+    expect(wrapper.text()).toContain('total|10')
+    const buttons = wrapper.findAll('button').filter(button => button.text() === 'admin.accounts.usageWindow.activeQuery')
+    expect(buttons).toHaveLength(adapter ? 1 : 0)
+    // 列表手动刷新也只刷新本站数据，不顺带查询供应商。
+    await wrapper.setProps({ manualRefreshToken: 1 })
+    expect(getUsage).not.toHaveBeenCalled()
+    expect(requestBatchedUsage).not.toHaveBeenCalled()
+    expect(requestUpstreamUsage).not.toHaveBeenCalled()
+    if (adapter) {
+      expect(wrapper.text()).toContain('admin.accounts.upstreamUsage.observedAt')
+      if (mode === 'coding' || mode === 'go') expect(wrapper.text()).toContain('5h|42')
+      const statsBadge = wrapper.findAll('span').find(node => node.text() === '42 req')!
+      expect(statsBadge.element.compareDocumentPosition(buttons[0].element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      await buttons[0].trigger('click')
+      expect(requestUpstreamUsage).toHaveBeenCalledTimes(1)
+      expect(requestUpstreamUsage).toHaveBeenCalledWith(account, { force: true })
+    }
+    wrapper.unmount()
+  })
+
+  // 上游错误、管理员关闭查询或请求在途都不能抹掉本站统计。
+  it('MiniMax Coding 的上游错误、关闭及加载状态均保留本站统计和配额', async () => {
+    const requestUpstreamUsage = vi.fn()
+    const account = makeAccount({ id: 9501, platform: 'minimax', type: 'apikey',
+      credentials: { account_mode: 'coding' }, quota_daily_limit: 20, quota_daily_used: 10 })
+    const wrapper = mount(AccountUsageCell, {
+      props: { account, requestUpstreamUsage,
+        todayStats: { requests: 42, tokens: 200, cost: 2, standard_cost: 2, user_cost: 3 },
+        upstreamUsageError: { code: 'UPSTREAM_USAGE_TIMEOUT', message: 'timeout' },
+      },
+      global: { stubs: { UsageProgressBar: {
+        props: ['label', 'utilization'], template: '<div>{{ label }}|{{ utilization }}</div>',
+      }, AccountQuotaInfo: true } },
+    })
+    for (const state of ['error', 'disabled', 'loading'] as const) {
+      if (state === 'disabled') await wrapper.setProps({ account: { ...account, extra: { upstream_usage_query: { enabled: false } } } })
+      if (state === 'loading') await wrapper.setProps({ account, upstreamUsageError: null, upstreamUsageLoading: true })
+      await flushPromises()
+      expect(wrapper.text()).toContain('42 req')
+      expect(wrapper.text()).toContain('A $2.00')
+      expect(wrapper.text()).toContain('U $3.00')
+      expect(wrapper.text()).toContain('1d|50')
+      const buttons = wrapper.findAll('button').filter(button => button.text() === 'admin.accounts.usageWindow.activeQuery')
+      expect(buttons).toHaveLength(state === 'disabled' ? 0 : 1)
+      if (state === 'error') expect(wrapper.text()).toContain('admin.accounts.upstreamUsage.errors.UPSTREAM_USAGE_TIMEOUT')
+      if (state === 'disabled') expect(wrapper.text()).toContain('admin.accounts.upstreamUsage.disabled')
+      if (state === 'loading') expect(buttons[0].attributes('disabled')).toBeDefined()
+    }
+    expect(getUsage).not.toHaveBeenCalled()
+    expect(requestUpstreamUsage).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('renders eligible Ollama Cloud state and forwards query updates', async () => {

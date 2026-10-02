@@ -1,4 +1,5 @@
 import type { BillingMode, ChannelTimePricing, PricingInterval } from '@/api/admin/channels'
+import type { VideoPriceFormEntry, VideoImageInputPricingForm, VideoTokenPrepayForm } from './videoPricing'
 
 type TranslateFn = (key: string, params?: Record<string, unknown>) => string
 
@@ -22,6 +23,10 @@ export interface IntervalFormEntry {
 export interface PricingFormEntry {
   models: string[]
   billing_mode: BillingMode
+  video_prices?: VideoPriceFormEntry[]
+  video_image_input_pricing?: VideoImageInputPricingForm | null
+  video_fallback_price?: number | string | null
+  video_token_prepay?: VideoTokenPrepayForm | null
   // 空值保留“未配置”语义，0 表示显式免费。
   price_multiplier: number | string | null
   // OpenAI Fast 模式按最终普通价格收取的倍率。
@@ -216,6 +221,11 @@ function hasConfiguredPrice(val: number | string | null | undefined): boolean {
 
 /** 判断当前计费模式是否至少配置了一项实际参与计费的价格。 */
 export function hasExplicitPricing(entry: PricingFormEntry): boolean {
+  // 兜底价可以独立构成视频价卡，零价同样是显式合同。
+  if (['video', 'video_token', 'video_per_request'].includes(entry.billing_mode) && hasConfiguredPrice(entry.video_fallback_price)) return true
+  if (entry.billing_mode === 'video_token' || entry.billing_mode === 'video_per_request' || (entry.billing_mode === 'video' && entry.video_prices?.length)) {
+    return (entry.video_prices || []).some(value => hasConfiguredPrice(value.price))
+  }
   if (entry.billing_mode === 'per_request' || entry.billing_mode === 'image' || entry.billing_mode === 'video') {
     return hasConfiguredPrice(entry.per_request_price) ||
       entry.intervals.some(iv => hasConfiguredPrice(iv.per_request_price))
@@ -466,6 +476,7 @@ export function getPlatformTagClass(platform: string): string {
     case 'zhipu': return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
     case 'deepseek': return 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400'
     case 'minimax': return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
+    case 'video': return 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
     case 'opencode_go': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
     default: return 'bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400'
   }
@@ -483,6 +494,7 @@ export function getPlatformTextClass(platform: string): string {
     case 'zhipu': return 'text-indigo-700 dark:text-indigo-400'
     case 'deepseek': return 'text-teal-700 dark:text-teal-400'
     case 'minimax': return 'text-rose-700 dark:text-rose-400'
+    case 'video': return 'text-violet-700 dark:text-violet-400'
     case 'opencode_go': return 'text-amber-700 dark:text-amber-400'
     default: return ''
   }

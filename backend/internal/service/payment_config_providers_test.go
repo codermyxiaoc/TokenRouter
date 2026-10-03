@@ -743,6 +743,47 @@ func TestProviderDraftTestUsesStoredSensitiveConfigWithoutPersistingDraft(t *tes
 	require.Equal(t, "pkey-test", savedConfig["pkey"])
 }
 
+// 草稿探测允许随机订单不存在，但不能把鉴权或格式错误误判为配置可用。
+func TestProviderDraftTestRequiresRecognizedQueryResponse(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		statusCode int
+		body       string
+		wantError  bool
+	}{
+		{"order missing", http.StatusOK, `{"code":0,"msg":"订单不存在"}`, false},
+		{"valid response", http.StatusOK, `{"code":1,"status":0}`, false},
+		{"invalid credentials", http.StatusOK, `{"code":0,"msg":"商户密钥错误"}`, true},
+		{"merchant missing", http.StatusOK, `{"code":0,"msg":"merchant not found"}`, true},
+		{"unknown failure", http.StatusOK, `{"code":0,"msg":"failed"}`, true},
+		{"missing code", http.StatusOK, `{"msg":"not found"}`, true},
+		{"missing status", http.StatusOK, `{"code":1}`, true},
+		{"HTTP failure", http.StatusNotFound, `{"code":0,"msg":"not found"}`, true},
+		{"invalid response", http.StatusOK, `<html>not found</html>`, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+			config := validEasyPayProviderConfig(t)
+			config["apiBase"] = server.URL
+			svc := &PaymentConfigService{}
+			result, err := svc.TestProviderDraft(context.Background(), TestProviderDraftRequest{
+				ProviderKey: payment.TypeEasyPay, Config: config,
+			})
+			if tt.wantError {
+				require.Error(t, err)
+				require.Nil(t, result)
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, result.Reachable)
+		})
+	}
+}
+
 func TestDeleteProviderInstanceRetainsUnrecoveredForceExpiredOrder(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)

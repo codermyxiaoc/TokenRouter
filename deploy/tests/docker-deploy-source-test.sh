@@ -39,6 +39,6 @@ export SOURCE_LOG="$TEST_ROOT/source.log" DEPLOY_SOURCE="$ROOT_DIR/deploy"
 )
 [[ "$(wc -l < "$SOURCE_LOG" | tr -d ' ')" == 2 ]]
 cmp "$TEST_ROOT/deployment/docker-compose.yml" "$ROOT_DIR/deploy/docker-compose.local.yml"
-grep -Fq 'SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v3.2' "$TEST_ROOT/deployment/.env"
+grep -Fq 'SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v3.3' "$TEST_ROOT/deployment/.env"
 [[ -d "$TEST_ROOT/deployment/data" && -d "$TEST_ROOT/deployment/postgres_data" && -d "$TEST_ROOT/deployment/redis_data" ]]
 printf 'Docker deployment fork source checks passed.\n'

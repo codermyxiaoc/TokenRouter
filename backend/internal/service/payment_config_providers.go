@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -216,6 +217,7 @@ func (s *PaymentConfigService) CreateProviderInstance(ctx context.Context, req C
 
 // TestProviderDraft 使用未持久化的 EasyPay 草稿执行只读查单探测。
 // 探测订单号不会写入本地或发起任何真实扣款。
+// @project-doc docs/domains/payments_and_entitlements.md#easypay_order_query
 func (s *PaymentConfigService) TestProviderDraft(ctx context.Context, req TestProviderDraftRequest) (*ProviderDraftTestResult, error) {
 	providerKey := strings.TrimSpace(req.ProviderKey)
 	if providerKey != payment.TypeEasyPay {
@@ -248,7 +250,8 @@ func (s *PaymentConfigService) TestProviderDraft(ctx context.Context, req TestPr
 	if err != nil {
 		return nil, infraerrors.BadRequest("PAYMENT_PROVIDER_TEST_INVALID_CONFIG", "payment provider test configuration is invalid").WithCause(err)
 	}
-	if _, err := prov.QueryOrder(ctx, generateOutTradeNo()); err != nil {
+	// 随机探测订单本就不存在；仅此配置检查可接受明确的不存在响应，真实订单仍必须查明支付状态。
+	if _, err := prov.QueryOrder(ctx, generateOutTradeNo()); err != nil && !errors.Is(err, provider.ErrEasyPayOrderNotFound) {
 		return nil, infraerrors.ServiceUnavailable("PAYMENT_PROVIDER_TEST_FAILED", "payment provider test failed").WithCause(err)
 	}
 	return &ProviderDraftTestResult{Reachable: true}, nil

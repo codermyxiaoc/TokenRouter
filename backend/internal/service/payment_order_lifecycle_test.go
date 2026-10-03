@@ -6,6 +6,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/ent/enttest"
 	"github.com/TokenFlux/TokenRouter/ent/paymentauditlog"
 	"github.com/TokenFlux/TokenRouter/internal/payment"
+	"github.com/TokenFlux/TokenRouter/internal/payment/provider"
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
@@ -718,6 +721,137 @@ func TestCancelOrderStillClosesPendingUpstreamOrder(t *testing.T) {
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusCancelled, reloaded.Status)
+}
+
+// 使用真实EasyPay解析器连接本地上游，验证回退结果经过取消、审计和履约的完整服务链路。
+func TestCancelOrderEasyPayEmptyPOSTFallbackPreservesPaymentState(t *testing.T) {
+	tests := []struct {
+		name       string
+		getBody    string
+		wantStatus string
+		wantResult string
+		wantError  bool
+	}{
+		{
+			name:       "unpaid can be cancelled",
+			getBody:    `{"code":1,"status":0,"money":"88.00"}`,
+			wantStatus: OrderStatusCancelled,
+			wantResult: checkPaidResultCancelled,
+		},
+		{
+			name:       "paid is fulfilled instead of cancelled",
+			getBody:    `{"code":1,"status":1,"money":"88.00","trade_no":"easypay-paid-trade"}`,
+			wantStatus: OrderStatusCompleted,
+			wantResult: checkPaidResultAlreadyPaid,
+		},
+		{
+			name:       "unknown status remains pending",
+			getBody:    `{"code":1,"status":2}`,
+			wantStatus: OrderStatusPending,
+			wantError:  true,
+		},
+		{
+			name:       "missing status remains pending",
+			getBody:    `{"code":1}`,
+			wantStatus: OrderStatusPending,
+			wantError:  true,
+		},
+		{
+			name:       "business error remains pending",
+			getBody:    `{"code":0,"status":0,"msg":"not found"}`,
+			wantStatus: OrderStatusPending,
+			wantError:  true,
+		},
+		{
+			name:       "invalid response remains pending",
+			getBody:    `<html>unavailable</html>`,
+			wantStatus: OrderStatusPending,
+			wantError:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			client := newPaymentOrderLifecycleTestClient(t)
+			order := createPaymentOrderLifecycleOrder(t, ctx, client, OrderStatusPending, time.Now().Add(time.Hour))
+			requests := make(chan string, 8)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- r.Method
+				if err := r.ParseForm(); err != nil {
+					t.Errorf("parse query request: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if r.URL.Path != "/api.php" || r.Form.Get("act") != "order" || r.Form.Get("out_trade_no") != order.OutTradeNo {
+					t.Errorf("unexpected payment request path or action")
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if r.Method == http.MethodPost {
+					// 模拟仅接受GET查单的上游：POST成功响应没有正文。
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				if r.Method != http.MethodGet {
+					t.Errorf("unexpected payment request method: %s", r.Method)
+					w.WriteHeader(http.StatusMethodNotAllowed)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.getBody))
+			}))
+			t.Cleanup(server.Close)
+
+			easypay, err := provider.NewEasyPay("fallback-test", map[string]string{
+				"pid": "test-merchant", "pkey": "test-key", "apiBase": server.URL,
+				"notifyUrl": "https://example.com/notify", "returnUrl": "https://example.com/return",
+			})
+			require.NoError(t, err)
+			registry := payment.NewRegistry()
+			registry.Register(easypay)
+			userRepo := &mockUserRepo{getByIDUser: &User{ID: order.UserID, Email: order.UserEmail, Username: order.UserName}}
+			userRepo.updateBalanceFn = func(_ context.Context, userID int64, amount float64) error {
+				require.Equal(t, order.UserID, userID)
+				userRepo.getByIDUser.Balance += amount
+				return nil
+			}
+			redeemRepo := &paymentOrderLifecycleRedeemRepo{codesByCode: map[string]*RedeemCode{
+				order.RechargeCode: {ID: 1, Code: order.RechargeCode, Type: RedeemTypeBalance, Value: order.Amount, Status: StatusUnused},
+			}}
+			svc := &PaymentService{
+				entClient: client, registry: registry, providersLoaded: true, userRepo: userRepo,
+				redeemService: NewRedeemService(redeemRepo, userRepo, nil, nil, nil, client, nil, nil),
+			}
+
+			outcome, err := svc.CancelOrder(ctx, order.ID, order.UserID)
+			if tt.wantError {
+				require.Error(t, err)
+				require.Equal(t, 503, infraerrors.Code(err))
+				require.Equal(t, "PAYMENT_STATUS_UNAVAILABLE", infraerrors.Reason(err))
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tt.wantResult, outcome)
+			require.Len(t, requests, 2)
+			require.Equal(t, http.MethodPost, <-requests)
+			require.Equal(t, http.MethodGet, <-requests)
+			reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantStatus, reloaded.Status)
+			require.Equal(t, tt.wantStatus == OrderStatusCancelled, svc.hasAuditLog(ctx, order.ID, "ORDER_CANCELLED"))
+			require.Equal(t, tt.wantError, svc.hasAuditLog(ctx, order.ID, "PAYMENT_CANCEL_FAILED"))
+			if tt.wantStatus == OrderStatusCompleted {
+				require.Equal(t, order.Amount, userRepo.getByIDUser.Balance)
+				require.Len(t, redeemRepo.useCalls, 1)
+				require.NotNil(t, reloaded.PaidAt)
+				require.Equal(t, "easypay-paid-trade", reloaded.PaymentTradeNo)
+			} else {
+				require.Zero(t, userRepo.getByIDUser.Balance)
+				require.Empty(t, redeemRepo.useCalls)
+				require.Nil(t, reloaded.PaidAt)
+			}
+		})
+	}
 }
 
 func TestForceExpireOrderRecordsAuditAndRejectsRepeatedTransition(t *testing.T) {

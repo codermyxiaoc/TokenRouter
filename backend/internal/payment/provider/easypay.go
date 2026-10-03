@@ -2,11 +2,13 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,6 +34,9 @@ const (
 	paymentModePopup       = "popup"
 	deviceMobile           = "mobile"
 )
+
+// ErrEasyPayOrderNotFound 表示上游明确回复订单不存在，不能据此推断真实订单未支付。
+var ErrEasyPayOrderNotFound = errors.New("easypay order not found")
 
 // EasyPay implements payment.Provider for the EasyPay aggregation platform.
 type EasyPay struct {
@@ -308,7 +313,7 @@ type easyPayQueryData struct {
 }
 
 type easyPayQueryResponse struct {
-	Code        int              `json:"code"`
+	Code        *int             `json:"code"`
 	Msg         string           `json:"msg"`
 	TradeStatus *string          `json:"trade_status"`
 	Status      *int             `json:"status"`
@@ -317,19 +322,101 @@ type easyPayQueryResponse struct {
 	Data        easyPayQueryData `json:"data"`
 }
 
+// @project-doc docs/domains/payments_and_entitlements.md#easypay_order_query
 func (e *EasyPay) QueryOrder(ctx context.Context, tradeNo string) (*payment.QueryOrderResponse, error) {
+	// 查单及兼容回退共用一个总超时；复制客户端，避免改变下单和退款的传输行为。
+	client := http.Client{}
+	if e.httpClient != nil {
+		client = *e.httpClient
+	}
+	timeout := easypayHTTPTimeout
+	if client.Timeout > 0 && client.Timeout < timeout {
+		timeout = client.Timeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	client.Timeout = 0
+	// GET 查询含商户密钥，任何重定向都不能携带凭据继续访问。
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
 	params := map[string]string{
 		"act": "order", "pid": e.config["pid"],
 		"key": e.config["pkey"], "out_trade_no": tradeNo,
 	}
-	body, statusCode, err := e.postRaw(ctx, e.apiBase()+"/api.php", params)
+	method := easyPayQueryMethod(e.apiBase())
+	body, statusCode, err := e.queryRaw(ctx, &client, method, params)
 	if err != nil {
-		return nil, fmt.Errorf("easypay query: %w", err)
+		return nil, err
+	}
+	// 部分易支付平台仅从 URL 读取查单参数；只对成功但空白的 POST 回退一次。
+	if method == http.MethodPost && statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices && len(bytes.TrimSpace(body)) == 0 {
+		body, statusCode, err = e.queryRaw(ctx, &client, http.MethodGet, params)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return parseEasyPayQueryResponse(statusCode, body, tradeNo, e.MerchantIdentityMetadata())
 }
 
-// parseEasyPayQueryResponse 只把成功 HTTP 响应中的 JSON 对象解释为支付状态。
+// Z-Pay 官方查单协议要求 GET；精确匹配已核实主机，其他易支付保留 POST 兼容流程。
+func easyPayQueryMethod(apiBase string) string {
+	if parsed, err := url.Parse(apiBase); err == nil {
+		switch strings.ToLower(parsed.Hostname()) {
+		case "zpayz.cn", "www.zpayz.cn":
+			return http.MethodGet
+		}
+	}
+	return http.MethodPost
+}
+
+// queryRaw 独立约束查单请求，错误中不包含 URL、表单或上游正文中的商户密钥。
+func (e *EasyPay) queryRaw(ctx context.Context, client *http.Client, method string, params map[string]string) ([]byte, int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, fmt.Errorf("easypay query: %w", err)
+	}
+	values := url.Values{}
+	for key, value := range params {
+		values.Set(key, value)
+	}
+	endpoint := e.apiBase() + "/api.php"
+	var requestBody io.Reader
+	if method == http.MethodGet {
+		endpoint += "?" + values.Encode()
+	} else {
+		requestBody = strings.NewReader(values.Encode())
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, requestBody)
+	if err != nil {
+		return nil, 0, fmt.Errorf("easypay query %s: invalid request URL", method)
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		// net/http 的错误可能携带完整查询 URL，不能直接包装或输出。
+		if ctx.Err() != nil {
+			return nil, 0, fmt.Errorf("easypay query %s: %w", method, ctx.Err())
+		}
+		return nil, 0, fmt.Errorf("easypay query %s: request failed", method)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxEasypayResponseSize+1))
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, resp.StatusCode, fmt.Errorf("easypay query %s: %w", method, ctx.Err())
+		}
+		return nil, resp.StatusCode, fmt.Errorf("easypay query %s: read response failed", method)
+	}
+	if len(body) > maxEasypayResponseSize {
+		return nil, resp.StatusCode, fmt.Errorf("easypay query %s: response too large", method)
+	}
+	return body, resp.StatusCode, nil
+}
+
+// parseEasyPayQueryResponse 只接受 HTTP 与业务查询均成功且支付状态明确的 JSON 对象。
 // 错误响应不携带原始 body，避免错误页回显敏感信息进入日志或客户端。
 func parseEasyPayQueryResponse(statusCode int, body []byte, fallbackTradeNo string, metadata map[string]string) (*payment.QueryOrderResponse, error) {
 	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
@@ -353,21 +440,46 @@ func parseEasyPayQueryResponse(statusCode int, body []byte, fallbackTradeNo stri
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("easypay query non-JSON response (HTTP %d)", statusCode)
 	}
-	status := payment.ProviderStatusPending
+	if resp.Code == nil || *resp.Code != easypayCodeSuccess {
+		// 草稿连通性探测可识别明确的不存在结果，普通查单仍返回错误且不推断未支付。
+		if resp.Code != nil && easyPayQueryOrderNotFoundMessage(resp.Msg) {
+			return nil, fmt.Errorf("easypay query unsuccessful response (HTTP %d): %w", statusCode, ErrEasyPayOrderNotFound)
+		}
+		return nil, fmt.Errorf("easypay query unsuccessful response (HTTP %d)", statusCode)
+	}
+	var tradeStatus *string
+	var numericStatus *int
+	// 保留已有字段优先级，但不再将未知或缺失状态当作未付款。
 	if resp.TradeStatus != nil {
-		if *resp.TradeStatus == tradeStatusSuccess {
-			status = payment.ProviderStatusPaid
-		}
+		tradeStatus = resp.TradeStatus
 	} else if resp.Data.TradeStatus != nil {
-		if *resp.Data.TradeStatus == tradeStatusSuccess {
-			status = payment.ProviderStatusPaid
-		}
+		tradeStatus = resp.Data.TradeStatus
 	} else if resp.Status != nil {
-		if *resp.Status == easypayStatusPaid {
+		numericStatus = resp.Status
+	} else {
+		numericStatus = resp.Data.Status
+	}
+	var status string
+	if tradeStatus != nil {
+		switch *tradeStatus {
+		case tradeStatusSuccess:
 			status = payment.ProviderStatusPaid
+		case "WAITING", "WAIT_BUYER_PAY":
+			status = payment.ProviderStatusPending
+		default:
+			return nil, fmt.Errorf("easypay query unknown payment status")
 		}
-	} else if resp.Data.Status != nil && *resp.Data.Status == easypayStatusPaid {
-		status = payment.ProviderStatusPaid
+	} else if numericStatus != nil {
+		switch *numericStatus {
+		case easypayStatusPaid:
+			status = payment.ProviderStatusPaid
+		case 0:
+			status = payment.ProviderStatusPending
+		default:
+			return nil, fmt.Errorf("easypay query unknown payment status")
+		}
+	} else {
+		return nil, fmt.Errorf("easypay query missing payment status")
 	}
 
 	money := ""
@@ -392,6 +504,17 @@ func parseEasyPayQueryResponse(statusCode int, body []byte, fallbackTradeNo stri
 		Amount:   amount,
 		Metadata: metadata,
 	}, nil
+}
+
+// 仅识别固定的不存在文案；权限、路由或其他未知失败不能通过包含关系被误判。
+func easyPayQueryOrderNotFoundMessage(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(strings.TrimRight(strings.TrimSpace(message), ".!?。！？")))
+	switch message {
+	case "not found", "order not found", "order does not exist", "order not exist", "订单不存在", "订单编号不存在", "订单号不存在":
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *EasyPay) VerifyNotification(_ context.Context, rawBody string, _ map[string]string) (*payment.PaymentNotification, error) {

@@ -308,18 +308,44 @@ func TestIntelligenceRecoveryDoesNotResubmit(t *testing.T) {
 		require.Equal(t, "completed", repo.run.Status)
 		require.Equal(t, "passed", repo.run.Verdict)
 	})
-	for _, code := range []int{400, 429, 503} {
-		t.Run(string(rune(code)), func(t *testing.T) {
-			s, repo, client, _ := newIntelligenceFixture()
-			client.err = &manxue.HTTPError{StatusCode: code}
+}
+
+func TestIntelligenceSubmissionFailureDoesNotRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		err         error
+		wantStatus  string
+		wantMessage string
+	}{
+		{"HTTP400拒绝创建", &manxue.HTTPError{StatusCode: 400}, "error", "检测服务拒绝创建任务（HTTP 400）"},
+		{"HTTP429拒绝创建", &manxue.HTTPError{StatusCode: 429}, "error", "检测服务拒绝创建任务（HTTP 429）"},
+		{"HTTP503受理未知", &manxue.HTTPError{StatusCode: 503}, "unknown", "检测服务创建接口异常（HTTP 503）"},
+		{"提交超时受理未知", &manxue.TransportError{Timeout: true}, "unknown", "连接检测服务超时"},
+		{"原始错误不能回显", errors.New("https://private.example/v1 sk-privatekey1234567890123456 remote-capability"), "unknown", "检测提交未成功确认"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, repo, client, key := newIntelligenceFixture()
+			client.err = tc.err
 			s.execute(context.Background(), intelligenceQueued())
 			require.Equal(t, 1, client.creates)
+			require.Zero(t, client.gets)
+			require.Len(t, repo.saves, 2)
+			require.Equal(t, "submitting", repo.saves[0].Status)
+			require.Equal(t, tc.wantStatus, repo.run.Status)
+			require.Equal(t, tc.wantStatus, repo.run.Verdict)
+			require.Contains(t, repo.run.ErrorMessage, tc.wantMessage)
 			require.Contains(t, repo.run.ErrorMessage, "未自动重试")
-			if code == 503 {
-				require.Equal(t, "unknown", repo.run.Status)
-			} else {
-				require.Equal(t, "error", repo.run.Status)
+			require.True(t, repo.run.HasDetail)
+			require.NotNil(t, repo.run.FinishedAt)
+			for _, private := range []string{"https://private.example", key.Key, "remote-capability"} {
+				require.NotContains(t, repo.run.ErrorMessage, private)
 			}
+			// 模拟仅成功写入 submitting 就中断的恢复路径，不能因错误分类重新发出 POST。
+			interrupted := repo.saves[0]
+			s.execute(context.Background(), &interrupted)
+			require.Equal(t, 1, client.creates)
+			require.Zero(t, client.gets)
+			require.Equal(t, "unknown", repo.run.Status)
 		})
 	}
 }
@@ -342,10 +368,184 @@ func TestIntelligenceResultPrivacyAndUnknownVerdict(t *testing.T) {
 	s.applyResult(context.Background(), run, &manxue.TestResult{ID: "remote", Status: "succeeded", Benchmark: "candy"}, "")
 	require.NotEqual(t, "passed", repo.run.Verdict)
 	run = intelligenceQueued()
+	run.Benchmark = "drawing"
 	run.RemoteID = "remote"
 	s.applyResult(context.Background(), run, &manxue.TestResult{ID: "remote", Status: "succeeded", Benchmark: "pelican", Assessment: &manxue.Assessment{Quality: "good"}}, "")
-	require.Equal(t, "error", repo.run.Status)
+	require.Equal(t, "unknown", repo.run.Status)
+	require.Equal(t, "unknown", repo.run.Verdict)
+	require.Contains(t, repo.run.ErrorMessage, "未能给出明确的画图评判")
 }
+
+func TestIntelligenceDecodedResultPersistsOutcomeAndSafeDiagnostic(t *testing.T) {
+	// 使用协议原始 JSON 覆盖解码、判定和持久化全链路，避免结构体夹具绕开错误解析。
+	for _, tc := range []struct {
+		name         string
+		benchmark    string
+		payload      string
+		wantStatus   string
+		wantVerdict  string
+		wantMessage  string
+		wantDetail   bool
+		wantArtifact bool
+	}{
+		{
+			name: "糖果通过", benchmark: "candy",
+			payload:    `{"benchmark":"candy","status":"succeeded","candy":{"status":"passed","question":"糖果问题 __KEY__","answer":"21 __REMOTE__"}}`,
+			wantStatus: "completed", wantVerdict: "passed", wantDetail: true,
+		},
+		{
+			name: "糖果未通过", benchmark: "candy",
+			payload:    `{"benchmark":"candy","status":"succeeded","candy":{"status":"incorrect","answer":"20"}}`,
+			wantStatus: "completed", wantVerdict: "failed", wantDetail: true,
+		},
+		{
+			name: "糖果结果无正文", benchmark: "candy",
+			payload:    `{"benchmark":"candy","status":"succeeded","candy":{"status":"passed"}}`,
+			wantStatus: "completed", wantVerdict: "passed",
+		},
+		{
+			name: "糖果状态未知", benchmark: "candy",
+			payload:    `{"benchmark":"candy","status":"succeeded","candy":{"status":"undetermined"}}`,
+			wantStatus: "unknown", wantVerdict: "unknown", wantMessage: "糖果判定状态无法识别", wantDetail: true,
+		},
+		{
+			name: "糖果缺少结果", benchmark: "candy",
+			payload:    `{"benchmark":"candy","status":"succeeded"}`,
+			wantStatus: "unknown", wantVerdict: "unknown", wantMessage: "未返回糖果判定结果", wantDetail: true,
+		},
+		{
+			name: "糖果执行错误无原因", benchmark: "candy",
+			payload:    `{"benchmark":"candy","status":"succeeded","candy":{"status":"error"}}`,
+			wantStatus: "error", wantVerdict: "error", wantMessage: "未提供可识别的失败原因", wantDetail: true,
+		},
+		{
+			name: "顶层鉴权错误覆盖通过结果", benchmark: "candy",
+			payload:    `{"benchmark":"candy","status":"succeeded","candy":{"status":"passed"},"error":{"code":"invalid_api_key","message":"__URL__ __KEY__ __REMOTE__","status_code":401}}`,
+			wantStatus: "error", wantVerdict: "error", wantMessage: "检测服务报告失败：模型接口鉴权失败，请检查检测 Key（HTTP 401）", wantDetail: true,
+		},
+		{
+			name: "糖果嵌套额度错误覆盖通过结果", benchmark: "candy",
+			payload:    `{"benchmark":"candy","status":"succeeded","candy":{"status":"passed","error":{"error":{"type":"insufficient_quota","message":"__URL__ __KEY__ __REMOTE__"},"status":429}}}`,
+			wantStatus: "error", wantVerdict: "error", wantMessage: "糖果检测异常：模型接口余额或额度不足（HTTP 429）", wantDetail: true,
+		},
+		{
+			name: "字符串限流错误", benchmark: "candy",
+			payload:    `{"benchmark":"candy","status":"failed","error":"HTTP 429 too many requests __URL__ __KEY__ __REMOTE__"}`,
+			wantStatus: "error", wantVerdict: "error", wantMessage: "检测服务报告失败：模型接口请求受限，请稍后重试（HTTP 429）", wantDetail: true,
+		},
+		{
+			name: "未知错误原文不回显", benchmark: "candy",
+			payload:    `{"benchmark":"candy","status":"failed","error":{"code":"__KEY__","message":"__URL__ __REMOTE__"}}`,
+			wantStatus: "error", wantVerdict: "error", wantMessage: "未提供可安全展示的具体原因", wantDetail: true,
+		},
+		{
+			name: "空错误占位不改变成功", benchmark: "candy",
+			payload:    `{"benchmark":"candy","status":"succeeded","error":{},"candy":{"status":"passed","error":""}}`,
+			wantStatus: "completed", wantVerdict: "passed",
+		},
+		{
+			name: "糖果取消", benchmark: "candy",
+			payload:    `{"benchmark":"candy","status":"cancelled","error":"__URL__ __KEY__ __REMOTE__"}`,
+			wantStatus: "error", wantVerdict: "error", wantMessage: "检测任务已被取消", wantDetail: true,
+		},
+		{
+			name: "画图通过", benchmark: "drawing",
+			payload:    `{"benchmark":"pelican","status":"succeeded","result":{"html":"<p>作品 __KEY__ __REMOTE__</p>"},"assessment":{"quality":"normal","reason":"内容完整"}}`,
+			wantStatus: "completed", wantVerdict: "passed", wantDetail: true, wantArtifact: true,
+		},
+		{
+			name: "画图未通过", benchmark: "drawing",
+			payload:    `{"benchmark":"pelican","status":"succeeded","assessment":{"quality":"degraded","reason":"缺少部分元素"}}`,
+			wantStatus: "completed", wantVerdict: "failed", wantDetail: true,
+		},
+		{
+			name: "画图评判未知仍保留作品", benchmark: "drawing",
+			payload:    `{"benchmark":"pelican","status":"succeeded","result":{"html":"<p>作品</p>"},"assessment":{"quality":"unknown","reason":"评估说明 __KEY__ __REMOTE__"}}`,
+			wantStatus: "unknown", wantVerdict: "unknown", wantMessage: "未能给出明确的画图评判", wantDetail: true, wantArtifact: true,
+		},
+		{
+			name: "画图缺少质量评估", benchmark: "drawing",
+			payload:    `{"benchmark":"pelican","status":"succeeded","result":{"html":"<p>作品</p>"}}`,
+			wantStatus: "unknown", wantVerdict: "unknown", wantMessage: "未返回画图质量评估", wantDetail: true, wantArtifact: true,
+		},
+		{
+			name: "画图执行失败HTTP503", benchmark: "drawing",
+			payload:    `{"benchmark":"pelican","status":"failed","error":{"status_code":503,"message":"__URL__ __KEY__ __REMOTE__"}}`,
+			wantStatus: "error", wantVerdict: "error", wantMessage: "模型接口服务异常，请稍后重试（HTTP 503）", wantDetail: true,
+		},
+		{
+			name: "画图取消", benchmark: "drawing",
+			payload:    `{"benchmark":"pelican","status":"cancelled"}`,
+			wantStatus: "error", wantVerdict: "error", wantMessage: "检测任务已被取消", wantDetail: true,
+		},
+		{
+			name: "省略远端类型沿用画图配置", benchmark: "drawing",
+			payload:    `{"status":"succeeded","assessment":{"quality":"normal"}}`,
+			wantStatus: "completed", wantVerdict: "passed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, repo, _, key := newIntelligenceFixture()
+			run := intelligenceQueued()
+			run.Benchmark = tc.benchmark
+			run.RemoteID = "remote-private-capability"
+			privateURL := "https://private.example/custom/v1?credential=private-value"
+			payload := strings.NewReplacer("__KEY__", key.Key, "__REMOTE__", run.RemoteID, "__URL__", privateURL).Replace(tc.payload)
+			payload = `{"id":"` + run.RemoteID + `",` + strings.TrimPrefix(payload, "{")
+			var result manxue.TestResult
+			require.NoError(t, json.Unmarshal([]byte(payload), &result))
+			s.applyResult(context.Background(), run, &result, key.Key)
+			require.Len(t, repo.saves, 1)
+			require.Equal(t, tc.wantStatus, repo.run.Status)
+			require.Equal(t, tc.wantVerdict, repo.run.Verdict)
+			require.Equal(t, tc.wantDetail, repo.run.HasDetail)
+			require.Equal(t, tc.wantArtifact, repo.run.HasArtifact)
+			require.NotNil(t, repo.run.FinishedAt)
+			if tc.wantMessage == "" {
+				require.Empty(t, repo.run.ErrorMessage)
+			} else {
+				require.Contains(t, repo.run.ErrorMessage, tc.wantMessage)
+			}
+			raw, err := json.Marshal(repo.run)
+			require.NoError(t, err)
+			for _, private := range []string{key.Key, run.RemoteID, privateURL, "private.example", run.LeaseToken} {
+				require.NotContains(t, string(raw), private)
+			}
+			var visible map[string]any
+			require.NoError(t, json.Unmarshal(raw, &visible))
+			require.Equal(t, tc.wantDetail, visible["has_detail"])
+		})
+	}
+}
+
+func TestIntelligenceClassifyingPhasePersistsUntilAssessmentArrives(t *testing.T) {
+	s, repo, _, key := newIntelligenceFixture()
+	run := intelligenceQueued()
+	run.Benchmark = "drawing"
+	run.RemoteID = "remote-classifying"
+	var result manxue.TestResult
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"remote-classifying","benchmark":"pelican","status":"running","phase":"classifying","result":{"html":"<p>待评估作品</p>"}}`), &result))
+	s.applyResult(context.Background(), run, &result, key.Key)
+	require.Equal(t, "classifying", repo.run.Phase)
+	require.Equal(t, "running", repo.run.Status)
+	require.Equal(t, "pending", repo.run.Verdict)
+	require.Nil(t, repo.run.FinishedAt)
+	require.Empty(t, repo.run.ErrorMessage)
+	require.True(t, repo.run.HasArtifact)
+	require.True(t, repo.run.HasDetail)
+	// 评估阶段可继续查询同一远端任务，未知终态仍保留已生成的作品供查看。
+	result = manxue.TestResult{}
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"remote-classifying","benchmark":"pelican","status":"succeeded","phase":"completed","assessment":{"quality":"unknown","reason":"无法给出明确判断"}}`), &result))
+	s.applyResult(context.Background(), repo.run, &result, key.Key)
+	require.Len(t, repo.saves, 2)
+	require.Equal(t, "unknown", repo.run.Status)
+	require.Equal(t, "unknown", repo.run.Verdict)
+	require.Equal(t, "completed", repo.run.Phase)
+	require.Equal(t, "<p>待评估作品</p>", repo.run.HTML)
+	require.NotNil(t, repo.run.FinishedAt)
+	require.True(t, repo.run.HasDetail)
+}
+
 func TestIntelligenceUserVisibilityAndLightweightList(t *testing.T) {
 	s, repo, _, _ := newIntelligenceFixture()
 	run := intelligenceQueued()

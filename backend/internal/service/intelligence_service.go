@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
@@ -361,7 +362,7 @@ func (s *IntelligenceService) execute(ctx context.Context, run *IntelligenceRun)
 			if errors.As(err, &httpErr) && httpErr.StatusCode >= 400 && httpErr.StatusCode < 500 {
 				status = "error"
 			}
-			s.finish(context.WithoutCancel(ctx), run, status, status, "检测提交未成功确认，未自动重试，请核对站内使用记录")
+			s.finish(context.WithoutCancel(ctx), run, status, status, intelligenceSubmissionError(err))
 			return
 		}
 		if result == nil || result.ID == "" {
@@ -430,11 +431,12 @@ func (s *IntelligenceService) applyResult(ctx context.Context, run *Intelligence
 		result = &copy
 	}
 	run.Phase = ""
-	if intelligenceChoice(result.Phase, "queued", "generating", "testing", "assessing", "completed", "complete", "failed", "finished", "candy", "pelican") {
+	if intelligenceChoice(result.Phase, "queued", "generating", "testing", "assessing", "classifying", "completed", "complete", "failed", "finished", "candy", "pelican") {
 		run.Phase = result.Phase
 	}
 	run.Verdict = result.Outcome()
 	run.Status = "running"
+	run.ErrorMessage = ""
 	redact := func(v string) string {
 		if run.RemoteID != "" {
 			v = strings.ReplaceAll(v, run.RemoteID, "[已隐藏任务凭证]")
@@ -470,12 +472,58 @@ func (s *IntelligenceService) applyResult(ctx context.Context, run *Intelligence
 	if result.Terminal() {
 		run.Status = "completed"
 		if run.Verdict == "error" || run.Verdict == "unknown" {
-			run.Status = "error"
-			run.ErrorMessage = "检测调用失败或未获得明确评判，请查看站内使用记录"
+			// 生成结束但评估不明确属于未知，不能冒充调用失败或模型未通过。
+			run.Status = run.Verdict
+			run.ErrorMessage = intelligenceResultMessage(result, run.Verdict)
 		}
 		run.FinishedAt = &run.UpdatedAt
 	}
 	run.HasArtifact = run.HTML != ""
 	run.HasDetail = run.Question != "" || run.Answer != "" || run.HTML != "" || run.AssessmentReason != "" || run.ErrorMessage != ""
 	_, _ = s.repo.SaveRun(ctx, run, time.Now().Add(10*time.Second), false)
+}
+
+// 提交错误只引用安全类型和状态码，原始网络错误可能含地址、凭据和任务编号。
+func intelligenceSubmissionError(err error) string {
+	var httpErr *manxue.HTTPError
+	if errors.As(err, &httpErr) && httpErr.StatusCode >= 400 && httpErr.StatusCode <= 599 {
+		if httpErr.StatusCode < 500 {
+			return fmt.Sprintf("检测服务拒绝创建任务（HTTP %d），请检查检测参数或服务限流；未自动重试", httpErr.StatusCode)
+		}
+		return fmt.Sprintf("检测服务创建接口异常（HTTP %d），是否受理尚不确定；未自动重试，请核对站内使用记录", httpErr.StatusCode)
+	}
+	var transport *manxue.TransportError
+	if errors.As(err, &transport) && transport.Timeout {
+		return "连接检测服务超时，是否受理尚不确定；未自动重试，请核对站内使用记录"
+	}
+	if errors.Is(err, manxue.ErrResponseTooLarge) {
+		return "检测服务响应超过大小限制，未能确认任务信息；未自动重试，请核对站内使用记录"
+	}
+	return "检测提交未成功确认，未自动重试，请核对站内使用记录"
+}
+
+// 执行错误使用客户端的固定安全分类；评估未知使用独立文案，不回显远端任意错误正文。
+func intelligenceResultMessage(result *manxue.TestResult, verdict string) string {
+	if verdict == "unknown" {
+		if result.Benchmark == "candy" {
+			if result.Candy == nil {
+				return "检测已结束，但检测服务未返回糖果判定结果；不能据此判定模型是否通过"
+			}
+			return "检测已结束，但糖果判定状态无法识别；不能据此判定模型是否通过"
+		}
+		if result.Assessment == nil {
+			return "检测已结束，但检测服务未返回画图质量评估；不能据此判定模型是否降智"
+		}
+		return "检测已结束，但检测服务未能给出明确的画图评判；请查看评估说明"
+	}
+	if result.Status == "cancelled" {
+		return "检测任务已被取消，未自动重新提交"
+	}
+	if result.Error != nil && result.Error.Code != "" {
+		return "检测服务报告失败：" + result.Error.SafeMessage()
+	}
+	if result.Candy != nil && result.Candy.Error != nil && result.Candy.Error.Code != "" {
+		return "糖果检测异常：" + result.Candy.Error.SafeMessage()
+	}
+	return "检测服务报告执行异常，但未提供可识别的失败原因；请核对相同时段的站内使用记录"
 }

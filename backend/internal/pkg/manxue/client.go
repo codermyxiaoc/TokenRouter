@@ -113,20 +113,192 @@ type Assessment struct {
 
 // RemoteError 不保留远端任意报错正文，防止原始请求或凭据被带入日志。
 type RemoteError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	HTTPStatus int    `json:"http_status,omitempty"`
 }
 
 func (e *RemoteError) UnmarshalJSON(data []byte) error {
-	if !json.Valid(data) {
+	var value any
+	if json.Unmarshal(data, &value) != nil {
 		return ErrInvalidResponse
 	}
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) || bytes.Equal(bytes.TrimSpace(data), []byte(`""`)) {
+	*e = RemoteError{}
+	if !remoteErrorPresent(value, 0) {
 		return nil
 	}
-	e.Code = "remote_error"
-	e.Message = "检测服务报告执行失败"
+	// 原文仅在解析期间用于分类；结构中始终只保存固定词汇和受限状态码。
+	var codes, messages []string
+	collectRemoteError(value, 0, &codes, &messages, &e.HTTPStatus)
+	for _, code := range codes {
+		category := remoteErrorCategory(code)
+		// 网关可能用通用限流外层包装额度错误，明确的额度原因优先。
+		if e.Code == "" || (category == "quota" && (e.Code == "rate_limit" || e.Code == "remote_error")) {
+			e.Code = category
+		}
+	}
+	for _, message := range messages {
+		if e.HTTPStatus == 0 {
+			if match := remoteHTTPStatusPattern.FindStringSubmatch(message); len(match) > 1 {
+				e.HTTPStatus, _ = strconv.Atoi(match[1])
+			}
+		}
+		category := remoteErrorCategory(message)
+		if e.Code == "" || (category == "quota" && (e.Code == "rate_limit" || e.Code == "remote_error")) {
+			e.Code = category
+		}
+	}
+	if e.Code == "" {
+		switch e.HTTPStatus {
+		case 401:
+			e.Code = "auth"
+		case 403:
+			e.Code = "permission"
+		case 402:
+			e.Code = "quota"
+		case 408, 504:
+			e.Code = "timeout"
+		case 429:
+			e.Code = "rate_limit"
+		default:
+			switch {
+			case e.HTTPStatus >= 500:
+				e.Code = "upstream"
+			case e.HTTPStatus >= 400:
+				e.Code = "invalid_request"
+			default:
+				e.Code = "remote_error"
+			}
+		}
+	}
+	e.Message = remoteErrorMessages[e.Code]
 	return nil
+}
+
+// SafeMessage 即使面对手工构造的错误，也只返回本地模板和合法 HTTP 状态码。
+func (e *RemoteError) SafeMessage() string {
+	message := remoteErrorMessages["remote_error"]
+	if e == nil {
+		return message
+	}
+	if known, ok := remoteErrorMessages[e.Code]; ok {
+		message = known
+	}
+	if e.HTTPStatus >= 400 && e.HTTPStatus <= 599 {
+		message += fmt.Sprintf("（HTTP %d）", e.HTTPStatus)
+	}
+	return message
+}
+
+// 状态码必须有明确的 HTTP 或 status 标记，不能把任务编号中的数字当成错误码。
+var remoteHTTPStatusPattern = regexp.MustCompile(`(?i)\b(?:http(?:/[0-9](?:\.[0-9])?)?(?:\s+(?:error|status(?:\s+code)?))?|status(?:[_ ]+code)?)(?:\s*[:=]\s*|\s+)([45][0-9]{2})\b`)
+
+var remoteErrorMessages = map[string]string{
+	"auth":            "模型接口鉴权失败，请检查检测 Key",
+	"permission":      "模型接口拒绝访问，请检查 Key 和模型权限",
+	"quota":           "模型接口余额或额度不足",
+	"rate_limit":      "模型接口请求受限，请稍后重试",
+	"timeout":         "模型接口请求超时",
+	"invalid_request": "模型接口不接受检测请求，请检查模型、协议和参数",
+	"model":           "模型不存在或不可用，请检查模型名称和分组支持范围",
+	"transport":       "检测服务无法连接模型接口",
+	"upstream":        "模型接口服务异常，请稍后重试",
+	"remote_error":    "检测服务报告执行失败，未提供可安全展示的具体原因",
+}
+
+// 空错误占位符不代表失败；未知非空形状仍保守记录为通用错误。
+func remoteErrorPresent(value any, depth int) bool {
+	if depth > 8 {
+		return true
+	}
+	switch v := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(v) != ""
+	case map[string]any:
+		for _, item := range v {
+			if remoteErrorPresent(item, depth+1) {
+				return true
+			}
+		}
+		return false
+	case []any:
+		for _, item := range v {
+			if remoteErrorPresent(item, depth+1) {
+				return true
+			}
+		}
+		return false
+	default:
+		return true
+	}
+}
+
+// 仅解析约定的错误字段；headers、URL、任务编号等其他字段不能成为诊断文本。
+func collectRemoteError(value any, depth int, codes, messages *[]string, status *int) {
+	if depth > 8 {
+		return
+	}
+	switch v := value.(type) {
+	case string:
+		*messages = append(*messages, v)
+	case map[string]any:
+		for _, field := range []string{"status", "status_code", "http_status", "statusCode"} {
+			if *status != 0 {
+				break
+			}
+			var candidate int
+			switch raw := v[field].(type) {
+			case float64:
+				if raw >= 400 && raw <= 599 && raw == float64(int(raw)) {
+					candidate = int(raw)
+				}
+			case string:
+				candidate, _ = strconv.Atoi(strings.TrimSpace(raw))
+			}
+			if candidate >= 400 && candidate <= 599 {
+				*status = candidate
+			}
+		}
+		for _, field := range []string{"code", "type"} {
+			if code, ok := v[field].(string); ok {
+				*codes = append(*codes, code)
+			}
+		}
+		for _, field := range []string{"error", "message", "detail"} {
+			collectRemoteError(v[field], depth+1, codes, messages, status)
+		}
+	}
+}
+
+// 错误分类只返回本地白名单，不把远端 code 或 message 直接回显。
+func remoteErrorCategory(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if _, known := remoteErrorMessages[value]; known {
+		return value
+	}
+	for _, category := range []struct {
+		code     string
+		patterns []string
+	}{
+		{"quota", []string{"insufficient_quota", "quota_exceeded", "exceeded your current quota", "billing_hard_limit", "insufficient_balance", "insufficient balance", "daily_limit_exceeded", "weekly_limit_exceeded", "monthly_limit_exceeded", "daily usage limit exceeded", "weekly usage limit exceeded", "monthly usage limit exceeded", "余额不足", "额度不足"}},
+		{"model", []string{"model_not_found", "model not found", "model does not exist", "model_not_available", "模型不存在", "模型不可用"}},
+		{"auth", []string{"invalid_api_key", "invalid api key", "incorrect api key", "authentication_error", "authentication failed", "unauthorized", "鉴权失败", "认证失败"}},
+		{"permission", []string{"permission_denied", "permission denied", "permission_error", "forbidden", "权限不足", "无权访问"}},
+		{"rate_limit", []string{"rate_limit", "rate limit", "too many requests", "限流", "请求过于频繁"}},
+		{"timeout", []string{"timeout", "timed out", "超时"}},
+		{"invalid_request", []string{"invalid_request", "invalid request", "unsupported_parameter", "unsupported parameter", "invalid_parameter", "invalid parameter", "参数无效", "不支持的参数"}},
+		{"transport", []string{"connection_error", "connection error", "connection refused", "connection reset", "network error", "dns", "tls handshake", "连接失败", "无法连接"}},
+		{"upstream", []string{"server_error", "internal server error", "service_unavailable", "service unavailable", "bad gateway", "服务异常"}},
+	} {
+		for _, pattern := range category.patterns {
+			if strings.Contains(value, pattern) {
+				return category.code
+			}
+		}
+	}
+	return ""
 }
 
 // HTTPError 只携带安全状态码与重试等待时间，不包含 URL、响应正文或任务 ID。

@@ -28,6 +28,7 @@ const appStore = vi.hoisted(() => ({
     risk_control_enabled?: boolean
     team_enabled?: boolean
     ticket_enabled?: boolean
+    intelligence_enabled?: boolean
     usage_ranking_enabled?: boolean
     custom_menu_items?: []
   },
@@ -211,6 +212,40 @@ describe('feature route guard', () => {
     authStore.isAdmin = true
     appStore.publicSettingsLoaded = true
     appStore.cachedPublicSettings = { ticket_enabled: false }
+    const { navigation, next } = runGuard(route.meta!, route.path)
+    await navigation
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it.each([undefined, false])('keeps intelligence results closed when the flag is %s', async (enabled) => {
+    appStore.publicSettingsLoaded = true
+    appStore.cachedPublicSettings = { intelligence_enabled: enabled }
+    const route = routerHarness.routes.find(item => item.path === '/intelligence')!
+    expect(route.meta?.requiresIntelligence).toBe(true)
+    const { navigation, next } = runGuard(route.meta!, route.path)
+    await navigation
+    expect(next).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it('loads intelligence settings before allowing the user route', async () => {
+    appStore.fetchPublicSettings.mockImplementation(async () => {
+      appStore.cachedPublicSettings = { intelligence_enabled: true }
+      appStore.publicSettingsLoaded = true
+      return appStore.cachedPublicSettings
+    })
+    const { navigation, next } = runGuard({ requiresIntelligence: true }, '/intelligence')
+    await navigation
+    expect(appStore.fetchPublicSettings).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it('keeps intelligence administration reachable while the feature is off', async () => {
+    authStore.isAdmin = true
+    appStore.publicSettingsLoaded = true
+    appStore.cachedPublicSettings = { intelligence_enabled: false }
+    const route = routerHarness.routes.find(item => item.path === '/admin/intelligence-tests')!
+    expect(route.meta?.requiresAdmin).toBe(true)
+    expect(route.meta?.requiresIntelligence).not.toBe(true)
     const { navigation, next } = runGuard(route.meta!, route.path)
     await navigation
     expect(next).toHaveBeenCalledWith()

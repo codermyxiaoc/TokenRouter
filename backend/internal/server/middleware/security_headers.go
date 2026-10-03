@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
@@ -141,6 +142,10 @@ func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) g
 
 	return func(c *gin.Context) {
 		finalPolicy := policy
+		// 仅允许本站的受票据保护作品路径；不扩大主站脚本权限或全部同源 iframe。
+		if source := intelligencePreviewFrameSource(c.Request.Host); source != "" {
+			finalPolicy = addToDirective(finalPolicy, "frame-src", source)
+		}
 		if getFrameSrcOrigins != nil {
 			for _, origin := range getFrameSrcOrigins() {
 				if origin != "" {
@@ -171,6 +176,17 @@ func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) g
 		}
 		c.Next()
 	}
+}
+
+// Host 只用于 CSP 来源表达式，严格限制字符，避免把请求头拼成额外策略。
+var intelligencePreviewHost = regexp.MustCompile(`^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[A-Fa-f0-9:]+\])(?::[0-9]{1,5})?$`)
+
+func intelligencePreviewFrameSource(host string) string {
+	if !intelligencePreviewHost.MatchString(host) {
+		return ""
+	}
+	// 不写协议，由浏览器沿用文档协议，兼容 TLS 在反向代理终止的部署。
+	return host + "/api/v1/intelligence-tests/preview-content/"
 }
 
 func isAPIRoutePath(c *gin.Context) bool {

@@ -104,6 +104,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // auditLog
 		nil, // 国产供应商用量监控
 		nil, // 工单后台任务
+		service.NewIntelligenceService(nil, nil, nil, nil, nil, nil), // 未启动的检测工作者也可安全关闭
 		nil, // 插件进程管理
 	)
 

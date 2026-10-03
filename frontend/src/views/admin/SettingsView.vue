@@ -7482,6 +7482,25 @@
 
         <!-- 分页：功能特性 -->
         <div v-show="activeTab === 'features'" class="space-y-6">
+          <!-- 检测开关独立于既有渠道状态；关闭时保留历史与管理配置。 -->
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t('intelligence.title') }}
+              </h2>
+            </div>
+            <div class="flex items-center justify-between gap-4 p-6">
+              <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('intelligence.settings.enabled') }}
+                </label>
+                <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('intelligence.settings.hint') }}
+                </p>
+              </div>
+              <Toggle v-model="form.intelligence_enabled" data-testid="intelligence-enabled-toggle" />
+            </div>
+          </div>
           <!-- 此开关仅隐藏菜单，运行中的插件必须在插件管理页停用。 -->
           <div class="card">
             <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
@@ -10075,6 +10094,7 @@ const form = reactive<SettingsForm>({
   // 页面功能开关默认开启，兼容升级前行为。
   team_enabled: true,
   creative_enabled: true,
+  intelligence_enabled: false,
   creative_model_settings: [] as CreativeModelSetting[],
   creative_worker_count: 128,
   risk_control_enabled: false,
@@ -12223,6 +12243,7 @@ async function saveSettings() {
       // 页面功能开关
       team_enabled: form.team_enabled,
       creative_enabled: form.creative_enabled,
+      intelligence_enabled: form.intelligence_enabled,
       creative_model_settings: normalizedCreativeModelSettings,
       creative_worker_count: normalizedCreativeWorkerCount,
       risk_control_enabled: form.risk_control_enabled,

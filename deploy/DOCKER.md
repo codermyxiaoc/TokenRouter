@@ -3,7 +3,7 @@
 当前标准、本地目录和 standalone Compose 默认从 DockerHub 拉取：
 
 ```text
-coderxiaoc/tokenrouter:v0.1.278-ct-v2.8
+coderxiaoc/tokenrouter:v0.1.278-ct-v2.9
 ```
 
 在 `.env` 中设置 `SUB2API_IMAGE` 可选择其他已发布标签或镜像摘要。这些 Compose 保留 `pull_policy: always`，部署服务器无需源码。应用依赖 PostgreSQL 和 Redis；Compose 提供运行配置、持久化存储、健康检查和依赖启动顺序。
@@ -27,10 +27,10 @@ coderxiaoc/tokenrouter:v0.1.278-ct-v2.8
 
 ```bash
 docker login
-docker buildx build --platform linux/amd64 --build-arg VERSION=0.1.278-ct-v2.8 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v2.8 --load --file Dockerfile .
-docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v2.8 --version
-docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v2.8 --version
-docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.8
+docker buildx build --platform linux/amd64 --build-arg VERSION=0.1.278-ct-v2.9 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v2.9 --load --file Dockerfile .
+docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v2.9 --version
+docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v2.9 --version
+docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.9
 ```
 
 版本和 PostgreSQL 客户端检查不挂载现有数据，也不启动应用服务。程序内部版本号不带 `v`，镜像标签保留 `v` 前缀。根 `Dockerfile` 还支持 `COMMIT`、`DATE` 构建参数；发布下一版本时同时替换构建参数、镜像标签与部署端 `SUB2API_IMAGE`。以上命令只发布 `amd64`，不会同时生成 `arm64` 镜像。
@@ -43,8 +43,8 @@ docker push coderxiaoc/tokenrouter:v0.1.278-ct-v2.8
 
 ```bash
 set -e
-binary="$PWD/release/sub2api_v0.1.278-ct-v2.8_linux_amd64/sub2api"
-image=coderxiaoc/tokenrouter:v0.1.278-ct-v2.8
+binary="$PWD/release/sub2api_v0.1.278-ct-v2.9_linux_amd64/sub2api"
+image=coderxiaoc/tokenrouter:v0.1.278-ct-v2.9
 build_context="$(mktemp -d)"
 test -s "$binary"
 mkdir -p "$build_context/backend" "$build_context/deploy"
@@ -64,7 +64,7 @@ image_binary_hash="$(docker run --rm --entrypoint sha256sum "$image" /app/sub2ap
 test "$binary_hash" = "$image_binary_hash"
 ```
 
-核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v2.8`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
+核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v2.9`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
 
 ```bash
 docker login
@@ -89,7 +89,7 @@ nano .env
 在现有部署目录修改 `.env`，保留原有密码、JWT/TOTP 密钥以及其他配置：
 
 ```dotenv
-SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v2.8
+SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v2.9
 POSTGRES_BIND_HOST=127.0.0.1
 POSTGRES_PORT=5433
 ```
@@ -107,7 +107,7 @@ docker compose -f docker-compose.yml pull sub2api
 
 ```bash
 docker compose -f docker-compose.yml stop sub2api
-backup_dir="backups/pre-v2.8-$(date +%Y%m%d-%H%M%S)"
+backup_dir="backups/pre-v2.9-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$backup_dir"
 chmod 700 "$backup_dir"
 cp -p .env docker-compose.yml "$backup_dir/"
@@ -130,7 +130,15 @@ docker compose -f docker-compose.yml exec -T sub2api wget -q -O - http://127.0.0
 
 `--no-deps sub2api` 只更新应用，不替换 PostgreSQL 或 Redis。新应用启动时自动执行待应用迁移。沿用既有数据、配置和稳定安全密钥，完成升级后检查程序版本、健康状态、登录、网关调用和用量记录。
 
-### v2.8 升级检查
+### v2.9 降智检测升级检查
+
+从 `v0.1.278-ct-v2.8` 更新到 `v0.1.278-ct-v2.9` 新增 `294_intelligence_tests.sql`，只创建独立的检测配置、执行记录表及索引，不回填或修改既有余额、订阅、额度、账本、用量记录或计费规则。本次交付 Ubuntu `linux/amd64` 二进制和同平台 DockerHub 镜像；Apple Container 的 `linux/arm64` 环境须选择实际已发布的兼容镜像。
+
+降智检测总开关与定时检测默认关闭，升级不会自动创建检测任务。继续使用原数据库、Redis、数据目录和稳定的 `JWT_SECRET`，多实例必须使用相同密钥；检测 Base URL 必须是 Manxue 可访问的本站公网 HTTPS 网关地址。启用前配置只绑定目标分组的专用普通站内 API Key，其模型请求仍通过既有网关正常计费。
+
+升级后核对迁移 294、版本与健康、原有账务数据、开关关闭行为，以及启用后的管理员配置和用户分组权限。关闭总开关只阻止新检测；已获得远端 ID 的任务继续 GET 轮询并保存结果，不能因为重启、关开功能或 Key 停用而重新 POST。回退前先关闭新检测并等待已提交任务结束，旧版本不具备检测恢复器；缺少远端 ID 的 `submitting` 记录保持未知并先核对使用记录，不通过删除记录重试。完整升级与恢复边界见[部署与数据库迁移](../docs/operations/deployment_and_migrations.md#v2_9_upgrade)及[降智检测](../docs/domains/intelligence_tests.md)。从 v2.7 或更早版本跨级升级时，还须遵守下述 v2.8 视频平台升级要求。
+
+### v2.8 历史升级检查
 
 从 `v0.1.278-ct-v2.7` 更新到 `v0.1.278-ct-v2.8` 新增迁移 289–293，最高迁移为 `293_video_fallback_and_token_prepay.sql`。本次交付 Ubuntu `linux/amd64` 二进制和同平台 DockerHub 镜像；Apple Container 的 `linux/arm64` 环境须选择实际已发布的兼容镜像，本次标签不提供该架构。
 
@@ -270,7 +278,7 @@ v1.3 的 WS 执行状态按 API Key、原始线程/会话和 `request_kind` 隔�
 
 ## 镜像标签
 
-当前默认固定版本标签 `v0.1.278-ct-v2.8`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
+当前默认固定版本标签 `v0.1.278-ct-v2.9`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
 
 ## 相关链接
 

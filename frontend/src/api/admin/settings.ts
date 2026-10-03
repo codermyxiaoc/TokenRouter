@@ -730,6 +730,7 @@ export interface SystemSettings {
   // 页面功能开关
   team_enabled: boolean;
   creative_enabled: boolean;
+  intelligence_enabled: boolean;
   creative_model_settings: CreativeModelSetting[];
   creative_worker_count: number;
   risk_control_enabled: boolean;
@@ -1055,6 +1056,7 @@ export interface UpdateSettingsRequest {
   // 页面功能开关
   team_enabled?: boolean;
   creative_enabled?: boolean;
+  intelligence_enabled?: boolean;
   creative_worker_count?: number;
   risk_control_enabled?: boolean;
   cyber_session_block_enabled?: boolean;

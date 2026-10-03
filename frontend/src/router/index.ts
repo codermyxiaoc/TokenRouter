@@ -389,7 +389,19 @@ const routes: RouteRecordRaw[] = [
       requiresPayment: true
     }
   },
-  // 工单入口保留历史访问，暂停创建的限制由工单配置和服务端共同执行。
+  // 检测结果由专用开关控制，管理员配置入口始终保留。
+  {
+    path: '/intelligence',
+    name: 'Intelligence',
+    component: () => import('@/views/user/IntelligenceView.vue'),
+    meta: { requiresAuth: true, requiresIntelligence: true, hidePageHeading: true, title: 'Model quality checks', titleKey: 'intelligence.title' }
+  },
+  {
+    path: '/admin/intelligence-tests',
+    name: 'AdminIntelligenceTests',
+    component: () => import('@/views/admin/IntelligenceTestsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, hidePageHeading: true, title: 'Intelligence checks', titleKey: 'intelligence.adminTitle' }
+  },
   {
     path: '/tickets',
     name: 'Tickets',
@@ -967,6 +979,7 @@ router.beforeEach(async (to, _from, next) => {
     || to.meta.requiresUsageRanking
     || to.meta.requiresCreative
     || to.meta.requiresTickets
+    || to.meta.requiresIntelligence
   if (requiresPublicFeature && !appStore.publicSettingsLoaded) {
     try {
       await appStore.fetchPublicSettings()
@@ -1019,6 +1032,12 @@ router.beforeEach(async (to, _from, next) => {
     appStore.cachedPublicSettings?.creative_enabled === false
   ) {
     next(authStore.isAdmin ? '/admin/settings' : '/dashboard')
+    return
+  }
+
+  // 仅明确开启后开放用户检测页，旧缓存缺失字段也不放行。
+  if (to.meta.requiresIntelligence && appStore.cachedPublicSettings?.intelligence_enabled !== true) {
+    next(authStore.isAdmin ? '/admin/intelligence-tests' : '/dashboard')
     return
   }
 

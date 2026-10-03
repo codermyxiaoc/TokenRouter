@@ -18,6 +18,10 @@ func RegisterUserRoutes(
 	settingService *service.SettingService,
 	panelRateLimiter *middleware.PanelRateLimiter,
 ) {
+	// 原生 iframe 使用短期单作品票据；内容服务自行复核权限和隔离策略。
+	if h.IntelligenceTests != nil {
+		v1.GET("/intelligence-tests/preview-content/:ticket", panelRateLimiter.PublicIP(), h.IntelligenceTests.PreviewContent)
+	}
 	// 原生视频元素无法设置面板 JWT；只允许通过已鉴权接口签发的短期任务专属票据播放。
 	if h.MediaTask != nil {
 		v1.GET("/media-tasks/preview-content/:ticket", panelRateLimiter.PublicIP(), h.MediaTask.PreviewContent)
@@ -33,6 +37,7 @@ func RegisterUserRoutes(
 	{
 		// 工单始终按当前登录用户隔离。
 		registerTicketRoutes(authenticated, h)
+		registerIntelligenceRoutes(authenticated, h)
 		registerMediaTaskRoutes(authenticated, h, false)
 
 		// 用户接口

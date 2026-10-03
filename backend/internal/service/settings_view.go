@@ -191,7 +191,8 @@ type SystemSettings struct {
 	// TeamEnabled 控制团队功能页面的入口与访问。
 	TeamEnabled bool
 	// CreativeEnabled 控制创作台页面入口与 API 访问（进程配置 creative.enabled 仍为前置条件）。
-	CreativeEnabled bool
+	CreativeEnabled     bool
+	IntelligenceEnabled bool
 	// RiskControlEnabled 控制风控中心入口和网关内容审计总开关。
 	RiskControlEnabled                   bool
 	CyberSessionBlockEnabled             bool
@@ -411,6 +412,7 @@ type PublicSettings struct {
 	TicketEnabled bool
 	// CreativeEnabled 暴露给前端用于控制创作台页面入口与路由守卫。
 	CreativeEnabled       bool
+	IntelligenceEnabled   bool
 	OIDCOAuthEnabled      bool
 	OIDCOAuthProviderName string
 	GitHubOAuthEnabled    bool

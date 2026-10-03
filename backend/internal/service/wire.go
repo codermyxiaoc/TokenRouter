@@ -11,6 +11,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/antigravity"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/manxue"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
@@ -841,6 +842,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(TicketConfigProvider), new(*TicketConfigService)),
 	NewTicketService,
 	ProvideTicketRuntime,
+	ProvideIntelligenceService,
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	ProvideAuthCacheInvalidationWorker,
@@ -1052,4 +1054,11 @@ func ProvideClaudeResetCreditService(accounts AccountRepository, tokens *ClaudeT
 	s.ConfigureRedemption(idem, locks)
 	s.ConfigureTransport(upstream, profiles)
 	return s
+}
+
+// ProvideIntelligenceService 复用数据库权限与后台生命周期，不进入既有渠道探测统计。
+func ProvideIntelligenceService(repo IntelligenceRepository, keys APIKeyRepository, groups GroupRepository, keyService *APIKeyService, settings *SettingService) *IntelligenceService {
+	svc := NewIntelligenceService(repo, keys, groups, keyService, manxue.NewClient(nil), settings.IsIntelligenceEnabled)
+	svc.Start()
+	return svc
 }

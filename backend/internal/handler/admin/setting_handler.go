@@ -325,6 +325,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		DefaultBalance:                                   settings.DefaultBalance,
 		TeamEnabled:                                      settings.TeamEnabled,
 		CreativeEnabled:                                  settings.CreativeEnabled,
+		IntelligenceEnabled:                              settings.IntelligenceEnabled,
 		CreativeModelSettings:                            settings.CreativeModelSettings,
 		CreativeWorkerCount:                              settings.CreativeWorkerCount,
 		RiskControlEnabled:                               settings.RiskControlEnabled,

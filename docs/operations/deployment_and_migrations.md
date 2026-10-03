@@ -10,6 +10,7 @@
 - [迁移执行](#migration_execution)：修改 runner 或迁移格式时读取。
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
+- [v2.9 降智检测升级](#v2_9_upgrade)：从 v2.8 升级检测配置、持久任务与画图预览时读取。
 - [v2.8 视频平台升级](#v2_8_upgrade)：从 v2.7 升级视频任务、价卡和重置代次时读取。
 - [v1.3 升级与缓存切换](#v1_3_upgrade)：从 v1.2 更新 OpenCode、WS 和账号缓存时读取。
 - [WS 池与作用域更新](#ws-连接池与执行作用域更新)：更新连接容量和跨实例会话隔离时读取。
@@ -40,7 +41,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v2.8`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v2.9`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -55,11 +56,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v2.8`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v2.9`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v2.8 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v2.9 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -90,6 +91,8 @@
 - schema、数据回填、Repository 查询和 Ent schema 变化应在同一兼容序列中设计；若明确无法支持新旧二进制共存，必须在本页记录停机升级、备份与回滚步骤。
 
 ## 新增与同步迁移
+
+v2.9 新增 `294_intelligence_tests.sql`，创建独立的 `intelligence_test_configs`、`intelligence_test_runs` 表及活动任务唯一索引、轮询和历史索引，不修改既有账本、余额、订阅或计费数据。升级和恢复要求见下文 [v2.9 降智检测升级](#v2_9_upgrade)。
 
 v2.8 独立 Video 新增迁移 289–293：
 
@@ -124,7 +127,18 @@ v2.8 独立 Video 新增迁移 289–293：
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v2.8`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `293_video_fallback_and_token_prepay.sql`。
+当前发布版本为 `v0.1.278-ct-v2.9`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `294_intelligence_tests.sql`。
+
+<a id="v2_9_upgrade"></a>
+### v2.9 降智检测升级
+
+从 v2.8 升级只新增迁移 294，原迁移 289–293 及更早文件保持不变。新表独立保存检测配置和执行结果，不回填或改写已有余额、订阅用量、额度窗口、有效期、重置次数、账本及用量记录，也不改变路由和计费规则；供应商通过配置的站内 API Key 请求模型时，仍按既有网关链路正常记账。降智检测总开关 `intelligence_enabled` 默认关闭，配置的定时检测也默认关闭，升级不会自动发起检测。
+
+升级前验证数据库和配置备份，沿用原数据库、Redis、数据目录、Compose 项目及稳定的 `JWT_SECRET`；画图预览票据依赖该密钥，多实例必须保持一致。完成全部后端和前端更新，再按需开启功能。检测 Base URL 必须是 Manxue 能访问的本站公网 HTTPS 网关地址，不能使用 HTTP、localhost 或私网地址；使用只绑定目标分组的专用普通站内 API Key，并先确认该 Key 的权限、额度及预期费用。管理员配置和用户只读权限见[降智检测](../domains/intelligence_tests.md#intelligence_access)。
+
+升级后核对迁移 294、版本与健康、既有账务与订阅数据、默认关闭时的菜单及 API 限制，按需验证管理员配置、用户分组隔离和画图预览。关闭总开关阻止新提交和定时入队；已持有远端 ID 的任务继续 GET 轮询并保存结果，重启、关闭功能或停用 Key 均不能触发重复 POST。未持有远端 ID 的 `submitting` 记录按未知结果处理，先核对使用记录，不自动重发；完整轮询、租约和超时规则以[降智检测](../domains/intelligence_tests.md)为准。
+
+回退前关闭新检测并保留 v2.9 工作者，直到已提交任务结束或其未知结果完成核对。旧应用没有检测恢复器，回退不会撤销远端已受理请求及其正常网关费用，也不会删除新增表；不能通过删除检测记录、迁移记录或修改余额处理未知结果。需要精确恢复升级前状态时，先核对升级后的账务，再使用已验证的数据库与配置备份。由 v2.7 或更早版本跨级升级仍须执行下述 v2.8 视频平台停机与恢复要求。
 
 <a id="v2_8_upgrade"></a>
 ### v2.8 视频平台升级

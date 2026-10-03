@@ -363,8 +363,9 @@ type UpdateSettingsRequest struct {
 	// 风控中心功能开关
 	RiskControlEnabled *bool `json:"risk_control_enabled"`
 	// 团队和创作台页面功能开关
-	TeamEnabled     *bool `json:"team_enabled"`
-	CreativeEnabled *bool `json:"creative_enabled"`
+	TeamEnabled         *bool `json:"team_enabled"`
+	CreativeEnabled     *bool `json:"creative_enabled"`
+	IntelligenceEnabled *bool `json:"intelligence_enabled"`
 
 	// cyber 会话屏蔽开关与 TTL
 	CyberSessionBlockEnabled    *bool   `json:"cyber_session_block_enabled"`
@@ -1890,6 +1891,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.CreativeEnabled
 		}(),
+		IntelligenceEnabled: func() bool {
+			if req.IntelligenceEnabled != nil {
+				return *req.IntelligenceEnabled
+			}
+			return previousSettings.IntelligenceEnabled
+		}(),
 		CreativeModelSettings: func() []service.CreativeModelSetting {
 			if req.CreativeModelSettings != nil {
 				return *req.CreativeModelSettings
@@ -2488,6 +2495,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DefaultBalance:                                   updatedSettings.DefaultBalance,
 		TeamEnabled:                                      updatedSettings.TeamEnabled,
 		CreativeEnabled:                                  updatedSettings.CreativeEnabled,
+		IntelligenceEnabled:                              updatedSettings.IntelligenceEnabled,
 		CreativeModelSettings:                            updatedSettings.CreativeModelSettings,
 		CreativeWorkerCount:                              updatedSettings.CreativeWorkerCount,
 		RiskControlEnabled:                               updatedSettings.RiskControlEnabled,

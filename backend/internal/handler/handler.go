@@ -45,30 +45,31 @@ type AdminHandlers struct {
 
 // Handlers contains all HTTP handlers
 type Handlers struct {
-	Auth             *AuthHandler
-	User             *UserHandler
-	APIKey           *APIKeyHandler
-	Usage            *UsageHandler
-	Redeem           *RedeemHandler
-	Subscription     *SubscriptionHandler
-	Announcement     *AnnouncementHandler
-	ModelMarketplace *ModelMarketplaceHandler
-	Admin            *AdminHandlers
-	Gateway          *GatewayHandler
-	OpenAIGateway    *OpenAIGatewayHandler
-	QoderGateway     *QoderGatewayHandler
-	Setting          *SettingHandler
-	Totp             *TotpHandler
-	Passkey          *PasskeyHandler
-	Payment          *PaymentHandler
-	PaymentWebhook   *PaymentWebhookHandler
-	MediaTask        *MediaTaskHandler
-	AsyncImage       *AsyncImageHandler
-	Video            *VideoHandler
-	BatchImage       *BatchImageHandler
-	Creative         *CreativeHandler
-	Team             *TeamHandler
-	Ticket           *TicketHandler
+	Auth              *AuthHandler
+	User              *UserHandler
+	APIKey            *APIKeyHandler
+	Usage             *UsageHandler
+	Redeem            *RedeemHandler
+	Subscription      *SubscriptionHandler
+	Announcement      *AnnouncementHandler
+	ModelMarketplace  *ModelMarketplaceHandler
+	Admin             *AdminHandlers
+	Gateway           *GatewayHandler
+	OpenAIGateway     *OpenAIGatewayHandler
+	QoderGateway      *QoderGatewayHandler
+	Setting           *SettingHandler
+	Totp              *TotpHandler
+	Passkey           *PasskeyHandler
+	Payment           *PaymentHandler
+	PaymentWebhook    *PaymentWebhookHandler
+	MediaTask         *MediaTaskHandler
+	AsyncImage        *AsyncImageHandler
+	Video             *VideoHandler
+	BatchImage        *BatchImageHandler
+	Creative          *CreativeHandler
+	Team              *TeamHandler
+	Ticket            *TicketHandler
+	IntelligenceTests *IntelligenceHandler
 }
 
 // BuildInfo contains build-time information

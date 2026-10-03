@@ -75,6 +75,8 @@ setup 使用 `DATA_DIR > 可写 /app/data > 当前目录` 选择 `config.yaml` �
 
 ## 数据库运行时设置
 
+`intelligence_enabled` 对应“开启降智检测”，缺失、无效或读取失败均关闭；管理设置省略该字段保留旧值，公开设置与 HTML 注入同步提供。关闭阻止新检测与用户结果访问，但已提交任务继续只读查询、管理员仍可管理配置。模型、站内测试 Key 引用和定时计划存储在独立配置表，不放入通用 settings JSON。检测费用继续走配置 Key 的原有结算规则，见[降智检测](../domains/intelligence_tests.md#intelligence_access)。
+
 Claude Code 出站版本使用三个运行时键：`claude_code_client_version` 是管理员固定版本，`claude_code_client_version_synced` 仅由后台同步任务写入，`claude_code_version_auto_sync_enabled` 缺失时默认开启。有效版本按管理员值、启动时有效的 `SUB2API_CLAUDE_CLI_VERSION` 环境固定值、同步值、内置基线依次选择，每层均校验稳定三段版本且不低于基线；升级保留现有环境配置的手工固定语义，自动同步不得覆盖该值。同步每小时读取 `anthropics/claude-code` 官方最新稳定 release，主路径失败后扫描最近 release，排除草稿及预发布，仅向更高版本推进；获取或读取已保存版本失败时不覆盖已有同步值。关闭开关只停止新拉取，保留已有同步结果；清空手动字段恢复跟随。设置保存和同步成功后失效本实例缓存，其它实例最多约 60 秒刷新。不需要数据库迁移，不影响入站客户端最低/最高版本限制。
 
 异步图片存储采用 `image_storage_config` 运行时设置，管理端备份页面单独维护；从未保存过时使用进程 `image_storage.*` 配置（`enabled` 默认关闭），后台保存后接管配置。本实例立即失效缓存，其它实例最多约 30 秒刷新；`reuse_backup_s3` 可复用备份连接与凭据，密钥加密存储且不明文返回。提交时固定存储快照，后续关闭只禁止新任务，不取消已接受任务或阻止结果查询。PostgreSQL 短期结果、Redis 镜像 TTL、签名 URL 与对象生命周期边界见[异步图片与任务记录](../domains/media_tasks.md)。

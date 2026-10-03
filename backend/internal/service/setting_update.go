@@ -577,6 +577,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// 页面功能开关：控制团队和创作台相关页面的入口与访问。
 	updates[SettingKeyTeamEnabled] = strconv.FormatBool(settings.TeamEnabled)
 	updates[SettingKeyCreativeEnabled] = strconv.FormatBool(settings.CreativeEnabled)
+	updates[SettingKeyIntelligenceEnabled] = strconv.FormatBool(settings.IntelligenceEnabled)
 
 	// 风控中心总开关：控制菜单入口和网关内容审计是否执行。
 	updates[SettingKeyRiskControlEnabled] = strconv.FormatBool(settings.RiskControlEnabled)

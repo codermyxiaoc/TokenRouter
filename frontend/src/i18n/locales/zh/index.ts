@@ -9,6 +9,7 @@ import team from './team'
 import tickets from './tickets'
 import mediaTasks from './mediaTasks'
 import apiDocs from './apiDocs'
+import intelligence from './intelligence'
 
 export default {
   ...landing,
@@ -22,4 +23,5 @@ export default {
   ...tickets,
   ...mediaTasks,
   ...apiDocs,
+  ...intelligence,
 }

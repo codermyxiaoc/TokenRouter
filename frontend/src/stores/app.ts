@@ -393,6 +393,7 @@ export const useAppStore = defineStore('app', () => {
         team_enabled: true,
         ticket_enabled: true,
         creative_enabled: true,
+        intelligence_enabled: false,
         table_default_page_size: 20,
         table_page_size_options: [10, 20, 50, 100],
         usage_ranking_limit: 20,

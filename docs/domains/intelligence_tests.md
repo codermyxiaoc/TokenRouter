@@ -1,0 +1,47 @@
+# 降智检测
+
+本文描述管理员配置、Manxue 检测任务、用户只读结果和画图预览之间的权限及持久化契约。检测结果是独立观测，不修改网关调度、分组定价或渠道状态；模型请求仍使用现有网关链路和计费规则。上级目录：[领域文档](index.md)。
+
+<a id="intelligence_access"></a>
+## 入口、配置与权限
+
+系统设置“开启降智检测”对应 `intelligence_enabled`，缺失、无效或读取失败均关闭。公开设置与 HTML 注入包含该布尔值，关闭时侧栏同时隐藏用户和管理员的“降智检测”菜单，并阻止进入用户页；后端独立校验。系统设置中的开关入口保留，开启后恢复两个菜单。关闭时用户列表、详情和画图预览不可访问，管理员通过配置页地址仍能管理配置、查看文本历史，不能发起新检测。已提交的远端任务继续查询并保存结果，避免关开功能造成重复请求。
+
+管理员页面为 `/admin/intelligence-tests`，用户页面为 `/intelligence`。配置身份由分组、模型、测试类型组成；同一分组可配置多个模型，每个模型可分别配置糖果与画图测试。身份字段创建后固定，避免把旧记录移入其他分组或模型。编辑其他字段和删除配置均要求无在途任务；全站最多 200 份配置，写入在事务锁内检查数量。
+
+测试要求使用一个仅绑定所选分组的普通站内 API Key，不支持复合 Key、智能路由 Key、自动默认分组 fallback 或系统管理 Key。配置表单复用 `/api/v1/keys`，以 `scope=personal` 和所选分组分页查询当前登录用户的 Key；服务端按认证用户限定归属并排除系统托管 Key，前端再过滤复合、智能路由、回退、停用、过期或耗尽的 Key。选项只显示名称与编号，选择后填入密码框，也保留手动填写入口。换组立即清空凭据，旧查询取消且不覆盖新分组；关闭弹窗清除候选与明文。保存时解析密钥并只记录原 Key ID，响应仅返回是否已配置；编辑不自动选择新 Key，留空保留原引用。执行前再次检查 Key 的状态、归属、有效期及额度。
+
+Base URL 输入框提供“使用当前网站”，按浏览器当前 `origin` 补全 `/v1`，不携带后台页面路径、查询参数或片段。地址仍须为检测供应商可访问的公网 HTTPS 地址；从本地开发环境填入的 HTTP/localhost 地址不能用于远端检测。拒绝用户凭据、查询参数、片段与私网地址，提交前再次检查 DNS。
+
+管理员设置的 Key 与 Base URL 会发送到 Manxue，由其向该地址发起模型请求。应使用专用 Key；计费、余额、订阅和使用记录仍属于该 Key 的用户，检测模块不重复扣费或绕过网关。用户侧仅可查看已有分组授权范围内、启用的检测配置与结果；详情和预览重新校验授权，不能通过记录 ID 查看其他分组。普通用户没有创建、修改或立即检测接口。
+
+## 远端协议与执行恢复
+
+`internal/pkg/manxue` 仅连接固定的 `https://manxue.ai/api/v1/tests`：POST 创建，GET 按远端 ID 查询。糖果使用 `candy` 与 Responses；本地画图类型 `drawing` 映射上游 `pelican`，支持 Responses 或 Chat Completions。协议、推理档位与服务档位按供应商文档校验。参考 [Manxue API](https://manxue.ai/api)。不使用全站公开监控结果代替本地分组的真实检测。
+
+手动检测与可选定时检测共用持久任务队列；定时默认关闭、间隔默认 60 分钟，范围 5–10080 分钟。每进程两个工作者，以 PostgreSQL 行锁和租约领取任务；同配置唯一活动任务约束保护多实例及并发点击。新建、调度和结果持久化使用独立表，不在使用记录中伪造检测结果。
+
+在发送创建 POST 前先持久化 `submitting`。进程重启遇到无远端 ID 的 `submitting` 记录，标为未知，不能自动重发；创建传输失败或无法确认受理时也不通过重试 POST 猜测结果。得到远端 ID 后持久化并轮询，服务重启可继续 GET；轮询短暂故障退避重试，远端记录消失或超过观察期限明确结束。旧工作者必须通过租约令牌及期限的比较交换才能写回，不得覆盖新实例结果。HTTP 客户端禁止重定向和创建自动重放，限制响应体 4 MiB、单份 HTML 2 MiB，超限作为错误而非截断成成功。
+
+执行成功与评测通过是不同字段：糖果 `passed` 为通过、`incorrect` 为未通过；画图质量 `normal` 为通过、`degraded` 为未通过，其他无法判定状态显示未知。接口错误、取消、超时单独显示，不能记成未通过。远端任务 ID、租约及密钥不进入面板响应；回显内容中的密钥与远端 ID 也需要脱敏。
+
+## 历史与展示
+
+迁移 `294_intelligence_tests.sql` 新增配置与执行记录表。每份配置保留最新 60 次记录；画图只保留最新 10 份完整 HTML，淘汰正文仍保留对应历史状态和统计。小摘要存入 `record`，问答、HTML 和评测原因独立存入 `payload`，列表 SQL 只读取摘要列，详情或恢复查询时才合并正文，避免列表查询解压全部作品的 PostgreSQL TOAST 数据。
+
+用户页按分组、模型、测试类型展示。历史条从左到右由旧到新，绿色通过、红色未通过，接口错误与未知另用状态色；可点击或键盘选择查看实际返回的问答、Token 与耗时等信息。API 没有提供的题目、费用或推理明细不编造。画图作品在历史条下面横向滚动，最新在左，最多 10 份；仅可视卡片加载，页面共用缓存并限制并发两次读取。
+
+<a id="intelligence_preview"></a>
+## 画图隔离
+
+模型返回的 HTML 是不可信主动内容，不能直接放入主页面或赋予同源权限。已鉴权的 `/runs/:id/preview` 签发五分钟单作品票据，使用固定 JWT secret 的独立 HMAC 域签名。内容路径 `/api/v1/intelligence-tests/preview-content/:ticket` 不依赖面板 JWT，但每次验证票据、总开关、用户有效状态、管理员角色或分组授权，并读取尚未淘汰的作品；权限撤销或作品移除后票据立即不可用。
+
+画图 iframe 使用 `sandbox="allow-scripts"`，不设置 `allow-same-origin`，不开放表单、弹窗或顶层导航。内容响应使用独立 CSP：只允许内联脚本/样式及 data/blob 媒体，禁止网络连接、子框架、Worker、对象与表单提交；禁止浏览器相机、麦克风等能力。主站 CSP 仅追加本站预览路径到 `frame-src`，不放宽主站脚本策略。独立响应避免 `srcdoc` 继承主站 nonce 导致 Canvas 脚本无法运行。历史作品如果依赖外部库或外部素材，预览可能不完整；不为其开放网络或主站会话。
+
+预览响应禁止缓存、禁止 MIME 嗅探，不发送 Referer；票据路径在请求和访问日志中脱敏。票据不具备网关调用权限，不能作为通用代理或任意 URL 下载入口。
+
+## 接口与实现位置
+
+管理接口前缀 `/api/v1/admin/intelligence-tests`：GET 列表、POST 新增，`/:id` PUT/DELETE，`/:id/run` POST，`/:id/runs` GET，`/runs/:id` GET 详情及 `/runs/:id/preview` GET 签发预览。用户 `/api/v1/intelligence-tests` 仅 GET 列表、详情和预览。除预览内容返回 HTML 外，接口遵循既有面板 JSON envelope 与权限中间件。
+
+服务编排在 `backend/internal/service/intelligence_service.go`，SQL 仓储在 `backend/internal/repository/intelligence_repo.go`，面板与预览在 `backend/internal/handler/intelligence_*.go`；Wire 管理工作者启动及退出。前端页面、共享结果组件和 API 分别位于 `views/admin/IntelligenceTestsView.vue`、`views/user/IntelligenceView.vue`、`components/intelligence/` 与 `api/intelligence.ts`。

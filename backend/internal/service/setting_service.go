@@ -646,6 +646,16 @@ func (s *SettingService) IsRegistrationEmailNormalizationEnabled(ctx context.Con
 	return value == "true"
 }
 
+// IsIntelligenceEnabled 缺失或读取失败时保持关闭，避免意外发起消耗额度的检测。
+// @project-doc docs/domains/intelligence_tests.md#intelligence_access
+func (s *SettingService) IsIntelligenceEnabled(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyIntelligenceEnabled)
+	return err == nil && value == "true"
+}
+
 // IsCreativeEnabled 读取创作台数据库运行时开关（键缺失或读取失败时默认开启，
 // 与 team_enabled 保持同款"缺省 true"语义；进程级 creative.enabled 由调用方另行校验）。
 func (s *SettingService) IsCreativeEnabled(ctx context.Context) bool {

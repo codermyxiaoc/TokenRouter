@@ -130,6 +130,7 @@ func provideCleanup(
 	auditLog *service.AuditLogService,
 	cnUsageMonitor *service.CNProviderBalanceCheckService,
 	ticketRuntime *service.TicketRuntime,
+	intelligenceTests *service.IntelligenceService,
 	pluginManager *service.PluginManager,
 ) func() {
 	return func() {
@@ -144,7 +145,9 @@ func provideCleanup(
 		// 应用层清理步骤可并行执行；持久化刷写服务在基础设施关闭前按顺序停止。
 		parallelSteps := []cleanupStep{
 			{"VideoTaskService", func() error {
-				if videoTasks != nil { videoTasks.Stop() }
+				if videoTasks != nil {
+					videoTasks.Stop()
+				}
 				return nil
 			}},
 			{"ImageTaskService", func() error {
@@ -163,6 +166,12 @@ func provideCleanup(
 			{"TicketRuntime", func() error {
 				if ticketRuntime != nil {
 					ticketRuntime.Stop()
+				}
+				return nil
+			}},
+			{"IntelligenceService", func() error {
+				if intelligenceTests != nil {
+					intelligenceTests.Stop()
 				}
 				return nil
 			}},

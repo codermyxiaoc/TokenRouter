@@ -74,6 +74,7 @@ var ProviderSet = wire.NewSet(
 	NewUserRepository,
 	NewTeamRepository,
 	NewTicketRepository,
+	NewIntelligenceRepository,
 	NewTeamInvitationLimiter,
 	ProvideAPIKeyRepository,
 	NewGroupRepository,

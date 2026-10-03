@@ -3,7 +3,9 @@
     <!-- 独立内容响应提供专用 CSP，避免 srcdoc 继承面板 CSP 导致绘图脚本失效。 -->
     <iframe
       v-if="visible && pageVisible && url" :src="url" sandbox="allow-scripts" referrerpolicy="no-referrer"
-      :title="title" class="h-full w-full border-0 bg-white" allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'"
+      :title="title" :scrolling="thumbnail ? 'no' : undefined" :tabindex="thumbnail ? -1 : undefined"
+      class="h-full w-full border-0 bg-white" :class="{ 'pointer-events-none': thumbnail }"
+      allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'"
     />
     <p v-else-if="error" class="px-4 text-center text-xs text-gray-500">{{ error }}</p>
     <p v-else role="status" class="text-xs text-gray-400">{{ t('common.loading') }}</p>
@@ -15,7 +17,8 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { intelligencePreviewURL } from './results'
 import { useIntelligenceResults } from './useIntelligenceResults'
-const props = defineProps<{ runId: string; title: string }>()
+// 列表缩略图隐藏自身滚动条且不进入键盘焦点；详情预览仍可滚动和交互。
+const props = defineProps<{ runId: string; title: string; thumbnail?: boolean }>()
 const { t } = useI18n()
 const loader = useIntelligenceResults()
 const container = ref<HTMLElement>()

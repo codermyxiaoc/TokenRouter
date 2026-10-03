@@ -14,14 +14,7 @@
             <IntelligenceResultBar :runs="test.runs || []" @select="openRun" />
             <template v-if="test.benchmark === 'drawing' && recentArtifacts(test.artifacts || []).length">
               <p class="mb-3 mt-5 text-xs text-gray-500">{{ t('intelligence.artworksHint') }}</p>
-              <!-- 隐藏样例滚动条，保留横向滚动与触摸滑动。 -->
-              <div class="scrollbar-hide flex min-w-0 snap-x gap-4 overflow-x-auto overscroll-x-contain pb-3" data-testid="drawing-gallery">
-                <article v-for="artifact in recentArtifacts(test.artifacts || [])" :key="artifact.id" class="relative w-[min(78vw,360px)] shrink-0 snap-start overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-dark-600">
-                  <div class="pointer-events-none h-56 overflow-hidden"><IntelligenceDrawing :run-id="artifact.id" :title="`${model.name} · ${formatDateTime(artifact.created_at)}`" /></div>
-                  <span class="absolute right-2 top-2 rounded-md px-2 py-1 text-xs font-semibold text-white shadow-sm" :class="resultColor(artifact)">{{ t(`intelligence.statuses.${resultStatus(artifact)}`) }}</span>
-                  <button type="button" class="flex w-full items-center justify-between gap-3 border-t border-gray-100 px-3 py-3 text-left text-xs hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-800 dark:hover:bg-dark-700" @click="openRun(artifact)"><span class="text-gray-500">{{ formatDateTime(artifact.created_at) }}</span><span class="font-medium text-primary-600 dark:text-primary-400">{{ t('intelligence.preview') }}</span></button>
-                </article>
-              </div>
+              <IntelligenceDrawingGallery :artifacts="test.artifacts || []" :model="model.name" @select="openRun" />
             </template>
           </div>
         </div>
@@ -36,11 +29,10 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import IntelligenceResultBar from '@/components/intelligence/IntelligenceResultBar.vue'
-import IntelligenceDrawing from '@/components/intelligence/IntelligenceDrawing.vue'
+import IntelligenceDrawingGallery from '@/components/intelligence/IntelligenceDrawingGallery.vue'
 import IntelligenceRunDialog from '@/components/intelligence/IntelligenceRunDialog.vue'
-import { groupTests, recentArtifacts, resultColor, resultStatus } from '@/components/intelligence/results'
+import { groupTests, recentArtifacts } from '@/components/intelligence/results'
 import { intelligenceAPI, type IntelligenceRun, type IntelligenceTest } from '@/api/intelligence'
-import { formatDateTime } from '@/utils/format'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { provideIntelligenceResults } from '@/components/intelligence/useIntelligenceResults'
 

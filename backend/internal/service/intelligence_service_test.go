@@ -113,7 +113,8 @@ func (c *intelligenceClientStub) Get(context.Context, string) (*manxue.TestResul
 
 func newIntelligenceFixture() (*IntelligenceService, *intelligenceRepoStub, *intelligenceClientStub, *APIKey) {
 	gid := int64(7)
-	key := &APIKey{ID: 9, Key: "sk-privatekey1234567890123456", GroupID: &gid, Status: StatusActive, User: &User{Status: StatusActive}}
+	// 普通 Key 创建时默认开启自动降级，夹具必须保留真实默认值。
+	key := &APIKey{ID: 9, Key: "sk-privatekey1234567890123456", GroupID: &gid, Status: StatusActive, FallbackToDefaultGroupWhenUnavailable: true, User: &User{Status: StatusActive}}
 	cfg := &IntelligenceConfig{ID: 1, GroupID: gid, GroupName: "测试组", APIKeyID: key.ID, Model: "gpt-test", Benchmark: "candy", BaseURL: "https://gateway.example/v1", Protocol: "responses", Enabled: true, IntervalMinutes: 60}
 	repo := &intelligenceRepoStub{config: cfg}
 	client := &intelligenceClientStub{}
@@ -147,13 +148,28 @@ func TestIntelligenceConfigurationCredentialAndProtocolBoundaries(t *testing.T) 
 		name   string
 		mutate func(*APIKey)
 	}{
-		{"复合", func(k *APIKey) { k.IsComposite = true }}, {"智能路由", func(k *APIKey) { k.SmartRouting = true }}, {"错组", func(k *APIKey) { id := int64(8); k.GroupID = &id }}, {"停用", func(k *APIKey) { k.Status = "disabled" }}, {"过期", func(k *APIKey) { v := time.Now().Add(-time.Hour); k.ExpiresAt = &v }}, {"超额", func(k *APIKey) { k.Quota = 1; k.QuotaUsed = 1 }}, {"回退默认组", func(k *APIKey) { k.FallbackToDefaultGroupWhenUnavailable = true }}, {"禁用用户", func(k *APIKey) { k.User.Status = "disabled" }},
+		{"复合", func(k *APIKey) { k.IsComposite = true }},
+		{"智能路由", func(k *APIKey) { k.SmartRouting = true }},
+		{"复合映射", func(k *APIKey) { k.CompositeGroups = []APIKeyCompositeGroup{{GroupID: 7, Prefix: "a"}} }},
+		{"错组", func(k *APIKey) { id := int64(8); k.GroupID = &id }},
+		{"无绑定分组", func(k *APIKey) { k.GroupID = nil }},
+		{"停用", func(k *APIKey) { k.Status = "disabled" }},
+		{"过期", func(k *APIKey) { v := time.Now().Add(-time.Hour); k.ExpiresAt = &v }},
+		{"超额", func(k *APIKey) { k.Quota = 1; k.QuotaUsed = 1 }},
+		{"系统托管", func(k *APIKey) { managedBy := "creative_studio"; k.ManagedBy = &managedBy }},
+		{"禁用用户", func(k *APIKey) { k.User.Status = "disabled" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _, _, key := newIntelligenceFixture()
+			s, repo, client, key := newIntelligenceFixture()
 			tc.mutate(key)
 			_, err := s.SaveConfig(context.Background(), 0, intelligenceInput(key.Key))
 			require.Error(t, err)
+			_, err = s.Run(context.Background(), 1)
+			require.Error(t, err)
+			// 放行普通降级开关后，执行入口仍须拒绝其他无效凭据。
+			s.execute(context.Background(), intelligenceQueued())
+			require.Zero(t, client.creates)
+			require.Equal(t, "error", repo.run.Status)
 		})
 	}
 	for _, tc := range []struct {
@@ -177,6 +193,49 @@ func TestIntelligenceConfigurationCredentialAndProtocolBoundaries(t *testing.T) 
 		_, err := s.SaveConfig(context.Background(), 1, in)
 		require.Error(t, err)
 	})
+}
+
+func TestIntelligenceOrdinaryKeyFallbackDoesNotBlockDetection(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		fallback bool
+	}{
+		{"默认开启自动降级", true},
+		{"关闭自动降级", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, repo, client, key := newIntelligenceFixture()
+			key.FallbackToDefaultGroupWhenUnavailable = tc.fallback
+			saved, err := s.SaveConfig(context.Background(), 1, intelligenceInput(key.Key))
+			require.NoError(t, err)
+			require.Equal(t, key.ID, saved.APIKeyID)
+			run, err := s.Run(context.Background(), saved.ID)
+			require.NoError(t, err)
+			require.Equal(t, "queued", run.Status)
+			client.create = func(in manxue.CreateRequest) (*manxue.TestResult, error) {
+				// 检测传递原 Key，不关闭开关、不替换凭据，实际降级由原网关负责。
+				require.Equal(t, key.Key, in.APIKey)
+				require.Equal(t, saved.Model, in.Model)
+				return &manxue.TestResult{ID: "remote", Benchmark: "candy", Status: "running"}, nil
+			}
+			s.execute(context.Background(), intelligenceQueued())
+			require.Equal(t, 1, client.creates)
+			require.Equal(t, "running", repo.run.Status)
+			require.Equal(t, saved.GroupID, *key.GroupID)
+			require.Equal(t, tc.fallback, key.FallbackToDefaultGroupWhenUnavailable)
+		})
+		t.Run(tc.name+"仍阻止停用分组提交", func(t *testing.T) {
+			s, repo, client, key := newIntelligenceFixture()
+			key.FallbackToDefaultGroupWhenUnavailable = tc.fallback
+			s.groups = intelligenceGroupStub{group: &Group{ID: 7, Status: StatusDisabled}}
+			_, err := s.SaveConfig(context.Background(), 1, intelligenceInput(key.Key))
+			require.Error(t, err)
+			s.execute(context.Background(), intelligenceQueued())
+			require.Zero(t, client.creates)
+			require.Equal(t, "error", repo.run.Status)
+			require.Equal(t, "分组不可用", repo.run.ErrorMessage)
+		})
+	}
 }
 
 func TestIntelligenceCreateOnceAfterDurableState(t *testing.T) {

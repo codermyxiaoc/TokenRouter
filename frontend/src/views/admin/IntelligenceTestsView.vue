@@ -41,6 +41,7 @@
             <label for="intelligence-api-key" class="input-label mt-3">{{ t('intelligence.apiKey') }}</label>
             <input id="intelligence-api-key" v-model="form.api_key" type="password" autocomplete="new-password" class="input w-full" :required="!storedKey" :disabled="saving" :placeholder="t(storedKey ? 'intelligence.apiKeyKeep' : 'intelligence.apiKeyRequired')" @input="selectedKeyID = null" />
             <p class="mt-2 text-xs text-gray-500">{{ t('intelligence.apiKeyHint') }}</p>
+            <p class="mt-2 text-xs text-gray-500">{{ t('intelligence.apiKeyFallbackHint') }}</p>
           </div>
           <div class="grid gap-4 sm:grid-cols-2"><div><label for="intelligence-reasoning" class="input-label">{{ t('intelligence.reasoning') }}</label><Select id="intelligence-reasoning" v-model="form.reasoning_effort" :options="reasoningOptions" :disabled="saving" /></div><div><label for="intelligence-tier" class="input-label">{{ t('intelligence.tier') }}</label><Select id="intelligence-tier" v-model="form.service_tier" :options="tierOptions" :disabled="saving" /></div></div>
           <div class="flex items-center justify-between gap-4 border-t border-gray-100 pt-4 dark:border-dark-700"><label for="intelligence-config-enabled" class="input-label">{{ t('intelligence.enabled') }}</label><Toggle id="intelligence-config-enabled" v-model="form.enabled" :disabled="saving" /></div>
@@ -171,9 +172,9 @@ async function loadModels() {
 }
 function useCurrentSite() { form.base_url = `${window.location.origin}/v1` }
 function canUseKey(key: ApiKey, groupID: number) {
+  // 普通 Key 默认开启停用分组自动降级，不应因此被当成复合或智能路由 Key 排除。
   return key.group_id === groupID && key.status === 'active' && !!key.key && !key.team_id && key.scope !== 'team'
     && !key.is_composite && !key.smart_routing && !key.composite_groups?.length && !key.smart_routing_group_ids?.length
-    && !key.fallback_to_default_group_when_unavailable
     && (!key.expires_at || Date.parse(key.expires_at) > Date.now())
     && (key.quota <= 0 || key.quota_used < key.quota)
 }

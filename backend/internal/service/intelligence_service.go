@@ -139,7 +139,8 @@ func intelligenceInvalid(message string) error {
 	return infraerrors.BadRequest("INTELLIGENCE_INVALID", message)
 }
 func intelligenceValidKey(key *APIKey, groupID int64) bool {
-	return key != nil && key.Key != "" && key.IsActive() && !key.IsExpired() && !key.IsQuotaExhausted() && !key.IsComposite && !key.SmartRouting && len(key.CompositeGroups) == 0 && key.GroupID != nil && *key.GroupID == groupID && key.ManagedBy == nil && !key.FallbackToDefaultGroupWhenUnavailable && key.User != nil && key.User.Status == StatusActive && key.User.DeletedAt == nil
+	// 普通 Key 的自动降级开关不会改变正常绑定分组；分组不可用时仍沿用原网关降级规则。
+	return key != nil && key.Key != "" && key.IsActive() && !key.IsExpired() && !key.IsQuotaExhausted() && !key.IsComposite && !key.SmartRouting && len(key.CompositeGroups) == 0 && key.GroupID != nil && *key.GroupID == groupID && key.ManagedBy == nil && key.User != nil && key.User.Status == StatusActive && key.User.DeletedAt == nil
 }
 func validateIntelligenceBaseURL(raw string) (string, error) {
 	u, err := url.Parse(raw)

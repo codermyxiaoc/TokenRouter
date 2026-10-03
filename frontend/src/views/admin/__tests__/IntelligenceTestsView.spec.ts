@@ -22,8 +22,8 @@ const mountPage = () => mount(IntelligenceTestsView, { global: { stubs: {
   IntelligenceRunDialog: true,
 } } })
 const clickText = async (wrapper: ReturnType<typeof mountPage>, key: string) => { await wrapper.findAll('button').find(button => button.text() === key)!.trigger('click'); await flushPromises() }
-// 使用不具备调用能力的本地夹具验证凭据选择，不访问真实密钥接口。
-const keyFixture = (overrides: Partial<ApiKey> = {}) => ({ id: 1, user_id: 1, name: 'Personal key', key: 'test-only-secret', group_id: 1, status: 'active', quota: 0, quota_used: 0, expires_at: null, ...overrides }) as ApiKey
+// 使用不具备调用能力的本地夹具，并显式模拟普通 Key 默认开启自动降级的真实接口字段。
+const keyFixture = (overrides: Partial<ApiKey> = {}) => ({ id: 1, user_id: 1, name: 'Personal key', key: 'test-only-secret', group_id: 1, scope: 'personal', team_id: null, is_composite: false, smart_routing: false, composite_groups: [], smart_routing_group_ids: [], fallback_to_default_group_when_unavailable: true, status: 'active', quota: 0, quota_used: 0, expires_at: null, ...overrides }) as ApiKey
 const keyPage = (items: ApiKey[], total = items.length, page = 1) => ({ items, total, page, page_size: 100, pages: Math.ceil(total / 100) })
 const chooseGroup = async (wrapper: ReturnType<typeof mountPage>, id: number) => { wrapper.getComponent('#intelligence-group').vm.$emit('update:modelValue', id); await flushPromises() }
 const chooseKey = async (wrapper: ReturnType<typeof mountPage>, id: number | null) => { wrapper.getComponent('#intelligence-key-select').vm.$emit('update:modelValue', id); await flushPromises() }
@@ -69,11 +69,11 @@ describe('管理员降智检测', () => {
     expect(run).not.toHaveBeenCalled()
     wrapper.unmount()
   })
-  it('按个人分组遍历分页并排除复合、智能路由、失效和回退 Key，选项不包含密钥', async () => {
+  it('按个人分组分页列出开启或关闭自动降级的普通 Key，排除复合、智能路由和失效 Key', async () => {
     listKeys.mockResolvedValueOnce(keyPage([
       keyFixture(), keyFixture({ id: 2, is_composite: true }), keyFixture({ id: 3, smart_routing: true }),
       keyFixture({ id: 4, composite_groups: [{ group_id: 1, prefix: 'a' }] }),
-      keyFixture({ id: 5, fallback_to_default_group_when_unavailable: true }),
+      keyFixture({ id: 5, fallback_to_default_group_when_unavailable: false }),
       keyFixture({ id: 6, group_id: 2 }), keyFixture({ id: 7, status: 'inactive' }),
       keyFixture({ id: 8, expires_at: '2000-01-01T00:00:00Z' }), keyFixture({ id: 9, quota: 1, quota_used: 1 }),
       keyFixture({ id: 10, team_id: 1 }), keyFixture({ id: 11, smart_routing_group_ids: [1] }),
@@ -85,7 +85,7 @@ describe('管理员降智检测', () => {
     await chooseGroup(wrapper, 1)
     expect(listKeys).toHaveBeenCalledTimes(2)
     expect(listKeys).toHaveBeenLastCalledWith(2, 100, expect.objectContaining({ scope: 'personal', group_id: 1, status: 'active' }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
-    expect(wrapper.getComponent('#intelligence-key-select').props('options')).toEqual([{ value: 1, label: 'Personal key (#1)' }, { value: 101, label: 'Last key (#101)' }])
+    expect(wrapper.getComponent('#intelligence-key-select').props('options')).toEqual([{ value: 1, label: 'Personal key (#1)' }, { value: 5, label: 'Personal key (#5)' }, { value: 101, label: 'Last key (#101)' }])
     await chooseKey(wrapper, 101)
     expect((wrapper.get('#intelligence-api-key').element as HTMLInputElement).value).toBe('last-test-secret')
     expect(wrapper.text()).not.toContain('last-test-secret')

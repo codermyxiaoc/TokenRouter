@@ -2209,7 +2209,9 @@ func TestOpenAIGatewayServiceRecordUsage_SubscriptionBillingUsesPlanGroupRateOve
 	require.InDelta(t, 0.5, usageRepo.lastLog.RateMultiplier, 1e-12)
 	require.InDelta(t, expectedCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
 	require.InDelta(t, expectedCost.ActualCost, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
-	require.Equal(t, 0, rateRepo.calls)
+	// 套餐定价保持不变，但必须预先取得余额回退倍率。
+	require.Equal(t, 1, rateRepo.calls)
+	require.InDelta(t, userGroupRate, billingRepo.lastCmd.BalanceRateMultiplier, 1e-12)
 }
 
 func TestOpenAIGatewayServiceRecordUsage_InferredSubscriptionUsesPlanGroupRate(t *testing.T) {
@@ -2280,7 +2282,9 @@ func TestOpenAIGatewayServiceRecordUsage_InferredSubscriptionUsesPlanGroupRate(t
 	require.InDelta(t, 0.5, usageRepo.lastLog.RateMultiplier, 1e-12)
 	require.InDelta(t, expectedCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
 	require.InDelta(t, expectedCost.ActualCost, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
-	require.Equal(t, 0, rateRepo.calls)
+	// 自动选中套餐也不能丢弃用户余额专属倍率。
+	require.Equal(t, 1, rateRepo.calls)
+	require.InDelta(t, userGroupRate, billingRepo.lastCmd.BalanceRateMultiplier, 1e-12)
 	require.Equal(t, 1, billingRepo.resolveCalls)
 }
 

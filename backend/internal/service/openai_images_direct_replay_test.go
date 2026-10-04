@@ -52,6 +52,7 @@ func TestCodexDirectImagesFallbackPreservesTLSRouting(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, 2, calls)
+	require.Equal(t, 2, ImageUpstreamAttemptCount(c), "协议回退必须累加发送记录")
 	for _, profile := range upstream.profiles {
 		require.NotNil(t, profile)
 		require.Equal(t, "Built-in Default (Node.js 24.x)", profile.Name)
@@ -93,6 +94,7 @@ func TestCodexDirectImagesNetworkFailureNeverReplays(t *testing.T) {
 			var failover *UpstreamFailoverError
 			require.NotErrorAs(t, err, &failover)
 			require.Equal(t, 1, calls)
+			require.Equal(t, 1, ImageUpstreamAttemptCount(c), "网络错误不能抹掉已发送记录")
 			if phase == "stream_partial" {
 				require.NotNil(t, result)
 				require.Equal(t, 1, result.ImageCount)

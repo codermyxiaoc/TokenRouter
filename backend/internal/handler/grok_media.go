@@ -284,6 +284,8 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to rewrite request model")
 		return
 	}
+	imageBilling := &asyncImageBillingState{gateway: h.gatewayService}
+	defer imageBilling.finish(c, reqLog)
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
@@ -437,6 +439,19 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			return
 		}
 
+		if endpoint == service.GrokMediaEndpointImagesGenerations || endpoint == service.GrokMediaEndpointImagesEdits {
+			// 视频与查询保持既有账务路径，只有异步固定价图片会返回非空预占。
+			if err := imageBilling.prepare(requestCtx, apiKey, account, subscription, requestModel, requestInfo.N, requestInfo.SizeTier, channelMapping); err != nil {
+				releaseAccount()
+				status, code, message, retryAfter := billingErrorDetails(err)
+				if retryAfter > 0 {
+					c.Header("Retry-After", strconv.Itoa(retryAfter))
+				}
+				h.errorResponse(c, status, code, message)
+				return
+			}
+		}
+
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		forwardStart := time.Now()
 		writerSizeBeforeForward := c.Writer.Size()
@@ -445,6 +460,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			if endpoint.IsSeedance() {
 				return h.gatewayService.ForwardSeedance(requestCtx, c, account, endpoint, requestID, forwardBody)
 			}
+			imageBilling.startForward(c)
 			return h.gatewayService.ForwardGrokMedia(requestCtx, c, account, endpoint, requestID, forwardBody, forwardContentType)
 		}()
 
@@ -457,6 +473,17 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, responseLatencyMs)
 
 		if err != nil {
+			imageBilling.forwardFailed(c, err)
+		}
+		if err != nil && (result == nil || result.ImageCount <= 0) {
+			if imageBilling.reservation != nil && imageBilling.uncertain {
+				// 传输中断不能证明上游未生成，保留预占并停止切号，避免重复生成。
+				if !service.IsResponseCommitted(c) && c.Writer.Size() == writerSizeBeforeForward {
+					h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Image generation outcome is unknown")
+				}
+				reqLog.Warn("grok_media.image_billing_reconciliation_required", zap.Error(err))
+				return
+			}
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				if failoverClientGone(c) {
@@ -620,7 +647,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				recordGrokMediaUsage(c, h, reqLog, apiKey, subject, subscription, account, billResult, billResult.Model, channelMapping, body, taskID)
 			}
 		} else if shouldRecordGrokMediaUsage(endpoint, requestModel, result) {
-			recordGrokMediaUsage(c, h, reqLog, apiKey, subject, subscription, account, result, requestModel, channelMapping, body, requestID)
+			_ = recordGrokMediaUsage(c, h, reqLog, apiKey, subject, subscription, account, result, requestModel, channelMapping, body, requestID, imageBilling)
 		}
 		reqLog.Debug("grok_media.request_completed",
 			zap.Int64("account_id", account.ID),
@@ -898,10 +925,11 @@ func recordGrokMediaUsage(
 	channelMapping service.ChannelMappingResult,
 	body []byte,
 	requestID string,
-) {
+	imageBilling ...*asyncImageBillingState,
+) error {
 	// 没有转发结果时不存在可结算用量，也不能继续读取模型元数据。
 	if result == nil {
-		return
+		return nil
 	}
 	userAgent := c.GetHeader("User-Agent")
 	clientIP := ip.GetClientIP(c)
@@ -924,7 +952,11 @@ func recordGrokMediaUsage(
 			payloadForHash = []byte(videoTaskID)
 		}
 	}
-	h.submitMediaUsageRecordTask(c, result, func(ctx context.Context) {
+	var imageState *asyncImageBillingState
+	if len(imageBilling) > 0 && imageBilling[0] != nil && imageBilling[0].reservation != nil {
+		imageState = imageBilling[0]
+	}
+	recordTask := func(ctx context.Context) error {
 		billingSucceeded := false
 		seedance := strings.HasPrefix(result.ResponseID, "seedance:")
 		var subscriptionScopeID *int64
@@ -944,7 +976,7 @@ func recordGrokMediaUsage(
 				}
 			}()
 		}
-		if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
+		input := &service.OpenAIRecordUsageInput{
 			Result:              result,
 			APIKey:              apiKey,
 			User:                apiKey.User,
@@ -960,7 +992,14 @@ func recordGrokMediaUsage(
 			QuotaPlatform:       quotaPlatform,
 			ClientSessionID:     sessionID,
 			ChannelUsageFields:  channelUsageFields,
-		}); err != nil {
+		}
+		var recordErr error
+		if imageState != nil {
+			recordErr = imageState.record(c, input)
+		} else {
+			recordErr = h.gatewayService.RecordUsage(ctx, input)
+		}
+		if recordErr != nil {
 			if videoTaskID != "" && !seedance {
 				if releaseErr := h.gatewayService.ReleaseGrokVideoBilling(ctx, videoTaskID, subject.UserID, apiKey.ID); releaseErr != nil {
 					reqLog.Warn("grok_media.video_billing_claim_release_failed",
@@ -976,12 +1015,18 @@ func recordGrokMediaUsage(
 				zap.Any("group_id", apiKey.GroupID),
 				zap.String("model", requestModel),
 				zap.Int64("account_id", account.ID),
-			).Error("grok_media.record_usage_failed", zap.Error(err))
-			reqLog.Debug("grok_media.record_usage_failed", zap.Error(err))
-			return
+			).Error("grok_media.record_usage_failed", zap.Error(recordErr))
+			reqLog.Debug("grok_media.record_usage_failed", zap.Error(recordErr))
+			return recordErr
 		}
 		billingSucceeded = true
-	})
+		return nil
+	}
+	if imageState != nil {
+		return recordTask(c.Request.Context())
+	}
+	h.submitMediaUsageRecordTask(c, result, func(ctx context.Context) { _ = recordTask(ctx) })
+	return nil
 }
 
 // submitMediaUsageRecordTask 保证已领取结算权的方舟任务不会被队列丢弃，其它媒体沿用原策略。

@@ -781,6 +781,11 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		}
 	}
 
+	return applyUsageBillingAllowanceEffects(ctx, tx, cmd, result)
+}
+
+// applyUsageBillingAllowanceEffects 复用已确认资金分配，预占捕获时不再分配或扣减用户资金。
+func applyUsageBillingAllowanceEffects(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, result *service.UsageBillingApplyResult) error {
 	billableAmount := result.SubscriptionAmountUSD + result.BalanceAmountUSD
 	if cmd.TeamID != nil && cmd.ActorUserID > 0 && cmd.ActorUserID != cmd.UserID {
 		if err := incrementUsageBillingTeamMember(ctx, tx, *cmd.TeamID, cmd.ActorUserID, billableAmount, time.Now()); err != nil {

@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -131,4 +132,23 @@ func TestSyncBalanceCacheAfterDeductionQueuesDeductWhenBalanceStillEligible(t *t
 	require.Eventually(t, func() bool {
 		return cache.deductCalls.Load() == 1
 	}, 2*time.Second, 10*time.Millisecond)
+}
+
+// 图片预占已扣余额，捕获只使缓存失效；全额释放也必须刷新，不能根据实际费用跳过。
+func TestSyncBalanceCacheAfterImageCaptureInvalidatesWithoutSecondDeduction(t *testing.T) {
+	for _, actual := range []float64{0, 0.12} {
+		t.Run(fmt.Sprintf("actual_%g", actual), func(t *testing.T) {
+			cache := &balanceEligibilityCacheStub{balance: 0.28}
+			svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, &config.Config{}, nil)
+			t.Cleanup(svc.Stop)
+			balance := 1 - actual
+			syncBalanceCacheAfterDeduction(context.Background(), &usageBillingParams{
+				Cost: &CostBreakdown{ActualCost: actual}, User: &User{ID: 1},
+				ImageReservation: &ImageBillingReservation{ID: "image-capture"},
+			}, &billingDeps{billingCacheService: svc}, &UsageBillingApplyResult{NewBalance: &balance, BalanceAmountUSD: actual})
+			require.Equal(t, int64(1), cache.invalidateCalls.Load())
+			svc.Stop()
+			require.Zero(t, cache.deductCalls.Load())
+		})
+	}
 }

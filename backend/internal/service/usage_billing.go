@@ -192,6 +192,10 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 	if c.SubscriptionScopeID != nil {
 		raw += fmt.Sprintf("|subscription_scope:%d", *c.SubscriptionScopeID)
 	}
+	// 显式独立倍率和免费高峰不能与允许套餐覆盖的旧命令共享指纹；false 保持历史格式。
+	if c.DisablePlanGroupRateMultiplier {
+		raw += "|plan_rate_override:disabled"
+	}
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }

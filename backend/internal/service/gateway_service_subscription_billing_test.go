@@ -162,7 +162,8 @@ func TestBuildUsageBillingCommand_IncludesRequestGroupID(t *testing.T) {
 	}
 }
 
-func TestBuildUsageBillingCommand_NonTokenModesPreserveEffectiveRate(t *testing.T) {
+// 非令牌计费也必须保留两种资金来源，不再从已选套餐的展示费用复制余额倍率。
+func TestBuildUsageBillingCommand_NonTokenModesPreserveSeparateRates(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -170,11 +171,10 @@ func TestBuildUsageBillingCommand_NonTokenModesPreserveEffectiveRate(t *testing.
 		mode       BillingMode
 		totalCost  float64
 		actualCost float64
-		wantRate   float64
 	}{
-		{name: "image independent rate", mode: BillingModeImage, totalCost: 0.2, actualCost: 0.2, wantRate: 1},
-		{name: "video independent rate", mode: BillingModeVideo, totalCost: 0.08, actualCost: 0.02, wantRate: 0.25},
-		{name: "per request rate", mode: BillingModePerRequest, totalCost: 0.4, actualCost: 0.1, wantRate: 0.25},
+		{name: "image", mode: BillingModeImage, totalCost: 0.12, actualCost: 0.72},
+		{name: "video", mode: BillingModeVideo, totalCost: 0.08, actualCost: 0.48},
+		{name: "per request", mode: BillingModePerRequest, totalCost: 0.4, actualCost: 2.4},
 	}
 
 	for _, tt := range tests {
@@ -189,9 +189,10 @@ func TestBuildUsageBillingCommand_NonTokenModesPreserveEffectiveRate(t *testing.
 				User:                            &User{ID: 1},
 				APIKey:                          &APIKey{ID: 2},
 				Account:                         &Account{ID: 3},
-				SubscriptionRateMultiplier:      0.15,
-				SubscriptionRateMultiplierScale: 2,
-				BalanceRateMultiplier:           0.15,
+				SubscriptionRateMultiplier:      6,
+				SubscriptionRateMultiplierScale: 1,
+				BalanceRateMultiplier:           1,
+				RateMultipliersResolved:         true,
 			}
 
 			cmd := buildUsageBillingCommand("req-non-token", nil, p)
@@ -199,14 +200,14 @@ func TestBuildUsageBillingCommand_NonTokenModesPreserveEffectiveRate(t *testing.
 			if cmd == nil {
 				t.Fatal("buildUsageBillingCommand returned nil")
 			}
-			if cmd.SubscriptionRateMultiplier != tt.wantRate {
-				t.Errorf("SubscriptionRateMultiplier = %v, want %v", cmd.SubscriptionRateMultiplier, tt.wantRate)
+			if cmd.SubscriptionRateMultiplier != 6 {
+				t.Errorf("SubscriptionRateMultiplier = %v, want 6", cmd.SubscriptionRateMultiplier)
 			}
 			if cmd.SubscriptionRateMultiplierScale != 1 {
 				t.Errorf("SubscriptionRateMultiplierScale = %v, want 1", cmd.SubscriptionRateMultiplierScale)
 			}
-			if cmd.BalanceRateMultiplier != tt.wantRate {
-				t.Errorf("BalanceRateMultiplier = %v, want %v", cmd.BalanceRateMultiplier, tt.wantRate)
+			if cmd.BalanceRateMultiplier != 1 {
+				t.Errorf("BalanceRateMultiplier = %v, want 1", cmd.BalanceRateMultiplier)
 			}
 		})
 	}

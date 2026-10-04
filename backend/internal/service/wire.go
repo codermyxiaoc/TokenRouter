@@ -1042,8 +1042,9 @@ func ProvideImageStorageSettingService(repo SettingRepository, encryptor SecretE
 }
 
 // ProvideImageTaskService 保持热更新开关和已接收任务的查询能力。
-func ProvideImageTaskService(store ImageTaskStore, settings *ImageStorageSettingService) *ImageTaskService {
+func ProvideImageTaskService(store ImageTaskStore, settings *ImageStorageSettingService, billing UsageBillingRepository) *ImageTaskService {
 	svc := NewImageTaskServiceWithResolver(store, settings.Resolver(), 0, 0)
+	svc.imageBilling, _ = billing.(ImageBillingReservationRepository)
 	svc.Start()
 	return svc
 }

@@ -672,6 +672,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamStart := time.Now()
+	markImageUpstreamAttempt(c)
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
@@ -961,6 +962,10 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	// 回填只影响交付格式，计费仍使用原始上游用量与图片尺寸。
 	usage, _ := extractOpenAIUsageFromJSONBytes(body)
 	imageCount := extractOpenAIImageCountFromJSONBytes(body)
+	if imageCount <= 0 {
+		// 成功状态不能证明已经产图；禁止用请求的 n 补造计费数量或自动重放未知结果。
+		return OpenAIUsage{}, 0, nil, newOpenAIUpstreamStreamReadError(ErrOpenAIUpstreamStreamTruncated)
+	}
 	imageSizes := collectOpenAIResponseImageOutputSizesFromJSONBytes(body)
 	body = s.backfillOpenAIImagesB64JSON(ctx, account, parsed, body)
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

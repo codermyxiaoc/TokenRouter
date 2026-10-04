@@ -147,8 +147,8 @@ upgrade
 
 if grep -qi TokenFlux "$CURL_LOG"; then fail "requested the old repository"; fi
 grep -Fq 'https://raw.githubusercontent.com/codermyxiaoc/TokenRouter/main/deploy' "$ROOT_DIR/deploy/docker-deploy.sh" || fail "Docker preparation uses another source"
-grep -Fq 'APPLE_CONTAINER_SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v3.3' "$ROOT_DIR/deploy/.env.example" || fail "Apple image default is not the fork"
-grep -Fq 'read_env_value APPLE_CONTAINER_SUB2API_IMAGE coderxiaoc/tokenrouter:v0.1.278-ct-v3.3' "$ROOT_DIR/deploy/apple-container.sh" || fail "Apple fallback image default is not the fork"
+grep -Fq 'APPLE_CONTAINER_SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v3.4' "$ROOT_DIR/deploy/.env.example" || fail "Apple image default is not the fork"
+grep -Fq 'read_env_value APPLE_CONTAINER_SUB2API_IMAGE coderxiaoc/tokenrouter:v0.1.278-ct-v3.4' "$ROOT_DIR/deploy/apple-container.sh" || fail "Apple fallback image default is not the fork"
 
 # Apple 平台缺少镜像时明确失败，不悄悄回退旧仓库或 amd64。
 sed -n '/^ensure_image_available() {$/,/^}$/p' "$ROOT_DIR/deploy/apple-container.sh" > "$TEST_ROOT/apple-function.sh"
@@ -157,7 +157,7 @@ container() { printf '%s\n' "$*" >> "$TEST_ROOT/apple-calls"; return 1; }
 info() { :; }
 die() { printf '%s\n' "$*" >&2; exit 1; }
 PLATFORM=linux/arm64
-if (ensure_image_available coderxiaoc/tokenrouter:v0.1.278-ct-v3.3) 2> "$TEST_ROOT/apple-error"; then fail "missing Apple architecture accepted"; fi
+if (ensure_image_available coderxiaoc/tokenrouter:v0.1.278-ct-v3.4) 2> "$TEST_ROOT/apple-error"; then fail "missing Apple architecture accepted"; fi
 grep -Fq 'Configure an image published for linux/arm64' "$TEST_ROOT/apple-error" || fail "missing Apple architecture has no diagnostic"
 [[ "$(grep -c '^image pull ' "$TEST_ROOT/apple-calls")" == 1 ]] || fail "Apple pull attempted an implicit fallback"
 

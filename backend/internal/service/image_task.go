@@ -97,6 +97,7 @@ type ImageTaskService struct {
 	ttl              time.Duration
 	executionTimeout time.Duration
 	runtime          *imageTaskRuntime
+	imageBilling     ImageBillingReservationRepository
 }
 
 func NewImageTaskService(store ImageTaskStore) *ImageTaskService {

@@ -139,6 +139,8 @@ Chat 兼容桥必须把 HTTP 200 中的流错误及未完成空流转换为失�
 
 ## 用量与结算
 
+固定价异步 Images 是下述普通后扣流程的例外：取得最终分组及账号并发槽后先原子预占，产生图片后在 handler 返回前同步捕获，不交给 UsageRecord worker。明确拒绝可以释放并按规则切号，执行结果未知时停止重放并保留待核对；其报价和资金合同见[异步图片资金预占](../domains/media_tasks.md#async_image_billing)。Token 图片与同步接口仍沿用下述流程。
+
 上游转发产生可计量 usage 后，handler 把解析出的 token/图片/视频用量、客户端与上游模型、endpoint、账号、订阅快照、请求标识和渠道映射交给有界 UsageRecord worker pool。Anthropic 网关与 OpenAI 兼容的 Messages、Responses、Chat 三条链在终止事件前中断时，只要 service 随错误返回了部分结果，handler 仍提交其中已观测的 usage；无结果不生成记录，`UpstreamFailoverError` 不携带部分结果，避免重试成功后双重计费。国产供应商原生 Anthropic 转 Responses 的流在客户端写失败后停止下游输出，但继续排水上游并推进状态机，直到读到末尾 `message_delta` 的最终 token 或达到有界读超时。OpenAI OAuth 图片响应在 HTTP 成功后若发生上游 body 传输中断，仅在尚未向客户端写出真实图片内容时按 502 进入账号策略和 failover；JSON keepalive 空白不算真实输出，客户端取消、deadline、响应体超限以及首字节后的中断不会换号。worker 使用脱离已结束请求取消信号但受自身超时约束的 Context；队列策略可以同步回退或丢弃，并通过指标/日志暴露压力，不能为每个请求创建无界 goroutine。
 
 WebSocket 的 `AfterTurn` 同样结算错误结果中已观测的 token、缓存 token 或图片用量，已由风控路径单独结算的失败不重复提交；无用量失败继续跳过记账。WS 转 HTTP 的首轮只在未断连、未输出且未观测到用量或图片时允许恢复，包含带用量的前导帧、失败帧以及随后发生的 EOF/读写错误。错误收尾和失败终态均不得被计为账号调度成功。

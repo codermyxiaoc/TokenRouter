@@ -280,11 +280,12 @@ func applyUsageBillingRateMultipliers(cmd *UsageBillingCommand, p *usageBillingP
 	}
 
 	effectiveRate := p.Cost.ActualCost / baseAmount
-	if mode := strings.TrimSpace(p.Cost.BillingMode); mode != "" && mode != string(BillingModeToken) {
-		// 非 token 模式已在 ActualCost 中应用图片、视频或按次倍率；默认 allocation 必须沿用该倍率。
-		cmd.SubscriptionRateMultiplier = effectiveRate
-		cmd.SubscriptionRateMultiplierScale = 1
-		cmd.BalanceRateMultiplier = effectiveRate
+	if p.RateMultipliersResolved {
+		// 订阅与余额分别保留真实资金来源的倍率；零倍率表示免费，不是缺少配置。
+		cmd.SubscriptionRateMultiplier = p.SubscriptionRateMultiplier
+		cmd.SubscriptionRateMultiplierScale = p.SubscriptionRateMultiplierScale
+		cmd.BalanceRateMultiplier = p.BalanceRateMultiplier
+		cmd.DisablePlanGroupRateMultiplier = p.DisablePlanGroupRateMultiplier
 		return
 	}
 
@@ -322,12 +323,27 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 	billingCtx, cancel := detachedBillingContext(ctx)
 	defer cancel()
 
-	result, err := repo.Apply(billingCtx, cmd)
+	var result *UsageBillingApplyResult
+	var err error
+	if p.ImageReservation != nil {
+		imageRepo, ok := repo.(ImageBillingReservationRepository)
+		if !ok {
+			return false, fmt.Errorf("image billing reservation repository is required")
+		}
+		// 预占和捕获必须使用同一张图片账本，不能再调用普通结算绕过冻结金额。
+		result, err = imageRepo.CaptureImageBilling(billingCtx, p.ImageReservation.ID, cmd, cmd.BaseAmountUSD)
+	} else {
+		result, err = repo.Apply(billingCtx, cmd)
+	}
 	if err != nil {
 		return false, err
 	}
 
 	if result == nil || !result.Applied {
+		if p.ImageReservation != nil && result != nil {
+			// 捕获重放不再扣款，但用量记录仍须还原账本中的实际资金分配，不能沿用预估订阅价。
+			applyUsageBillingResultToUsageLog(usageLog, result)
+		}
 		deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
 		return false, nil
 	}
@@ -344,7 +360,18 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 }
 
 func syncBalanceCacheAfterDeduction(ctx context.Context, p *usageBillingParams, deps *billingDeps, result *UsageBillingApplyResult) {
-	if p == nil || p.User == nil || deps == nil || deps.billingCacheService == nil || result == nil || result.BalanceAmountUSD <= 0 {
+	if p == nil || p.User == nil || deps == nil || deps.billingCacheService == nil || result == nil {
+		return
+	}
+	if p.ImageReservation != nil {
+		// 预占已改变可用余额，捕获还可能退还差额；按消费金额再次扣缓存会造成双扣。
+		// 包括最终余额消费为零的捕获，也要让下一次读取看到退回后的数据库余额。
+		if err := deps.billingCacheService.InvalidateUserBalance(ctx, p.User.ID); err != nil {
+			slog.Warn("invalidate balance cache after image capture failed", "user_id", p.User.ID, "error", err)
+		}
+		return
+	}
+	if result.BalanceAmountUSD <= 0 {
 		return
 	}
 	if result.NewBalance != nil && deps.billingCacheService.balanceBelowEligibilityThreshold(*result.NewBalance) {
@@ -378,6 +405,10 @@ func notifyBalanceLow(p *usageBillingParams, deps *billingDeps, result *UsageBil
 			"user_nil", p.User == nil,
 			"service_nil", deps.balanceNotifyService == nil,
 		)
+		return
+	}
+	if p.ImageReservation != nil && result.NewBalance == nil {
+		// 捕获缺少最终余额时不能用任务受理前的用户快照推导通知，避免退款被误判为新扣款。
 		return
 	}
 
@@ -656,10 +687,8 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	if apiKey.GroupID != nil && apiKey.Group != nil {
 		groupDefault := apiKey.Group.RateMultiplier
 		subscriptionMultiplier = groupDefault
-		balanceMultiplier = groupDefault
-		if subscription == nil {
-			balanceMultiplier = s.getUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, groupDefault)
-		}
+		// 即使当前使用订阅，结算溢出的基础用量也必须采用用户的余额倍率。
+		balanceMultiplier = s.getUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, groupDefault)
 	}
 	if apiKey.GroupID != nil && apiKey.Group != nil && subscription == nil {
 		multiplier = balanceMultiplier
@@ -674,12 +703,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 	opts.PricingAt = rateNow
 	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, multiplier, rateNow)
-	subscriptionMultiplier, _ = computePeakAwareMultipliers(apiKey, subscriptionMultiplier, rateNow)
-	balanceMultiplier, _ = computePeakAwareMultipliers(apiKey, balanceMultiplier, rateNow)
-	subscriptionMultiplierScale := 1.0
-	if apiKey.Group != nil && apiKey.Group.RateMultiplier > 0 {
-		subscriptionMultiplierScale = subscriptionMultiplier / apiKey.Group.RateMultiplier
-	}
+	peakScale, _ := computePeakAwareMultipliers(apiKey, 1, rateNow)
 
 	// 确定计费模型
 	billingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
@@ -701,6 +725,11 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// 计算费用
 	cost := s.calculateRecordUsageCost(ctx, result, apiKey, account, billingModel, requestedModel, input.BillingModelSource, input.ChannelMappedModel, multiplier, imageMultiplier, opts)
+	mediaMode := BillingMode("")
+	if result.ImageCount > 0 {
+		mediaMode = BillingModeImage
+	}
+	allocationRates := resolveUsageBillingAllocationRates(apiKey, cost.BillingMode, mediaMode, subscriptionMultiplier, balanceMultiplier, peakScale)
 
 	// 预填 billing_type 仅用于 simple mode / 持久化前对象，真实扣费结果会在统一扣费后回填。
 	isSubscriptionBilling := subscription != nil
@@ -756,9 +785,11 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		Subscription:                    subscription,
 		RequestPayloadHash:              resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
 		AccountRateMultiplier:           accountRateMultiplier,
-		SubscriptionRateMultiplier:      subscriptionMultiplier,
-		SubscriptionRateMultiplierScale: subscriptionMultiplierScale,
-		BalanceRateMultiplier:           balanceMultiplier,
+		SubscriptionRateMultiplier:      allocationRates.SubscriptionRateMultiplier,
+		SubscriptionRateMultiplierScale: allocationRates.SubscriptionRateMultiplierScale,
+		BalanceRateMultiplier:           allocationRates.BalanceRateMultiplier,
+		RateMultipliersResolved:         true,
+		DisablePlanGroupRateMultiplier:  allocationRates.DisablePlanGroupRateMultiplier,
 		APIKeyService:                   input.APIKeyService,
 		Platform:                        quotaPlatform,
 	}, s.billingDeps(), s.usageBillingRepo)

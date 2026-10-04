@@ -150,6 +150,8 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		}
 	}
 	requestCtx := service.WithOpenAIImagesEndpoint(service.WithOpenAIImageGenerationIntent(c.Request.Context()))
+	imageBilling := &asyncImageBillingState{gateway: h.gatewayService}
+	defer imageBilling.finish(c, reqLog)
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
@@ -231,6 +233,19 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			return
 		}
 
+		// 最终账号与渠道模型确定后冻结报价；后续同组账号重试沿用本次快照。
+		if err := imageBilling.prepare(requestCtx, apiKey, account, subscription, requestModel, parsed.N, parsed.SizeTier, channelMapping); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			status, code, message, retryAfter := billingErrorDetails(err)
+			if retryAfter > 0 {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+			}
+			h.handleStreamingAwareError(c, status, code, message, streamStarted)
+			return
+		}
+
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		if !parsed.Stream && !jsonKeepaliveStarted {
 			stopJSONKeepalive = service.StartOpenAIImagesJSONKeepalive(c, h.openAIImagesJSONKeepaliveInterval())
@@ -248,6 +263,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			if err := h.gatewayService.EnforceOpenAIClientPolicyForRequest(requestCtx, c, account, body, tlsRouterMatch); err != nil {
 				return nil, err
 			}
+			imageBilling.startForward(c)
 			return h.gatewayService.ForwardImages(requestCtx, c, account, body, parsed, routingModel, tlsRouterMatch)
 		}()
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
@@ -261,6 +277,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
 		}
 		if err != nil {
+			imageBilling.forwardFailed(c, err)
 			if result != nil && result.ImageCount > 0 {
 				reqLog.Warn("openai.images.forward_partial_error_with_image_result",
 					zap.Int64("account_id", account.ID),
@@ -268,6 +285,12 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 					zap.Error(err),
 				)
 			} else {
+				if imageBilling.reservation != nil && imageBilling.uncertain {
+					// 已发出的图片请求结果未知时停止自动重放，避免一次预占触发重复生成。
+					h.ensureOpenAIForwardErrorResponse(c, streamStarted, err)
+					reqLog.Warn("openai.images.billing_reconciliation_required", zap.Error(err))
+					return
+				}
 				var imageUpstreamErr *service.OpenAIImagesUpstreamError
 				if errors.As(err, &imageUpstreamErr) {
 					retryableServerError := service.IsOpenAIImagesRetryableUpstreamError(imageUpstreamErr)
@@ -400,8 +423,8 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		if result != nil {
 			upstreamModel = result.UpstreamModel
 		}
-		h.submitMandatoryUsageRecordTask(c, func(ctx context.Context) {
-			if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
+		recordUsage := func(ctx context.Context) {
+			input := &service.OpenAIRecordUsageInput{
 				Result:             result,
 				APIKey:             apiKey,
 				User:               apiKey.User,
@@ -417,7 +440,14 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				QuotaPlatform:      quotaPlatform,
 				ClientSessionID:    clientSessionID,
 				ChannelUsageFields: channelMapping.ToUsageFields(requestModel, upstreamModel),
-			}); err != nil {
+			}
+			var recordErr error
+			if imageBilling.reservation != nil {
+				recordErr = imageBilling.record(c, input)
+			} else {
+				recordErr = h.gatewayService.RecordUsage(ctx, input)
+			}
+			if recordErr != nil {
 				logger.L().With(
 					zap.String("component", "handler.openai_gateway.images"),
 					zap.Int64("user_id", subject.UserID),
@@ -425,9 +455,15 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 					zap.Any("group_id", apiKey.GroupID),
 					zap.String("model", requestModel),
 					zap.Int64("account_id", account.ID),
-				).Error("openai.images.record_usage_failed", zap.Error(err))
+				).Error("openai.images.record_usage_failed", zap.Error(recordErr))
 			}
-		})
+		}
+		if imageBilling.reservation != nil {
+			// 预占必须在任务完成前捕获，不能交给可能晚于当前请求执行的 usage worker。
+			recordUsage(requestCtx)
+		} else {
+			h.submitMandatoryUsageRecordTask(c, recordUsage)
+		}
 
 		reqLog.Debug("openai.images.request_completed",
 			zap.Int64("account_id", account.ID),

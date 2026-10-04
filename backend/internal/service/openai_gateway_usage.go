@@ -22,18 +22,21 @@ import (
 type OpenAIRecordUsageInput struct {
 	// SubscriptionScopeID 只接受异步任务创建快照中的订阅 ID，禁止重新选择后来购买的套餐。
 	SubscriptionScopeID *int64 `json:"-"`
-	Result              *OpenAIForwardResult
-	APIKey              *APIKey
-	User                *User
-	Account             *Account
-	Subscription        *UserSubscription
-	InboundEndpoint     string
-	UpstreamEndpoint    string
-	UserAgent           string // 请求的 User-Agent
-	IPAddress           string // 请求的客户端 IP 地址
-	ClientSessionID     string // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
-	RequestPayloadHash  string
-	RequestBody         []byte // 原始请求体，用于解析客户端请求的计费推理档位
+	// 异步图片沿用受理时的报价和资金预占，防止完成时配置变化或再次扣款。
+	ImageReservation   *ImageBillingReservation `json:"-"`
+	ImageQuote         *OpenAIImageBillingQuote `json:"-"`
+	Result             *OpenAIForwardResult
+	APIKey             *APIKey
+	User               *User
+	Account            *Account
+	Subscription       *UserSubscription
+	InboundEndpoint    string
+	UpstreamEndpoint   string
+	UserAgent          string // 请求的 User-Agent
+	IPAddress          string // 请求的客户端 IP 地址
+	ClientSessionID    string // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
+	RequestPayloadHash string
+	RequestBody        []byte // 原始请求体，用于解析客户端请求的计费推理档位
 	// PricingAt 是 WS turn 开始时刻；普通 HTTP 调用留空并在记录时取当前时间。
 	PricingAt     time.Time
 	APIKeyService APIKeyQuotaUpdater
@@ -184,6 +187,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if apiKey == nil || user == nil || account == nil {
 		return errors.New("openai usage input requires api key, user, and account")
 	}
+	// 报价与预占必须成对出现，不能让预占请求意外退回普通后扣。
+	if (input.ImageQuote == nil) != (input.ImageReservation == nil) {
+		return ErrImageBillingReservationInvalid
+	}
 	billingAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
 	if err != nil {
 		return err
@@ -228,10 +235,8 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 	if apiKey.GroupID != nil && apiKey.Group != nil {
 		subscriptionMultiplier = apiKey.Group.RateMultiplier
-		balanceMultiplier = apiKey.Group.RateMultiplier
-		if subscription == nil {
-			balanceMultiplier = s.resolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, apiKey.Group.RateMultiplier)
-		}
+		// 订阅预检通过不代表它会承担整笔费用，余额回退必须提前解析用户专属倍率。
+		balanceMultiplier = s.resolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, apiKey.Group.RateMultiplier)
 	}
 	if apiKey.GroupID != nil && apiKey.Group != nil && subscription == nil {
 		multiplier = balanceMultiplier
@@ -249,12 +254,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		rateNow = input.PricingAt
 	}
 	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, baseMultiplier, rateNow)
-	subscriptionMultiplier, _ = computePeakAwareMultipliers(apiKey, subscriptionMultiplier, rateNow)
-	balanceMultiplier, _ = computePeakAwareMultipliers(apiKey, balanceMultiplier, rateNow)
-	subscriptionMultiplierScale := 1.0
-	if apiKey.Group != nil && apiKey.Group.RateMultiplier > 0 {
-		subscriptionMultiplierScale = subscriptionMultiplier / apiKey.Group.RateMultiplier
-	}
+	peakScale, _ := computePeakAwareMultipliers(apiKey, 1, rateNow)
 	videoMultiplier := resolveVideoRateMultiplier(apiKey, baseMultiplier)
 
 	var cost *CostBreakdown
@@ -272,19 +272,25 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if result.ServiceTier != nil {
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
 	}
-	cost, err = s.calculateOpenAIRecordUsageCostAt(
-		ctx,
-		result,
-		apiKey,
-		billingModels,
-		multiplier,
-		imageMultiplier,
-		videoMultiplier,
-		baseMultiplier,
-		tokens,
-		serviceTier,
-		rateNow,
-	)
+	if input.ImageQuote != nil {
+		// 最终数量/尺寸使用冻结价卡；账号故障转移或管理员改价不能改变已预占的合同。
+		cost, err = input.ImageQuote.settledCost(result.ImageSize, result.ImageCount, input.ImageReservation)
+		billingModel = input.ImageQuote.BillingModel
+	} else {
+		cost, err = s.calculateOpenAIRecordUsageCostAt(
+			ctx,
+			result,
+			apiKey,
+			billingModels,
+			multiplier,
+			imageMultiplier,
+			videoMultiplier,
+			baseMultiplier,
+			tokens,
+			serviceTier,
+			rateNow,
+		)
+	}
 	if err != nil {
 		if !isUsagePricingUnavailableError(err) {
 			return err
@@ -304,7 +310,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	// 免费 Fast 只减免用户侧费用。保留 Fast 的 TotalCost 供账号统计和审计，
 	// 并记录 Standard 基础金额供统一订阅/余额分配使用。
 	var billingBaseAmountUSD *float64
-	if groupBillsOpenAIFastAtStandard(apiKey, billingAccount, serviceTier) && cost != nil {
+	if input.ImageReservation == nil && groupBillsOpenAIFastAtStandard(apiKey, billingAccount, serviceTier) && cost != nil {
 		standardCost, standardErr := s.calculateOpenAIRecordUsageCostAt(
 			ctx,
 			result,
@@ -346,6 +352,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	durationMs := int(result.Duration.Milliseconds())
 	accountRateMultiplier := account.BillingRateMultiplier()
 	requestID := resolveUsageBillingRequestID(ctx, result.RequestID)
+	if input.ImageReservation != nil {
+		// 生成结果的上游 ID 与受理 ID 不一定相同，始终使用预占账本的稳定请求 ID。
+		requestID = input.ImageReservation.ID
+	}
 	if result.OpenAIWSMode {
 		if upstreamRequestID := strings.TrimSpace(result.RequestID); upstreamRequestID != "" {
 			requestID = upstreamRequestID
@@ -504,6 +514,25 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if quotaPlatform == "" {
 		quotaPlatform = PlatformFromAPIKey(apiKey)
 	}
+	mediaMode := BillingMode("")
+	switch {
+	case result.WebSearchCalls > 0 || result.AudioUsage != nil:
+		mediaMode = BillingModePerRequest
+	case isGrokVideoUsageResult(result, billingModels):
+		mediaMode = BillingModeVideo
+	case result.ImageCount > 0:
+		mediaMode = BillingModeImage
+	}
+	allocationRates := resolveUsageBillingAllocationRates(apiKey, cost.BillingMode, mediaMode, subscriptionMultiplier, balanceMultiplier, peakScale)
+	if input.ImageReservation != nil {
+		hold := input.ImageReservation.Hold
+		allocationRates = usageBillingAllocationRates{
+			SubscriptionRateMultiplier:      hold.SubscriptionRateMultiplier,
+			SubscriptionRateMultiplierScale: hold.SubscriptionRateMultiplierScale,
+			BalanceRateMultiplier:           hold.BalanceRateMultiplier,
+			DisablePlanGroupRateMultiplier:  hold.DisablePlanGroupRateMultiplier,
+		}
+	}
 
 	billingErr := func() error {
 		_, err := applyUsageBilling(ctx, requestID, usageLog, &usageBillingParams{
@@ -514,11 +543,14 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			Account:                         account,
 			Subscription:                    subscription,
 			SubscriptionScopeID:             input.SubscriptionScopeID,
+			ImageReservation:                input.ImageReservation,
 			RequestPayloadHash:              resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
 			AccountRateMultiplier:           accountRateMultiplier,
-			SubscriptionRateMultiplier:      subscriptionMultiplier,
-			SubscriptionRateMultiplierScale: subscriptionMultiplierScale,
-			BalanceRateMultiplier:           balanceMultiplier,
+			SubscriptionRateMultiplier:      allocationRates.SubscriptionRateMultiplier,
+			SubscriptionRateMultiplierScale: allocationRates.SubscriptionRateMultiplierScale,
+			BalanceRateMultiplier:           allocationRates.BalanceRateMultiplier,
+			RateMultipliersResolved:         true,
+			DisablePlanGroupRateMultiplier:  allocationRates.DisablePlanGroupRateMultiplier,
 			APIKeyService:                   input.APIKeyService,
 			Platform:                        quotaPlatform,
 			BillingBaseAmountUSD:            billingBaseAmountUSD,

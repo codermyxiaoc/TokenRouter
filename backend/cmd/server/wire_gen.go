@@ -322,7 +322,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	mediaTaskService := service.ProvideMediaTaskServiceWithVideoContent(mediaTaskRepository, mediaTaskPreviewCache, videoUpstreamService, accountRepository)
 	mediaTaskHandler := handler.NewMediaTaskHandler(mediaTaskService)
 	imageTaskStore := repository.NewDurableImageTaskStore(db, redisClient)
-	imageTaskService := service.ProvideImageTaskService(imageTaskStore, imageStorageSettingService)
+	imageTaskService := service.ProvideImageTaskService(imageTaskStore, imageStorageSettingService, usageBillingRepository)
 	asyncImageHandler := handler.NewAsyncImageHandler(imageTaskService, openAIGatewayHandler)
 	videoTaskRepository := repository.NewVideoTaskRepository(db)
 	videoTaskService := service.ProvideVideoTaskService(videoTaskRepository, videoUpstreamService, modelPricingResolver, usageBillingRepository, usageLogRepository, accountRepository, userGroupRateRepository, apiKeyService, billingCacheService, mediaTaskService, configConfig)

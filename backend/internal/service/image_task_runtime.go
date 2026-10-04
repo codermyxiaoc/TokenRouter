@@ -56,6 +56,14 @@ func (s *ImageTaskService) Start() {
 				logger.L().Warn("image_task.reconcile_failed", zap.Error(err))
 			}
 			cancel()
+			// 资金账本不随图片结果过期清理；遗留预占仅标记待核对，不猜测上游结果退款。
+			if s.imageBilling != nil && r.ctx.Err() == nil {
+				billingCtx, stop := context.WithTimeout(r.ctx, 10*time.Second)
+				if _, err := s.imageBilling.ReconcileExpiredImageBilling(billingCtx, time.Now().UTC(), 100); err != nil && r.ctx.Err() == nil {
+					logger.L().Warn("image_task.billing_reconcile_failed", zap.Error(err))
+				}
+				stop()
+			}
 			select {
 			case <-r.ctx.Done():
 				return

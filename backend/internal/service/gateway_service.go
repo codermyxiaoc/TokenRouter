@@ -1626,7 +1626,7 @@ func finalizeUsageBilling(p *usageBillingParams, deps *billingDeps, result *Usag
 		return
 	}
 
-	if result != nil && result.BalanceAmountUSD > 0 && p.User != nil {
+	if result != nil && (result.BalanceAmountUSD > 0 || p.ImageReservation != nil) && p.User != nil {
 		syncBalanceCacheAfterDeduction(context.Background(), p, deps, result)
 	}
 
@@ -1739,7 +1739,9 @@ type usageBillingParams struct {
 	// 简易模式仅累计密钥窗口，不扣余额、套餐或账号额度。
 	SimpleModeKeyRateLimitOnly bool
 	// SubscriptionScopeID 固化异步任务创建时 auto 可以参与分摊的订阅，不来自客户端配置。
-	SubscriptionScopeID             *int64
+	SubscriptionScopeID *int64
+	// 图片预占存在时只能捕获原预占，不允许回退普通后付费重复扣款。
+	ImageReservation                *ImageBillingReservation
 	Cost                            *CostBreakdown
 	User                            *User
 	APIKey                          *APIKey
@@ -1750,8 +1752,11 @@ type usageBillingParams struct {
 	SubscriptionRateMultiplier      float64
 	SubscriptionRateMultiplierScale float64
 	BalanceRateMultiplier           float64
-	APIKeyService                   APIKeyQuotaUpdater
-	Platform                        string // 来自 APIKey 关联 Group 的平台标识
+	// 已解析的资金倍率允许显式零价，不得再从当前订阅的展示费用推导余额倍率。
+	RateMultipliersResolved        bool
+	DisablePlanGroupRateMultiplier bool
+	APIKeyService                  APIKeyQuotaUpdater
+	Platform                       string // 来自 APIKey 关联 Group 的平台标识
 	// BillingBaseAmountUSD 是用户资金分配使用的未倍率基础金额；nil 时沿用 Cost.TotalCost。
 	// 免费 Fast 需要把用户基础价切换为 Standard，同时保留 Fast 的账号统计基础成本。
 	BillingBaseAmountUSD *float64

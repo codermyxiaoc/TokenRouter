@@ -11,6 +11,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 )
 
@@ -75,7 +76,8 @@ func TestReserveUsageBillingBatchImageBilling_UsesBalanceRateAfterPartialSubscri
 	defer func() { _ = db.Close() }()
 
 	now := time.Now().UTC()
-	windowStart := now.Add(-time.Hour)
+	// 固定使用当前日窗口，避免午夜运行时误触发已跨日的额度重置。
+	windowStart := timezone.StartOfDay(now)
 	mock.ExpectBegin()
 	tx, err := db.BeginTx(ctx, nil)
 	require.NoError(t, err)
@@ -136,7 +138,7 @@ func TestReserveUsageBillingBatchImageBilling_StrictSubscriptionRejectsPartialHo
 	defer func() { _ = db.Close() }()
 
 	now := time.Now().UTC()
-	windowStart := now.Add(-time.Hour)
+	windowStart := timezone.StartOfDay(now)
 	preferredID := int64(11)
 	mock.ExpectBegin()
 	tx, err := db.BeginTx(ctx, nil)
@@ -181,7 +183,7 @@ func TestApplyUsageBillingEffects_StrictSubscriptionChargesOverflowToBalance(t *
 	defer func() { _ = db.Close() }()
 
 	now := time.Now().UTC()
-	windowStart := now.Add(-time.Hour)
+	windowStart := timezone.StartOfDay(now)
 	preferredID := int64(11)
 	mock.ExpectBegin()
 	tx, err := db.BeginTx(ctx, nil)

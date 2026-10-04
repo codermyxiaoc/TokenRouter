@@ -62,7 +62,15 @@ func TestReasoningEffortSubscriptionRecordUsageCompatibility(t *testing.T) {
 			require.InDelta(t, base*.4, usageRepo.lastLog.ActualCost, 1e-12)
 			require.InDelta(t, base*.4, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
 			require.InDelta(t, .4, usageRepo.lastLog.RateMultiplier, 1e-12)
-			require.Zero(t, rateRepo.calls, "套餐额外倍率应覆盖用户和默认分组倍率")
+			// 推理倍率已计入基础价格；订阅套餐倍率与余额专属倍率须分别保留，不能互相覆盖。
+			require.Equal(t, 1, rateRepo.calls, "存在订阅时也必须解析余额回退倍率")
+			require.InDelta(t, base, billingRepo.lastCmd.BaseAmountUSD, 1e-12)
+			if base > 0 {
+				require.InDelta(t, userRate, billingRepo.lastCmd.BalanceRateMultiplier, 1e-12)
+				require.Equal(t, key.Group.RateMultiplier, billingRepo.lastCmd.SubscriptionRateMultiplier)
+				require.Equal(t, 1.0, billingRepo.lastCmd.SubscriptionRateMultiplierScale)
+				require.False(t, billingRepo.lastCmd.DisablePlanGroupRateMultiplier, "订阅分配仍应采用套餐分组倍率")
+			}
 		})
 	}
 }

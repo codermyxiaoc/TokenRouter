@@ -17,12 +17,25 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/payment"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"github.com/stretchr/testify/require"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 	_ "modernc.org/sqlite"
 )
+
+// HTTP 绑定与服务层共同维护白名单；仅省略字段允许使用余额默认值。
+func TestPaymentOrderRequestBindingRejectsUnknownTypes(t *testing.T) {
+	for _, orderType := range []string{"", payment.OrderTypeBalance, payment.OrderTypeSubscription, "unknown", "BALANCE", "balance ", "subscription_typo"} {
+		err := binding.Validator.ValidateStruct(CreateOrderRequest{PaymentType: payment.TypeAlipay, OrderType: orderType})
+		if orderType == "" || orderType == payment.OrderTypeBalance || orderType == payment.OrderTypeSubscription {
+			require.NoError(t, err)
+		} else {
+			require.Error(t, err, orderType)
+		}
+	}
+}
 
 func TestApplyWeChatPaymentResumeClaims(t *testing.T) {
 	t.Parallel()

@@ -16,7 +16,7 @@
 
 | 工具 | 当前来源 | 当前约束 |
 | --- | --- | --- |
-| Go | `backend/go.mod`、根与部署 Dockerfile | `1.27.0` |
+| Go | `backend/go.mod`、根与部署 Dockerfile | `1.27.2` |
 | Node.js | 根与部署 Dockerfile | 镜像构建使用 `node:24-alpine`；本地使用满足前端依赖要求的工具链 |
 | pnpm | 根 Makefile 与 Dockerfile | `9`；根命令默认使用 `npx --yes pnpm@9` |
 | golangci-lint | `backend/Makefile`、`backend/.golangci.yml` | 后端检查执行 `golangci-lint run ./...`；安装版本由本地工具链提供 |

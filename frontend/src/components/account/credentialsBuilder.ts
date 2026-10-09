@@ -50,6 +50,7 @@ export function isHeaderOverrideCapable(platform: string, type: string): boolean
     platform === 'deepseek' ||
     platform === 'minimax' ||
     platform === 'opencode_go' ||
+    isAdditionalAPIKeyPlatform(platform) ||
     platform === 'video'
   ) {
     return type === 'apikey'
@@ -270,6 +271,43 @@ export type CnProviderPlatform = 'kimi' | 'zhipu' | 'deepseek' | 'minimax'
 export type CnApiProtocol = 'adaptive' | 'chat_completions' | 'anthropic' | 'responses'
 export type CnNativeApiProtocol = Exclude<CnApiProtocol, 'adaptive'>
 
+// 新聚合平台共用 API Key 表单；不改变原平台的模式和端点预设。
+export type AdditionalAPIKeyPlatform = 'typesafe' | 'cline' | 'command_code'
+export function isAdditionalAPIKeyPlatform(platform: string): platform is AdditionalAPIKeyPlatform {
+  return platform === 'typesafe' || platform === 'cline' || platform === 'command_code'
+}
+export function additionalProviderBaseUrl(platform: string): string {
+  return ({ typesafe: 'https://api.typesafe.ai', cline: 'https://api.cline.bot/api/v1', command_code: 'https://api.commandcode.ai/provider/v1' } as Record<string, string>)[platform] || ''
+}
+export interface AdditionalProviderForm {
+  protocol: CnApiProtocol
+  baseUrls: Record<CnNativeApiProtocol, string>
+  rules: OpenCodeGoProtocolRule[]
+  customRules: boolean
+}
+export function additionalProviderForm(credentials: Record<string, unknown> = {}): AdditionalProviderForm {
+  const protocol = credentials.api_protocol
+  const bases = credentials.api_base_urls as Record<string, unknown> | undefined
+  return {
+    protocol: protocol === 'chat_completions' || protocol === 'anthropic' || protocol === 'responses' ? protocol : 'adaptive',
+    baseUrls: { chat_completions: String(bases?.chat_completions || ''), responses: String(bases?.responses || ''), anthropic: String(bases?.anthropic || '') },
+    rules: parseOpenCodeGoProtocolRules(credentials.protocol_rules) || [],
+    customRules: Array.isArray(credentials.protocol_rules)
+  }
+}
+export function applyAdditionalProviderCredentials(credentials: Record<string, unknown>, platform: string, form: AdditionalProviderForm): void {
+  if (!isAdditionalAPIKeyPlatform(platform)) return
+  credentials.account_mode = 'payg'
+  credentials.api_protocol = platform === 'typesafe' ? 'systemone' : platform === 'cline' ? 'chat_completions' : form.protocol
+  delete credentials.api_base_urls
+  delete credentials.protocol_rules
+  if (platform !== 'command_code') return
+  // 空覆盖继承当前 Base URL，绝不将自定义中继的其它协议改发官方地址。
+  const bases = Object.fromEntries(Object.entries(form.baseUrls).map(([key, value]) => [key, value.trim()]).filter(([, value]) => value))
+  if (Object.keys(bases).length) credentials.api_base_urls = bases
+  if (form.customRules) applyOpenCodeGoProtocolRules(credentials, form.rules, 'edit')
+}
+
 /** DeepSeek、Kimi、MiniMax 和 OpenCode 提供原生 Responses 端点。 */
 export function cnSupportsNativeResponses(platform: string): boolean {
   return platform === 'deepseek' || platform === 'kimi' || platform === 'minimax' || platform === 'opencode_go'
@@ -305,6 +343,8 @@ export const DEFAULT_OPENCODE_ZEN_PROTOCOL_RULES: OpenCodeGoProtocolRule[] = [
   { pattern: 'gpt-*', protocol: 'responses' },
   { pattern: 'muse-spark-*', protocol: 'responses' },
   { pattern: 'claude-*', protocol: 'anthropic' },
+  // Zen 的精确规则优先于同系列通配规则，Go 默认路由保持不变。
+  { pattern: 'qwen3.8-max', protocol: 'chat_completions' },
   { pattern: 'qwen*', protocol: 'anthropic' }
 ]
 
@@ -358,7 +398,7 @@ export function applyOpenCodeGoProtocolRules(
 }
 
 export function isMultiProtocolApiKeyPlatform(platform: string): boolean {
-  return platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek' || platform === 'minimax' || platform === 'opencode_go'
+  return platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek' || platform === 'minimax' || platform === 'opencode_go' || platform === 'cline' || platform === 'command_code'
 }
 
 export interface CnBaseUrlPreset {

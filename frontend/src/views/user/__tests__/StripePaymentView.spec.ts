@@ -174,4 +174,34 @@ describe('StripePaymentView', () => {
 
     wrapper.unmount()
   })
+  it('卸载后加载完成的 SDK 不再创建支付元素', async () => {
+    getOrder.mockResolvedValue({ data: orderFactory() })
+    let resolveSDK!: (value: typeof stripeInstance) => void
+    loadStripe.mockReturnValueOnce(new Promise(resolve => { resolveSDK = resolve }))
+    const wrapper = mountView()
+    await flushPromises()
+    expect(loadStripe).toHaveBeenCalled()
+    wrapper.unmount()
+    resolveSDK(stripeInstance)
+    await flushPromises()
+    expect(stripeInstance.elements).not.toHaveBeenCalled()
+  })
+
+  it('卸载后微信确认结果不恢复轮询', async () => {
+    vi.useFakeTimers()
+    routeState.query.method = 'wechat_pay'
+    getOrder.mockResolvedValue({ data: orderFactory() })
+    let resolveConfirm!: (value: unknown) => void
+    stripeInstance.confirmWechatPayPayment.mockReturnValueOnce(new Promise(resolve => { resolveConfirm = resolve }))
+    const wrapper = mountView()
+    await flushPromises()
+    expect(stripeInstance.confirmWechatPayPayment).toHaveBeenCalled()
+    wrapper.unmount()
+    resolveConfirm({ paymentIntent: { status: 'requires_action', next_action: { wechat_pay_display_qr_code: { image_data_url: 'data:image/png;base64,qr' } } } })
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(paymentStore.pollOrderStatus).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
 })

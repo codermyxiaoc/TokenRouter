@@ -2811,8 +2811,35 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 
 	// Handle Antigravity accounts: return Claude + Gemini models
 	if account.Platform == service.PlatformAntigravity {
-		// 直接复用 antigravity.DefaultModels()，与 /v1/models 端点保持同步
+		// 测试模型列表尊重本站独立白名单，不恢复上游仅 mapping 的限制模式。
+		if configured := account.GetConfiguredRequestModels(); len(configured) > 0 {
+			models := make([]openai.Model, 0, len(configured))
+			for _, id := range configured {
+				models = append(models, openai.Model{ID: id, Object: "model", Type: "model", DisplayName: id})
+			}
+			response.Success(c, models)
+			return
+		}
 		response.Success(c, antigravity.DefaultModels())
+		return
+	}
+	if account.IsTypeSafe() || account.IsCline() || account.IsCommandCode() {
+		ids := account.GetConfiguredRequestModels()
+		if len(ids) == 0 {
+			switch account.Platform {
+			case service.PlatformTypeSafe:
+				ids = []string{service.DefaultTypeSafeModel}
+			case service.PlatformCline:
+				ids = []string{service.DefaultClineTestModel, service.DefaultClinePassTestModel}
+			case service.PlatformCommandCode:
+				ids = []string{service.DefaultCommandCodeTestModel}
+			}
+		}
+		models := make([]openai.Model, 0, len(ids))
+		for _, id := range ids {
+			models = append(models, openai.Model{ID: id, Object: "model", Type: "model", DisplayName: id})
+		}
+		response.Success(c, models)
 		return
 	}
 

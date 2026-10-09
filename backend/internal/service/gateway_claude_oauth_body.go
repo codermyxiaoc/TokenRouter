@@ -1052,9 +1052,15 @@ func collectCacheControlPaths(body []byte) (invalidThinking []cacheControlPath, 
 	return invalidThinking, messagePaths, toolPaths, systemPaths
 }
 
-// enforceCacheControlLimit 强制执行 cache_control 块数量限制（最多 4 个）
-// 超限时优先移除工具断点，再移除 messages 断点，最后才移除 system 断点。
+// enforceCacheControlLimit 让出站 cache_control 满足上游约束：
+// 先执行块数量限制，再修正 TTL 顺序。
 func enforceCacheControlLimit(body []byte) []byte {
+	return normalizeCacheControlTTLOrder(enforceCacheControlBlockLimit(body))
+}
+
+// enforceCacheControlBlockLimit 强制执行 cache_control 块数量限制（最多 4 个）
+// 超限时优先移除工具断点，再移除 messages 断点，最后才移除 system 断点。
+func enforceCacheControlBlockLimit(body []byte) []byte {
 	if len(body) == 0 {
 		return body
 	}
@@ -1135,6 +1141,40 @@ func enforceCacheControlLimit(body []byte) []byte {
 		return out
 	}
 	return body
+}
+
+// normalizeCacheControlTTLOrder 按 tools、system、messages 的处理顺序修正缓存 TTL。
+// 省略 TTL 等价于 5m，后续存在 1h 断点时把之前断点提升为 1h，避免上游拒绝请求。
+// 最后一个 1h 断点之前的内容本就按 1h 写缓存；已有合法顺序保持不变。
+func normalizeCacheControlTTLOrder(body []byte) []byte {
+	_, messagePaths, toolPaths, systemPaths := collectCacheControlPaths(body)
+	paths := make([]string, 0, len(toolPaths)+len(systemPaths)+len(messagePaths)+1)
+	paths = append(paths, toolPaths...)
+	paths = append(paths, systemPaths...)
+	paths = append(paths, messagePaths...)
+	// 顶层 cache_control 对应最后一个可缓存块。
+	if gjson.GetBytes(body, "cache_control").Exists() {
+		paths = append(paths, "cache_control")
+	}
+
+	last1h := -1
+	for i, path := range paths {
+		if gjson.GetBytes(body, path+".ttl").String() == cacheTTLTarget1h {
+			last1h = i
+		}
+	}
+
+	out := body
+	for _, path := range paths[:last1h+1] {
+		cc := gjson.GetBytes(out, path)
+		if cc.Get("type").String() != "ephemeral" || cc.Get("ttl").String() == cacheTTLTarget1h {
+			continue
+		}
+		if next, err := sjson.SetBytes(out, path+".ttl", cacheTTLTarget1h); err == nil {
+			out = next
+		}
+	}
+	return out
 }
 
 // injectAnthropicCacheControlTTL1h 将已有 ephemeral cache_control 块的 ttl 强制写为 1h。

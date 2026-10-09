@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -26,6 +27,15 @@ const (
 // on content length, transparently decoding any Content-Encoding the upstream
 // client used to compress the body (zstd, gzip, deflate).
 func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
+	body, err := readRequestBodyWithPrealloc(req)
+	if err != nil {
+		return nil, err
+	}
+	return validateRoutingRequestBody(body)
+}
+
+// 读取与解压不自行规范化；调用方在最终解析边界校验，避免宽容入口对同一正文重复复制。
+func readRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 	if req == nil || req.Body == nil {
 		return nil, nil
 	}
@@ -62,6 +72,14 @@ func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 	req.ContentLength = int64(len(decoded))
 
 	return decoded, nil
+}
+
+// 请求读体完成后先拒绝歧义模型，保证模型重定向、调度和供应商转换看到同一字段。
+func validateRoutingRequestBody(body []byte) ([]byte, error) {
+	if err := jsonutil.ValidateRoutingModel(body); err != nil {
+		return nil, err
+	}
+	return body, nil
 }
 
 // readRequestBodyChunks 按有界块接收请求，完成后只组装一次精确大小的结果。
@@ -116,7 +134,7 @@ func readRequestBodyChunks(reader io.Reader, initialCapacity int, contentLength 
 // ReadLenientJSONRequestBodyWithPrealloc 读取请求体，并在严格 JSON
 // 校验前转义字符串中的原始控制字节。
 func ReadLenientJSONRequestBodyWithPrealloc(req *http.Request, maxNormalizedBytes int64) ([]byte, error) {
-	body, err := ReadRequestBodyWithPrealloc(req)
+	body, err := readRequestBodyWithPrealloc(req)
 	if err != nil {
 		return nil, err
 	}
@@ -204,9 +222,9 @@ func NormalizeLenientJSONRequestBody(body []byte, maxNormalizedBytes int64) ([]b
 		}
 	}
 	if out != nil {
-		return out, nil
+		return validateRoutingRequestBody(out)
 	}
-	return body, nil
+	return validateRoutingRequestBody(body)
 }
 
 // trimUTF8BOM 移除 JSON 请求体开头的 UTF-8 BOM。

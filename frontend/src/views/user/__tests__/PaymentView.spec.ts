@@ -474,6 +474,28 @@ describe('PaymentView recharge rate preview', () => {
 })
 
 describe('PaymentView subscription confirmation amounts', () => {
+  it.each([
+    { min: 50, max: 75, available: true },
+    { min: 0, max: 73, available: false },
+    { min: 80, max: 0, available: false },
+  ])('订阅限额使用换汇与手续费后的实付 $min..$max', async ({ min, max, available }) => {
+    const wrapper = await mountSubscriptionConfirm({
+      checkout: { subscription_usd_to_cny_rate: 7, balance_recharge_multiplier: 3,
+        recharge_bonus_mode: 'discount', recharge_bonus_tiers: [{ min_amount: 0, bonus_percent: 50 }] },
+      method: { currency: 'CNY', fee_fixed: 2, fee_rate: 3, single_min: min, single_max: max },
+      plan: { price: 10 },
+    })
+    const vm = wrapper.vm as unknown as { subTotalAmount: number; canSubmitSubscription: boolean; confirmSubscribe: () => Promise<void> }
+    expect(vm.subTotalAmount).toBe(74.1)
+    expect(wrapper.getComponent(PaymentMethodSelector).props('methods')[0].available).toBe(available)
+    expect(vm.canSubmitSubscription).toBe(available)
+    if (!available) {
+      await vm.confirmSubscribe()
+      expect(createOrder).not.toHaveBeenCalled()
+    }
+    wrapper.unmount()
+  })
+
   it('shows converted CNY pay amount using the subscription rate, not the balance multiplier', async () => {
     const wrapper = await mountSubscriptionConfirm({
       checkout: {
@@ -592,8 +614,8 @@ describe('PaymentView wallet subscription payments', () => {
 
   it('uses the plan price without exchange rates or fees and completes without a cashier', async () => {
     const wrapper = await mountSubscriptionConfirm({
-      checkout: { wallet_payment_enabled: true, subscription_usd_to_cny_rate: 7.15, balance_recharge_multiplier: 3 },
-      method: { currency: 'CNY', fee_fixed: 2, fee_rate: 10 },
+      checkout: { wallet_payment_enabled: true, subscription_usd_to_cny_rate: 7.15, balance_recharge_multiplier: 3, recharge_bonus_mode: 'discount', recharge_bonus_tiers: [{ min_amount: 0, bonus_percent: 50 }] },
+      method: { currency: 'CNY', fee_fixed: 2, fee_rate: 10, single_min: 100, single_max: 200 },
       plan: { price: 10 },
     }, { tab: 'subscription', plan: '7' })
     wrapper.findComponent(PaymentMethodSelector).vm.$emit('select', 'balance')
@@ -1236,5 +1258,32 @@ describe('PaymentView payment help text', () => {
     expect(help.find('strong').text()).toBe('发票说明')
     expect(help.find('a').attributes('href')).toBe('https://example.com/invoice')
     expect(help.html()).not.toContain('<script>')
+  })
+})
+
+// 页面提交原始金额，服务端报价；展示及渠道限额必须使用优惠加手续费后的实付。
+describe('PaymentView recharge promotions', () => {
+  it.each(['bonus', 'discount'] as const)('keeps fork fees and credited units in %s mode', async (mode) => {
+    routeState.path = '/purchase'
+    routeState.query = {}
+    localStorage.clear()
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({
+      balance_recharge_multiplier: 0.14,
+      recharge_bonus_mode: mode,
+      recharge_bonus_tiers: [{ min_amount: 100, bonus_percent: 20 }],
+      recharge_bonus_notice: '<img src=x onerror="alert(1)"><script>alert(1)</script>活动',
+      methods: { wxpay: { ...checkoutInfoFixture().data.methods.wxpay, currency: 'CNY', fee_fixed: 2, fee_rate: 3, single_max: 90 } },
+    }))
+    const wrapper = shallowMount(PaymentView, { global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true, Transition: false } } })
+    await flushPromises()
+    wrapper.getComponent(AmountInput).vm.$emit('update:modelValue', 100)
+    await flushPromises()
+    const methods = wrapper.getComponent(PaymentMethodSelector).props('methods')
+    expect(methods[0].available).toBe(mode === 'discount')
+    expect(wrapper.text()).toContain(formatPaymentAmount(mode === 'bonus' ? 105 : 84.4, 'CNY'))
+    expect(wrapper.text()).toContain(mode === 'bonus' ? '16.80' : '14.00')
+    expect(wrapper.html()).not.toContain('onerror')
+    expect(wrapper.html()).not.toContain('<script>')
+    wrapper.unmount()
   })
 })

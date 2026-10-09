@@ -317,6 +317,9 @@ func TestHTTPUpstreamDoFallsBackToOfficialGrokAPIOnCLIAccessDenied(t *testing.T)
 	require.Equal(t, "Bearer oauth-token", fallbackHeaders.Get("Authorization"))
 	require.Empty(t, fallbackHeaders.Get("X-XAI-Token-Auth"))
 	require.Empty(t, fallbackHeaders.Get("x-grok-client-version"))
+	require.Empty(t, fallbackHeaders.Get("x-grok-client-identifier"))
+	require.Empty(t, fallbackHeaders.Get("x-grok-client-mode"))
+	require.Empty(t, fallbackHeaders.Get("x-authenticateresponse"))
 	require.Empty(t, fallbackHeaders.Get("User-Agent"))
 }
 
@@ -473,14 +476,14 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 	})
 
 	t.Run("accepts a valid operator override", func(t *testing.T) {
-		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.121-alpha.1")
+		t.Setenv("XAI_GROK_CLI_VERSION", "1.0.14-alpha.1")
 		req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/chat/completions", nil)
 		require.NoError(t, err)
 
 		applyGrokCLIProxyHeaders(req)
 
-		require.Equal(t, "0.2.121-alpha.1", req.Header.Get("x-grok-client-version"))
-		require.Equal(t, xai.CLIUserAgent("0.2.121-alpha.1"), req.Header.Get("User-Agent"))
+		require.Equal(t, "1.0.14-alpha.1", req.Header.Get("x-grok-client-version"))
+		require.Equal(t, xai.CLIUserAgent("1.0.14-alpha.1"), req.Header.Get("User-Agent"))
 	})
 
 	t.Run("rejects an unsafe override", func(t *testing.T) {

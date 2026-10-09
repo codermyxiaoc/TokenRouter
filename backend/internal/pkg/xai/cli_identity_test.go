@@ -16,16 +16,16 @@ func TestResolveCLIVersionDefaultsToPinnedClientVersion(t *testing.T) {
 }
 
 func TestResolveCLIVersionAcceptsValidOverride(t *testing.T) {
-	t.Setenv(CLIVersionEnv, "0.2.95-alpha.1")
-	require.Equal(t, "0.2.95-alpha.1", ResolveCLIVersion())
+	t.Setenv(CLIVersionEnv, "1.0.14-alpha.1")
+	require.Equal(t, "1.0.14-alpha.1", ResolveCLIVersion())
 }
 
 func TestResolveCLIVersionRejectsUnsafeOrTooOld(t *testing.T) {
 	for _, version := range []string{
-		"0.2.92",
-		"0.2.93-beta.1",
-		"0.2.95\r\nX-Injected: true",
-		"0.2.093",
+		"1.0.12",
+		"1.0.13-beta.1",
+		"1.0.14\r\nX-Injected: true",
+		"1.0.014",
 		"0.3",
 		"1",
 	} {
@@ -47,12 +47,14 @@ func TestApplyCLIProxyHeaders(t *testing.T) {
 
 	require.Equal(t, CLIClientVersion, req.Header.Get("x-grok-client-version"))
 	require.Equal(t, CLIClientIdentifier, req.Header.Get("x-grok-client-identifier"))
+	require.Equal(t, CLIClientMode, req.Header.Get("x-grok-client-mode"))
+	require.Equal(t, "authenticate-response", req.Header.Get("x-authenticateresponse"))
 	require.Equal(t, CLITokenAuth, req.Header.Get("X-XAI-Token-Auth"))
 	require.Equal(t, CLIUserAgent(CLIClientVersion), req.Header.Get("User-Agent"))
 }
 
 func TestApplyCLIProxyHeadersLeavesAPIHostUnchanged(t *testing.T) {
-	t.Setenv(CLIVersionEnv, "0.2.95")
+	t.Setenv(CLIVersionEnv, "1.0.14")
 
 	req, err := http.NewRequest(http.MethodPost, "https://api.x.ai/v1/responses", nil)
 	require.NoError(t, err)
@@ -62,6 +64,8 @@ func TestApplyCLIProxyHeadersLeavesAPIHostUnchanged(t *testing.T) {
 
 	require.Empty(t, req.Header.Get("x-grok-client-version"))
 	require.Empty(t, req.Header.Get("x-grok-client-identifier"))
+	require.Empty(t, req.Header.Get("x-grok-client-mode"))
+	require.Empty(t, req.Header.Get("x-authenticateresponse"))
 	require.Empty(t, req.Header.Get("X-XAI-Token-Auth"))
 	require.Equal(t, "direct-api-client/1.0", req.Header.Get("User-Agent"))
 }

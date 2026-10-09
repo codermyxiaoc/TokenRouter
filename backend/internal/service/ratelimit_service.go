@@ -475,6 +475,16 @@ func (s *RateLimitService) ApplyUpstreamError(ctx context.Context, account *Acco
 
 // handleDefaultUpstreamError 只处理非池模式、未命中显式策略时的平台默认账号状态。
 func (s *RateLimitService) handleDefaultUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
+	// 显式错误策略已经优先处理；默认额度错误仅冷却受影响的钱包或模型。
+	ctx = withTempUnschedulableModel(ctx, requestedModel)
+	if account.IsCline() && (statusCode == 402 || statusCode == 403 || statusCode == 429) && s.handleClineError(ctx, account, statusCode, responseBody, sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(responseBody))) {
+		return false
+	}
+	if account.IsCommandCode() && (statusCode == 402 || statusCode == 403 || statusCode == 429) {
+		if handled, disable := s.handleCommandCodeUsageError(ctx, account, statusCode, responseBody, sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(responseBody))); handled {
+			return disable
+		}
+	}
 	if account == nil {
 		return false
 	}

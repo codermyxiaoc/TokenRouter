@@ -235,7 +235,9 @@ function closeDetail() {
 
 async function markAsRead(id: number) {
   try {
-    await announcementStore.markAsRead(id)
+    const marked = await announcementStore.markAsRead(id)
+    // 会话已切换时 store 返回空结果，旧操作不应打扰新用户。
+    if (marked === false) appStore.showError(t('common.unknownError'))
   } catch (err: any) {
     appStore.showError(err?.message || t('common.unknownError'))
   }
@@ -243,8 +245,8 @@ async function markAsRead(id: number) {
 
 async function markAllAsRead() {
   try {
-    await announcementStore.markAllAsRead()
-    appStore.showSuccess(t('announcements.allMarkedAsRead'))
+    const marked = await announcementStore.markAllAsRead()
+    if (marked) appStore.showSuccess(t('announcements.allMarkedAsRead'))
   } catch (err: any) {
     appStore.showError(err?.message || t('common.unknownError'))
   }

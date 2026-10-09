@@ -555,6 +555,7 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	c *gin.Context,
 	resp *http.Response,
 	writeError compatErrorWriter,
+	accounts ...*Account,
 ) (*apicompat.ChatCompletionsResponse, OpenAIUsage, error) {
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
@@ -564,6 +565,13 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 		return nil, OpenAIUsage{}, fmt.Errorf("read upstream body: %w", err)
 	}
 
+	if len(accounts) > 0 && accounts[0].IsCline() {
+		respBody, err = normalizeClineChatJSON(respBody)
+		if err != nil {
+			writeError(c, http.StatusBadGateway, "api_error", "Invalid Cline upstream response")
+			return nil, OpenAIUsage{}, err
+		}
+	}
 	var ccResp apicompat.ChatCompletionsResponse
 	if err := json.Unmarshal(respBody, &ccResp); err != nil {
 		writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")

@@ -278,6 +278,13 @@ func (s *SmartRoutingService) listSmartRoutingCatalogAccounts(ctx context.Contex
 
 // smartRoutingGroupEndpointEligible 对齐公开路由分派，防止探针或媒体请求选中无法承接端点的平台。
 func smartRoutingGroupEndpointEligible(platform, endpoint string) bool {
+	// TypeSafe 只接受结构化 SystemOne，不能由同名模型获得聊天、图片或视频资格。
+	if strings.HasSuffix(strings.TrimSuffix(endpoint, "/"), "/systemone") {
+		return platform == PlatformTypeSafe || platform == PlatformOpenCodeGo
+	}
+	if platform == PlatformTypeSafe {
+		return false
+	}
 	if route, ok := MatchVideoGatewayRoute("POST", endpoint); ok {
 		if route.Protocol == "openai_videos" {
 			// 共享 OpenAI 视频入口仍允许既有 Grok 分组参与智能选号。
@@ -306,7 +313,7 @@ func smartRoutingGroupEndpointEligible(platform, endpoint string) bool {
 	case strings.HasSuffix(endpoint, "/embeddings"), strings.HasSuffix(endpoint, "/alpha/search"):
 		return platform == PlatformOpenAI
 	case strings.HasSuffix(endpoint, "/responses/input_tokens"):
-		return platform == PlatformOpenAI || platform == PlatformGrok || platform == PlatformKimi || platform == PlatformZhipu || platform == PlatformDeepseek || platform == PlatformMiniMax || platform == PlatformOpenCodeGo
+		return platform == PlatformOpenAI || platform == PlatformGrok || platform == PlatformKimi || platform == PlatformZhipu || platform == PlatformDeepseek || platform == PlatformMiniMax || platform == PlatformOpenCodeGo || platform == PlatformCline || platform == PlatformCommandCode
 	case strings.HasSuffix(endpoint, "/messages/count_tokens"):
 		return platform != PlatformAntigravity && platform != PlatformQoder
 	case strings.Contains(endpoint, "/responses/"):

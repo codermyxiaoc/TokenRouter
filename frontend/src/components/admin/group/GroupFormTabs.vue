@@ -32,8 +32,8 @@
         tabindex="0"
         class="group-tab-panel space-y-5"
       >
-        <!-- Video 不挂载文本设置，避免隐藏字段参与校验；其他平台保留原有草稿。 -->
-        <slot v-if="platform !== 'video' || visibleTabs.includes(tab)" :name="tab" />
+        <!-- Video 与 SystemOne 不挂载文本设置，避免隐藏字段参与校验；其他平台保留原有草稿。 -->
+        <slot v-if="!['video', 'typesafe'].includes(platform) || visibleTabs.includes(tab)" :name="tab" />
       </section>
     </div>
   </div>
@@ -52,7 +52,7 @@ const rootRef = ref<HTMLElement | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
 const visibleTabs = computed(() => allTabs.filter(tab =>
   (tab !== 'platform' || ['anthropic', 'openai', 'gemini', 'antigravity'].includes(props.platform)) &&
-  (tab !== 'protocol' || props.platform !== 'video'),
+  (tab !== 'protocol' || !['video', 'typesafe'].includes(props.platform)),
 ))
 
 watch(visibleTabs, tabs => {

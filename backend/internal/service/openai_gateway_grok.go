@@ -1596,7 +1596,8 @@ func applyGrokCLIHeaders(headers http.Header) {
 	headers.Set("X-Grok-Client-Version", version)
 	headers.Set("x-grok-client-version", version)
 	headers.Set("x-grok-client-identifier", xai.CLIClientIdentifier)
-	headers.Set("X-Grok-Client-Mode", "interactive")
+	headers.Set("X-Grok-Client-Mode", xai.CLIClientMode)
+	headers.Set("X-Authenticateresponse", "authenticate-response")
 }
 
 func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, account *Account, snapshot *xai.QuotaSnapshot) {

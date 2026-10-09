@@ -309,6 +309,9 @@ func TestParseUsageAndEnrichCoverage(t *testing.T) {
 	require.Equal(t, 0, state.usage.OutputTokens)
 	require.Equal(t, 0, state.usage.CacheReadInputTokens)
 
+	// 坏计量会终止原连接；后续合法样本需使用新的 relay 状态。
+	require.Error(t, state.usageError)
+	state = &relayState{}
 	parseUsageAndAccumulate(state, []byte(`{"type":"response.completed","response":{"usage":{"input_tokens":2,"output_tokens":1,"input_tokens_details":{"cached_tokens":1,"cache_write_tokens":4},"output_tokens_details":{"image_tokens":3}}}}`), "response.completed", nil)
 	finalizeRelayTurnUsage(state)
 	require.Equal(t, 2, state.usage.InputTokens)

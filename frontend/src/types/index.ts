@@ -574,6 +574,9 @@ export type GroupPlatform =
   | 'minimax'
   | 'opencode_go'
   | 'video'
+  | 'typesafe'
+  | 'cline'
+  | 'command_code'
 export type GroupSchedulerType = 'basic' | 'advanced'
 export type VideoModelPrices = Record<string, Record<string, number>>
 
@@ -1150,6 +1153,9 @@ export type AccountPlatform =
   | 'minimax'
   | 'opencode_go'
   | 'video'
+  | 'typesafe'
+  | 'cline'
+  | 'command_code'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account' | 'cosy'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -1648,6 +1654,8 @@ export type UpstreamUsageAdapter =
   | 'minimax_coding'
   | 'opencode_go'
   | 'video'
+  | 'cline'
+  | 'command_code'
 
 export interface UpstreamUsageQueryConfig {
   enabled: boolean
@@ -1662,11 +1670,15 @@ export interface UpstreamUsageAmount {
 }
 
 export interface UpstreamUsageBalanceEntry {
+  // 钱包类型与币种分开，避免月度额度和充值余额混为同一项。
+  kind?: 'monthly' | 'purchased' | 'free' | string
   currency: string
   remaining: number
 }
 
 export interface UpstreamUsageLimit {
+  // 单个窗口可能按百分比计量，与钱包的 USD 单位不同。
+  unit?: string
   name: string
   used?: number
   limit?: number

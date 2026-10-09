@@ -21,6 +21,8 @@ const emit = defineEmits<{
 }>()
 
 const loading = ref(false)
+// 只有完整读取当前配置后才能保存，禁止默认值覆盖尚未加载的真实设置。
+const settingsLoaded = ref(false)
 const saving = ref(false)
 const ignoredStatusCodesInput = ref('401, 403')
 
@@ -73,6 +75,7 @@ function formatIgnoredStatusCodes(codes: number[] | null | undefined): string {
 
 // 加载所有配置
 async function loadAllSettings() {
+  settingsLoaded.value = false
   loading.value = true
   try {
     const [runtime, email, advanced, thresholds] = await Promise.all([
@@ -97,6 +100,7 @@ async function loadAllSettings() {
           upstream_error_rate_percent_max: thresholds.upstream_error_rate_percent_max ?? 5
         }
     }
+    settingsLoaded.value = true
   } catch (err: any) {
     console.error('[OpsSettingsDialog] Failed to load settings', err)
     appStore.showError(err?.response?.data?.detail || t('admin.ops.settings.loadFailed'))
@@ -215,6 +219,7 @@ const validation = computed(() => {
 
 // 保存所有配置
 async function saveAllSettings() {
+  if (loading.value || !settingsLoaded.value || saving.value) return
   if (!validation.value.valid) {
     appStore.showError(validation.value.errors[0])
     return
@@ -647,7 +652,7 @@ async function saveAllSettings() {
     <template #footer>
       <div class="flex justify-end gap-2">
         <button class="btn btn-secondary" @click="emit('close')">{{ t('common.cancel') }}</button>
-        <button class="btn btn-primary" :disabled="saving || !validation.valid" @click="saveAllSettings">
+        <button class="btn btn-primary" :disabled="loading || !settingsLoaded || saving || !validation.valid" @click="saveAllSettings">
           {{ saving ? t('common.saving') : t('common.save') }}
         </button>
       </div>

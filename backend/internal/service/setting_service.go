@@ -189,6 +189,12 @@ type SettingRepository interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// SettingAtomicUpdater 在同一数据库事务内锁定设置、读取现值、校验合并结果并保存。
+// 回调失败必须回滚整次更新；同一组键的并发调用须跨进程串行化。
+type SettingAtomicUpdater interface {
+	UpdateMultiple(ctx context.Context, keys []string, update func(map[string]string) (map[string]string, error)) error
+}
+
 // WebSearchManagerBuilder creates a websearch.Manager from config (injected by infra layer).
 // proxyURLs maps proxy ID to resolved URL for provider-level proxy support.
 type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[int64]string)

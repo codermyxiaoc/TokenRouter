@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai_compat"
@@ -20,6 +21,11 @@ import (
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	// 内部调用同样拒绝歧义模型，不能在协议转换后掩盖不同解析器的取值差异。
+	if err := jsonutil.ValidateRoutingModel(body); err != nil {
+		return nil, err
+	}
+
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -187,10 +193,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	// OpenCode 的原生协议由模型规则决定，不使用 OpenAI 探测结果覆盖配置。
-	if account.IsOpenCodeGo() {
-		switch openCodeGoNativeProtocol(account, resolveOpenCodeGoMappedModel(account, body, "")) {
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
+		mapped := resolveOpenCodeGoMappedModel(account, body, "")
+		if rejectOpenCodeStandardModel(account, mapped) {
+			return nil, writeOpenCodeUnsupportedModelError(c, false, mapped)
+		}
+		switch s.modelRoutedUpstreamProtocol(ctx, account, APIProtocolResponses, mapped) {
 		case APIProtocolAnthropic:
-			return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, "", tlsRouterMatch)
+			return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, strings.TrimSpace(reqModel), tlsRouterMatch)
 		case APIProtocolResponses:
 			SetActualOpenAIUpstreamEndpoint(c, "/v1/responses")
 		case APIProtocolSystemOne:
@@ -523,6 +533,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				SkipDefaultInstructions:             true,
 				PreserveToolCallIDs:                 true,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
+				ResponsesLite:                       responsesLite,
 			})
 			ensureCodexOAuthInstructionsField(decoded)
 			markDecodedModified()
@@ -531,6 +542,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				IsCodexCLI:                          isCodexCLI,
 				IsCompact:                           isCompactRequest,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
+				ResponsesLite:                       responsesLite,
 			})
 		}
 		if codexResult.Error != nil {
@@ -598,7 +610,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		maxOutputTokens := gjson.GetBytes(body, "max_output_tokens")
 		if maxOutputTokens.Exists() {
 			switch account.Platform {
-			case PlatformOpenAI, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
+			case PlatformOpenAI, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformCommandCode:
 				// 先保留 Responses 原生输出上限；仅当选中上游明确拒绝时，才在下方有界 HTTP 重试中移除。
 			case PlatformAnthropic:
 				decoded, decodeErr := ensureReqBody()
@@ -1086,7 +1098,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 			upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 			upstreamCode := extractUpstreamErrorCode(respBody)
-			if !httpInvalidEncryptedContentRetryTried && resp.StatusCode == http.StatusBadRequest && upstreamCode == "invalid_encrypted_content" {
+			// 仅对明确的 OpenAI 加密历史拒绝执行已有的一次清理重试，避免吞掉普通思考错误。
+			invalidEncryptedContentError := upstreamCode == "invalid_encrypted_content" ||
+				(upstreamCode == "thinking_signature_invalid" &&
+					strings.Contains(upstreamMsg, "The encrypted content") &&
+					strings.Contains(upstreamMsg, "could not be verified") &&
+					strings.Contains(upstreamMsg, "could not be decrypted or parsed"))
+			if !httpInvalidEncryptedContentRetryTried && resp.StatusCode == http.StatusBadRequest && invalidEncryptedContentError {
 				decoded, decodeErr := ensureReqBody()
 				if decodeErr != nil {
 					return nil, decodeErr
@@ -1315,8 +1333,11 @@ func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
 	if account == nil || account.Type != AccountTypeAPIKey {
 		return false
 	}
-	if account.IsOpenCodeGo() {
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
 		return false // OpenCode 必须由模型协议规则决定转发路径。
+	}
+	if account.IsCline() {
+		return true
 	}
 	if account.Extra != nil {
 		if supported, ok := account.Extra["openai_responses_supported"].(bool); ok && !supported {

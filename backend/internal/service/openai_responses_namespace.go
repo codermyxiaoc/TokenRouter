@@ -170,35 +170,37 @@ func stripOpenAIResponsesInputNamespaces(body []byte, keepToolCallNamespaces boo
 	}
 
 	var rebuilt bytes.Buffer
-	rebuilt.Grow(len(input.Raw))
-	_ = rebuilt.WriteByte('[')
 	changed := false
-	first := true
+	// 偏移相对于 input 原始片段，首次真正修改时才分配缓冲区。
+	copyFrom := 0
 	var stripErr error
 	input.ForEach(func(_, item gjson.Result) bool {
-		if !first {
-			_ = rebuilt.WriteByte(',')
+		if !item.IsObject() || !item.Get("namespace").Exists() ||
+			(keepToolCallNamespaces && isOpenAIResponsesToolCallItemType(item.Get("type").String())) {
+			return true
 		}
-		first = false
-		itemBody := []byte(item.Raw)
-		if item.IsObject() && item.Get("namespace").Exists() &&
-			(!keepToolCallNamespaces || !isOpenAIResponsesToolCallItemType(item.Get("type").String())) {
-			itemBody, stripErr = sjson.DeleteBytes(itemBody, "namespace")
-			if stripErr != nil {
-				return false
-			}
+		itemBody, err := sjson.DeleteBytes([]byte(item.Raw), "namespace")
+		if err != nil {
+			stripErr = err
+			return false
+		}
+		if !changed {
+			rebuilt.Grow(len(input.Raw))
 			changed = true
 		}
+		itemStart := item.Index - input.Index
+		_, _ = rebuilt.WriteString(input.Raw[copyFrom:itemStart])
 		_, _ = rebuilt.Write(itemBody)
+		copyFrom = itemStart + len(item.Raw)
 		return true
 	})
-	_ = rebuilt.WriteByte(']')
 	if stripErr != nil {
 		return body, fmt.Errorf("delete OpenAI input namespace: %w", stripErr)
 	}
 	if !changed {
 		return body, nil
 	}
+	_, _ = rebuilt.WriteString(input.Raw[copyFrom:])
 	stripped, err := sjson.SetRawBytes(body, "input", rebuilt.Bytes())
 	if err != nil {
 		return body, fmt.Errorf("replace OpenAI input after namespace deletion: %w", err)

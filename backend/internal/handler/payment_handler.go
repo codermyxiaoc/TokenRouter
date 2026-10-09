@@ -154,6 +154,9 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		BalanceRechargeMultiplier:     cfg.BalanceRechargeMultiplier,
 		SubscriptionUSDToCNYRate:      cfg.SubscriptionUSDToCNYRate,
 		RechargeFeeRate:               cfg.RechargeFeeRate,
+		RechargeBonusTiers:            cfg.RechargeBonusTiers,
+		RechargeBonusMode:             cfg.RechargeBonusMode,
+		RechargeBonusNotice:           cfg.RechargeBonusNotice,
 		MethodFees:                    cfg.MethodFees,
 		HelpText:                      cfg.HelpText,
 		HelpImageURL:                  cfg.HelpImageURL,
@@ -173,6 +176,9 @@ type checkoutInfoResponse struct {
 	BalanceRechargeMultiplier     float64                         `json:"balance_recharge_multiplier"`
 	SubscriptionUSDToCNYRate      float64                         `json:"subscription_usd_to_cny_rate"`
 	RechargeFeeRate               float64                         `json:"recharge_fee_rate"`
+	RechargeBonusTiers            []service.RechargeBonusTier     `json:"recharge_bonus_tiers"`
+	RechargeBonusMode             string                          `json:"recharge_bonus_mode"`
+	RechargeBonusNotice           string                          `json:"recharge_bonus_notice"`
 	MethodFees                    service.MethodFeeSettings       `json:"method_fees"`
 	HelpText                      string                          `json:"help_text"`
 	HelpImageURL                  string                          `json:"help_image_url"`
@@ -250,7 +256,7 @@ type CreateOrderRequest struct {
 	WechatResumeToken string               `json:"wechat_resume_token"`
 	ReturnURL         string               `json:"return_url"`
 	PaymentSource     string               `json:"payment_source"`
-	OrderType         string               `json:"order_type"`
+	OrderType         string               `json:"order_type" binding:"omitempty,oneof=balance subscription"`
 	PlanID            int64                `json:"plan_id"`
 	BillingInfo       *payment.BillingInfo `json:"billing_info"`
 	// IsMobile lets the frontend declare its mobile status directly. When
@@ -521,6 +527,7 @@ type PublicOrderResult struct {
 	Amount              float64    `json:"amount"`
 	PayAmount           float64    `json:"pay_amount"`
 	FeeRate             float64    `json:"fee_rate"`
+	BonusAmount         float64    `json:"bonus_amount"`
 	FeeFixed            float64    `json:"fee_fixed"`
 	FeeRateAmount       float64    `json:"fee_rate_amount"`
 	FeeAmount           float64    `json:"fee_amount"`
@@ -558,6 +565,7 @@ func buildPublicOrderResult(order *dbent.PaymentOrder) PublicOrderResult {
 		Amount:              order.Amount,
 		PayAmount:           order.PayAmount,
 		FeeRate:             order.FeeRate,
+		BonusAmount:         order.BonusAmount,
 		FeeFixed:            order.FeeFixed,
 		FeeRateAmount:       order.FeeRateAmount,
 		FeeAmount:           order.FeeAmount,
@@ -670,6 +678,7 @@ type PaymentOrderResult struct {
 	Amount              float64    `json:"amount"`
 	PayAmount           float64    `json:"pay_amount"`
 	FeeRate             float64    `json:"fee_rate"`
+	BonusAmount         float64    `json:"bonus_amount"`
 	FeeFixed            float64    `json:"fee_fixed"`
 	FeeRateAmount       float64    `json:"fee_rate_amount"`
 	FeeAmount           float64    `json:"fee_amount"`
@@ -711,6 +720,7 @@ func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder) *PaymentOrderRes
 		Amount:              order.Amount,
 		PayAmount:           order.PayAmount,
 		FeeRate:             order.FeeRate,
+		BonusAmount:         order.BonusAmount,
 		FeeFixed:            order.FeeFixed,
 		FeeRateAmount:       order.FeeRateAmount,
 		FeeAmount:           order.FeeAmount,

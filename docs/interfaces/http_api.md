@@ -35,6 +35,8 @@ RequestLogger
 
 入口体积限制和错误采集按路由族叠加。网关在读取 JSON/multipart 之前应用通用或文本 body limit、client request ID、Ops error logger、endpoint 归一化和 API Key auth。面板接口使用全局/重查询限流和审计；高风险公开认证接口使用独立 Redis 限流并在依赖故障时 fail-close。
 
+嵌入式前端需放行已注册的无版本 API 别名，包括 Chat、Embeddings、token 计数、Alpha/Grok 搜索、语音、Realtime、custom voices、System One 和 Seedance 任务路径，避免返回 SPA HTML。`/models` 同时是模型广场：只有无 API 鉴权/查询信号的 HTML 导航交给页面，其余仍进入模型 API；放行中间件不代表绕过后续 Key 鉴权或平台能力限制。
+
 ## 路由族
 
 | 路由族 | 认证 | 主要所有者与用途 |

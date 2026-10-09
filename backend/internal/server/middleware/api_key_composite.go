@@ -14,6 +14,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	pkghttputil "github.com/TokenFlux/TokenRouter/internal/pkg/httputil"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -61,6 +62,9 @@ func resolveCompositeAPIKeyRequest(c *gin.Context, apiKeyService *service.APIKey
 		}
 	}
 	if err != nil {
+		if errors.Is(err, jsonutil.ErrDuplicateField) {
+			return nil, infraerrors.BadRequest("COMPOSITE_KEY_INVALID_REQUEST", "Ambiguous model or session fields")
+		}
 		return nil, err
 	}
 
@@ -345,6 +349,10 @@ func readAndRestoreRequestBody(request *http.Request) ([]byte, error) {
 
 	encoding := strings.ToLower(strings.TrimSpace(request.Header.Get("Content-Encoding")))
 	if encoding == "" || encoding == "identity" {
+		// 先校验再改写，不能让复合或智能 Key 按首个 model 选组后保留另一个出站值。
+		if err := jsonutil.ValidateRoutingModel(rawBody); err != nil {
+			return nil, err
+		}
 		return rawBody, nil
 	}
 

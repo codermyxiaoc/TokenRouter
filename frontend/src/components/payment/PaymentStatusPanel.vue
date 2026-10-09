@@ -24,6 +24,10 @@
                 <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.amount') }}</span>
                 <span class="font-medium text-gray-900 dark:text-white">{{ formatOrderAmount(paidOrder.amount, paidOrder.order_type) }}</span>
               </div>
+              <div v-if="paidOrder.order_type === 'balance' && (paidOrder.bonus_amount || 0) > 0" class="flex justify-between text-green-600 dark:text-green-400">
+                <span>{{ t('payment.orders.bonusAmount') }}</span>
+                <span>{{ formatOrderAmount(paidOrder.bonus_amount!, paidOrder.order_type) }}</span>
+              </div>
               <div class="flex justify-between">
                 <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</span>
                 <span class="font-medium text-gray-900 dark:text-white">{{ formatGatewayAmount(paidOrder.pay_amount) }}</span>

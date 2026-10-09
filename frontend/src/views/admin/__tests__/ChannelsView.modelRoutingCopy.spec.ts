@@ -4,12 +4,13 @@ import { flushPromises, mount } from '@vue/test-utils'
 
 import ChannelsView from '../ChannelsView.vue'
 
-const { listChannels, createChannel, updateChannel, getGroups, getWebSearchEmulationConfig } = vi.hoisted(() => ({
+const { listChannels, createChannel, updateChannel, getGroups, getWebSearchEmulationConfig, syncPricingModels } = vi.hoisted(() => ({
   listChannels: vi.fn(),
   createChannel: vi.fn(),
   updateChannel: vi.fn(),
   getGroups: vi.fn(),
-  getWebSearchEmulationConfig: vi.fn()
+  getWebSearchEmulationConfig: vi.fn(),
+  syncPricingModels: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -19,7 +20,7 @@ vi.mock('@/api/admin', () => ({
       create: createChannel,
       update: updateChannel,
       remove: vi.fn(),
-      syncPricingModels: vi.fn(),
+      syncPricingModels,
       getModelDefaultPricing: vi.fn()
     },
     groups: {
@@ -112,6 +113,35 @@ function mountView() {
 }
 
 describe('ChannelsView model routing copy', () => {
+  it('模型同步结果绑定原平台对象，删除平台后不覆盖新索引', async () => {
+    let resolve!: (value: { models: string[] }) => void
+    syncPricingModels.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    const wrapper = mountView()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    const oldSection = { platform: 'openai', model_pricing: [] }
+    const keptSection = { platform: 'cline', model_pricing: [] }
+    vm.form.platforms = [oldSection, keptSection]
+    const syncing = vm.syncLatestModels(0)
+    vm.form.platforms.splice(0, 1)
+    resolve({ models: ['gpt-example'] })
+    await syncing
+    expect(keptSection.model_pricing).toEqual([])
+    expect(oldSection.model_pricing).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('TypeSafe 和视频无通用模型同步入口，Cline 和 Command Code 保留同步', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    expect(vm.supportsChannelModelSync('typesafe')).toBe(false)
+    expect(vm.supportsChannelModelSync('video')).toBe(false)
+    expect(vm.supportsChannelModelSync('cline')).toBe(true)
+    expect(vm.supportsChannelModelSync('command_code')).toBe(true)
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     listChannels.mockReset()
     createChannel.mockReset().mockResolvedValue({})

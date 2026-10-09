@@ -154,6 +154,7 @@ import type { SyncUpstreamPreviewParams } from '@/api/admin/accounts'
 import { useClipboard } from '@/composables/useClipboard'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { supportsAccountModelSync } from '@/constants/platforms'
 import { allModels, getModelsByPlatform, findModelWhitelistMappingConflict } from '@/composables/useModelWhitelist'
 
 const { t } = useI18n()
@@ -202,25 +203,13 @@ const normalizedPlatforms = computed(() => {
   )
 })
 
-const upstreamSyncPlatforms = new Set([
-  'anthropic',
-  'openai',
-  'gemini',
-  'antigravity',
-  'grok',
-  'kimi',
-  'zhipu',
-  'deepseek',
-  'minimax',
-  'opencode_go'
-])
 const canSyncUpstream = computed(() => {
   if (props.accountId) {
     if (normalizedPlatforms.value.length === 0) return true
-    return normalizedPlatforms.value.some(platform => upstreamSyncPlatforms.has(platform.toLowerCase()))
+    return normalizedPlatforms.value.some(platform => supportsAccountModelSync(platform.toLowerCase()))
   }
   if (props.syncCredentials) {
-    return upstreamSyncPlatforms.has(props.syncCredentials.platform.toLowerCase())
+    return supportsAccountModelSync(props.syncCredentials.platform.toLowerCase())
   }
   return false
 })

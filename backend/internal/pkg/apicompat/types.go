@@ -97,11 +97,14 @@ func (b AnthropicContentBlock) MarshalJSON() ([]byte, error) {
 			anthropicContentBlock: anthropicContentBlock(b),
 		})
 	case "thinking":
+		// 严格客户端要求思考块始终包含 signature，开始帧也必须保留空字符串。
 		return json.Marshal(struct {
-			Thinking string `json:"thinking"`
+			Thinking  string `json:"thinking"`
+			Signature string `json:"signature"`
 			anthropicContentBlock
 		}{
 			Thinking:              b.Thinking,
+			Signature:             b.Signature,
 			anthropicContentBlock: anthropicContentBlock(b),
 		})
 	default:
@@ -318,6 +321,7 @@ func (i *ResponsesInputItem) UnmarshalJSON(data []byte) error {
 type ResponsesContentPart struct {
 	Type     string `json:"type"` // input_text、output_text、input_image 或 input_file
 	Text     string `json:"text,omitempty"`
+	Refusal  string `json:"refusal,omitempty"`   // 拒绝内容独立于普通正文。
 	ImageURL string `json:"image_url,omitempty"` // data URI for input_image
 
 	// input_file 字段。
@@ -690,6 +694,7 @@ type ChatStreamOptions struct {
 type ChatMessage struct {
 	Role             string          `json:"role"` // "system" | "user" | "assistant" | "tool" | "function"
 	Content          json.RawMessage `json:"content,omitempty"`
+	Refusal          string          `json:"refusal,omitempty"`
 	ReasoningContent string          `json:"reasoning_content,omitempty"`
 	Reasoning        string          `json:"reasoning,omitempty"`
 	Name             string          `json:"name,omitempty"`
@@ -852,6 +857,7 @@ type ChatChunkChoice struct {
 type ChatDelta struct {
 	Role             string         `json:"role,omitempty"`
 	Content          *string        `json:"content,omitempty"` // pointer: omit when not present, null vs "" matters
+	Refusal          *string        `json:"refusal,omitempty"`
 	ReasoningContent *string        `json:"reasoning_content,omitempty"`
 	Reasoning        *string        `json:"reasoning,omitempty"`
 	ToolCalls        []ChatToolCall `json:"tool_calls,omitempty"`

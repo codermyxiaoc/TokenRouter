@@ -1,6 +1,7 @@
 export default {
 // Accounts
     accounts: {
+      additionalProviders: { systemOneDescription: 'TypeSafe uses the dedicated SystemOne structured evaluation endpoint.', systemOneNote: 'Adapt state and questions to your task. This platform does not provide standard chat endpoints.', inheritBaseUrl: 'Leave empty to use the account Base URL', customRules: 'Custom model protocol rules', catalogHint: 'Protocols follow the upstream model catalog by default. Custom rules override the catalog; unmatched models use Chat Completions.' },
       video: {
   "endpoints": {
     "compat": "OpenAI Videos (/v1/video/generations)",
@@ -152,6 +153,12 @@ export default {
       schedulableEnabled: 'Scheduling enabled',
       schedulableDisabled: 'Scheduling disabled',
       failedToToggleSchedulable: 'Failed to toggle scheduling status',
+      priorityQuick: {
+        raise: 'Raise priority (value -1)',
+        lower: 'Lower priority (value +1)',
+        editHint: 'Click to type a value; lower is used first',
+        failed: 'Failed to update priority'
+      },
       groupCountTotal: '{count} groups total',
       platforms: {
         anthropic: 'Anthropic',
@@ -438,6 +445,7 @@ export default {
       },
       usageWindowsHint: 'OAuth accounts show official upstream usage windows; API Key accounts show local usage together with manually queried upstream balances and limits.',
       upstreamUsage: {
+        walletKinds: { monthly: 'Monthly credits', purchased: 'Purchased credits', free: 'Free credits' },
         title: 'Upstream usage query',
         hint: 'Display-only administrator query. It does not affect forwarding, scheduling, or local quotas.',
         enabled: 'Enabled',
@@ -482,6 +490,7 @@ export default {
           UPSTREAM_USAGE_CONFIG_INVALID: 'Invalid query configuration',
           UPSTREAM_USAGE_DISABLED: 'Query disabled',
           UPSTREAM_USAGE_ADAPTER_UNSUPPORTED: 'Unsupported protocol',
+          UPSTREAM_USAGE_UNSUPPORTED: 'Usage queries are unavailable for this upstream or credential; inference is unaffected',
           UPSTREAM_USAGE_AUTH_FAILED: 'Authentication failed',
           UPSTREAM_USAGE_WALLET_UNAVAILABLE: 'Wallet balance unavailable (the upstream has no wallet endpoint or no user token is configured)',
           UPSTREAM_USAGE_WALLET_AUTH_FAILED: 'Wallet access token authentication failed or the user identity did not match',
@@ -1039,7 +1048,7 @@ export default {
       customErrorCodes: 'Custom Error Codes',
       customErrorCodesHint: 'Only stop scheduling for selected error codes',
       customErrorCodesWarning:
-        'Only selected error codes will stop scheduling. Other errors will return 500.',
+        'Custom error codes only filter normal account-error handling (such as stopping scheduling or marking rate limits). They do not decide whether a request is retried or switched to another account. Unselected errors may still trigger a retry or an account switch, and the status returned to the client depends on the gateway path and error-passthrough rules; it is not always 500. An empty list applies no filtering.',
       customErrorCodes429Warning:
         '429 already has built-in rate limit handling. Adding it to custom error codes will disable the account instead of temporary rate limiting. Are you sure?',
       customErrorCodes529Warning:

@@ -33,16 +33,63 @@ func (r *opsRepository) GetDashboardOverview(ctx context.Context, filter *servic
 		mode = service.OpsQueryModeRaw
 	}
 
+	var overview *service.OpsDashboardOverview
+	var err error
 	switch mode {
 	case service.OpsQueryModeAuto:
-		out, err := r.getDashboardOverviewPreaggregated(ctx, filter)
+		overview, err = r.getDashboardOverviewPreaggregated(ctx, filter)
+		// 保留本站自动模式：任何预聚合错误都回退原始查询。
 		if err != nil {
-			return r.getDashboardOverviewRaw(ctx, filter)
+			overview, err = r.getDashboardOverviewRaw(ctx, filter)
 		}
-		return out, err
 	default:
-		return r.getDashboardOverviewRaw(ctx, filter)
+		overview, err = r.getDashboardOverviewRaw(ctx, filter)
 	}
+	if err != nil {
+		return nil, err
+	}
+	// 整个窗口按逐请求速率计算分位数，不能平均小时分位数；超时仅省略此项。
+	rateCtx, cancelRate := context.WithTimeout(ctx, opsRawLatencyQueryTimeout)
+	defer cancelRate()
+	overview.OutputTPS, err = r.queryOutputTPS(rateCtx, filter)
+	if err != nil && !isQueryTimeoutErr(err) {
+		return nil, err
+	}
+	return overview, nil
+}
+
+func (r *opsRepository) queryOutputTPS(ctx context.Context, filter *service.OpsDashboardFilter) (*service.OpsOutputTPS, error) {
+	join, where, args, _ := buildUsageWhere(filter, filter.StartTime.UTC(), filter.EndTime.UTC(), 1)
+	// 视频即使按 Token 计费也不属于文本速度；兼容历史媒体元数据和任务账本标识。
+	query := `
+SELECT
+ percentile_cont(0.05) WITHIN GROUP (ORDER BY output_tps),
+ percentile_cont(0.10) WITHIN GROUP (ORDER BY output_tps),
+ percentile_cont(0.50) WITHIN GROUP (ORDER BY output_tps),
+ AVG(output_tps),
+ COUNT(*)
+FROM (
+ SELECT ul.output_tokens * 1000.0 / NULLIF(ul.duration_ms, 0) AS output_tps
+ FROM usage_logs ul
+ ` + join + `
+ ` + where + `
+ AND ul.output_tokens > 0 AND ul.duration_ms > 0
+ AND ul.image_count = 0 AND ul.image_output_tokens = 0
+ AND COALESCE(ul.video_count, 0) = 0 AND COALESCE(ul.video_duration_seconds, 0) = 0
+ AND COALESCE(ul.billing_mode, '') NOT IN ('image', 'video', 'video_token', 'video_per_request')
+ AND LEFT(ul.request_id, 14) <> 'video_capture:'
+ ` + fmt.Sprintf("AND ul.request_type IN (%d, %d, %d, %d)",
+		service.RequestTypeSync, service.RequestTypeStream, service.RequestTypeWSV2, service.RequestTypeCyberBlocked) + `
+) rates`
+	var stats service.OpsOutputTPS
+	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&stats.P5, &stats.P10, &stats.P50, &stats.Avg, &stats.SampleCount); err != nil {
+		// lib/pq 不包装上下文错误，显式区分查询超时与调用方取消。
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+	return &stats, nil
 }
 
 func (r *opsRepository) getDashboardOverviewRaw(ctx context.Context, filter *service.OpsDashboardFilter) (*service.OpsDashboardOverview, error) {

@@ -55,7 +55,9 @@ func ValidateGroupAvailabilityProbeProtocol(platform, protocol string) error {
 	switch platform {
 	case PlatformOpenAI:
 		supported = normalized == APIProtocolChatCompletions || normalized == APIProtocolResponses
-	case PlatformKimi, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
+	case PlatformCline:
+		supported = normalized == APIProtocolChatCompletions
+	case PlatformKimi, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformCommandCode:
 		supported = normalized == APIProtocolChatCompletions || normalized == APIProtocolResponses || normalized == APIProtocolAnthropic
 	case PlatformZhipu:
 		supported = normalized == APIProtocolChatCompletions || normalized == APIProtocolAnthropic

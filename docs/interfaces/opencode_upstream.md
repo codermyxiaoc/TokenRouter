@@ -11,7 +11,7 @@ OpenCode 只支持 `type=apikey`。Zen 与 GO 共用平台身份，由 `credenti
 
 | 模式 | Responses | Anthropic Messages | 其余模型 |
 | --- | --- | --- | --- |
-| Zen | `gpt-*`、`grok-*`、`muse-spark-*` | `claude-*`、`qwen*` | Chat Completions |
+| Zen | `gpt-*`、`grok-*`、`muse-spark-*` | `claude-*`、`qwen*`（`qwen3.8-max` 除外） | Chat Completions（含 `qwen3.8-max`） |
 | GO | `gpt-*`、`grok-*`、`muse-spark-*` | `minimax-*`、`qwen*` | Chat Completions |
 
 Zen 另有两个结构化决策模型：`jev-1.13` 与 `jev-1.13-free` 只能发送到
@@ -20,7 +20,11 @@ Zen 另有两个结构化决策模型：`jev-1.13` 与 `jev-1.13-free` 只能发
 流式、图片、音频或视频。System One 由专用 `/v1/systemone` 入口处理，不能从普通
 Messages、Chat Completions 或 Responses 入口转换；GO 账号和其它平台不会被调度到 Jev。
 
+System One 拒绝重复顶层字段、问题 ID/字段以及已知字段的大小写变体，避免验证与上游解析歧义。`state` 和 `questions`（包含嵌套键值）进入统一内容审核；结果与错误均以安全 JSON 类型返回。明确的 400/413/422 参数拒绝不修改账号限流状态。相同校验器可供 TypeSafe 的专用模型使用，但各平台继续独立校验模型和账号能力。
+
 `credentials.protocol_rules` 最多 64 条，按顺序首条命中；pattern 支持精确值或末尾 `*`，最长 128 字符，不接受空白和中间通配符。缺失/null 使用当前模式默认表，显式 `[]` 表示全部兜底 Chat。固定协议优先于规则；OpenAI Responses 探测和文本路由配置不覆盖 OpenCode 的选择。
+
+默认自适应规则下，Gemini/Jev 模型族不能从普通文本入口盲目转发：映射后的专用模型在访问上游前返回 400。管理员明确设置固定协议或显式 `protocol_rules` 时保留中继的兼容意图；已正式支持的 Jev 1.13 两个模型始终只允许 System One 专用入口。GO 的 Qwen 默认规则维持 Anthropic，Zen 仅对 `qwen3.8-max` 精确改走 Chat。
 
 Zen 默认根地址为 `https://opencode.ai/zen/v1`，GO 为 `https://opencode.ai/zen/go/v1`。Anthropic 默认根地址移除末尾 `/v1`，端点拼接识别已有版本路径，不能生成 `/v1/v1/messages`。自适应 `api_base_urls` 的对应项优先，随后是管理员显式 `base_url`，最后才是模式默认值；自定义中继主机及路径不得被替换为官方地址。代理、TLS 指纹、受保护请求头覆写继续复用现有传输层。
 
@@ -49,6 +53,8 @@ Zen 402 沿已有余额不足临时冷却处理。GO 429 优先使用身份有�
 GO 自动使用内部 `opencode_go` 只读适配器，在配置的 GO API 根地址归一化到 `/v1/usage`（已有 `/v1` 时不重复追加），保留中继主机和路径。解析 rolling（五小时）、weekly、monthly 窗口并归一化为百分比。Zen 可像 OpenAI API Key 一样选择 Sub2API、New API 或 Zivv 通用站点查询协议及查询地址覆盖，实际站点必须支持所选接口；不新增 Zen 官方原生余额协议。历史 Zen 的 `adapter=opencode_go` 仅在运行时回退为 `sub2api`，编辑保存时修正，不进入 GO 窗口查询。
 
 仅官方 `https://opencode.ai/zen/go[/v1]` GO 账号可以在 API Key、代理、TLS、认证头和完整查询配置一致时共享并发查询及 30 秒成功结果。共享缓存有界，每个调用方再次验证自身账号身份并返回独立结果；凭据变化使旧结果失效。Zen 与第三方中继不进入共享，查询目标不会被改为官方。保留现有周期监控及 CAS，没有并行引入上游独立活动防抖任务。
+
+GO 的 `/usage` 返回 403 时按该账号不支持用量查询处理，可继续显示已有历史快照，不因此判定推理凭据失效。GO 429 的 `Retry-After` 支持秒数或 HTTP 日期，冷却最多 24 小时；缺失、非法或已过去值沿用原短冷却，窗口耗尽等既有权威规则仍优先。
 
 手动查询只用于展示，Zen 不具备周期监控或调度快照资格。既有 `gateway.cn_providers.monitor_enabled` 默认关闭；开启后可监控 GO 并保存统一、身份绑定的 `cn_usage_monitor_snapshot`。GO 的五小时/周/月阈值读取该快照，耗尽或多个阈值同时命中时选择最晚恢复时间。查询失败、凭据/代理/模式/端点变化后的旧快照不得用于停调；GO 调度元数据保留完整查询身份以维持与完整账号相同的校验。
 

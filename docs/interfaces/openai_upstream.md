@@ -60,6 +60,8 @@ OAuth/Codex 凭据的 Images 请求在最终账号模型映射之后选择通道
 
 API Key Images 兼容接口还接受 `gemini-*` 且含完整 `-image` 型号段的生图模型。渠道映射后的模型先决定 `images-apikey` 能力，账号映射后的最终模型再次校验；OAuth/Setup Token 不能被调度到这类第三方兼容模型。不会把 Gemini 文本型号开放为图片，也不改变 Gemini 原生生图或当前 Token/张计费选择。明确的结构化 `insufficient_balance` 错误保留原始运维信息并继续故障转移；非池模式且允许自动处理的账号仅对图片能力短暂冷却，不禁用文字模型。全部候选失败后返回明确的图片余额不足原因，管理员显式错误透传规则仍优先。
 
+Responses WebSocket 的每轮与聚合用量都保留 `image_input_tokens`。图片输入优先使用标准 usage 的 image_tokens，缺少时才读取 `tool_usage.image_gen`；工具输出图片 token 同样只补齐缺失值，不能覆盖标准用量的显式零值或跨轮沿用上一轮图片计数。所有已知 token 字段按精确非负整数验证，单项上限为 `2^40`；字符串、小数、越界数、重复计量键与汇总加法溢出会终止当前转发，不能交付成功终态或按成功结算。已完成回合的合法用量保持不变，失败回合只把此前已经验证的计量交给现有失败结算路径，不重放生成。该补全复用当前图片计价与结算链路。
+
 <a id="images_url_backfill"></a>
 ### 图片结果回填
 
@@ -119,6 +121,10 @@ OpenAI 兼容非流式响应的 usage 按 `usage`、`response.usage`、`data.usa
 Responses 转 Messages 按输出项和内容索引记录已发文本；done 只补已发前缀之后的尾文，终态正文仅在此前没有正文时恢复，未知索引不猜配，message_stop 后不追加。服务层仍先识别失败：恢复正文不能把 failed 变成成功，也不能解除已输出后的禁止重放；失败日志、部分用量和智能路由的恢复记录仍需保存。
 
 仅 Responses 转 Chat 合并开头的 system/developer 指令，并把会话中途的 system/developer 转为原位置的 user，以适配 Chat 上游；保留其图片等多模态内容和工具顺序。这会改变该兼容路径的指令权重与缓存前缀，原生 Chat 请求不执行此规范化。Codex `agent_message` 的 input_text 和客户端携带的 encrypted_content 字符串作为正文保留，不执行解密或记录密文；任务边界清理旧 reasoning，避免跨轮附着。
+
+Chat 转 Responses 保留 `developer` 角色；指定函数的 `tool_choice` 转为 Responses 顶层名称。旧版 `function_call` 与 `role=function` 按函数名和历史顺序配对成稳定、无冲突的调用 ID，未知调用结果继续按原函数名兼容。Responses 转 Chat 会保留拒绝正文和流式拒绝增量，非流式聚合也能从增量恢复；思考块始终带 `signature`，尚无签名时使用空字符串。所有缓冲 Anthropic 聚合器忽略负数内容块索引，避免异常上游帧导致进程崩溃。
+
+OpenAI OAuth 重放包含 `web_search_call` 的历史且没有声明搜索工具时，仅补充 `external_web_access=false` 的历史工具声明。普通 Responses 放在顶层 `tools`，Responses Lite 放入输入的 `additional_tools`，并保持末尾压缩触发项位置。原请求没有工具且选择为缺省、auto 或 none 时固定 `tool_choice=none`，保留调用方的禁用工具意图；已存在工具或强制选择不被覆盖。API Key、其它平台和旧 `/responses/compact` 报文不执行该修复。
 
 ### 远程压缩协议
 
@@ -182,6 +188,8 @@ OpenAI API Key 账号以 `force_chat_completions` 承接 `/v1/messages` 时，Ch
 
 常驻 reader 的连接不在普通借出路径重复执行同步 ping；后台和轮间预检使用独立 10 秒探活上限，保留正常请求读写超时。ping 不占用业务写锁等待 pong。`passthrough` 有自己的直拨与 relay reader，HTTP bridge 使用 HTTP/SSE，两者均不额外启动池 reader。重试使用新连接时仍受原可重试错误、预算和尚未输出的限制。
 
+WebSocket 首轮使用建连分组快照；后续轮次开始前通过现有 Key 认证缓存重新读取已选分组，按当轮快照结算。普通 Key 只能刷新同 ID 分组，前缀复合/智能 Key 只能刷新仍在候选列表内的已选分组，平台或身份类型不匹配、缓存读取失败时保留建连快照。更新只替换计费 Group，不修改绑定账号、付款人、团队成员、Key 的余额/自动/指定订阅模式或指定订阅 ID；已开始轮次的异步记账捕获其自身快照。缓存新鲜度沿用现有分组更新失效机制，不保证绕过缓存实时读库。
+
 <a id="openai_execution_scope"></a>
 ## 执行作用域
 
@@ -198,9 +206,9 @@ turn-state、会话连接和失效密文 lineage 的读写/清理统一使用本
 <a id="responses_large_body"></a>
 ## 大请求内存与语义
 
-Responses 的普通无改动路径优先检查必要顶层字段、复用原始请求；只需修改 input 元数据时按项处理，未变的图片、工具结果和大数字保留原始 JSON 片段，最后按实际长度组装新请求。legacy 字段转换、重复键、异常编码等需要旧解码语义的场景仍回退原流程。公共读体按实际到达数据分块接收，不按不可信的 Content-Length 一次分配整包，也不扩大原有解压和请求大小限制。
+Responses 的普通无改动路径优先检查必要顶层字段、复用原始请求；只需修改 input 元数据时按项处理，未变的图片、工具结果和大数字保留原始 JSON 片段，最后按实际长度组装新请求。legacy 字段转换、非路由/会话控制字段的重复键、异常编码等需要旧解码语义的场景仍回退原流程。`model`、`previous_response_id`、`prompt_cache_key` 重复时在改写前直接拒绝；WS 同时拒绝重复的 `type`、`session` 和 `session.model`，包括转义及仅大小写不同的同名字段，不走兼容回退。公共读体按实际到达数据分块接收，不按不可信的 Content-Length 一次分配整包，也不扩大原有解压和请求大小限制。
 
-原始 byte slice 在整个请求、重试和异步使用期保持不可变。无修改返回原 slice，有修改构造新 slice；智能路由的原请求副本、OpenCode 原始会话 body、审核和必要日志快照不得原地覆盖或提前归还内存池。namespace/Lite、工具调用、账号一次映射、旧/原生压缩及 Images 端点和计费不因减少分配而改写语义。分块组装期间仍可能同时持有分块和最终结果，这不是零拷贝或固定比例的进程内存保证。
+原始 byte slice 在整个请求、重试和异步使用期保持不可变。无修改返回原 slice，有修改构造新 slice；智能路由的原请求副本、OpenCode 原始会话 body、审核和必要日志快照不得原地覆盖或提前归还内存池。namespace 仅在实际删除对应字段时组装变更片段，其余输入项的空白、大整数和顺序保留。namespace/Lite、工具调用、账号一次映射、旧/原生压缩及 Images 端点和计费不因减少分配而改写语义。分块组装期间仍可能同时持有分块和最终结果，这不是零拷贝或固定比例的进程内存保证。
 
 ## 模型与能力
 
@@ -251,7 +259,7 @@ OpenAI OAuth 账号的用量单元格提供“次数”“重置”“点数”�
 
 HTTP Responses（原生与透传）及 WS→HTTP 桥接统一把已观测到的非零 token/图片用量或图片结果视为不可重放边界，即使客户端尚未收到正文。此后上游失败、提前 EOF、读取错误、首输出超时或下游写失败，必须保留部分结果交给现有幂等结算路径；不能返回可换号错误并丢弃已产生的成本。失败请求仍按失败上报调度结果，已由内容策略专门结算的请求不重复记账。没有输出和用量的请求继续按现有故障转移规则恢复。
 
-账号状态更新使用凭据快照/CAS，避免较早请求在 token 已刷新后再次封禁账号。401/403、429、endpoint 不支持、内容策略、网络错误和上游 5xx 分别分类；只有可切换且客户端响应未开始的失败才进入下一账号。OpenAI 上游代理或 CDN 返回的 HTML 403 只证明当前链路或端点被阻断：请求仍可按既有规则 failover，但不得递增连续 403 计数、临时停调或永久禁用账号；结构化 JSON 与纯文本 403 继续按账号级策略处理。API Key passthrough 池模式会把 `pool_mode_retry_status_codes` 命中的 HTTP 错误先转换为未提交响应的 failover，在同账号预算耗尽后才换号；未配置时默认覆盖 401、403、429，显式空列表可关闭这类按状态码重试。原生 Responses 上游返回的确定性 `400` 在现有账号策略、池模式重试和错误透传规则均未要求改写或故障转移时，按真实 400 回写，并保留脱敏后的 `message` 与诊断所需 `type`、`code`、`param`；瞬时处理错误和容量类 400 仍保持可重试或通用网关错误语义。图片模型被 Codex 文本端点以 plan-gated `400` 拒绝时属于端点错配：当前尝试仍切号，但不写模型冷却，避免影响同账号后续通过 `/v1/images/*` 正常生图；专用 Images 端点上的同类拒绝仍按真实账号能力缺失冷却，图片模型的 `404 model_not_found` 也不豁免。Responses HTTP 与 WebSocket v2 首次发送时保留加密 reasoning/compaction；若上游明确返回 `invalid_encrypted_content`，同账号恢复最多重试一次，清理账号绑定的加密状态但保留未加密 compaction。
+账号状态更新使用凭据快照/CAS，避免较早请求在 token 已刷新后再次封禁账号。401/403、429、endpoint 不支持、内容策略、网络错误和上游 5xx 分别分类；只有可切换且客户端响应未开始的失败才进入下一账号。OpenAI 上游代理或 CDN 返回的 HTML 403 只证明当前链路或端点被阻断：请求仍可按既有规则 failover，但不得递增连续 403 计数、临时停调或永久禁用账号；结构化 JSON 与纯文本 403 继续按账号级策略处理。API Key passthrough 池模式会把 `pool_mode_retry_status_codes` 命中的 HTTP 错误先转换为未提交响应的 failover，在同账号预算耗尽后才换号；未配置时默认覆盖 401、403、429，显式空列表可关闭这类按状态码重试。原生 Responses 上游返回的确定性 `400` 在现有账号策略、池模式重试和错误透传规则均未要求改写或故障转移时，按真实 400 回写，并保留脱敏后的 `message` 与诊断所需 `type`、`code`、`param`；瞬时处理错误和容量类 400 仍保持可重试或通用网关错误语义。图片模型被 Codex 文本端点以 plan-gated `400` 拒绝时属于端点错配：当前尝试仍切号，但不写模型冷却，避免影响同账号后续通过 `/v1/images/*` 正常生图；专用 Images 端点上的同类拒绝仍按真实账号能力缺失冷却，图片模型的 `404 model_not_found` 也不豁免。Responses HTTP 与 WebSocket v2 首次发送时保留加密 reasoning/compaction；若上游明确返回 `invalid_encrypted_content`，或 HTTP 转发中 `thinking_signature_invalid` 且文本明确表示加密内容无法验证/解密解析，同账号恢复最多重试一次，清理账号绑定的加密状态但保留未加密 compaction。
 
 账号与模型组合的瞬时失败按连续结果累计：首次失败只记录，第二次短冷却，第三次及以后长冷却。请求间隔较长不能把持续故障误当成恢复，只要未超过状态回收 TTL，稀疏流量中的失败仍继续累计；任一成功结果立即清零该组合。TTL 只负责回收长期不再使用的条目，不能兼作短窗口的连续失败重置条件。
 

@@ -98,6 +98,9 @@ const platformLabel = computed(() => {
   if (props.platform === 'minimax') return 'MiniMax'
   if (props.platform === 'opencode_go') return 'OpenCode'
   if (props.platform === 'video') return 'Video'
+  if (props.platform === 'typesafe') return 'TypeSafe'
+  if (props.platform === 'cline') return 'Cline'
+  if (props.platform === 'command_code') return 'Command Code'
   return 'Gemini'
 })
 
@@ -188,6 +191,9 @@ const planIconName = computed<'bolt' | null>(() => {
   return null
 })
 const platformClass = computed(() => {
+  if (props.platform === 'typesafe') return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
+  if (props.platform === 'cline') return 'bg-lime-100 text-lime-700 dark:bg-lime-900/30 dark:text-lime-400'
+  if (props.platform === 'command_code') return 'bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-400'
   if (props.platform === 'video') return 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
   if (props.platform === 'anthropic') {
     return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
@@ -223,6 +229,9 @@ const platformClass = computed(() => {
 })
 
 const typeClass = computed(() => {
+  if (props.platform === 'typesafe') return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
+  if (props.platform === 'cline') return 'bg-lime-100 text-lime-700 dark:bg-lime-900/30 dark:text-lime-400'
+  if (props.platform === 'command_code') return 'bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-400'
   if (props.platform === 'anthropic') {
     return 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400'
   }

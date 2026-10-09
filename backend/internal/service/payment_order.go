@@ -27,6 +27,10 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if req.OrderType == "" {
 		req.OrderType = payment.OrderTypeBalance
 	}
+	// 仅省略类型时兼容余额默认值，未知类型必须在任何配置读取或支付操作前拒绝。
+	if err := validatePaymentOrderType(req.OrderType); err != nil {
+		return nil, err
+	}
 	if normalized := NormalizeVisibleMethod(req.PaymentType); normalized != "" {
 		req.PaymentType = normalized
 	}
@@ -58,14 +62,6 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if s.notificationEmailService != nil {
 		s.notificationEmailService.RememberRecipientLocale(ctx, req.UserID, user.Email, req.Locale)
 	}
-	orderAmount := req.Amount
-	limitAmount := req.Amount
-	if plan != nil {
-		orderAmount = plan.Price
-		limitAmount = plan.Price
-	} else if req.OrderType == payment.OrderTypeBalance {
-		orderAmount = calculateCreditedBalance(req.Amount, cfg.BalanceRechargeMultiplier)
-	}
 	methodFee := cfg.EffectiveMethodFee(req.PaymentType)
 	methodCurrency := payment.DefaultPaymentCurrency
 	if s.configService != nil {
@@ -73,6 +69,16 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 		if err != nil {
 			return nil, err
 		}
+	}
+	orderAmount, limitAmount, bonusAmount := req.Amount, req.Amount, 0.0
+	if plan != nil {
+		orderAmount, limitAmount = plan.Price, plan.Price
+	} else if req.OrderType == payment.OrderTypeBalance {
+		quote, quoteErr := quoteRechargeBonusForOrder(cfg, req.Amount, methodCurrency)
+		if quoteErr != nil {
+			return nil, quoteErr
+		}
+		orderAmount, limitAmount, bonusAmount = quote.Credited, quote.PayBase, quote.Bonus
 	}
 	// 订阅订单先换算网关扣款基数，再统一应用 fork 的固定费与比例费模型。
 	feeBreakdown, payAmountStr, payAmount, err := calculateCreateOrderPayAmountForOrderType(limitAmount, methodFee, methodCurrency, req.OrderType, cfg.SubscriptionUSDToCNYRate)
@@ -91,6 +97,14 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 		selectedCurrency = paymentProviderConfigCurrency(sel.ProviderKey, sel.Config)
 	}
 	if selectedCurrency != methodCurrency {
+		// 币种精度变化时，从用户原始金额重新报价，再计算本站固定费和比例费。
+		if plan == nil && req.OrderType == payment.OrderTypeBalance {
+			quote, quoteErr := quoteRechargeBonusForOrder(cfg, req.Amount, selectedCurrency)
+			if quoteErr != nil {
+				return nil, quoteErr
+			}
+			orderAmount, limitAmount, bonusAmount = quote.Credited, quote.PayBase, quote.Bonus
+		}
 		feeBreakdown, payAmountStr, payAmount, err = calculateCreateOrderPayAmountForOrderType(limitAmount, methodFee, selectedCurrency, req.OrderType, cfg.SubscriptionUSDToCNYRate)
 		if err != nil {
 			return nil, err
@@ -117,7 +131,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if oauthResp != nil {
 		return oauthResp, nil
 	}
-	order, err := s.createOrderInTx(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeBreakdown, sel)
+	order, err := s.createOrderInTx(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeBreakdown, sel, bonusAmount)
 	if err != nil {
 		return nil, err
 	}
@@ -132,11 +146,15 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 }
 
 func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig) (*dbent.SubscriptionPlan, error) {
-	if req.OrderType == payment.OrderTypeBalance && cfg.BalanceDisabled {
-		return nil, infraerrors.Forbidden("BALANCE_PAYMENT_DISABLED", "balance recharge has been disabled")
-	}
-	if req.OrderType == payment.OrderTypeSubscription {
+	switch req.OrderType {
+	case payment.OrderTypeSubscription:
 		return s.validateSubOrder(ctx, req)
+	case payment.OrderTypeBalance:
+		if cfg.BalanceDisabled {
+			return nil, infraerrors.Forbidden("BALANCE_PAYMENT_DISABLED", "balance recharge has been disabled")
+		}
+	default:
+		return nil, validatePaymentOrderType(req.OrderType)
 	}
 	if math.IsNaN(req.Amount) || math.IsInf(req.Amount, 0) || req.Amount <= 0 {
 		return nil, infraerrors.BadRequest("INVALID_AMOUNT", "amount must be a positive number")
@@ -146,6 +164,16 @@ func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrder
 			WithMetadata(map[string]string{"min": fmt.Sprintf("%.2f", cfg.MinAmount), "max": fmt.Sprintf("%.2f", cfg.MaxAmount)})
 	}
 	return nil, nil
+}
+
+// validatePaymentOrderType 统一创建、报价与履约支持的类型，禁止将异常历史值解释为余额充值。
+func validatePaymentOrderType(orderType string) error {
+	switch orderType {
+	case payment.OrderTypeBalance, payment.OrderTypeSubscription:
+		return nil
+	default:
+		return infraerrors.BadRequest("INVALID_ORDER_TYPE", "order type must be balance or subscription")
+	}
 }
 
 func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRequest) (*dbent.SubscriptionPlan, error) {
@@ -159,7 +187,7 @@ func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRe
 	return plan, nil
 }
 
-func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount float64, feeBreakdown payment.FeeBreakdown, sel *payment.InstanceSelection) (*dbent.PaymentOrder, error) {
+func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount float64, feeBreakdown payment.FeeBreakdown, sel *payment.InstanceSelection, bonusAmounts ...float64) (*dbent.PaymentOrder, error) {
 	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
@@ -187,12 +215,18 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 		selectedInstanceID = strings.TrimSpace(sel.InstanceID)
 		selectedProviderKey = strings.TrimSpace(sel.ProviderKey)
 	}
+	// 可选参数兼容内部既有调用；普通下单始终携带服务端计算的优惠快照。
+	bonusAmount := 0.0
+	if len(bonusAmounts) > 0 {
+		bonusAmount = bonusAmounts[0]
+	}
 	b := tx.PaymentOrder.Create().
 		SetUserID(req.UserID).
 		SetUserEmail(user.Email).
 		SetUserName(user.Username).
 		SetNillableUserNotes(psNilIfEmpty(user.Notes)).
 		SetAmount(orderAmount).
+		SetBonusAmount(bonusAmount).
 		SetPayAmount(feeBreakdown.PayAmount).
 		SetFeeRate(feeBreakdown.FeeRate).
 		SetFeeFixed(feeBreakdown.FixedFee).
@@ -495,6 +529,7 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	s.writeAuditLog(ctx, order.ID, "ORDER_CREATED", fmt.Sprintf("user:%d", req.UserID), map[string]any{
 		"paymentAmount":  req.Amount,
 		"creditedAmount": order.Amount,
+		"bonusAmount":    order.BonusAmount,
 		"payAmount":      order.PayAmount,
 		"paymentType":    req.PaymentType,
 		"orderType":      req.OrderType,
@@ -707,6 +742,9 @@ func calculateCreateOrderPayAmount(limitAmount float64, methodFee payment.FeeCon
 }
 
 func calculateCreateOrderPayAmountForOrderType(limitAmount float64, methodFee payment.FeeConfig, currency, orderType string, usdToCnyRate float64) (payment.FeeBreakdown, string, float64, error) {
+	if err := validatePaymentOrderType(orderType); err != nil {
+		return payment.FeeBreakdown{}, "", 0, err
+	}
 	paymentAmount := limitAmount
 	if orderType == payment.OrderTypeSubscription {
 		paymentAmount = calculateSubscriptionGatewayBaseAmount(limitAmount, usdToCnyRate, currency)
@@ -798,6 +836,7 @@ func buildCreateOrderResponse(order *dbent.PaymentOrder, req CreateOrderRequest,
 		Amount:        order.Amount,
 		PayAmount:     payAmount,
 		FeeRate:       order.FeeRate,
+		BonusAmount:   order.BonusAmount,
 		FeeFixed:      order.FeeFixed,
 		FeeRateAmount: order.FeeRateAmount,
 		FeeAmount:     order.FeeAmount,

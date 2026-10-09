@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -33,7 +35,7 @@ func (s *OpenAIGatewayService) ForwardOpenCodeSystemOne(
 
 	originalModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	model := normalizeOpenCodeGoModelID(account.GetMappedModel(originalModel))
-	if !IsOpenCodeSystemOneModel(model) {
+	if !account.supportsSystemOneModel(model) {
 		return nil, fmt.Errorf("model %q is not supported by OpenCode System One", model)
 	}
 	if model != originalModel {
@@ -43,7 +45,11 @@ func (s *OpenAIGatewayService) ForwardOpenCodeSystemOne(
 	if apiKey == "" {
 		return nil, fmt.Errorf("account %d missing api_key", account.ID)
 	}
-	base, err := s.validateUpstreamBaseURL(account.openCodeProtocolBaseURL(APIProtocolSystemOne))
+	baseURL := account.openCodeProtocolBaseURL(APIProtocolSystemOne)
+	if account.IsTypeSafe() {
+		baseURL = account.additionalProviderBaseURL(APIProtocolSystemOne)
+	}
+	base, err := s.validateUpstreamBaseURL(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid OpenCode System One base URL: %w", err)
 	}
@@ -79,35 +85,33 @@ func (s *OpenAIGatewayService) ForwardOpenCodeSystemOne(
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		setOpsUpstreamError(c, resp.StatusCode, message, "")
-		if failoverErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, message, model); failoverErr != nil {
-			return nil, failoverErr
+		if !systemOneClientRequestError(resp.StatusCode) {
+			if failoverErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, message, model); failoverErr != nil {
+				return nil, failoverErr
+			}
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Platform: account.Platform, AccountID: account.ID,
 			AccountName: account.Name, UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
 			Kind: "http_error", Message: message})
 		// 参数校验失败不能通过跨组重放掩盖；保持原生错误 JSON。
-		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity {
+		if systemOneClientRequestError(resp.StatusCode) {
 			MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
 		}
 		writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
-		contentType := resp.Header.Get("Content-Type")
-		if contentType == "" {
-			contentType = "application/json"
-		}
+		contentType := systemOneResponseContentType(resp.Header.Get("Content-Type"))
+		c.Header("Content-Type", contentType)
 		c.Data(resp.StatusCode, contentType, respBody)
 		return nil, fmt.Errorf("OpenCode System One upstream status %d: %s", resp.StatusCode, message)
 	}
 
 	// 不能把 HTML、截断 JSON 或缺失计量的响应当成成功，避免成功但漏记扣费。
-	usage, validUsage := extractOpenAIUsageFromJSONBytes(respBody)
+	usage, validUsage := extractSystemOneUsage(respBody)
 	if !gjson.ValidBytes(respBody) || !gjson.GetBytes(respBody, "answers").IsObject() || !validUsage {
 		return nil, s.systemOneResponseFailure(c, account, resp, "Invalid OpenCode System One response: expected answers and usage")
 	}
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
-	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "application/json"
-	}
+	contentType := systemOneResponseContentType(resp.Header.Get("Content-Type"))
+	c.Header("Content-Type", contentType)
 	c.Data(resp.StatusCode, contentType, respBody)
 	requestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
 	if requestID == "" {
@@ -124,6 +128,55 @@ func (s *OpenAIGatewayService) ForwardOpenCodeSystemOne(
 		UpstreamEndpoint: "/v1/systemone",
 		Duration:         time.Since(start),
 	}, nil
+}
+
+// SystemOne 是同步计量契约；缺字段、负数或字符串解析失败不能伪装成显式零费用。
+func extractSystemOneUsage(body []byte) (OpenAIUsage, bool) {
+	// 根 usage 与其计量字段均须唯一，所有读取方才能得到同一计费结果。
+	if jsonutil.ValidateUniqueFields(body, "usage") != nil {
+		return OpenAIUsage{}, false
+	}
+	usage := gjson.GetBytes(body, "usage")
+	if !usage.IsObject() || jsonutil.ValidateUniqueFields([]byte(usage.Raw)) != nil {
+		return OpenAIUsage{}, false
+	}
+	result := OpenAIUsage{}
+	for _, field := range []struct {
+		name     string
+		target   *int
+		required bool
+	}{
+		{"input_tokens", &result.InputTokens, true}, {"output_tokens", &result.OutputTokens, true},
+		{"cache_read_input_tokens", &result.CacheReadInputTokens, false}, {"cache_creation_input_tokens", &result.CacheCreationInputTokens, false},
+	} {
+		raw := usage.Get(field.name)
+		if !raw.Exists() && !field.required {
+			continue
+		}
+		if raw.Type != gjson.Number && raw.Type != gjson.String {
+			return OpenAIUsage{}, false
+		}
+		// gjson.Number.String 会格式化浮点值，必须直接验证原始数值字面量。
+		literal := raw.Raw
+		if raw.Type == gjson.String {
+			literal = raw.Str
+		}
+		value, ok := jsonutil.ParseNonNegativeInt(literal, 1<<40)
+		if !ok {
+			return OpenAIUsage{}, false
+		}
+		*field.target = value
+	}
+	return result, true
+}
+
+// 已验证的 JSON 不得借上游 Content-Type 在本站域名被浏览器解释为 HTML。
+func systemOneResponseContentType(raw string) string {
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(raw))
+	if err == nil && (mediaType == "application/json" || (strings.HasPrefix(mediaType, "application/") && strings.HasSuffix(mediaType, "+json"))) {
+		return strings.TrimSpace(raw)
+	}
+	return "application/json"
 }
 
 // systemOneResponseFailure 记录输出前的损坏响应，交给既有重试流程处理。

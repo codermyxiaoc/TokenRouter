@@ -93,6 +93,8 @@ type codexOAuthTransformOptions struct {
 	SkipDefaultInstructions             bool
 	PreserveToolCallIDs                 bool
 	OmitPromotedSystemMessagesFromInput bool
+	// ResponsesLite 决定兼容历史所需的托管工具声明位置。
+	ResponsesLite bool
 }
 
 const (
@@ -341,6 +343,11 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 		} else {
 			reqBody["input"] = []any{}
 		}
+		result.Modified = true
+	}
+
+	// 在输入过滤后检查最终历史；compact 使用独立报文结构，不注入工具。
+	if !opts.IsCompact && ensureOpenAIOAuthWebSearchToolForHistory(reqBody, opts.ResponsesLite) {
 		result.Modified = true
 	}
 

@@ -11,6 +11,7 @@ import (
 	pkghttputil "github.com/TokenFlux/TokenRouter/internal/pkg/httputil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ip"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/typesafe"
 	middleware2 "github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
@@ -31,8 +32,8 @@ func (h *OpenAIGatewayHandler) SystemOne(c *gin.Context) {
 		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
 		return
 	}
-	if apiKey.Group.Platform != service.PlatformOpenCodeGo {
-		h.errorResponse(c, http.StatusNotFound, "not_found_error", "System One is only available for OpenCode Zen groups")
+	if apiKey.Group.Platform != service.PlatformOpenCodeGo && apiKey.Group.Platform != service.PlatformTypeSafe {
+		h.errorResponse(c, http.StatusNotFound, "not_found_error", "System One is only available for OpenCode Zen or TypeSafe groups")
 		return
 	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
@@ -70,30 +71,23 @@ func (h *OpenAIGatewayHandler) SystemOne(c *gin.Context) {
 		return
 	}
 
-	modelResult := gjson.GetBytes(body, "model")
-	if !modelResult.Exists() || modelResult.Type != gjson.String || strings.TrimSpace(modelResult.String()) == "" {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+	requestedModel, validationErr := typesafe.ValidateSystemOneRequest(body)
+	if validationErr != nil {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", validationErr.Error())
 		return
 	}
-	requestedModel := strings.TrimSpace(modelResult.String())
-	if !service.IsOpenCodeSystemOneModel(requestedModel) {
+	requestedModel = strings.TrimSpace(requestedModel)
+	if (apiKey.Group.Platform == service.PlatformTypeSafe && requestedModel != service.DefaultTypeSafeModel) ||
+		(apiKey.Group.Platform == service.PlatformOpenCodeGo && !service.IsOpenCodeSystemOneModel(requestedModel)) {
 		h.errorResponse(c, http.StatusNotFound, "model_not_found", "The requested model is not available on OpenCode System One")
 		return
 	}
-	if gjson.GetBytes(body, "stream").Bool() {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "OpenCode System One does not support streaming")
-		return
-	}
-	if !gjson.GetBytes(body, "state").Exists() {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "state is required")
-		return
-	}
-	questions := gjson.GetBytes(body, "questions")
-	if !questions.IsObject() || len(questions.Map()) == 0 {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "questions must be a non-empty object")
-		return
-	}
 	reqLog = reqLog.With(zap.String("model", requestedModel))
+	// 结构化决策中的 state、题目与扩展字段同样属于用户输入。
+	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolSystemOne, requestedModel, body); decision != nil && decision.Blocked {
+		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+		return
+	}
 	setOpsRequestContext(c, requestedModel, false)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeSync))
 
@@ -142,7 +136,7 @@ func (h *OpenAIGatewayHandler) SystemOne(c *gin.Context) {
 			service.OpenAIEndpointCapabilitySystemOne,
 			false,
 			false,
-			service.PlatformOpenCodeGo,
+			apiKey.Group.Platform,
 		)
 		if err != nil || selection == nil || selection.Account == nil {
 			if failoverClientGone(c) {
@@ -153,7 +147,7 @@ func (h *OpenAIGatewayHandler) SystemOne(c *gin.Context) {
 				if err != nil && h.handleOpenAISelectionBusinessError(c, err, streamStarted) {
 					return
 				}
-				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, requestedModel, requestedModel, service.PlatformOpenCodeGo)
+				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, requestedModel, requestedModel, apiKey.Group.Platform)
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 				}

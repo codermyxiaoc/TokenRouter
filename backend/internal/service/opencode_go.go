@@ -3,9 +3,9 @@ package service
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
-	"strings"
 
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/tidwall/gjson"
@@ -72,6 +72,40 @@ func normalizeOpenCodeGoModelID(model string) string {
 	return model
 }
 
+// IsOpenCodeUnsupportedModel 标识需要专用端点、不能按默认文本协议转发的模型族。
+func IsOpenCodeUnsupportedModel(model string) bool {
+	model = normalizeOpenCodeGoModelID(model)
+	return strings.HasPrefix(model, "gemini-") || strings.HasPrefix(model, "jev-")
+}
+
+// rejectOpenCodeStandardModel 保留管理员的固定协议和自定义规则，只约束默认自适应路由。
+// 已正式支持的 Jev 模型始终要求 System One 入口，避免丢失其结构化请求语义。
+func rejectOpenCodeStandardModel(account *Account, model string) bool {
+	if !account.IsOpenCodeGo() || !IsOpenCodeUnsupportedModel(model) {
+		return false
+	}
+	if IsOpenCodeSystemOneModel(model) {
+		return true
+	}
+	if account.GetAPIProtocol() != APIProtocolAdaptive {
+		return false
+	}
+	return account.Credentials[openCodeGoProtocolRulesKey] == nil
+}
+
+// writeOpenCodeUnsupportedModelError 在请求上游前返回客户端协议对应的参数错误。
+func writeOpenCodeUnsupportedModelError(c *gin.Context, isAnthropic bool, model string) error {
+	message := fmt.Sprintf("Model '%s' requires a dedicated OpenCode endpoint (Gemini: Google SDK; Jev: /v1/systemone)", model)
+	if c != nil {
+		if isAnthropic {
+			c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": message}})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "code": "model_not_supported", "message": message}})
+		}
+	}
+	return fmt.Errorf("opencode unsupported model: %s", model)
+}
+
 // IsOpenCodeSystemOneModel 判断模型是否属于 Zen 的 Jev System One 端点。
 // 该端点只对 Zen 账号开放，GO 账号即使共享平台目录也不能承载 Jev 请求。
 func IsOpenCodeSystemOneModel(model string) bool {
@@ -101,13 +135,14 @@ func DefaultOpenCodeGoProtocolRules() []OpenCodeGoProtocolRule {
 }
 
 // DefaultOpenCodeZenProtocolRules 对齐 https://opencode.ai/docs/zen/ 端点表：
-// GPT/Grok/Muse Spark → Responses，Claude/Qwen → Anthropic，其余 Chat Completions。
+// GPT/Grok/Muse Spark → Responses，Claude/Qwen → Anthropic；qwen3.8-max 精确例外走 Chat。
 func DefaultOpenCodeZenProtocolRules() []OpenCodeGoProtocolRule {
 	return []OpenCodeGoProtocolRule{
 		{Pattern: "grok-*", Protocol: APIProtocolResponses},
 		{Pattern: "gpt-*", Protocol: APIProtocolResponses},
 		{Pattern: "muse-spark-*", Protocol: APIProtocolResponses},
 		{Pattern: "claude-*", Protocol: APIProtocolAnthropic},
+		{Pattern: "qwen3.8-max", Protocol: APIProtocolChatCompletions},
 		{Pattern: "qwen*", Protocol: APIProtocolAnthropic},
 	}
 }

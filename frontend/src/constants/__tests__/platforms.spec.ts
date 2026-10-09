@@ -14,7 +14,10 @@ const concretePlatforms = [
   'deepseek',
   'minimax',
   'opencode_go',
-  'video'
+  'video',
+  'typesafe',
+  'cline',
+  'command_code'
 ]
 
 describe('platform option catalogs', () => {

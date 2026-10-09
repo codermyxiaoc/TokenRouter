@@ -796,13 +796,14 @@ func applyUsageBillingAllowanceEffects(ctx context.Context, tx *sql.Tx, cmd *ser
 		effectiveRate := billableAmount / cmd.BaseAmountUSD
 		result.EffectiveRateMultiplier = &effectiveRate
 	}
+	// 已受理请求的 Key 在结算前被删除时，只跳过 Key 计数，用户、团队与账号费用仍需提交。
 	if cmd.APIKeyQuotaCost > 0 {
 		quotaCost := cmd.APIKeyQuotaCost
 		if usageBillingUsesBaseAmount(cmd) {
 			quotaCost = billableAmount
 		}
 		exhausted, err := incrementUsageBillingAPIKeyQuota(ctx, tx, cmd.APIKeyID, quotaCost)
-		if err != nil {
+		if err != nil && !errors.Is(err, service.ErrAPIKeyNotFound) {
 			return err
 		}
 		result.APIKeyQuotaExhausted = exhausted
@@ -813,7 +814,7 @@ func applyUsageBillingAllowanceEffects(ctx context.Context, tx *sql.Tx, cmd *ser
 		if usageBillingUsesBaseAmount(cmd) {
 			rateLimitCost = billableAmount
 		}
-		if err := incrementUsageBillingAPIKeyRateLimit(ctx, tx, cmd.APIKeyID, rateLimitCost); err != nil {
+		if err := incrementUsageBillingAPIKeyRateLimit(ctx, tx, cmd.APIKeyID, rateLimitCost); err != nil && !errors.Is(err, service.ErrAPIKeyNotFound) {
 			return err
 		}
 	}

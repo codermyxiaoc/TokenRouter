@@ -4225,7 +4225,7 @@
                       </tr>
                     </thead>
                     <tbody class="space-y-2">
-                      <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'video'] as const)" :key="p" class="align-top">
+                      <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'video', 'typesafe', 'cline', 'command_code'] as const)" :key="p" class="align-top">
                         <td class="pr-4 py-1">
                           <span class="font-mono text-xs text-gray-700 dark:text-gray-300">{{ p }}</span>
                         </td>
@@ -4481,7 +4481,7 @@
                             </tr>
                           </thead>
                           <tbody>
-                            <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'video'] as const)" :key="`${authSource.source}-pq-${p}`" class="align-top">
+                            <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'video', 'typesafe', 'cline', 'command_code'] as const)" :key="`${authSource.source}-pq-${p}`" class="align-top">
                               <td class="pr-4 py-1">
                                 <span class="font-mono text-xs text-gray-700 dark:text-gray-300">{{ p }}</span>
                               </td>
@@ -8548,6 +8548,14 @@
             </div>
           </div>
 
+          <!-- 充值优惠阶梯（独立卡片，与服务商管理同级） -->
+          <RechargeBonusTierEditor
+            v-if="form.payment_enabled"
+            v-model="form.payment_recharge_bonus_tiers"
+            v-model:mode="form.payment_recharge_bonus_mode"
+            v-model:notice="form.payment_recharge_bonus_notice"
+          />
+
           <!-- Provider Management -->
           <PaymentProviderList
             v-if="form.payment_enabled"
@@ -9120,6 +9128,15 @@ import OpenAIOAuthImportDefaultsSettings from "@/components/admin/account/OpenAI
 import BackupSettings from "@/views/admin/BackupView.vue";
 import TicketSettingsTab from "@/views/admin/settings/TicketSettingsTab.vue";
 import { useBalanceDisplay } from "@/composables/useBalanceDisplay";
+import RechargeBonusTierEditor from "@/components/admin/settings/RechargeBonusTierEditor.vue";
+import {
+  normalizeRechargeBonusMode,
+  normalizeRechargeBonusTiers,
+  rechargeBonusTierError,
+  sanitizeRechargeBonusTiersForSubmit,
+  type RechargeBonusMode,
+  type RechargeBonusTierDraft,
+} from "@/utils/rechargeBonus";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
 import PreAggregationSettings from "@/views/admin/settings/PreAggregationSettings.vue";
@@ -9765,7 +9782,13 @@ type SettingsForm = Omit<
   | "wechat_connect_open_enabled"
   | "wechat_connect_mp_enabled"
   | "wechat_connect_mobile_enabled"
+  | "payment_recharge_bonus_tiers"
+  | "payment_recharge_bonus_mode"
+  | "payment_recharge_bonus_notice"
 > & {
+  payment_recharge_bonus_tiers: RechargeBonusTierDraft[];
+  payment_recharge_bonus_mode: RechargeBonusMode;
+  payment_recharge_bonus_notice: string;
   smtp_password: string;
   turnstile_secret_key: string;
   tencent_captcha_app_secret_key: string;
@@ -9879,6 +9902,9 @@ const form = reactive<SettingsForm>({
   payment_balance_recharge_multiplier: 1,
   payment_subscription_usd_to_cny_rate: 0,
   payment_recharge_fee_rate: 0,
+  payment_recharge_bonus_tiers: [],
+  payment_recharge_bonus_mode: "bonus",
+  payment_recharge_bonus_notice: "",
   payment_method_fees: {},
   payment_enabled_types: [],
   payment_help_image_url: "",
@@ -11566,6 +11592,9 @@ async function loadSettings() {
           }))
         : defaultLoginAgreementDocuments();
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(settings));
+    form.payment_recharge_bonus_tiers = normalizeRechargeBonusTiers(settings.payment_recharge_bonus_tiers);
+    form.payment_recharge_bonus_mode = normalizeRechargeBonusMode(settings.payment_recharge_bonus_mode);
+    form.payment_recharge_bonus_notice = settings.payment_recharge_bonus_notice || "";
     form.default_platform_quotas = normalizePlatformQuotasMap(settings.default_platform_quotas);
     form.user_prompt_replacement_config =
       normalizeUserPromptReplacementConfig(
@@ -11765,6 +11794,15 @@ async function saveSettings() {
   if (activeTab.value === "tickets") return;
   saving.value = true;
   try {
+    // 在组装任何设置更新前拒绝非法档位；空白草稿仍由提交清洗忽略。
+    const bonusError = form.payment_recharge_bonus_tiers
+      .map((_, index) => rechargeBonusTierError(form.payment_recharge_bonus_tiers, index, form.payment_recharge_bonus_mode))
+      .find(Boolean);
+    if (bonusError) {
+      activeTab.value = "payment";
+      appStore.showError(t(`admin.settings.payment.rechargeBonus.${bonusError}`));
+      return;
+    }
     const normalizedCreativeWorkerCount = Math.floor(Number(form.creative_worker_count));
     if (!Number.isSafeInteger(normalizedCreativeWorkerCount) || normalizedCreativeWorkerCount <= 0) {
       appStore.showError(t("admin.settings.features.creative.workerCountInvalid"));
@@ -12266,6 +12304,9 @@ async function saveSettings() {
       payment_subscription_usd_to_cny_rate:
         Number(form.payment_subscription_usd_to_cny_rate) || 0,
       payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
+      payment_recharge_bonus_tiers: sanitizeRechargeBonusTiersForSubmit(form.payment_recharge_bonus_tiers),
+      payment_recharge_bonus_mode: form.payment_recharge_bonus_mode,
+      payment_recharge_bonus_notice: form.payment_recharge_bonus_notice,
       payment_method_fees: form.payment_method_fees,
       payment_enabled_types: form.payment_enabled_types,
       payment_load_balance_strategy: form.payment_load_balance_strategy,
@@ -12387,6 +12428,9 @@ async function saveSettings() {
       }
     }
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(updated));
+    form.payment_recharge_bonus_tiers = normalizeRechargeBonusTiers(updated.payment_recharge_bonus_tiers);
+    form.payment_recharge_bonus_mode = normalizeRechargeBonusMode(updated.payment_recharge_bonus_mode);
+    form.payment_recharge_bonus_notice = updated.payment_recharge_bonus_notice || "";
     form.default_platform_quotas = normalizePlatformQuotasMap(updated.default_platform_quotas);
     form.openai_account_quota_auto_pause = {
       default_threshold_5h:

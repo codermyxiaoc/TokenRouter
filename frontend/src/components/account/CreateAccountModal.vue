@@ -71,6 +71,10 @@
       <div>
         <label class="input-label">{{ t('admin.accounts.platform') }}</label>
         <div class="mt-2 flex flex-wrap rounded-lg bg-gray-100 p-1 dark:bg-dark-700" data-tour="account-form-platform">
+          <button v-for="provider in additionalProviderOptions" :key="provider.value" type="button" @click="form.platform = provider.value"
+            :class="['flex h-9 flex-1 items-center justify-center gap-2 rounded-md px-4 py-1.5 text-sm font-medium transition-all', form.platform === provider.value ? 'bg-white text-primary-600 shadow-sm dark:bg-dark-600' : 'text-gray-600 hover:text-gray-900 dark:text-gray-400']">
+            {{ provider.label }}
+          </button>
           <button
             type="button"
             @click="form.platform = 'anthropic'"
@@ -1702,7 +1706,7 @@
                     : 'https://generativelanguage.googleapis.com'
                   : form.platform === 'grok'
                     ? 'https://api.x.ai/v1'
-                    : form.platform === 'video' ? 'https://api.example.com' : form.platform === 'opencode_go' ? defaultCNBaseUrl(form.platform, openCodeAccountMode, apiProtocol) : 'https://api.anthropic.com'
+                    : form.platform === 'video' ? 'https://api.example.com' : additionalProviderBaseUrl(form.platform) || (form.platform === 'opencode_go' ? defaultCNBaseUrl(form.platform, openCodeAccountMode, apiProtocol) : 'https://api.anthropic.com')
             "
           />
           <p v-if="baseUrlHint" class="input-hint">{{ baseUrlHint }}</p>
@@ -1768,6 +1772,7 @@
         </div>
 
         <VideoAccountFields v-if="form.platform === 'video'" v-model="videoAccountForm" />
+        <AdditionalProviderFields v-if="isAdditionalAPIKeyPlatform(form.platform)" v-model="additionalProvider" :platform="form.platform" />
 
         <!-- Gemini API Key tier selection -->
         <div v-if="form.platform === 'gemini' && geminiProviderType === 'official'" data-testid="create-gemini-tier">
@@ -4348,6 +4353,8 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
+import AdditionalProviderFields from '@/components/account/AdditionalProviderFields.vue'
+import { isAdditionalAPIKeyPlatform, additionalProviderBaseUrl, additionalProviderForm, applyAdditionalProviderCredentials } from '@/components/account/credentialsBuilder'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import UpstreamUsageConfigEditor from '@/components/account/UpstreamUsageConfigEditor.vue'
@@ -4433,7 +4440,7 @@ const baseUrlHint = computed(() => {
     return t('admin.accounts.gemini.providerType.thirdPartyBaseUrlHint')
   }
   if (form.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
-  if (form.platform === 'grok' || form.platform === 'opencode_go' || form.platform === 'video') return ''
+  if (form.platform === 'grok' || form.platform === 'opencode_go' || form.platform === 'video' || isAdditionalAPIKeyPlatform(form.platform)) return ''
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -4443,7 +4450,7 @@ const apiKeyHint = computed(() => {
     return t('admin.accounts.gemini.providerType.thirdPartyApiKeyHint')
   }
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
-  if (form.platform === 'grok' || form.platform === 'opencode_go' || form.platform === 'video') return ''
+  if (form.platform === 'grok' || form.platform === 'opencode_go' || form.platform === 'video' || isAdditionalAPIKeyPlatform(form.platform)) return ''
   return t('admin.accounts.apiKeyHint')
 })
 
@@ -4594,6 +4601,12 @@ const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
 const videoAccountForm = ref(createVideoAccountForm())
+const additionalProvider = ref(additionalProviderForm())
+const additionalProviderOptions = [
+  { value: 'typesafe' as const, label: 'TypeSafe' },
+  { value: 'cline' as const, label: 'Cline' },
+  { value: 'command_code' as const, label: 'Command Code' }
+]
 const upstreamUsageEnabled = ref(true)
 const upstreamUsageAdapter = ref<UpstreamUsageAdapter>('sub2api')
 const upstreamUsageBaseUrl = ref('')
@@ -4610,7 +4623,7 @@ function currentOpenCodeOrCNMode(): CnAccountMode | OpenCodeAccountMode {
 }
 // 原生余额与套餐窗口继续自动查询；Zen 和普通按量模式允许配置通用适配器。
 const usesAutomaticUpstreamUsageAdapter = computed(() => nativeUpstreamUsageAdapter({
-  type: 'apikey', platform: form.platform, credentials: { account_mode: currentOpenCodeOrCNMode() }, extra: {},
+  type: 'apikey', platform: form.platform, credentials: { account_mode: currentOpenCodeOrCNMode(), base_url: apiKeyBaseUrl.value }, extra: {},
 }) !== null)
 // 智谱团队版 Coding Plan 的组织/项目 ID，仅在创建团队账号时写入凭据。
 const zhipuOrganization = ref('')
@@ -5513,6 +5526,7 @@ watch(
 watch(
   [accountCategory, addMethod, antigravityAccountType, qoderAccountType, () => form.platform],
   ([category, method, agType]) => {
+    if (isAdditionalAPIKeyPlatform(form.platform)) { form.type = 'apikey'; return }
     if (form.platform === 'qoder') {
       form.type = 'cosy'
       return
@@ -5575,6 +5589,16 @@ watch(
       form.type = 'apikey'
       accountCategory.value = 'apikey'
       apiKeyBaseUrl.value = defaultCNBaseUrl(newPlatform, openCodeAccountMode.value, apiProtocol.value)
+    }
+    if (isAdditionalAPIKeyPlatform(newPlatform)) {
+      form.type = 'apikey'
+      accountCategory.value = 'apikey'
+      apiKeyBaseUrl.value = additionalProviderBaseUrl(newPlatform)
+      additionalProvider.value = additionalProviderForm()
+      upstreamUsageAdapter.value = 'sub2api'
+      upstreamUsageBaseUrl.value = ''
+      upstreamUsageWalletAccessToken.value = ''
+      upstreamUsageWalletUserId.value = ''
     }
     // 切换平台时旧平台模型不再适用。Qoder 由账号 model_mapping
     // 配置展示/请求模型，默认不填充会过期的前端硬编码白名单。
@@ -6107,6 +6131,7 @@ const resetForm = () => {
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
   videoAccountForm.value = createVideoAccountForm()
+  additionalProvider.value = additionalProviderForm()
   upstreamUsageEnabled.value = true
   upstreamUsageAdapter.value = 'sub2api'
   upstreamUsageBaseUrl.value = ''
@@ -6710,7 +6735,7 @@ const handleSubmit = async () => {
 
   // Build credentials with optional model mapping
   const credentials: Record<string, unknown> = {
-    base_url: form.platform === 'video' ? enteredBaseUrl : enteredBaseUrl || defaultBaseUrl,
+    base_url: form.platform === 'video' ? enteredBaseUrl : enteredBaseUrl || additionalProviderBaseUrl(form.platform) || defaultBaseUrl,
     ...(form.platform === 'video' ? videoAccountCredentials(videoAccountForm.value) : {}),
     api_key: apiKeyValue.value.trim()
   }
@@ -6763,6 +6788,7 @@ const handleSubmit = async () => {
     }
   }
 
+  applyAdditionalProviderCredentials(credentials, form.platform, additionalProvider.value)
   // Add model mapping if configured（OpenAI 开启自动透传时不应用）
   if (!isOpenAIModelRestrictionDisabled.value) {
     applyPersistedModelRestriction(credentials)

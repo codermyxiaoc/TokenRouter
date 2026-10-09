@@ -329,16 +329,24 @@ func (s *PaymentService) executeFulfillment(ctx context.Context, oid int64) erro
 	if err != nil {
 		return fmt.Errorf("get order: %w", err)
 	}
-	if o.OrderType == payment.OrderTypeSubscription {
+	switch o.OrderType {
+	case payment.OrderTypeSubscription:
 		return s.ExecuteSubscriptionFulfillment(ctx, oid)
+	case payment.OrderTypeBalance:
+		return s.ExecuteBalanceFulfillment(ctx, oid)
+	default:
+		return validatePaymentOrderType(o.OrderType)
 	}
-	return s.ExecuteBalanceFulfillment(ctx, oid)
 }
 
 func (s *PaymentService) ExecuteBalanceFulfillment(ctx context.Context, oid int64) error {
 	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
 	if err != nil {
 		return infraerrors.NotFound("NOT_FOUND", "order not found")
+	}
+	// 管理员和恢复任务也可直接调用该入口，因此必须校验实际订单类型。
+	if o.OrderType != payment.OrderTypeBalance {
+		return infraerrors.BadRequest("INVALID_ORDER_TYPE", "balance fulfillment requires a balance order")
 	}
 	if o.Status == OrderStatusCompleted {
 		return nil
@@ -576,6 +584,10 @@ func (s *PaymentService) ExecuteSubscriptionFulfillment(ctx context.Context, oid
 	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
 	if err != nil {
 		return infraerrors.NotFound("NOT_FOUND", "order not found")
+	}
+	// 防止直接履约入口把余额订单或异常历史订单解释为订阅。
+	if o.OrderType != payment.OrderTypeSubscription {
+		return infraerrors.BadRequest("INVALID_ORDER_TYPE", "subscription fulfillment requires a subscription order")
 	}
 	if o.Status == OrderStatusCompleted {
 		return nil

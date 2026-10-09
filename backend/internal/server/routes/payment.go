@@ -1,12 +1,22 @@
 package routes
 
 import (
+	"time"
+
 	"github.com/TokenFlux/TokenRouter/internal/handler"
 	"github.com/TokenFlux/TokenRouter/internal/handler/admin"
+	ratelimit "github.com/TokenFlux/TokenRouter/internal/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
+)
+
+// 匿名旧订单查询独立按 IP 限流，减少订单号枚举，不影响已登录查询和支付回调。
+const (
+	publicOrderVerifyRateLimit       = 20
+	publicOrderVerifyRateLimitWindow = time.Minute
 )
 
 // RegisterPaymentRoutes registers all payment-related routes:
@@ -21,6 +31,7 @@ func RegisterPaymentRoutes(
 	auditLog middleware.AuditLogMiddleware,
 	settingService *service.SettingService,
 	panelRateLimiter *middleware.PanelRateLimiter,
+	redisClient *redis.Client,
 ) {
 	// --- User-facing payment endpoints (authenticated) ---
 	authenticated := v1.Group("/payment")
@@ -51,9 +62,13 @@ func RegisterPaymentRoutes(
 	// Signed resume-token recovery is the preferred public lookup path.
 	// The legacy anonymous out_trade_no verify endpoint remains available as a
 	// persisted-state compatibility path for staggered upgrades.
+	// 匿名查询按 IP 限流；Redis 故障时放行，避免中断已在支付中的用户查询。
+	publicRateLimiter := ratelimit.NewRateLimiter(redisClient)
 	public := v1.Group("/payment/public")
 	{
-		public.POST("/orders/verify", paymentHandler.VerifyOrderPublic)
+		public.POST("/orders/verify",
+			publicRateLimiter.Limit("payment-public-order-verify", publicOrderVerifyRateLimit, publicOrderVerifyRateLimitWindow),
+			paymentHandler.VerifyOrderPublic)
 		public.POST("/orders/resolve", paymentHandler.ResolveOrderPublicByResumeToken)
 	}
 

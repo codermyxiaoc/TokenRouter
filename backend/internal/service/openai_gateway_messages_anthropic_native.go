@@ -124,7 +124,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 		return s.handleAnthropicErrorResponse(resp, c, account, billingModel)
 	}
 
-	if account.IsOpenCodeGo() {
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
 		result, err := s.handleOpenCodeNativeAnthropicResponse(resp, c, account, APIProtocolAnthropic, clientStream, originalModel, billingModel, upstreamModel, reasoningEffort, startTime, apicompat.ResponsesClientToolMapping{}, false)
 		if result != nil {
 			result.RequestedReasoningEffort = requestedReasoningEffort
@@ -156,7 +156,7 @@ func (s *OpenAIGatewayService) nativeAnthropicTargetURL(account *Account) (strin
 	if err != nil {
 		return "", fmt.Errorf("invalid base_url: %w", err)
 	}
-	if account.IsOpenCodeGo() {
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
 		return buildOpenAIEndpointURL(validatedURL, "/v1/messages"), nil
 	}
 	return strings.TrimRight(validatedURL, "/") + "/v1/messages", nil
@@ -227,7 +227,7 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	}
 
 	applyOpenCodeUpstreamUserAgent(account, req.URL.String(), req.Header)
-	if account.IsOpenCodeGo() {
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
 		// OpenCode 的三种原生协议都遵守当前 UA/TLS 路由，原有 CN 请求保持原行为。
 		s.applyOpenAIUpstreamUserAgent(ctx, c, account, req, false, tlsRouterMatch...)
 	}
@@ -235,7 +235,7 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	account.ApplyHeaderOverrides(req.Header)
 	filterSonnet55ToolsetBetaHeader(req.Header, body, model)
 	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body)
-	if account.IsOpenCodeGo() {
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
 		// 错误尚未生成用量结果，也要记录实际 Anthropic 端点。
 		SetActualOpenAIUpstreamEndpoint(c, req.URL.Path)
 	}
@@ -245,7 +245,7 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 
 // OpenCode 的原生 Anthropic 请求保留账号或路由指纹；既有 CN 路径仍使用原传输入口。
 func (s *OpenAIGatewayService) sendNativeAnthropicUpstreamRequest(req *http.Request, proxyURL string, account *Account, tlsRouterMatch ...TLSFingerprintRouterMatchResult) (*http.Response, error) {
-	if account.IsOpenCodeGo() {
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
 		return s.doOpenAIUpstream(req, proxyURL, account, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
 	}
 	return s.doOpenAIUpstream(req, proxyURL, account)

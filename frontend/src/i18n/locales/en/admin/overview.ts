@@ -1142,6 +1142,9 @@ affiliates: {
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
+        typesafe: 'TypeSafe',
+        cline: 'Cline',
+        command_code: 'Command Code',
         video: 'Video',
       },
       deleteConfirm:

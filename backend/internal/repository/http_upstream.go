@@ -23,7 +23,6 @@ import (
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
-	"golang.org/x/mod/semver"
 	"golang.org/x/net/http2"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
@@ -473,6 +472,9 @@ func newGrokOfficialAPIFallbackRequest(req *http.Request) (*http.Request, error)
 	for _, header := range []string{
 		"X-XAI-Token-Auth",
 		"X-Grok-Client-Version",
+		"X-Grok-Client-Identifier",
+		"X-Grok-Client-Mode",
+		"X-Authenticateresponse",
 		"X-Grok-Client-Surface",
 		"X-UserID",
 		"X-Email",
@@ -535,16 +537,16 @@ func applyGrokCLIProxyHeaders(req *http.Request) {
 	req.Header.Set("X-XAI-Token-Auth", xai.CLITokenAuth)
 	req.Header.Set("x-grok-client-version", version)
 	req.Header.Set("x-grok-client-identifier", xai.CLIClientIdentifier)
+	req.Header.Set("x-grok-client-mode", xai.CLIClientMode)
+	req.Header.Set("x-authenticateresponse", "authenticate-response")
 	req.Header.Set("User-Agent", xai.CLIUserAgent(version))
 }
 
 // isSupportedGrokCLIVersion 校验覆盖版本是否为规范 SemVer，且不低于内置最低版本。
 func isSupportedGrokCLIVersion(version string) bool {
-	canonical := "v" + version
-	minimum := "v" + xai.CLIClientVersion
-	return semver.IsValid(canonical) &&
-		semver.Canonical(canonical) == canonical &&
-		semver.Compare(canonical, minimum) >= 0
+	// 与账单、用量和转发使用同一版本下限，避免环境覆盖被传输层再次改写。
+	return xai.IsSupportedCLIVersion(version)
+
 }
 
 // acquireClientWithTLS 获取或创建带 TLS 指纹的客户端

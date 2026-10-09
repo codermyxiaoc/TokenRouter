@@ -703,8 +703,40 @@ func (refundProviderTestDouble) Refund(context.Context, payment.RefundRequest) (
 type refundQueryProviderTestDouble struct {
 	refundProviderTestDouble
 	refundResponse *payment.RefundResponse
+	queryRequest   payment.RefundQueryRequest
 }
 
-func (p *refundQueryProviderTestDouble) QueryRefund(context.Context, payment.RefundQueryRequest) (*payment.RefundResponse, error) {
+func (p *refundQueryProviderTestDouble) QueryRefund(_ context.Context, request payment.RefundQueryRequest) (*payment.RefundResponse, error) {
+	p.queryRequest = request
 	return p.refundResponse, nil
+}
+
+// 优惠和余额倍率影响权益快照，渠道查退金额必须按原实付比例换算并保留币种精度。
+func TestQueryPendingRefundUsesGatewayAmountAndCurrencyPrecision(t *testing.T) {
+	for _, tc := range []struct {
+		currency string
+		paid     float64
+		refund   float64
+		want     string
+	}{
+		{currency: "CNY", paid: 80, refund: 50, want: "40.00"},
+		{currency: "KWD", paid: 0.667, refund: 50, want: "0.334"},
+		{currency: "KWD", paid: 0.667, refund: 100, want: "0.667"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			ctx := context.Background()
+			client := newPaymentConfigServiceTestClient(t)
+			order := createPendingRefundOrderForTest(t, ctx, client, "refund-precision-"+tc.want, false)
+			_, err := client.PaymentOrder.UpdateOneID(order.ID).SetPayAmount(tc.paid).SetRefundAmount(tc.refund).
+				SetProviderSnapshot(map[string]any{"provider_key": payment.TypeStripe, "currency": tc.currency}).Save(ctx)
+			require.NoError(t, err)
+			prov := &refundQueryProviderTestDouble{refundResponse: &payment.RefundResponse{Status: payment.ProviderStatusPending}}
+			restore := replacePaymentProviderFactoryForTest(t, prov)
+			defer restore()
+			svc := &PaymentService{entClient: client, loadBalancer: &captureLoadBalancer{}}
+			_, err = svc.QueryAndFinalizeRefund(ctx, order.ID)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, prov.queryRequest.Amount)
+		})
+	}
 }

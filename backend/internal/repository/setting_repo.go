@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/ent"
@@ -70,20 +72,65 @@ func (r *settingRepository) GetMultiple(ctx context.Context, keys []string) (map
 }
 
 func (r *settingRepository) SetMultiple(ctx context.Context, settings map[string]string) error {
+	return setMultipleSettings(ctx, r.client, settings)
+}
+
+// setMultipleSettings 共用客户端和事务写入，按键排序避免并发批量更新的反向锁顺序。
+func setMultipleSettings(ctx context.Context, client *ent.Client, settings map[string]string) error {
 	if len(settings) == 0 {
 		return nil
 	}
 
 	now := time.Now()
 	builders := make([]*ent.SettingCreate, 0, len(settings))
-	for key, value := range settings {
-		builders = append(builders, r.client.Setting.Create().SetKey(key).SetValue(value).SetUpdatedAt(now))
+	keys := make([]string, 0, len(settings))
+	for key := range settings {
+		keys = append(keys, key)
 	}
-	return r.client.Setting.
+	sort.Strings(keys)
+	for _, key := range keys {
+		builders = append(builders, client.Setting.Create().SetKey(key).SetValue(settings[key]).SetUpdatedAt(now))
+	}
+	return client.Setting.
 		CreateBulk(builders...).
 		OnConflictColumns(setting.FieldKey).
 		UpdateNewValues().
 		Exec(ctx)
+}
+
+// UpdateMultiple 先为缺省键建立空值行，再按固定顺序持有行锁完成读、合并、校验和写入。
+// 行锁由数据库事务持有，多个服务实例也不能同时依据旧的优惠配置提交非法组合。
+func (r *settingRepository) UpdateMultiple(ctx context.Context, keys []string, update func(map[string]string) (map[string]string, error)) error {
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin settings update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	keys = append([]string(nil), keys...)
+	sort.Strings(keys)
+	stored := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if _, ok := stored[key]; ok {
+			continue
+		}
+		if err := tx.Setting.Create().SetKey(key).SetValue("").
+			OnConflictColumns(setting.FieldKey).Ignore().Exec(ctx); err != nil {
+			return fmt.Errorf("initialize settings update key: %w", err)
+		}
+		row, err := tx.Setting.Query().Where(setting.KeyEQ(key)).ForUpdate().Only(ctx)
+		if err != nil {
+			return fmt.Errorf("lock settings update key: %w", err)
+		}
+		stored[key] = row.Value
+	}
+	updates, err := update(stored)
+	if err != nil {
+		return err
+	}
+	if err := setMultipleSettings(ctx, tx.Client(), updates); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *settingRepository) GetAll(ctx context.Context) (map[string]string, error) {

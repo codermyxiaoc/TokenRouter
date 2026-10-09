@@ -26,6 +26,9 @@ export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' 
 
 export type OrderType = 'balance' | 'subscription'
 
+/** 按输入充值金额匹配的优惠档位。 */
+export interface RechargeBonusTier { min_amount: number; bonus_percent: number }
+
 // ==================== Configuration ====================
 
 export interface PaymentConfig {
@@ -41,6 +44,9 @@ export interface PaymentConfig {
   balance_recharge_multiplier: number
   subscription_usd_to_cny_rate: number
   recharge_fee_rate: number
+  recharge_bonus_tiers?: RechargeBonusTier[]
+  recharge_bonus_mode?: string
+  recharge_bonus_notice?: string
   method_fees: Record<string, MethodFeeConfig>
   enabled_payment_types: PaymentType[]
   help_image_url: string
@@ -87,6 +93,9 @@ export interface CheckoutInfoResponse {
   /** 订阅 CNY 换算汇率（1 USD = X CNY）；0 表示关闭并按套餐 price 直付。 */
   subscription_usd_to_cny_rate: number
   recharge_fee_rate: number
+  recharge_bonus_tiers?: RechargeBonusTier[]
+  recharge_bonus_mode?: string
+  recharge_bonus_notice?: string
   method_fees: Record<string, MethodFeeConfig>
   help_text: string
   help_image_url: string
@@ -106,6 +115,7 @@ export interface PaymentOrder {
   pay_amount: number
   currency?: string
   fee_rate: number
+  bonus_amount?: number
   fee_fixed: number
   fee_rate_amount: number
   fee_amount: number
@@ -276,6 +286,7 @@ export interface CreateOrderResult {
   payment_env?: string
   pay_amount: number
   fee_rate: number
+  bonus_amount?: number
   fee_fixed: number
   fee_rate_amount: number
   fee_amount: number

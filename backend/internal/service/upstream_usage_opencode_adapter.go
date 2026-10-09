@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -20,6 +21,10 @@ func (*openCodeGoUsageAdapter) Query(ctx context.Context, client *upstreamUsageH
 	body, status, err := client.getURL(ctx, openCodeGoQuotaURL(client.baseURL), true)
 	if err != nil {
 		return nil, err
+	}
+	// 独立 /usage 权限不足不代表推理密钥失效，保留历史样本且显示不支持。
+	if status == http.StatusForbidden {
+		return nil, ErrUpstreamUsageUnsupported
 	}
 	if err := validateCNUsageStatus(status); err != nil {
 		return nil, err

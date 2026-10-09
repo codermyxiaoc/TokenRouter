@@ -119,6 +119,7 @@ type UpstreamUsageAmount struct {
 
 // UpstreamUsageBalanceEntry 表示多币种余额中的一项。
 type UpstreamUsageBalanceEntry struct {
+	Kind      string  `json:"kind,omitempty"` // 聚合平台内独立钱包类型，不伪造币种。
 	Currency  string  `json:"currency"`
 	Remaining float64 `json:"remaining"`
 }
@@ -126,6 +127,7 @@ type UpstreamUsageBalanceEntry struct {
 // UpstreamUsageLimit 表示上游返回的某个周期限额，不使用 OAuth 的窗口命名。
 type UpstreamUsageLimit struct {
 	Name      string     `json:"name"`
+	Unit      string     `json:"unit,omitempty"` // 聚合平台的钱包金额与窗口百分比可以使用不同单位。
 	Used      *float64   `json:"used,omitempty"`
 	Limit     *float64   `json:"limit,omitempty"`
 	Remaining *float64   `json:"remaining,omitempty"`
@@ -202,6 +204,8 @@ type upstreamUsageAdapterRegistration struct {
 // upstreamUsageAdapterRegistry 是协议实现的唯一注册表。
 // 新协议在此登记工厂后即可参与配置校验和服务初始化。
 var upstreamUsageAdapterRegistry = []upstreamUsageAdapterRegistration{
+	{Name: UpstreamUsageAdapterCline, Label: "Cline", Automatic: true, Factory: func() UpstreamUsageAdapter { return &clineUsageAdapter{} }},
+	{Name: UpstreamUsageAdapterCommandCode, Label: "Command Code", Automatic: true, Factory: func() UpstreamUsageAdapter { return &commandCodeUsageAdapter{} }},
 	{Name: UpstreamUsageAdapterSub2API, Label: "Sub2API / TokenRouter", Factory: func() UpstreamUsageAdapter { return &sub2APIUsageAdapter{} }},
 	{Name: UpstreamUsageAdapterNewAPI, Label: "New API", Factory: func() UpstreamUsageAdapter { return &newAPIUsageAdapter{} }},
 	{Name: UpstreamUsageAdapterZivv, Label: "Zivv", Factory: func() UpstreamUsageAdapter { return &zivvUsageAdapter{} }},
@@ -350,7 +354,7 @@ func EffectiveUpstreamUsageConfig(account *Account) (UpstreamUsageQueryConfig, e
 			if !isGenericUpstreamUsageAdapter(config.Adapter) {
 				return UpstreamUsageQueryConfig{}, ErrUpstreamUsageUnsupported
 			}
-		} else if !account.IsCNProvider() && !account.IsOpenCodeGo() {
+		} else if cnUpstreamUsageAdapterName(account) == "" && !account.IsCNProvider() && !account.IsOpenCodeGo() {
 			config.Adapter = strings.TrimSpace(parsed)
 		}
 	}
@@ -570,6 +574,7 @@ func (s *UpstreamUsageService) QueryAccount(ctx context.Context, accountID int64
 // supportsGenericPayGUpstreamUsage 只开放手动查询，不授予原生周期监控或调度快照资格。
 func supportsGenericPayGUpstreamUsage(account *Account) bool {
 	return account != nil && (account.IsOpenCodeZen() ||
+		((account.IsCline() || account.IsCommandCode()) && cnUpstreamUsageAdapterName(account) == "") ||
 		((account.Platform == PlatformZhipu || account.Platform == PlatformMiniMax) && account.GetAccountMode() == AccountModePayG))
 }
 
@@ -584,6 +589,12 @@ func isGenericUpstreamUsageAdapter(adapter string) bool {
 }
 
 func cnUpstreamUsageAdapterName(account *Account) string {
+	if account != nil && account.IsCline() && isOfficialProviderHost(account.GetOpenAIBaseURL(), "api.cline.bot") {
+		return UpstreamUsageAdapterCline
+	}
+	if account != nil && account.IsCommandCode() && isOfficialProviderHost(account.GetOpenAIBaseURL(), "api.commandcode.ai") {
+		return UpstreamUsageAdapterCommandCode
+	}
 	// 此选择器仅定义原生协议及监控资格；Zen 的通用手查不能进入 GO 窗口协议。
 	if account != nil && account.IsOpenCodeGoPlan() {
 		return UpstreamUsageAdapterOpenCodeGo
@@ -864,7 +875,7 @@ func upstreamUsageAccountBaseURL(account *Account) string {
 		return account.GetGeminiBaseURL("https://generativelanguage.googleapis.com")
 	case PlatformAntigravity:
 		return account.GetGeminiBaseURL("https://generativelanguage.googleapis.com")
-	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo:
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformCline, PlatformCommandCode, PlatformTypeSafe:
 		// 用量端点只替换路径并保留账号主机；缺少自定义地址时使用平台默认值。
 		return account.GetOpenAIBaseURL()
 	default:
@@ -1037,12 +1048,12 @@ func validateNormalizedUsage(usage *UpstreamUsageInfo) error {
 		return errors.New("missing normalized usage fields")
 	}
 	switch usage.Mode {
-	case "balance", "quota", "limits", "subscription":
+	case "balance", "quota", "limits", "subscription", "wallets":
 	default:
 		return errors.New("unknown normalized usage mode")
 	}
 	switch usage.Mode {
-	case "balance", "quota":
+	case "balance", "quota", "wallets":
 		if usage.Balance == nil {
 			return errors.New("missing normalized balance")
 		}

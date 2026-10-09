@@ -52,10 +52,13 @@ const authStore = useAuthStore()
 const appStore = useAppStore()
 
 const username = ref(props.initialUsername)
+// 已保存值与输入草稿分离，轮询和保存回包不能覆盖用户后续编辑。
+let savedUsername = props.initialUsername
 const loading = ref(false)
 
 watch(() => props.initialUsername, (val) => {
-  username.value = val
+  if (username.value === savedUsername) username.value = val
+  savedUsername = val
 })
 
 const handleUpdateProfile = async () => {
@@ -66,10 +69,13 @@ const handleUpdateProfile = async () => {
   }
 
   loading.value = true
+  const submittedUsername = username.value
   try {
     const updatedUser = await userAPI.updateProfile({
       username: trimmedUsername
     })
+    if (username.value === submittedUsername) username.value = updatedUser.username
+    savedUsername = updatedUser.username
     authStore.user = updatedUser
     appStore.showSuccess(t('profile.updateSuccess'))
   } catch (error: unknown) {

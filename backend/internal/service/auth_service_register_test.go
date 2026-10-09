@@ -184,6 +184,10 @@ func (s *emailCacheStub) DeleteVerificationCode(ctx context.Context, email strin
 	return nil
 }
 
+func (s *emailCacheStub) DeleteVerificationCodeIfMatches(ctx context.Context, email, expectedCode string) error {
+	return nil
+}
+
 func (s *emailCacheStub) GetNotifyVerifyCode(ctx context.Context, email string) (*VerificationCodeData, error) {
 	return nil, nil
 }
@@ -193,6 +197,10 @@ func (s *emailCacheStub) SetNotifyVerifyCode(ctx context.Context, email string, 
 }
 
 func (s *emailCacheStub) DeleteNotifyVerifyCode(ctx context.Context, email string) error {
+	return nil
+}
+
+func (s *emailCacheStub) DeleteNotifyVerifyCodeIfMatches(ctx context.Context, email, expectedCode string) error {
 	return nil
 }
 
@@ -942,4 +950,20 @@ func TestCanBypassRegistrationDisabledForOAuth(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func (s *emailCacheStub) IncrVerificationCodeAttempts(context.Context, string, string) (int, error) {
+	if s.data == nil {
+		return 0, errors.New("verification code not found")
+	}
+	s.data.Attempts++
+	return s.data.Attempts, nil
+}
+
+func (s *emailCacheStub) IncrNotifyVerifyCodeAttempts(context.Context, string, string) (int, error) {
+	return 0, errors.New("notify verification code not found")
+}
+
+func (s *emailCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
+	return false, nil
 }

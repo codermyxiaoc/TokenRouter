@@ -31,6 +31,15 @@ type OpsPercentiles struct {
 	Max *int `json:"max_ms"`
 }
 
+// OpsOutputTPS 描述逐请求的文本输出速率分布，而非汇总吞吐量。
+type OpsOutputTPS struct {
+	P5          *float64 `json:"p5"`
+	P10         *float64 `json:"p10"`
+	P50         *float64 `json:"p50"`
+	Avg         *float64 `json:"avg"`
+	SampleCount int64    `json:"sample_count"`
+}
+
 type OpsDashboardOverview struct {
 	StartTime time.Time `json:"start_time"`
 	EndTime   time.Time `json:"end_time"`
@@ -64,8 +73,9 @@ type OpsDashboardOverview struct {
 	Upstream429Count             int64   `json:"upstream_429_count"`
 	Upstream529Count             int64   `json:"upstream_529_count"`
 
-	QPS OpsRateSummary `json:"qps"`
-	TPS OpsRateSummary `json:"tps"`
+	QPS       OpsRateSummary `json:"qps"`
+	TPS       OpsRateSummary `json:"tps"`
+	OutputTPS *OpsOutputTPS  `json:"output_tps"`
 
 	Duration OpsPercentiles `json:"duration"`
 	TTFT     OpsPercentiles `json:"ttft"`

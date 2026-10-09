@@ -204,7 +204,7 @@ func (s *CNProviderBalanceCheckService) runOnce(parents ...context.Context) {
 func (s *CNProviderBalanceCheckService) monitorCandidates(ctx context.Context) []Account {
 	result := make([]Account, 0)
 	// OpenCode 只让有窗口查询协议的 GO 进入监控，Zen 由适配器选择器过滤。
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo} {
+	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformCline, PlatformCommandCode} {
 		accounts, err := s.accountRepo.ListByPlatform(ctx, platform)
 		if err != nil {
 			slog.Warn("cn_usage_monitor_list_failed", "platform", platform, "error", err)
@@ -327,7 +327,7 @@ func (s *CNProviderBalanceCheckService) applyBalanceDecision(
 	identityHash string,
 	result *UpstreamUsageQueryResult,
 ) {
-	if result == nil || result.Mode != "balance" || ctx.Err() != nil {
+	if result == nil || (result.Mode != "balance" && result.Mode != "wallets") || ctx.Err() != nil {
 		return
 	}
 	account, err := s.accountRepo.GetByID(ctx, accountID)
@@ -345,6 +345,10 @@ func (s *CNProviderBalanceCheckService) applyBalanceDecision(
 	threshold := 0.5
 	if s.cfg != nil {
 		threshold = s.cfg.Gateway.CNProviders.BalanceThreshold
+	}
+	if result.Mode == "wallets" {
+		s.applyAggregatorWalletDecision(ctx, account, result, threshold, identityHash)
+		return
 	}
 	low, known := cnUsageBalanceBelowThreshold(result, threshold)
 	if !known {
@@ -410,7 +414,7 @@ func cnUsageMonitorSnapshotFromExtra(extra map[string]any) *CNUsageMonitorSnapsh
 
 // validCNUsageMonitorSnapshot 只返回与账号当前完整查询身份匹配的快照。
 func validCNUsageMonitorSnapshot(account *Account) *CNUsageMonitorSnapshot {
-	if account == nil || (!account.IsCNProvider() && !account.IsOpenCodeGoPlan()) {
+	if account == nil || (!account.IsCNProvider() && !account.IsOpenCodeGoPlan() && !account.IsCline() && !account.IsCommandCode()) {
 		return nil
 	}
 	queryConfig, err := EffectiveUpstreamUsageConfig(account)
@@ -431,7 +435,7 @@ func validCNUsageMonitorSnapshot(account *Account) *CNUsageMonitorSnapshot {
 }
 
 func cnUsageMonitorIdentityFingerprint(account *Account) string {
-	if account == nil || (!account.IsCNProvider() && !account.IsOpenCodeGoPlan()) || account.Type != AccountTypeAPIKey {
+	if account == nil || (!account.IsCNProvider() && !account.IsOpenCodeGoPlan() && !account.IsCline() && !account.IsCommandCode()) || account.Type != AccountTypeAPIKey {
 		return ""
 	}
 	queryConfig, err := EffectiveUpstreamUsageConfig(account)
@@ -493,6 +497,10 @@ func cnUsageOfficialHost(platform, host string) bool {
 		return host == "api.minimax.io" || host == "api.minimax.cn" || host == "api.minimaxi.com"
 	case PlatformOpenCodeGo:
 		return host == "opencode.ai"
+	case PlatformCline:
+		return host == "api.cline.bot"
+	case PlatformCommandCode:
+		return host == "api.commandcode.ai"
 	default:
 		return false
 	}

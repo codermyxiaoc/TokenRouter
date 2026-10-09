@@ -427,7 +427,7 @@
                 <div class="flex items-center gap-2">
                   <button
                     type="button"
-                    v-if="section.platform !== 'video'"
+                    v-if="supportsChannelModelSync(section.platform)"
                     @click="syncLatestModels(sIdx)"
                     :disabled="syncingPlatform === section.platform"
                     class="text-xs text-gray-500 hover:text-primary-600 disabled:opacity-50"
@@ -632,6 +632,7 @@
 </template>
 
 <script setup lang="ts">
+import { supportsChannelModelSync } from '@/constants/platforms'
 import { validVideoPrices, videoPricesFromAPI, videoPricesToAPI, validVideoImageInputPricing, videoImageInputPricingToAPI, videoImageInputPricingFromAPI, validVideoFallbackPrice, videoFallbackPriceToAPI, validVideoTokenPrepay, videoTokenPrepayToAPI, videoTokenPrepayFromAPI } from "@/components/admin/channel/videoPricing"
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -781,7 +782,7 @@ const billingModelSourceHint = computed(() => {
 let abortController: AbortController | null = null
 
 // ── Platform config ──
-const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'video']
+const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'qoder', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'video', 'typesafe', 'cline', 'command_code']
 
 // ── Helpers ──
 function formatDate(value: string): string {
@@ -894,14 +895,17 @@ function addPricingEntry(sectionIdx: number) {
 const syncingPlatform = ref<string | null>(null)
 
 async function syncLatestModels(sectionIdx: number) {
-  const platform = form.platforms[sectionIdx].platform
-  if (syncingPlatform.value) return
+  const section = form.platforms[sectionIdx]
+  if (!section || !supportsChannelModelSync(section.platform) || syncingPlatform.value) return
+  const platform = section.platform
   syncingPlatform.value = platform
   try {
     const result = await adminAPI.channels.syncPricingModels(platform)
+    // 切换或删除平台后，不把旧请求的结果写入新的索引位置。
+    if (!form.platforms.includes(section)) return
     // 收集当前平台定价条目里已有的模型名
     const existingModels = new Set<string>()
-    for (const entry of form.platforms[sectionIdx].model_pricing) {
+    for (const entry of section.model_pricing) {
       for (const m of entry.models) existingModels.add(m)
     }
     const newModels = result.models.filter(m => !existingModels.has(m))
@@ -939,8 +943,9 @@ async function syncLatestModels(sectionIdx: number) {
         // 查询默认价格失败不影响同步模型列表，用户仍可手动填写。
       }
     }
+    if (!form.platforms.includes(section)) return
     // 将新增模型合并为一个可继续手动调整价格的定价条目
-    form.platforms[sectionIdx].model_pricing.push({
+    section.model_pricing.push({
       models: newModels,
       billing_mode: 'token',
       price_multiplier: null,

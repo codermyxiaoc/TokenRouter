@@ -183,33 +183,30 @@ func TestImageBillingReservationCaptureOverrunAndPartialResult(t *testing.T) {
 	billingFocusAssertDecimal(t, "0.06", `SELECT quota_used::text FROM api_keys WHERE id=$1`, cmd.Hold.APIKeyID)
 }
 
-func TestImageBillingReservationCaptureEffectsFailureRollsBackAndCanRecover(t *testing.T) {
+// 删除 Key 不能阻断已经受理的图片结算，也不能使预留资金永久冻结。
+func TestImageBillingReservationDeletedKeyStillSettlesExactlyOnce(t *testing.T) {
 	ctx := context.Background()
 	repo, cmd, _ := newImageBillingIntegrationFixture(t, 1, 0)
 	hold, err := repo.ReserveImageBilling(ctx, cmd)
 	require.NoError(t, err)
-	// 模拟异步运行中 Key 被删除，使资金捕获后的配额更新失败；整个事务必须回滚。
 	_, err = integrationDB.ExecContext(ctx, `UPDATE api_keys SET deleted_at=NOW() WHERE id=$1`, cmd.Hold.APIKeyID)
-	require.NoError(t, err)
-	_, err = repo.CaptureImageBilling(ctx, hold.ID, imageBillingCaptureCommand(hold), 0.06)
-	require.ErrorIs(t, err, service.ErrAPIKeyNotFound)
-	billingFocusAssertDecimal(t, "0.88", `SELECT balance::text FROM users WHERE id=$1`, cmd.Hold.UserID)
-	billingFocusAssertDecimal(t, "0.12", `SELECT frozen_balance::text FROM users WHERE id=$1`, cmd.Hold.UserID)
-	var state string
-	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT state FROM image_billing_reservations WHERE request_id=$1 AND api_key_id=$2`, hold.ID, cmd.Hold.APIKeyID).Scan(&state))
-	require.Equal(t, service.ImageBillingReserved, state)
-	var count int
-	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_billing_dedup WHERE request_id=$1 AND api_key_id=$2`, hold.ID, cmd.Hold.APIKeyID).Scan(&count))
-	require.Zero(t, count)
-	require.NoError(t, repo.MarkImageBillingReconciliation(ctx, hold.ID, cmd.Hold.UserID, cmd.Hold.APIKeyID))
-	_, err = integrationDB.ExecContext(ctx, `UPDATE api_keys SET deleted_at=NULL WHERE id=$1`, cmd.Hold.APIKeyID)
 	require.NoError(t, err)
 	result, err := repo.CaptureImageBilling(ctx, hold.ID, imageBillingCaptureCommand(hold), 0.06)
 	require.NoError(t, err)
 	require.True(t, result.Applied)
 	billingFocusAssertDecimal(t, "0.94", `SELECT balance::text FROM users WHERE id=$1`, cmd.Hold.UserID)
 	billingFocusAssertDecimal(t, "0", `SELECT frozen_balance::text FROM users WHERE id=$1`, cmd.Hold.UserID)
-	billingFocusAssertDecimal(t, "0.06", `SELECT quota_used::text FROM api_keys WHERE id=$1`, cmd.Hold.APIKeyID)
+	billingFocusAssertDecimal(t, "0", `SELECT quota_used::text FROM api_keys WHERE id=$1`, cmd.Hold.APIKeyID)
+	var state string
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT state FROM image_billing_reservations WHERE request_id=$1 AND api_key_id=$2`, hold.ID, cmd.Hold.APIKeyID).Scan(&state))
+	require.Equal(t, service.ImageBillingCaptured, state)
+	result, err = repo.CaptureImageBilling(ctx, hold.ID, imageBillingCaptureCommand(hold), 0.06)
+	require.NoError(t, err)
+	require.False(t, result.Applied)
+	billingFocusAssertDecimal(t, "0.94", `SELECT balance::text FROM users WHERE id=$1`, cmd.Hold.UserID)
+	var count int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_billing_dedup WHERE request_id=$1 AND api_key_id=$2`, hold.ID, cmd.Hold.APIKeyID).Scan(&count))
+	require.Equal(t, 1, count)
 }
 
 func TestImageBillingReservation220ConcurrentFundsCannotBeReused(t *testing.T) {
@@ -285,4 +282,24 @@ func TestImageBillingReservation220ConcurrentFundsCannotBeReused(t *testing.T) {
 		}
 	}
 	billingFocusAssertDecimal(t, "0", `SELECT frozen_balance::text FROM users WHERE id=$1`, template.Hold.UserID)
+}
+
+// 真正的数据库结算错误仍必须回滚资金捕获与幂等认领，之后可安全重试。
+func TestImageBillingReservationAccountFailureRollsBackCapture(t *testing.T) {
+	ctx := context.Background()
+	repo, cmd, _ := newImageBillingIntegrationFixture(t, 1, 0)
+	hold, err := repo.ReserveImageBilling(ctx, cmd)
+	require.NoError(t, err)
+	capture := imageBillingCaptureCommand(hold)
+	capture.AccountID, capture.AccountType, capture.AccountQuotaCost = -1, service.AccountTypeAPIKey, 0.06
+	_, err = repo.CaptureImageBilling(ctx, hold.ID, capture, 0.06)
+	require.Error(t, err)
+	billingFocusAssertDecimal(t, "0.88", `SELECT balance::text FROM users WHERE id=$1`, cmd.Hold.UserID)
+	billingFocusAssertDecimal(t, "0.12", `SELECT frozen_balance::text FROM users WHERE id=$1`, cmd.Hold.UserID)
+	billingFocusAssertDecimal(t, "0", `SELECT quota_used::text FROM api_keys WHERE id=$1`, cmd.Hold.APIKeyID)
+	result, err := repo.CaptureImageBilling(ctx, hold.ID, imageBillingCaptureCommand(hold), 0.06)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	billingFocusAssertDecimal(t, "0.94", `SELECT balance::text FROM users WHERE id=$1`, cmd.Hold.UserID)
+	billingFocusAssertDecimal(t, "0", `SELECT frozen_balance::text FROM users WHERE id=$1`, cmd.Hold.UserID)
 }

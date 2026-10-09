@@ -91,6 +91,9 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	// payment_orders: subscription order snapshot fields
 	requireColumn(t, tx, "payment_orders", "plan_id", "bigint", 0, true)
 	requireColumn(t, tx, "payment_orders", "plan_snapshot", "jsonb", 0, true)
+	// 新优惠快照默认零，升级不得给历史订单追加权益。
+	requireColumn(t, tx, "payment_orders", "bonus_amount", "numeric", 0, false)
+	requireColumnDefaultContains(t, tx, "payment_orders", "bonus_amount", "0")
 	requireNoColumn(t, tx, "payment_orders", "subscription_group_id")
 	requireNoColumn(t, tx, "payment_orders", "subscription_days")
 

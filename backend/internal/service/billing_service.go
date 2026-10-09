@@ -615,6 +615,8 @@ func (s *BillingService) initFallbackPricing() {
 		InputPricePerToken: 0.042e-6,
 	}
 	s.fallbackPrices["jev-1.13-free"] = &ModelPricing{}
+	// TypeSafe 独立端点仅按输入 Token 计费，保留 Zen 原有 Jev 免费价格。
+	s.fallbackPrices["jev-latest"] = &ModelPricing{InputPricePerToken: 0.042 / 1_000_000}
 
 	// OpenAI GPT-5.6 官方价格（USD/token）。缓存写入为输入价的 1.25 倍。
 	s.fallbackPrices["gpt-5.6-sol"] = &ModelPricing{
@@ -982,6 +984,9 @@ func (s *BillingService) initFallbackPricing() {
 
 // getFallbackPricing 根据模型系列获取回退价格
 func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
+	if strings.EqualFold(strings.TrimSpace(model), "jev-latest") {
+		return s.fallbackPrices["jev-latest"]
+	}
 	modelLower := strings.ToLower(model)
 	if claude.IsSonnet55Model(modelLower) {
 		return &ModelPricing{InputPricePerToken: 2e-6, OutputPricePerToken: 10e-6, CacheCreationPricePerToken: 2.5e-6, CacheReadPricePerToken: 0.2e-6, CacheCreation5mPrice: 2.5e-6, CacheCreation1hPrice: 4e-6, SupportsCacheBreakdown: true}

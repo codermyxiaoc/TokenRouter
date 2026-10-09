@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -100,6 +100,7 @@ type qoderAccountTestOAuthClient interface {
 // TestEvent represents a SSE event for account testing
 type TestEvent struct {
 	Type     string `json:"type"`
+	TestID   string `json:"test_id,omitempty"`
 	Text     string `json:"text,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Status   string `json:"status,omitempty"`
@@ -401,6 +402,7 @@ func createTestPayloadWithPrompt(modelID string, prompt string) (map[string]any,
 // mode 是可选的："compact" 探测原生 V2，"legacy_compact" 仅探测旧端点兼容性。
 // testTypes 为可选的显式测试类型；不传时保留旧版按模型名判断的兼容行为。
 func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int64, modelID string, prompt string, mode string, testTypes ...string) error {
+	bindAccountTestLogContext(c, accountID, modelID, mode, nil)
 	ctx := c.Request.Context()
 	mode, testType, explicitTestType := resolveAccountTestModeAndType(mode, testTypes...)
 	// 图片测试与 Compact 探测不是同一条协议；显式图片选择优先使用普通图片路径。
@@ -413,6 +415,7 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
+	bindAccountTestLogContext(c, accountID, modelID, mode, account)
 	// 图片测试仅允许支持图像接口的平台，Antigravity 仅开放 API Key 账号。
 	if explicitTestType && testType == AccountTestTypeImage &&
 		!account.IsOpenAI() && !account.IsGemini() &&
@@ -420,7 +423,7 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		(account.Platform != PlatformAntigravity || account.Type != AccountTypeAPIKey) {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Image tests are not supported for platform %s", account.Platform))
 	}
-	if account.IsOpenCodeGo() {
+	if account.IsOpenCodeGo() || isAdditionalAPIKeyPlatform(account.Platform) {
 		return s.testCNProviderAccountConnection(c, account, modelID, prompt)
 	}
 	if account.IsCNProvider() {
@@ -470,6 +473,12 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 
 func defaultCNProviderTestModel(platform string) string {
 	switch platform {
+	case PlatformTypeSafe:
+		return DefaultTypeSafeModel
+	case PlatformCline:
+		return DefaultClineTestModel
+	case PlatformCommandCode:
+		return DefaultCommandCodeTestModel
 	case PlatformOpenCodeGo:
 		return DefaultOpenCodeGoTestModel
 	case PlatformKimi:
@@ -504,6 +513,11 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 	testModelID := strings.TrimSpace(modelID)
 	if testModelID == "" {
 		testModelID = defaultCNProviderTestModel(account.Platform)
+		if account.IsCline() && !account.isRateLimitActiveForKey(clinePassRateLimitKey) {
+			if snapshot := validCNUsageMonitorSnapshot(account); snapshot != nil && snapshot.Subscription != nil {
+				testModelID = DefaultClinePassTestModel
+			}
+		}
 	}
 	testModelID = account.GetMappedModel(testModelID)
 	if testModelID == "" {
@@ -514,6 +528,9 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 	protocol := account.GetAPIProtocol()
 	if account.IsOpenCodeGo() {
 		protocol = openCodeGoNativeProtocol(account, testModelID)
+	}
+	if account.IsCommandCode() {
+		protocol = s.openAIGatewayService.modelRoutedUpstreamProtocol(ctx, account, APIProtocolChatCompletions, testModelID)
 	}
 	if protocol == APIProtocolSystemOne {
 		return s.testOpenCodeSystemOneConnection(c, account, testModelID, prompt, apiKey)
@@ -528,11 +545,11 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 		if err != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
 		}
-		if hint := cnAnthropicBaseURLMisconfigHint(baseURL); hint != "" && !account.IsOpenCodeGo() {
+		if hint := cnAnthropicBaseURLMisconfigHint(baseURL); hint != "" && !account.IsOpenCodeGo() && !account.IsCommandCode() {
 			return s.sendErrorAndEnd(c, hint)
 		}
 		apiURL = strings.TrimRight(baseURL, "/") + "/v1/messages"
-		if account.IsOpenCodeGo() {
+		if account.IsOpenCodeGo() || account.IsCommandCode() {
 			apiURL = buildOpenAIEndpointURL(baseURL, "/v1/messages")
 		}
 		payload, err = createTestPayloadWithPrompt(testModelID, prompt)
@@ -541,7 +558,7 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 		}
 	case APIProtocolResponses:
 		base := account.GetOpenAIBaseURL()
-		if account.IsOpenCodeGo() {
+		if account.IsOpenCodeGo() || account.IsCommandCode() {
 			base = account.GetCNProtocolBaseURL(APIProtocolResponses)
 		}
 		baseURL, err := s.validateUpstreamBaseURL(base)
@@ -610,10 +627,10 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		errMsg := fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		errMsg := qoder.RedactSensitiveText(fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
 		// 显式渠道探测的协议权限不足不能把仍能服务其它协议的整个账号设为错误。
-		markForbidden := resp.StatusCode == http.StatusForbidden && !c.GetBool(accountTestExplicitProbeProtocolContextKey)
+		markForbidden := resp.StatusCode == http.StatusForbidden && !c.GetBool(accountTestExplicitProbeProtocolContextKey) && !account.IsCommandCode()
 		if (protocol == APIProtocolAnthropic && (resp.StatusCode == http.StatusUnauthorized || markForbidden)) && s.accountRepo != nil {
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
@@ -633,7 +650,11 @@ func (s *AccountTestService) testCNProviderAccountConnection(
 // 协议的 SSE 测试器，否则会把合法的 answers JSON 误判为空流。
 func (s *AccountTestService) testOpenCodeSystemOneConnection(c *gin.Context, account *Account, modelID, prompt, apiKey string) error {
 	ctx := c.Request.Context()
-	baseURL, err := s.openAIGatewayService.validateUpstreamBaseURL(account.openCodeProtocolBaseURL(APIProtocolSystemOne))
+	base := account.openCodeProtocolBaseURL(APIProtocolSystemOne)
+	if account.IsTypeSafe() {
+		base = account.additionalProviderBaseURL(APIProtocolSystemOne)
+	}
+	baseURL, err := s.openAIGatewayService.validateUpstreamBaseURL(base)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
 	}
@@ -2958,6 +2979,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 }
 
 func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
+	event.TestID = accountTestLogID(c)
 	if event.Type == "test_complete" {
 		if suppress, ok := c.Get(accountTestSuppressCompletionContextKey); ok {
 			if suppressCompletion, _ := suppress.(bool); suppressCompletion {
@@ -2967,7 +2989,7 @@ func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
 	}
 	eventJSON, _ := json.Marshal(event)
 	if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", eventJSON); err != nil {
-		log.Printf("failed to write SSE event: %v", err)
+		slog.Warn("account_test_sse_write_failed", accountTestLogAttrs(c)...)
 		return
 	}
 	c.Writer.Flush()
@@ -2975,9 +2997,52 @@ func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
 
 // sendErrorAndEnd sends an error event and ends the stream
 func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) error {
-	log.Printf("Account test error: %s", errorMsg)
+	// 上游错误可能回显凭据或任意响应体，服务日志仅保存关联 ID，详情留在管理员响应。
+	slog.Warn("account_test_failed", accountTestLogAttrs(c)...)
+	if value, exists := c.Get("account_test_account"); exists {
+		if account, ok := value.(*Account); ok && account != nil {
+			for _, name := range []string{"api_key", "access_token", "refresh_token", "token", "new_api_user_access_token"} {
+				if secret := account.GetCredential(name); len(secret) >= 4 {
+					errorMsg = strings.ReplaceAll(errorMsg, secret, "[REDACTED]")
+				}
+			}
+		}
+	}
+	errorMsg = qoder.RedactSensitiveText(errorMsg)
+	if len(errorMsg) > 4096 {
+		errorMsg = errorMsg[:4096] + "…"
+	}
 	s.sendEvent(c, TestEvent{Type: "error", Error: errorMsg})
 	return fmt.Errorf("%s", errorMsg)
+}
+
+func accountTestLogID(c *gin.Context) string {
+	if id := c.GetString("account_test_log_id"); id != "" {
+		return id
+	}
+	id := uuid.NewString()
+	c.Set("account_test_log_id", id)
+	return id
+}
+
+// 所有测试入口共用一次关联 ID；日志只保留定位元数据，不保存提示词或原始错误正文。
+func bindAccountTestLogContext(c *gin.Context, accountID int64, model, mode string, account *Account) {
+	accountTestLogID(c)
+	c.Set("account_test_account_id", accountID)
+	c.Set("account_test_model", strings.TrimSpace(model))
+	c.Set("account_test_mode", mode)
+	if c.GetString("account_test_source") == "" {
+		c.Set("account_test_source", "admin")
+	}
+	if account != nil {
+		c.Set("account_test_platform", account.Platform)
+		c.Set("account_test_type", account.Type)
+		c.Set("account_test_account", account)
+	}
+}
+
+func accountTestLogAttrs(c *gin.Context) []any {
+	return []any{"test_id", accountTestLogID(c), "account_id", c.GetInt64("account_test_account_id"), "platform", c.GetString("account_test_platform"), "type", c.GetString("account_test_type"), "model", c.GetString("account_test_model"), "mode", c.GetString("account_test_mode"), "source", c.GetString("account_test_source")}
 }
 
 // RunTestBackground executes an account test in-memory (no real HTTP client),
@@ -3004,6 +3069,7 @@ func (s *AccountTestService) RunTestBackgroundWithPromptAndUserAgentAndProtocol(
 
 	w := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(w)
+	ginCtx.Set("account_test_source", "background")
 	ginCtx.Request = (&http.Request{}).WithContext(ctx)
 
 	normalizedProtocol, testErr := normalizeGroupAvailabilityProbeProtocol(protocol)

@@ -245,6 +245,8 @@ func CanonicalizeReturnURL(raw string, srcHost string, srcURL string) (string, e
 		return "", infraerrors.BadRequest("INVALID_RETURN_URL", "return_url must use http or https")
 	}
 	parsed.Fragment = ""
+	// 清除客户端查询参数，由服务端重建结果页参数，阻断下单签名复用攻击。
+	parsed.RawQuery = ""
 	if parsed.Path == "" {
 		parsed.Path = "/"
 	}

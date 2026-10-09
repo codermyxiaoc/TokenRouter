@@ -41,4 +41,14 @@ describe('OpenCode credentials', () => {
     expect(isHeaderOverrideCapable('opencode_go', 'apikey')).toBe(true)
     expect(isHeaderOverrideCapable('opencode_go', 'oauth')).toBe(false)
   })
+  it('Zen 精确模型路由优先，Go 默认和显式规则保持原值', () => {
+    const zen = defaultOpenCodeProtocolRules('zen')
+    const exact = zen.findIndex(rule => rule.pattern === 'qwen3.8-max')
+    expect(exact).toBeGreaterThanOrEqual(0)
+    expect(exact).toBeLessThan(zen.findIndex(rule => rule.pattern === 'qwen*'))
+    expect(zen[exact].protocol).toBe('chat_completions')
+    expect(defaultOpenCodeProtocolRules('go').some(rule => rule.pattern === 'qwen3.8-max')).toBe(false)
+    expect(parseOpenCodeGoProtocolRules([{ pattern: 'qwen3.8-max', protocol: 'anthropic' }])).toEqual([{ pattern: 'qwen3.8-max', protocol: 'anthropic' }])
+  })
+
 })

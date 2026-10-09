@@ -504,6 +504,19 @@ func (s *paymentConfigSettingRepoStub) SetMultiple(_ context.Context, values map
 	}
 	return nil
 }
+
+// 单元测试使用顺序内存仓储；真实跨实例互斥由 PostgreSQL 集成测试验证。
+func (s *paymentConfigSettingRepoStub) UpdateMultiple(ctx context.Context, keys []string, update func(map[string]string) (map[string]string, error)) error {
+	stored, err := s.GetMultiple(ctx, keys)
+	if err != nil {
+		return err
+	}
+	values, err := update(stored)
+	if err != nil {
+		return err
+	}
+	return s.SetMultiple(ctx, values)
+}
 func (s *paymentConfigSettingRepoStub) GetAll(context.Context) (map[string]string, error) {
 	return s.values, nil
 }

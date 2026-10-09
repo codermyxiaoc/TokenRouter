@@ -15,6 +15,7 @@ import (
 	"time"
 
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -258,6 +259,9 @@ func smartRoutingRequestModel(c *gin.Context) (string, error) {
 
 // smartRoutingBodyError 保留请求体超限语义，不把传输错误当成目录未命中。
 func smartRoutingBodyError(err, missing error) error {
+	if errors.Is(err, jsonutil.ErrDuplicateField) {
+		return infraerrors.BadRequest("SMART_ROUTING_INVALID_REQUEST", "Ambiguous model or session fields")
+	}
 	var oversized *http.MaxBytesError
 	if errors.As(err, &oversized) {
 		return infraerrors.New(http.StatusRequestEntityTooLarge, "REQUEST_BODY_TOO_LARGE", "Request body is too large")

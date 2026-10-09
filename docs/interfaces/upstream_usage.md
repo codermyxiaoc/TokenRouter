@@ -1,6 +1,6 @@
 # API Key 上游用量查询
 
-本文定义 `type=apikey` 账号的上游用量查询，以及国产供应商可选的周期监控。管理员手动查询是纯展示能力，不参与 TokenRouter 调度、自动暂停、账号倍率、本地配额或结算；只有显式开启的 CN 周期监控可以写统一快照并按余额形成临时停调。`type=bedrock` 不在范围内，OAuth/Setup Token 的官方用量窗口仍由 `AccountUsageService` 独立维护。
+本文定义 `type=apikey` 账号的上游用量查询，以及国产供应商、OpenCode GO、Cline 与 Command Code 可选的周期监控。管理员手动查询是纯展示能力，不参与 TokenRouter 调度、自动暂停、账号倍率、本地配额或结算；只有显式开启的原生周期监控可以写统一快照并按余额形成临时停调。`type=bedrock` 不在范围内，OAuth/Setup Token 的官方用量窗口仍由 `AccountUsageService` 独立维护。
 
 ## 配置
 
@@ -24,6 +24,8 @@ New API 钱包若需要用户级认证，可在 `credentials` 中保存
 `new_api_user_access_token`（敏感字段，只写入不回显）和可选的
 `new_api_user_id`。前者只用于钱包查询，不能参与账号转发；后端响应只返回
 `credentials_status.has_new_api_user_access_token`。
+
+Cline 和 Command Code 的官方 HTTPS 账号自动使用原生 `cline` / `command_code` 适配器，自定义中继继续使用通用查询配置；TypeSafe 没有原生钱包端点。`wallets` 结果同时携带 USD 总余额、以 `balances[].kind` 区分的钱包和可选订阅窗口；`limits[].unit` 表示本窗口单位，不能把 Cline 百分比与美元混算。详情见[聚合平台钱包与冷却](aggregator_upstreams.md#provider_wallets)。
 
 ## 适配器
 

@@ -550,9 +550,9 @@ async function onModelsUpdate(newModels: string[]) {
   // 视频只能显式配置矩阵价格，不使用文本默认价自动填充。
   if (props.platform === 'video') return
 
-  // 只在新增模型且当前无价格时自动填充
+  // 仅空条目首次加入单个模型时填默认价，追加或批量模型不能静默改写整条价格。
   const addedModels = newModels.filter(m => !oldModels.includes(m))
-  if (addedModels.length === 0) return
+  if (oldModels.length !== 0 || addedModels.length !== 1) return
 
   // 检查是否所有价格字段都为空
   const e = props.entry

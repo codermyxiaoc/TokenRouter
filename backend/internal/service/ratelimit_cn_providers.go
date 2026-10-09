@@ -189,6 +189,12 @@ func (s *RateLimitService) cnBalanceCooldownDuration() time.Duration {
 // 周期额度探测刷新快照后阈值评估会再次停调到正确的时间点。
 // 无快照或均已过期返回 nil。
 func cnProviderQuotaSnapshotReset(account *Account, now time.Time) *time.Time {
+	if account != nil && account.IsCommandCode() {
+		if snapshot := validCNUsageMonitorSnapshot(account); snapshot != nil && snapshot.Mode == "wallets" && commandCodePurchasedBalance(snapshot.Balances) <= 0 {
+			return aggregatorExhaustedReset(snapshot.Limits, now)
+		}
+		return nil
+	}
 	if account != nil && account.IsOpenCodeGoPlan() {
 		// GO 有月窗口：只选择已确认耗尽窗口中的最晚恢复点，不能用未耗尽窗口推测 429。
 		if candidate := pickLatestResetSchedulingCandidate(openCodeGoThresholdCandidates(account, now), 100, now); candidate != nil {
@@ -227,6 +233,11 @@ func (s *RateLimitService) applyCNProviderReactive429(
 	if account != nil && account.IsOpenCodeGoPlan() {
 		now := time.Now()
 		until := cnProviderQuotaSnapshotReset(account, now)
+		if until == nil {
+			if reset := parseRetryAfterResetTime(headers, now); reset != nil && reset.After(now) && reset.Sub(now) <= 24*time.Hour {
+				until = reset
+			}
+		}
 		if until == nil {
 			if resetAt := parseOpenAIRateLimitResetTime(responseBody); resetAt != nil {
 				reset := time.Unix(*resetAt, 0)

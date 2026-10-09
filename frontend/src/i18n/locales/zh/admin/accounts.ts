@@ -1,6 +1,7 @@
 export default {
 // Accounts Management
     accounts: {
+      additionalProviders: { systemOneDescription: 'TypeSafe 使用独立的 SystemOne 结构化判断接口。', systemOneNote: '请根据业务调整 state 与 questions；此平台不提供普通对话接口。', inheritBaseUrl: '留空继承账号 Base URL', customRules: '自定义模型协议规则', catalogHint: '默认按上游模型目录适配协议；开启自定义后按规则匹配，未命中使用 Chat Completions。' },
       video: {
   "endpoints": {
     "compat": "OpenAI Videos（/v1/video/generations）",
@@ -149,6 +150,12 @@ export default {
       schedulableEnabled: '调度已开启',
       schedulableDisabled: '调度已关闭',
       failedToToggleSchedulable: '切换调度状态失败',
+      priorityQuick: {
+        raise: '提高优先级（数值 -1）',
+        lower: '降低优先级（数值 +1）',
+        editHint: '点击直接输入；数值越小越优先',
+        failed: '更新优先级失败'
+      },
       groupCountTotal: '共 {count} 个分组',
       columns: {
         name: '名称',
@@ -313,6 +320,7 @@ export default {
       },
       usageWindowsHint: 'OAuth 账号显示上游官方用量窗口；API Key 账号显示本地用量，以及管理员手动查询得到的上游余额和限额。',
       upstreamUsage: {
+        walletKinds: { monthly: '月度额度', purchased: '充值余额', free: '免费额度' },
         title: '上游用量查询',
         hint: '仅供管理员展示，不影响转发、调度或本地配额。',
         enabled: '启用查询',
@@ -357,6 +365,7 @@ export default {
           UPSTREAM_USAGE_CONFIG_INVALID: '查询配置无效',
           UPSTREAM_USAGE_DISABLED: '已关闭查询',
           UPSTREAM_USAGE_ADAPTER_UNSUPPORTED: '协议不支持',
+          UPSTREAM_USAGE_UNSUPPORTED: '该上游暂无可用用量接口或此凭据无查询权限，不影响推理',
           UPSTREAM_USAGE_AUTH_FAILED: '认证失败',
           UPSTREAM_USAGE_WALLET_UNAVAILABLE: '钱包余额不可用（上游未提供钱包接口或未配置用户访问令牌）',
           UPSTREAM_USAGE_WALLET_AUTH_FAILED: '钱包访问令牌认证失败或用户身份不匹配',
@@ -1173,7 +1182,8 @@ export default {
       poolModeRetryStatusCodesHint: '仅在池模式下生效。以英文逗号分隔的 HTTP 状态码（100-599），命中时触发同账号重试。留空使用默认值（{default}）。',
       customErrorCodes: '自定义错误码',
       customErrorCodesHint: '仅对选中的错误码停止调度',
-      customErrorCodesWarning: '仅选中的错误码会停止调度，其他错误将返回 500。',
+      customErrorCodesWarning:
+        '自定义错误码仅用于筛选常规的账号错误处理（如停止调度、限流标记），不决定请求是否重试或切换账号。未选中的错误仍可能触发重试或切换账号，最终返回给客户端的状态码取决于网关路径和错误透传规则，并非统一返回 500。列表为空时不做筛选。',
       customErrorCodes429Warning:
         '429 已有内置的限流处理机制。添加到自定义错误码后，将直接停止调度而非临时限流。确定要添加吗？',
       customErrorCodes529Warning:

@@ -63,9 +63,13 @@
               <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.payAmount') }}</span>
               <span class="font-bold text-primary-600 dark:text-primary-400">{{ formatGatewayAmount(order.pay_amount) }}</span>
             </div>
-            <div v-if="hasAmountFields(order) && order.amount !== order.pay_amount" class="flex justify-between">
+            <div v-if="hasAmountFields(order) && (order.amount !== order.pay_amount || (order.bonus_amount || 0) > 0)" class="flex justify-between">
               <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.creditedAmount') }}</span>
               <span class="font-medium text-gray-900 dark:text-white">{{ formatOrderAmount(order.amount, order.order_type) }}</span>
+            </div>
+            <div v-if="hasAmountFields(order) && order.order_type === 'balance' && (order.bonus_amount || 0) > 0" class="flex justify-between text-green-600 dark:text-green-400">
+              <span>{{ t('payment.orders.bonusAmount') }}</span>
+              <span>{{ formatOrderAmount(order.bonus_amount!, order.order_type) }}</span>
             </div>
             <div v-if="hasPaymentType(order)" class="flex justify-between">
               <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.paymentMethod') }}</span>

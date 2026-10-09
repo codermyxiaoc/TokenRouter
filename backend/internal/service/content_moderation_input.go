@@ -106,6 +106,15 @@ func ExtractContentModerationInput(protocol string, body []byte) ContentModerati
 	}
 	builder := newContentModerationInputBuilder()
 	switch protocol {
+	case ContentModerationProtocolSystemOne:
+		// 原生结构化请求的扩展字段和对象键也可能包含用户文本，统一保留审核。
+		gjson.ParseBytes(body).ForEach(func(key, value gjson.Result) bool {
+			if key.String() != "model" && key.String() != "stream" {
+				builder.addText(ContentModerationSourceUser, key.String())
+				collectSystemOneModerationText(value, builder)
+			}
+			return true
+		})
 	case ContentModerationProtocolAnthropicMessages:
 		collectAnthropicCurrentTurn(gjson.GetBytes(body, "messages"), builder)
 	case ContentModerationProtocolOpenAIChat:
@@ -123,6 +132,23 @@ func ExtractContentModerationInput(protocol string, body []byte) ContentModerati
 		collectGeminiCurrentTurn(gjson.GetBytes(body, "contents"), builder)
 	}
 	return builder.build()
+}
+
+// 解析字符串转义并遍历对象键值，防止把 JSON 转义文本当作不可识别的原始字符串。
+func collectSystemOneModerationText(value gjson.Result, builder *contentModerationInputBuilder) {
+	if value.IsObject() || value.IsArray() {
+		value.ForEach(func(key, child gjson.Result) bool {
+			if key.Type == gjson.String {
+				builder.addText(ContentModerationSourceUser, key.String())
+			}
+			collectSystemOneModerationText(child, builder)
+			return true
+		})
+		return
+	}
+	if value.Type == gjson.String {
+		builder.addText(ContentModerationSourceUser, value.String())
+	}
 }
 
 type contentModerationInputBuilder struct {

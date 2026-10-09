@@ -950,10 +950,10 @@ func TestRelay_PreservesFirstMessageType(t *testing.T) {
 	require.Equal(t, firstPayload, upstreamWrites[0].payload)
 }
 
-func TestRelay_UsageParseFailureDoesNotBlockRelay(t *testing.T) {
+func TestRelay_UsageParseFailureRejectsSuccess(t *testing.T) {
 	baseline := SnapshotMetrics().UsageParseFailureTotal
 
-	// 上游发送无效 JSON（非 usage 格式），不应影响透传
+	// 上游计量无效时不能转发成功终态或触发成功结算。
 	clientConn := newPassthroughTestFrameConn(nil, false)
 	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{
 		{
@@ -967,14 +967,14 @@ func TestRelay_UsageParseFailureDoesNotBlockRelay(t *testing.T) {
 	defer cancel()
 
 	result, relayExit := Relay(ctx, clientConn, upstreamConn, firstPayload, RelayOptions{})
-	require.Nil(t, relayExit)
-	// usage 解析失败，值为 0 但不影响透传
+	require.NotNil(t, relayExit)
+	require.Equal(t, "upstream_usage", relayExit.Stage)
 	require.Equal(t, 0, result.Usage.InputTokens)
-	require.Equal(t, "response.completed", result.TerminalEventType)
+	require.Empty(t, result.TerminalEventType)
 
-	// 帧仍然被转发
+	// 畸形完成帧不能作为成功交付。
 	clientWrites := clientConn.Writes()
-	require.Len(t, clientWrites, 1)
+	require.Empty(t, clientWrites)
 	require.GreaterOrEqual(t, SnapshotMetrics().UsageParseFailureTotal, baseline+1)
 }
 

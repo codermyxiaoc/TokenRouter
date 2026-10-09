@@ -18,6 +18,9 @@ export type Platform =
   | 'minimax'
   | 'opencode_go'
   | 'video'
+  | 'typesafe'
+  | 'cline'
+  | 'command_code'
 
 // ── Badge (bg + text + border, for inline badges with border) ───────
 const BADGE: Record<Platform, string> = {
@@ -32,6 +35,9 @@ const BADGE: Record<Platform, string> = {
   deepseek: 'bg-teal-500/10 text-teal-600 border-teal-500/30 dark:text-teal-400',
   minimax: 'bg-rose-500/10 text-rose-600 border-rose-500/30 dark:text-rose-400',
   opencode_go: 'bg-amber-500/10 text-amber-700 border-amber-500/30 dark:text-amber-300',
+  typesafe: 'bg-sky-500/10 text-sky-700 border-sky-500/30 dark:text-sky-300',
+  cline: 'bg-lime-500/10 text-lime-700 border-lime-500/30 dark:text-lime-300',
+  command_code: 'bg-slate-500/10 text-slate-700 border-slate-500/30 dark:text-slate-300',
   video: 'bg-violet-500/10 text-violet-700 border-violet-500/30 dark:text-violet-300',
 }
 const BADGE_DEFAULT = 'bg-slate-500/10 text-slate-600 border-slate-500/30 dark:text-slate-400'
@@ -49,6 +55,9 @@ const BADGE_LIGHT: Record<Platform, string> = {
   deepseek: 'bg-teal-500/10 text-teal-600 dark:bg-teal-500/10 dark:text-teal-300',
   minimax: 'bg-rose-500/10 text-rose-600 dark:bg-rose-500/10 dark:text-rose-300',
   opencode_go: 'bg-amber-500/10 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300',
+  typesafe: 'bg-sky-500/10 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300',
+  cline: 'bg-lime-500/10 text-lime-700 dark:bg-lime-500/10 dark:text-lime-300',
+  command_code: 'bg-slate-500/10 text-slate-700 dark:bg-slate-500/10 dark:text-slate-300',
   video: 'bg-violet-500/10 text-violet-700 dark:bg-violet-500/10 dark:text-violet-300',
 }
 
@@ -65,6 +74,9 @@ const BORDER: Record<Platform, string> = {
   deepseek: 'border-teal-500/20 dark:border-teal-500/20',
   minimax: 'border-rose-500/20 dark:border-rose-500/20',
   opencode_go: 'border-amber-500/20 dark:border-amber-500/20',
+  typesafe: 'border-sky-500/20 dark:border-sky-500/20',
+  cline: 'border-lime-500/20 dark:border-lime-500/20',
+  command_code: 'border-slate-500/20 dark:border-slate-500/20',
   video: 'border-violet-500/20 dark:border-violet-500/20',
 }
 const BORDER_DEFAULT = 'border-gray-200 dark:border-dark-700'
@@ -82,6 +94,9 @@ const ACCENT_BAR: Record<Platform, string> = {
   deepseek: 'bg-gradient-to-r from-teal-400 to-teal-500',
   minimax: 'bg-gradient-to-r from-rose-400 to-rose-500',
   opencode_go: 'bg-gradient-to-r from-amber-400 to-amber-500',
+  typesafe: 'bg-gradient-to-r from-sky-400 to-sky-500',
+  cline: 'bg-gradient-to-r from-lime-400 to-lime-500',
+  command_code: 'bg-gradient-to-r from-slate-400 to-slate-500',
   video: 'bg-gradient-to-r from-violet-400 to-violet-500',
 }
 const ACCENT_BAR_DEFAULT = 'bg-gradient-to-r from-primary-400 to-primary-500'
@@ -99,6 +114,9 @@ const TEXT: Record<Platform, string> = {
   deepseek: 'text-teal-600 dark:text-teal-400',
   minimax: 'text-rose-600 dark:text-rose-400',
   opencode_go: 'text-amber-700 dark:text-amber-300',
+  typesafe: 'text-sky-700 dark:text-sky-300',
+  cline: 'text-lime-700 dark:text-lime-300',
+  command_code: 'text-slate-700 dark:text-slate-300',
   video: 'text-violet-700 dark:text-violet-300',
 }
 const TEXT_DEFAULT = 'text-primary-600 dark:text-primary-400'
@@ -116,6 +134,9 @@ const ICON: Record<Platform, string> = {
   deepseek: 'text-teal-500 dark:text-teal-400',
   minimax: 'text-rose-500 dark:text-rose-400',
   opencode_go: 'text-amber-500 dark:text-amber-300',
+  typesafe: 'text-sky-500 dark:text-sky-300',
+  cline: 'text-lime-500 dark:text-lime-300',
+  command_code: 'text-slate-500 dark:text-slate-300',
   video: 'text-violet-500 dark:text-violet-300',
 }
 const ICON_DEFAULT = 'text-primary-500 dark:text-primary-400'
@@ -133,6 +154,9 @@ const BUTTON: Record<Platform, string> = {
   deepseek: 'bg-teal-500 text-white hover:bg-teal-600 active:bg-teal-700 dark:bg-teal-500/80 dark:hover:bg-teal-500',
   minimax: 'bg-rose-500 text-white hover:bg-rose-600 active:bg-rose-700 dark:bg-rose-500/80 dark:hover:bg-rose-500',
   opencode_go: 'bg-amber-500 text-white hover:bg-amber-600 active:bg-amber-700 dark:bg-amber-500/80 dark:hover:bg-amber-500',
+  typesafe: 'bg-sky-500 text-white hover:bg-sky-600 active:bg-sky-700 dark:bg-sky-500/80 dark:hover:bg-sky-500',
+  cline: 'bg-lime-500 text-white hover:bg-lime-600 active:bg-lime-700 dark:bg-lime-500/80 dark:hover:bg-lime-500',
+  command_code: 'bg-slate-500 text-white hover:bg-slate-600 active:bg-slate-700 dark:bg-slate-500/80 dark:hover:bg-slate-500',
   video: 'bg-violet-500 text-white hover:bg-violet-600 active:bg-violet-700 dark:bg-violet-500/80 dark:hover:bg-violet-500',
 }
 const BUTTON_DEFAULT = 'bg-primary-500 text-white hover:bg-primary-600 dark:bg-primary-600 dark:hover:bg-primary-500'
@@ -150,6 +174,9 @@ const DISCOUNT: Record<Platform, string> = {
   deepseek: 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300',
   minimax: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
   opencode_go: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+  typesafe: 'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300',
+  cline: 'bg-lime-100 text-lime-800 dark:bg-lime-900/40 dark:text-lime-300',
+  command_code: 'bg-slate-100 text-slate-800 dark:bg-slate-900/40 dark:text-slate-300',
   video: 'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300',
 }
 const DISCOUNT_DEFAULT = 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
@@ -167,6 +194,9 @@ const GRADIENT: Record<Platform, string> = {
   deepseek: 'from-teal-500 to-teal-600',
   minimax: 'from-rose-500 to-rose-600',
   opencode_go: 'from-amber-500 to-amber-600',
+  typesafe: 'from-sky-500 to-sky-600',
+  cline: 'from-lime-500 to-lime-600',
+  command_code: 'from-slate-500 to-slate-600',
   video: 'from-violet-500 to-violet-600',
 }
 const GRADIENT_DEFAULT = 'from-primary-500 to-primary-600'
@@ -184,6 +214,9 @@ const GRADIENT_TEXT: Record<Platform, string> = {
   deepseek: 'text-teal-100',
   minimax: 'text-rose-100',
   opencode_go: 'text-amber-100',
+  typesafe: 'text-sky-100',
+  cline: 'text-lime-100',
+  command_code: 'text-slate-100',
   video: 'text-violet-100',
 }
 const GRADIENT_TEXT_DEFAULT = 'text-primary-100'
@@ -200,6 +233,9 @@ const GRADIENT_SUBTEXT: Record<Platform, string> = {
   deepseek: 'text-teal-200',
   minimax: 'text-rose-200',
   opencode_go: 'text-amber-200',
+  typesafe: 'text-sky-200',
+  cline: 'text-lime-200',
+  command_code: 'text-slate-200',
   video: 'text-violet-200',
 }
 const GRADIENT_SUBTEXT_DEFAULT = 'text-primary-200'
@@ -219,7 +255,7 @@ function isPlatform(p: string): p is Platform {
     p === 'deepseek' ||
     p === 'minimax' ||
     p === 'opencode_go' ||
-    p === 'video'
+    p === 'video' || p === 'typesafe' || p === 'cline' || p === 'command_code'
   )
 }
 
@@ -281,6 +317,9 @@ export function platformLabel(p: string): string {
     case 'minimax': return 'MiniMax'
     case 'opencode_go': return 'OpenCode'
     case 'video': return 'Video'
+    case 'typesafe': return 'TypeSafe'
+    case 'cline': return 'Cline'
+    case 'command_code': return 'Command Code'
     default: return p || 'API'
   }
 }

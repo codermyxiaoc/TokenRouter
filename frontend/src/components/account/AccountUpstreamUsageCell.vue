@@ -35,8 +35,8 @@
           class="min-w-0 break-words pl-9 text-[9px] leading-tight text-gray-400 dark:text-gray-500"
           :title="limitAmountTitle(limit)"
         >
-          {{ formatAmount(limit.remaining, normalizedUsage?.unit) }} /
-          {{ formatAmount(limit.limit, normalizedUsage?.unit) }}
+          {{ formatAmount(limit.remaining, limit.unit) }} /
+          {{ formatAmount(limit.limit, limit.unit) }}
         </div>
       </div>
       <div v-if="subscriptionLabel || subscriptionExpiry" data-testid="upstream-subscription-row" class="flex flex-wrap items-center justify-end gap-1 text-[10px] text-gray-500 dark:text-gray-400 md:justify-start">
@@ -154,15 +154,15 @@ const formatExactNumber = (value: number | null | undefined) => {
 
 const formatAmount = (value: number | null | undefined, unit?: string) => {
   if (value == null) return '-'
-  // GO 用量接口以 PERCENT 表示窗口占比，界面展示常用百分号。
-  const suffix = props.account.platform === 'opencode_go' && unit === 'PERCENT' ? '%' : unit ? ` ${unit}` : ''
+  // 原生窗口可使用 PERCENT，独立于钱包金额单位。
+  const suffix = unit === 'PERCENT' ? '%' : unit ? ` ${unit}` : ''
   return `${formatNumber(value)}${suffix}`
 }
 
 const formatExactAmount = (value: number | null | undefined, unit?: string) => {
   if (value == null) return '-'
-  // GO 用量接口以 PERCENT 表示窗口占比，界面展示常用百分号。
-  const suffix = props.account.platform === 'opencode_go' && unit === 'PERCENT' ? '%' : unit ? ` ${unit}` : ''
+  // 原生窗口可使用 PERCENT，独立于钱包金额单位。
+  const suffix = unit === 'PERCENT' ? '%' : unit ? ` ${unit}` : ''
   return `${formatExactNumber(value)}${suffix}`
 }
 
@@ -209,6 +209,9 @@ const limitDisplayName = (name: string) => {
   return name
 }
 
+const walletKindLabel = (kind?: string) => kind && ['monthly', 'purchased', 'free'].includes(kind)
+  ? `${t(`admin.accounts.upstreamUsage.walletKinds.${kind}`)} ` : ''
+
 const balanceEntries = computed(() => normalizedUsage.value?.balances ?? [])
 
 const balanceLabel = computed(() => {
@@ -216,7 +219,7 @@ const balanceLabel = computed(() => {
   if (!usage) return ''
   if (balanceEntries.value.length > 0) {
     return balanceEntries.value
-      .map(entry => `${entry.currency} ${formatNumber(entry.remaining, false)}`)
+      .map(entry => `${walletKindLabel(entry.kind)}${entry.currency} ${formatNumber(entry.remaining, false)}`)
       .join(' · ')
   }
   if (!usage.balance) return ''
@@ -230,7 +233,7 @@ const balanceLabel = computed(() => {
 const balanceTitle = computed(() => {
   if (balanceEntries.value.length > 0) {
     return balanceEntries.value
-      .map(entry => `${entry.currency} ${formatExactNumber(entry.remaining)}`)
+      .map(entry => `${walletKindLabel(entry.kind)}${entry.currency} ${formatExactNumber(entry.remaining)}`)
       .join(' · ')
   }
   const balance = normalizedUsage.value?.balance
@@ -248,6 +251,7 @@ const allLimits = computed(() => {
 
 const visibleLimits = computed(() => allLimits.value.map(limit => ({
   name: limitDisplayName(limit.name),
+  unit: limit.unit ?? normalizedUsage.value?.unit,
   used: limit.used,
   limit: limit.limit,
   remaining: limit.remaining,
@@ -278,8 +282,8 @@ const subscriptionRemainingLabel = computed(() => {
   })
 })
 
-const limitAmountTitle = (limit: Pick<UpstreamUsageLimit, 'remaining' | 'limit'>) => {
-  const unit = normalizedUsage.value?.unit
+const limitAmountTitle = (limit: Pick<UpstreamUsageLimit, 'remaining' | 'limit' | 'unit'>) => {
+  const unit = limit.unit ?? normalizedUsage.value?.unit
   return t('admin.accounts.upstreamUsage.limitTooltip', {
     remaining: formatExactAmount(limit.remaining, unit),
     limit: formatExactAmount(limit.limit, unit)

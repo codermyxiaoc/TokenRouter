@@ -218,6 +218,27 @@ func (_u *PaymentOrderUpdate) AddFeeAmount(v float64) *PaymentOrderUpdate {
 	return _u
 }
 
+// SetBonusAmount sets the "bonus_amount" field.
+func (_u *PaymentOrderUpdate) SetBonusAmount(v float64) *PaymentOrderUpdate {
+	_u.mutation.ResetBonusAmount()
+	_u.mutation.SetBonusAmount(v)
+	return _u
+}
+
+// SetNillableBonusAmount sets the "bonus_amount" field if the given value is not nil.
+func (_u *PaymentOrderUpdate) SetNillableBonusAmount(v *float64) *PaymentOrderUpdate {
+	if v != nil {
+		_u.SetBonusAmount(*v)
+	}
+	return _u
+}
+
+// AddBonusAmount adds value to the "bonus_amount" field.
+func (_u *PaymentOrderUpdate) AddBonusAmount(v float64) *PaymentOrderUpdate {
+	_u.mutation.AddBonusAmount(v)
+	return _u
+}
+
 // SetRechargeCode sets the "recharge_code" field.
 func (_u *PaymentOrderUpdate) SetRechargeCode(v string) *PaymentOrderUpdate {
 	_u.mutation.SetRechargeCode(v)
@@ -1056,6 +1077,12 @@ func (_u *PaymentOrderUpdate) sqlSave(ctx context.Context) (_node int, err error
 	if value, ok := _u.mutation.AddedFeeAmount(); ok {
 		_spec.AddField(paymentorder.FieldFeeAmount, field.TypeFloat64, value)
 	}
+	if value, ok := _u.mutation.BonusAmount(); ok {
+		_spec.SetField(paymentorder.FieldBonusAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedBonusAmount(); ok {
+		_spec.AddField(paymentorder.FieldBonusAmount, field.TypeFloat64, value)
+	}
 	if value, ok := _u.mutation.RechargeCode(); ok {
 		_spec.SetField(paymentorder.FieldRechargeCode, field.TypeString, value)
 	}
@@ -1476,6 +1503,27 @@ func (_u *PaymentOrderUpdateOne) SetNillableFeeAmount(v *float64) *PaymentOrderU
 // AddFeeAmount adds value to the "fee_amount" field.
 func (_u *PaymentOrderUpdateOne) AddFeeAmount(v float64) *PaymentOrderUpdateOne {
 	_u.mutation.AddFeeAmount(v)
+	return _u
+}
+
+// SetBonusAmount sets the "bonus_amount" field.
+func (_u *PaymentOrderUpdateOne) SetBonusAmount(v float64) *PaymentOrderUpdateOne {
+	_u.mutation.ResetBonusAmount()
+	_u.mutation.SetBonusAmount(v)
+	return _u
+}
+
+// SetNillableBonusAmount sets the "bonus_amount" field if the given value is not nil.
+func (_u *PaymentOrderUpdateOne) SetNillableBonusAmount(v *float64) *PaymentOrderUpdateOne {
+	if v != nil {
+		_u.SetBonusAmount(*v)
+	}
+	return _u
+}
+
+// AddBonusAmount adds value to the "bonus_amount" field.
+func (_u *PaymentOrderUpdateOne) AddBonusAmount(v float64) *PaymentOrderUpdateOne {
+	_u.mutation.AddBonusAmount(v)
 	return _u
 }
 
@@ -2346,6 +2394,12 @@ func (_u *PaymentOrderUpdateOne) sqlSave(ctx context.Context) (_node *PaymentOrd
 	}
 	if value, ok := _u.mutation.AddedFeeAmount(); ok {
 		_spec.AddField(paymentorder.FieldFeeAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.BonusAmount(); ok {
+		_spec.SetField(paymentorder.FieldBonusAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedBonusAmount(); ok {
+		_spec.AddField(paymentorder.FieldBonusAmount, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.RechargeCode(); ok {
 		_spec.SetField(paymentorder.FieldRechargeCode, field.TypeString, value)

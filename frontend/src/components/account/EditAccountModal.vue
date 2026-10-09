@@ -300,6 +300,7 @@
         </div>
 
         <VideoAccountFields v-if="account.platform === 'video'" v-model="videoAccountForm" />
+        <AdditionalProviderFields v-if="isAdditionalAPIKeyPlatform(account.platform)" v-model="additionalProvider" :platform="account.platform" />
 
         <!-- Model Restriction Section (不适用于 Antigravity) -->
         <div v-if="account.platform !== 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
@@ -2957,6 +2958,8 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
+import AdditionalProviderFields from '@/components/account/AdditionalProviderFields.vue'
+import { isAdditionalAPIKeyPlatform, additionalProviderBaseUrl, additionalProviderForm, applyAdditionalProviderCredentials } from '@/components/account/credentialsBuilder'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
@@ -3052,7 +3055,7 @@ const handleOllamaCloudUsageUpdated = (state: OllamaCloudUsageState) => {
 // Platform-specific hint for Base URL
 const baseUrlHint = computed(() => {
   if (!props.account) return t('admin.accounts.baseUrlHint')
-  if (props.account.platform === 'video') return ''
+  if (props.account.platform === 'video' || isAdditionalAPIKeyPlatform(props.account.platform)) return ''
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini' && geminiProviderType.value === 'third_party') {
     return t('admin.accounts.gemini.providerType.thirdPartyBaseUrlHint')
@@ -3132,7 +3135,7 @@ function currentOpenCodeOrCNMode(): CnAccountMode | OpenCodeAccountMode {
 }
 // 以当前编辑的模式判断原生适配器，不能把 Zen 或普通按量模式误归为套餐查询。
 const usesAutomaticUpstreamUsageAdapter = computed(() => !!props.account && nativeUpstreamUsageAdapter({
-  type: 'apikey', platform: props.account.platform, credentials: { account_mode: currentOpenCodeOrCNMode() }, extra: {},
+  type: 'apikey', platform: props.account.platform, credentials: { account_mode: currentOpenCodeOrCNMode(), base_url: editBaseUrl.value }, extra: {},
 }) !== null)
 // 智谱团队版 Coding Plan 的组织/项目 ID，清空后随完整凭据更新一并移除。
 const editZhipuOrganization = ref('')
@@ -3724,8 +3727,10 @@ const tempUnschedPresets = computed(() => [
 
 // Computed: default base URL based on platform
 const videoAccountForm = ref(createVideoAccountForm())
+const additionalProvider = ref(additionalProviderForm())
 
 const defaultBaseUrl = computed(() => {
+  if (isAdditionalAPIKeyPlatform(props.account?.platform || '')) return additionalProviderBaseUrl(props.account!.platform)
   if (props.account?.platform === 'video') return ''
   if (props.account?.platform === 'openai') return 'https://api.openai.com'
   if (props.account?.platform === 'gemini') return 'https://generativelanguage.googleapis.com'
@@ -4172,6 +4177,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   if (newAccount.type === 'apikey' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     videoAccountForm.value = createVideoAccountForm(credentials)
+    additionalProvider.value = additionalProviderForm(credentials)
     // 国产供应商：读取 account_mode 与 api_protocol 作为可编辑初始值
     // （编辑弹窗允许修正两者，用于修复早期存错默认值的账号）。
     if (newAccount.platform === 'kimi' || newAccount.platform === 'zhipu' || newAccount.platform === 'deepseek' || newAccount.platform === 'minimax' || newAccount.platform === 'opencode_go') {
@@ -4248,7 +4254,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
               : 'https://api.anthropic.com'
     editBaseUrl.value = isCNApiKeyAccount.value && editApiProtocol.value === 'adaptive'
       ? editAdaptiveBaseUrls.value.chat_completions
-      : (credentials.base_url as string) || platformDefaultUrl
+      : (credentials.base_url as string) || additionalProviderBaseUrl(newAccount.platform) || platformDefaultUrl
 
     // 统一从 model_mapping 恢复白名单与映射两个视图，避免配置映射后把白名单误判为空。
     const existingMappings = credentials.model_mapping as Record<string, string> | undefined
@@ -4632,7 +4638,7 @@ const applyTempUnschedConfig = (credentials: Record<string, unknown>) => {
 function supportsAccountSchedulingThresholdOverridePlatform(
   platform: Account['platform'] | undefined
 ) {
-  return platform === 'openai' || platform === 'anthropic' || platform === 'grok'
+  return platform === 'openai' || platform === 'anthropic' || platform === 'grok' || platform === 'command_code'
 }
 
 function normalizeAccountSchedulingThresholdOverride(value: unknown): number | null {
@@ -5055,6 +5061,7 @@ const handleSubmit = async () => {
       }
 
       // 处理 API Key。
+      applyAdditionalProviderCredentials(newCredentials, props.account.platform, additionalProvider.value)
       // 后端响应已脱敏：currentCredentials 不会再包含 api_key 原文。
       // 用户填入新值则覆盖；留空时优先看 credentials_status.has_api_key；
       // 若后端尚未升级（无 credentials_status），回退读旧结构 currentCredentials.api_key。

@@ -41,6 +41,8 @@ API Key 和 OAuth/Setup Token 使用 Anthropic HTTP 路径；Bedrock 走独立�
 
 Anthropic 转 Chat 的普通桥和国产供应商原生桥在实际收到上游 usage 时发送一次末尾用量块，不因客户端省略或关闭 `stream_options.include_usage` 丢弃该事实；显式零用量仍发送，缺失或 `null` 不合成用量。OpenCode 专用响应处理和其它平台保留各自协议契约。Chat/Responses 流的外发用量与内部计费共用归一化缓存桶：权威 `prompt_tokens` 或命中/未命中字段可拆出未缓存输入；只有较晚的缓存桶而无权威总量时，不推测扣减原 `input_tokens`。重复累计用量事件不重复累加，供应商速度字段与客户端断连后的既有排水计费保持原语义。
 
+Anthropic 转 Chat 的普通桥仅把实际收到的上游 `ping` 转为 SSE 注释 `: ping` 并刷新，不凭空生成业务分块，也不计入首个正文延迟。该兼容不新增 Antigravity 首内容之前的定时心跳，不改变其它桥的流开始及故障转移边界。
+
 Responses 请求转换为 Anthropic Messages 时，只发送 Anthropic 入站协议可识别的内容块。OpenAI `reasoning`、`reasoning_text`、未知专有分片、空内容消息和纯空白文本块会被过滤；空白文本与合法图片并存时仅删除坏文本，保留图片。`function_call` / `function_call_output` 仍按调用 ID 转为相邻的 `tool_use` / `tool_result`，过滤过程不能破坏工具配对、角色交替或历史顺序。
 
 Responses 工具参数转换为 Anthropic `input_schema` 时，会把根节点的 `oneOf`、`anyOf`、`allOf` 归一为单一 object，避免上游拒绝顶层联合。对象分支的属性合并保留；`oneOf`/`anyOf` 的必填字段取分支交集，`allOf` 和原根节点的必填字段取并集。同名属性的备选约束使用嵌套 `anyOf`，必须同时满足的根约束或 `allOf` 分支使用嵌套 `allOf`；本就位于属性内部的 schema 联合保持原有结构。该步骤是目标协议的兼容归一化，不承诺完整保留根 `oneOf` 的互斥性或所有跨属性分支约束；原生 Anthropic 请求不经过此转换。
@@ -66,6 +68,10 @@ Anthropic 请求策略包括：
 ### 缓存断点与消息级输出配置
 
 OAuth 请求保留客户端 system 中的 cache_control 与 TTL；Messages 和 CountTokens 都在最终出站前执行最多四个缓存块的兜底，超限依次移除 tools、messages，最后才移除 system 断点。原有消息缓存重写、TTL 注入和价格口径继续按设置生效。
+
+缓存数量收敛后还按 tools、system、messages 的真实顺序校验 TTL：最后一个 1h 断点之前的 5m 或缺省断点提升为 1h，避免伪装自动添加的短断点使用户合法请求变成上游 400；原本合法的顺序保持不变。
+
+Claude Code 伪装 Messages 仅额外保留客户端显式请求的 structured outputs、mid-conversation-tool-changes 和 inline-tools 三个兼容 beta，仍经过现有禁用集合与模型级过滤。不能把此规则理解为转发任意 beta，也不扩张 Vertex/Bedrock 的白名单。
 
 Claude Code 伪装链路补充中途 output_config 对应 beta；最终过滤后的 beta 与 messages[].output_config 必须一致。上游不允许该 beta 时删除消息级配置，配置移除后完全空的 system 控制消息可删除，其它正文和未知块保留。顶层 output_config.effort、原 Fast/Fallback 规则以及 Bedrock/Vertex beta 白名单保持原有边界。
 

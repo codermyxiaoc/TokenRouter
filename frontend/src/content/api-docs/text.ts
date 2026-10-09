@@ -1,9 +1,9 @@
 import type { ApiDocEndpoint, ApiDocParameter } from './types'
 
 // 平台范围来自公开网关的实际分派；是否可调用仍取决于当前 Key 的分组与账号能力。
-const textPlatforms = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'qoder', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go']
-const countPlatforms = ['anthropic', 'openai', 'gemini', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go']
-const responsesCountPlatforms = ['openai', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go']
+const textPlatforms = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'qoder', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'cline', 'command_code']
+const countPlatforms = ['anthropic', 'openai', 'gemini', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'cline', 'command_code']
+const responsesCountPlatforms = ['openai', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'cline', 'command_code']
 const modelParameter: ApiDocParameter = { name: 'model', type: 'string', required: true, description: 'Body · 当前 Key 可请求的模型 ID。请以模型目录为准；示例型号不代表本站一定已开通。' }
 const messagesParameters: ApiDocParameter[] = [
   modelParameter,
@@ -227,17 +227,17 @@ export const textEndpoints: ApiDocEndpoint[] = [
     errors: [{ status: 404, code: 'model_not_found', description: '模型不存在或当前 Key 不可见。' }]
   },
   {
-    id: 'opencode-systemone', category: 'tools', title: 'OpenCode Jev System One', summary: 'OpenCode Zen Jev 的同步结构化决策接口，使用 state 和 questions，保持原生结果。',
-    platforms: ['opencode_go'], method: 'POST', path: '/v1/systemone', aliases: ['/systemone'], auth: 'bearer', contentType: 'application/json',
+    id: 'opencode-systemone', category: 'tools', title: 'TypeSafe / Jev System One', summary: 'TypeSafe 或 OpenCode Zen Jev 的同步结构化决策接口，使用 state 和 questions，保持原生结果。',
+    platforms: ['opencode_go', 'typesafe'], method: 'POST', path: '/v1/systemone', aliases: ['/systemone'], auth: 'bearer', contentType: 'application/json',
     parameters: [
-      { name: 'model', type: 'string', required: true, description: 'Body · 仅 jev-1.13 或 jev-1.13-free，且需要 OpenCode Zen 账号；GO 账号不支持。' },
+      { name: 'model', type: 'string', required: true, description: 'Body · TypeSafe 分组使用 jev-latest；OpenCode Zen 分组使用 jev-1.13 或 jev-1.13-free；GO 账号不支持。' },
       { name: 'state', type: 'JSON 值', required: true, description: 'Body · 必须提供待判断的状态内容，具体数据结构遵循 System One 上游规范。' },
-      { name: 'questions', type: 'object', required: true, description: 'Body · 非空问题对象，键为问题 ID，每项的 type / instructions 等字段交由上游校验。' },
+      { name: 'questions', type: 'object', required: true, description: 'Body · 非空问题对象，键为问题 ID；type 支持 noul、choice、score；choice 的 criteria 为对象，score 为非空档位数组。重复键、大小写混淆与非法结构会在请求前拒绝。' },
       { name: 'stream', type: 'boolean', required: false, description: 'Body · 只允许 false 或省略；不支持流式。' }
     ], requestExample: JSON.stringify({ model: 'jev-1.13', state: 'classify', questions: { is_urgent: { type: 'noul', instructions: 'Is this urgent?' } } }, null, 2),
     responseExample: JSON.stringify({ model: 'jev-1.13', answers: { is_urgent: { type: 'noul', value: false } }, usage: { input_tokens: 12, output_tokens: 1 } }, null, 2),
     notes: ['问题示例用于展示结构，完整问题类型由上游校验。不能把 Messages / Chat / Responses 请求体直接发送到这里。', '不支持图片、音频、视频；网关依据真实 usage 记录计费，并按账号规则派生缓存会话头。'],
-    errors: [{ status: 400, code: 'invalid_request_error', description: '模型、state、questions 不合法，或 stream=true。' }, { status: 404, code: 'not_found_error', description: '当前分组不是 OpenCode 或没有可用的 Zen System One 能力。' }]
+    errors: [{ status: 400, code: 'invalid_request_error', description: '模型、state、questions 不合法，或 stream=true。' }, { status: 404, code: 'not_found_error', description: '当前分组不是 TypeSafe / OpenCode，或没有可用的 System One 账号。' }]
   },
   {
     id: 'alpha-search', category: 'tools', title: 'Codex Alpha Search', summary: 'OpenAI / Codex Responses Lite 使用的独立搜索接口，不是普通 Chat 或 Responses 请求体。',

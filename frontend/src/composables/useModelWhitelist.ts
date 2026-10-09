@@ -295,8 +295,14 @@ const perplexityModels = [
   'llama-3-sonar-small-32k-chat', 'llama-3-sonar-large-32k-chat'
 ]
 
+// 新平台的已登记基线；实际账号目录仍可通过模型同步扩充。
+const typesafeModels = ['jev-latest']
+const clineModels = ['deepseek/deepseek-v4-flash', 'cline-pass/glm-5.3-flash']
+
 // 所有模型（去重）
 const allModelsList: string[] = Array.from(new Set([
+  ...typesafeModels,
+  ...clineModels,
   ...openaiModels,
   ...claudeModels,
   ...geminiModels,
@@ -551,6 +557,9 @@ export function getModelsByPlatform(platform: string, qoderSite?: QoderSite): st
     case 'moonshot':
     case 'kimi': return moonshotModels
     case 'video': return [] // 视频模型由账号显式配置，不回退到文本模型目录。
+    case 'typesafe': return typesafeModels
+    case 'cline': return clineModels
+    case 'command_code': return ['deepseek/deepseek-v4-flash']
     case 'opencode_go': return [...OPENCODE_MODELS]
     case 'doubao': return doubaoModels
     case 'minimax': return MINIMAX_MODELS
@@ -564,7 +573,7 @@ export function getModelsByPlatform(platform: string, qoderSite?: QoderSite): st
 
 // 按平台获取预设映射
 export function getPresetMappingsByPlatform(platform: string, qoderSite?: QoderSite) {
-  if (platform === 'video') return [] // 视频映射由管理员显式填写，不提供文本模型预设。
+  if (['video', 'typesafe', 'cline', 'command_code'].includes(platform)) return [] // 独立协议和动态目录平台由管理员显式填写映射，不套用其他平台预设。
   if (platform === 'openai') return openaiPresetMappings
   if (platform === 'gemini') return geminiPresetMappings
   if (platform === 'grok' || platform === 'xai') return grokPresetMappings

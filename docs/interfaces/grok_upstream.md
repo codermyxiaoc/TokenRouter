@@ -31,12 +31,18 @@ Grok 分组支持 Anthropic Messages、OpenAI Responses 和 Chat Completions，�
 
 Grok Responses 上游可能注入严格客户端不认识的 `event: ping` 帧。流式转发会把 data 未声明冲突事件类型的 ping 改写为 `: ping` SSE 注释，既保留连接活性，也避免中断 Grok CLI 或 Codex CLI；普通事件、未知字段帧和终止用量事件保持原样进入公共流处理链路。
 
+标准 Grok Responses 流若仅有前导和完全不含输出、用量、错误的成功终态，按静默拒绝触发输出前故障转移，不写成零用量成功记录；已有语义输出、usage 或明确错误的终态继续原有处理。
+
 Responses WebSocket 是 Grok/OpenAI 的原生传输能力，不由兼容 Responses 开关扩展到其它平台。图片和视频继续使用独立媒体资格与分组策略，不受文本协议集合直接控制。
 
 <a id="grok_account_contract"></a>
 ## 账号配置
 
 管理员可在控制台选择 OAuth 或 API Key 创建账号。OAuth 账号可通过浏览器授权、refresh token 或 SSO cookie 创建和重新授权；创建 Grok 分组并绑定账号后，用户即可生成分组 API Key。OAuth state 和 PKCE 会话优先保存在 Redis，并通过一次性消费标记阻止多实例重复兑换；Redis 写入失败时才使用进程内短期回退。SSO cookie、邮箱密码等临时输入只能用于兑换 Build OAuth token，不能写入账号凭据、响应或日志。
+
+SSO 设备同意页的隐藏 `consent_token` 在本次流程内提取并随批准请求提交，同时发送已验证 xAI 同意页的 Origin/Referer。旧版无令牌页面仍可兑换；跨域重定向继续逐跳校验，不把临时会话信息带到非受信任主机。
+
+Grok CLI 最终传输身份与账单/用量查询统一使用 `grok-pager`、`interactive`、认证响应标记和包含当前系统/架构的 pager/shell User-Agent。身份仅在精确的 CLI 代理主机写入；回退到公开 API 时清除 CLI 专用头，不改变管理员指定 Base URL。
 
 邮箱密码授权由进程配置 `gateway.grok.password_auth_enabled` 控制，默认关闭且管理端不展示入口。即使显式开启，服务也只接受密码到 SSO、再到 OAuth token 的临时转换。成功重新授权会清除 Grok 的软性消费上限重新授权标记，并以凭据快照/CAS 规则更新账号，避免旧请求覆盖新 token。
 
@@ -140,7 +146,7 @@ Grok 4.7 使用独立文本默认价：低于 200K 输入上下文时每百万�
 - `XAI_OAUTH_AUTHORIZE_URL`
 - `XAI_OAUTH_TOKEN_URL`
 - `XAI_BASE_URL`
-- `XAI_GROK_CLI_VERSION`：覆盖 Grok CLI 客户端版本；内置版本与最低允许版本均为 `0.2.114`，覆盖值必须是规范 SemVer 且不得低于该版本
+- `XAI_GROK_CLI_VERSION`：覆盖 Grok CLI 客户端版本；内置版本为 `1.0.46`、最低允许版本为 `1.0.13`；覆盖值必须是规范 SemVer 且不得低于下限，转发与账单采用同一校验
 
 进程配置 `gateway.grok` 还包含 Free OAuth 账号的本地滚动窗口软门禁：默认 24 小时、500000 token、95% 停调阈值和 60 秒统计缓存。只有明确标记为 Free 的账号参与；未知或付费层级以及数据库/统计失败均 fail-open。管理端主动额度查询和导入探测不经过该软门禁。
 

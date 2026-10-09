@@ -10,6 +10,8 @@ const platformProtocols: Partial<Record<GroupPlatform, GroupAvailabilityProbePro
   deepseek: ['chat_completions', 'responses', 'anthropic'],
   minimax: ['chat_completions', 'responses', 'anthropic'],
   opencode_go: ['chat_completions', 'responses', 'anthropic'],
+  cline: ['chat_completions'],
+  command_code: ['chat_completions', 'responses', 'anthropic'],
   zhipu: ['chat_completions', 'anthropic'],
 }
 

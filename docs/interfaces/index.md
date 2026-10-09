@@ -17,7 +17,8 @@
 - [配置边界](configuration.md)：默认值、YAML、环境变量、数据库运行时设置和首次初始化之间的边界。读取时机：新增配置项、修改加载优先级、设置页面或部署变量时读取。
 - [tf CLI 网页导入](tf_cli_web_import.md)：Keys 页、本机回环协议、会话证明、双重确认和浏览器安全头。读取时机：修改 Keys 导入入口、URL fragment、localhost fetch、CSP 或 tf-cli 协议时读取。
 - [CC Switch 导入](cc_switch_import.md)：Keys 页导入配置弹窗、全站模型搜索选择和应用/模型深链接映射。读取时机：修改 CCS 导入入口、模型选择、客户端应用或深链接参数时读取。
-- [上游账号能力矩阵](upstream_account_matrix.md)：十二个平台、七类账号和全部公开网关协议的正式支持、兼容保留与不支持边界。读取时机：新增平台/账号类型、修改创建导入校验、路由分派或能力承诺时读取。
+- [上游账号能力矩阵](upstream_account_matrix.md)：十五个平台、七类账号和全部公开网关协议的正式支持、兼容保留与不支持边界。读取时机：新增平台/账号类型、修改创建导入校验、路由分派或能力承诺时读取。
+- [TypeSafe、Cline 与 Command Code 上游](aggregator_upstreams.md)：独立 API Key 平台、SystemOne、模型协议目录、钱包隔离与冷却。读取时机：修改三个平台账号、分组、目录、用量或错误策略时读取。
 - [API Key 上游用量查询](upstream_usage.md)：API Key 账号的适配器、管理员查询接口、归一化结果和浏览器缓存边界。读取时机：修改 API Key 用量查询、适配器协议、账号用量展示或查询安全策略时读取。
 - [Anthropic 上游](anthropic_upstream.md)：OAuth、Setup Token、API Key、Bedrock 模型区域路由、Vertex，以及 Messages/OpenAI 兼容转换和缓存/限流契约。读取时机：修改 Anthropic 认证、协议、模型区域、beta、thinking、缓存或错误分类时读取。
 - [OpenAI 上游](openai_upstream.md)：OAuth/API Key、Responses、Chat、Messages、Embeddings、Images、Realtime 和 Codex 传输契约。读取时机：修改 OpenAI 认证、endpoint capability、WebSocket、模型或配额调度时读取。

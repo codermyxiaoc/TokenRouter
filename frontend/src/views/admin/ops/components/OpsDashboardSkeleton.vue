@@ -43,7 +43,7 @@ const props = withDefaults(defineProps<Props>(), {
 
         <div class="lg:col-span-7">
           <div class="grid h-full grid-cols-1 content-center gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <div v-for="i in 6" :key="i" class="h-20 animate-pulse rounded-2xl bg-gray-50 dark:bg-dark-950/30"></div>
+            <div v-for="i in 7" :key="i" class="h-20 animate-pulse rounded-2xl bg-gray-50 dark:bg-dark-950/30"></div>
           </div>
         </div>
       </div>
@@ -89,7 +89,7 @@ const props = withDefaults(defineProps<Props>(), {
       </div>
 
       <div class="mt-6 space-y-3">
-        <div v-for="i in 6" :key="i" class="flex items-center justify-between gap-4 rounded-2xl bg-gray-50 p-4 dark:bg-dark-950/30">
+        <div v-for="i in 7" :key="i" class="flex items-center justify-between gap-4 rounded-2xl bg-gray-50 p-4 dark:bg-dark-950/30">
           <div class="flex-1 space-y-2">
             <div class="h-3 w-56 animate-pulse rounded bg-gray-200 dark:bg-dark-700"></div>
             <div class="h-3 w-80 max-w-full animate-pulse rounded bg-gray-100 dark:bg-dark-700/70"></div>

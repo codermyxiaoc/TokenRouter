@@ -271,7 +271,7 @@ describe('AccountUpstreamUsageCell', () => {
       }
     })
     expect(wrapper.text()).toContain('5h|75|')
-    expect(wrapper.text()).toContain('25 PERCENT / 100 PERCENT')
+    expect(wrapper.text()).toContain('25% / 100%')
 
     await wrapper.setProps({
       account: {
@@ -387,4 +387,17 @@ describe('AccountUpstreamUsageCell', () => {
     expect(wrapper.find('button').exists()).toBe(false)
     expect(request).toHaveBeenCalledTimes(1)
   })
+  it.each(['cline', 'command_code'])('展示 %s 钱包类型和独立的百分比/金额窗口', platform => {
+    const wrapper = mountCell({ account: { ...account(), platform, credentials: {} }, result: {
+      account_id: 17, adapter: platform, observed_at: '2026-10-09T01:00:00Z', provider: platform,
+      mode: 'wallets', unit: 'USD', balances: [{ kind: 'monthly', currency: 'USD', remaining: 10 }, { kind: 'purchased', currency: 'USD', remaining: 5 }],
+      limits: [{ name: '5h', unit: 'PERCENT', used: 25, limit: 100, remaining: 75 }, { name: 'monthly', unit: 'USD', used: 15, limit: 25, remaining: 10 }]
+    } })
+    expect(wrapper.text()).toContain('walletKinds.monthly USD 10')
+    expect(wrapper.text()).toContain('walletKinds.purchased USD 5')
+    expect(wrapper.text()).toContain('75% / 100%')
+    expect(wrapper.text()).toContain('10 USD / 25 USD')
+    wrapper.unmount()
+  })
+
 })

@@ -27,6 +27,7 @@ func TestPaymentRoutesDoNotExposeAIChannels(t *testing.T) {
 		middleware.AuditLogMiddleware(passThrough),
 		nil,
 		nil,
+		nil,
 	)
 
 	registered := make(map[string]bool)

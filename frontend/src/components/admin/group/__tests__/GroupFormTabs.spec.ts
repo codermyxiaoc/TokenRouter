@@ -8,8 +8,8 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('GroupFormTabs', () => {
-  it('Video only mounts generic and pricing fields, excluding hidden text validation', async () => {
-    const wrapper = mount(GroupFormTabs, { props: { platform: 'video', idPrefix: 'video' },
+  it.each(['video', 'typesafe'])('%s only mounts generic and pricing fields, excluding hidden text validation', async platform => {
+    const wrapper = mount(GroupFormTabs, { props: { platform, idPrefix: platform },
       slots: { protocol: '<input required value="" />', platform: '<input required value="" />' } })
     expect(wrapper.find('[data-group-tab-button="protocol"]').exists()).toBe(false)
     expect(wrapper.find('[data-group-tab-button="platform"]').exists()).toBe(false)

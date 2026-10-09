@@ -14,6 +14,7 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/apicompat"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai_compat"
 	"github.com/TokenFlux/TokenRouter/internal/util/responseheaders"
@@ -35,6 +36,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	defaultMappedModel string,
 	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
 ) (*OpenAIForwardResult, error) {
+	// 内部调用同样拒绝歧义模型，不能在协议转换后掩盖不同解析器的取值差异。
+	if err := jsonutil.ValidateRoutingModel(body); err != nil {
+		return nil, err
+	}
+
 	rememberOpenCodeInboundBody(c, body)
 	// 在协议分流前统一清洗工具定义；保留原始请求副本供智能路由和会话派生使用。
 	if sanitized, changed, err := sanitizeOpenAIResponsesToolSchemasForPlatform(body, account.Platform); err != nil {
@@ -55,8 +61,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 国产供应商 Anthropic / adaptive 协议使用原生 Messages 端点，
 	// /v1/messages 请求零转换直通（仅模型名映射 + 少量 body 清洗），完整保留
 	// thinking / tool_use / cache 语义，适配 Claude Code 等原生客户端。
-	if account.IsOpenCodeGo() {
-		switch openCodeGoNativeProtocol(account, resolveOpenCodeGoMappedModel(account, body, defaultMappedModel)) {
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
+		mapped := resolveOpenCodeGoMappedModel(account, body, defaultMappedModel)
+		if rejectOpenCodeStandardModel(account, mapped) {
+			return nil, writeOpenCodeUnsupportedModelError(c, true, mapped)
+		}
+		switch s.modelRoutedUpstreamProtocol(ctx, account, APIProtocolAnthropic, mapped) {
 		case APIProtocolAnthropic:
 			return s.forwardAnthropicViaNativeAnthropicEndpoint(ctx, c, account, body, defaultMappedModel, tlsRouterMatch...)
 		case APIProtocolResponses:
@@ -121,7 +131,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 	}
 	// OpenCode 仅派生缓存会话，不能继承 OpenAI 兼容层的历史裁剪、续接状态或指令注入。
-	openAICompatStateEnabled := !account.IsOpenCodeGo()
+	openAICompatStateEnabled := !account.IsOpenCodeGo() && !account.IsCommandCode()
 	if openAICompatStateEnabled && promptCacheKey == "" && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 		promptCacheKey = promptCacheKeyFromAnthropicMetadataSession(&anthropicReq)
 		if promptCacheKey == "" {

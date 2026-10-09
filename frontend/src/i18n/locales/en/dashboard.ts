@@ -447,6 +447,8 @@ export default {
     latency: 'Latency',
     latencyFirstToken: 'First',
     latencyDuration: 'Total',
+    outputTps: 'Output TPS',
+    outputTpsHint: 'Output tokens divided by total duration, including first-token wait, in tok/s. May include reasoning tokens; excludes image, video and live requests.',
     detailedTiming: 'Detailed Timing',
     timingRequestSize: 'Request size',
     timingSlot: 'Slot',

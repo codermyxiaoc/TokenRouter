@@ -1607,14 +1607,29 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughBridg
 			wantRelayReject: true,
 		},
 		{
-			name:      "duplicate type",
-			payload:   `{"type":"response.create","type":"response.create","model":"gpt-5.1"}`,
-			threshold: 1,
+			// 控制字段重复时必须在拨号与桥接之前拒绝，不能依赖解析器的首值/末值语义。
+			name:            "duplicate type",
+			payload:         `{"type":"response.create","type":"response.create","model":"gpt-5.1"}`,
+			threshold:       1,
+			wantRelayReject: true,
 		},
 		{
-			name:      "duplicate previous response id",
-			payload:   `{"type":"response.create","previous_response_id":null,"previous_response_id":null,"model":"gpt-5.1"}`,
-			threshold: 1,
+			name:            "duplicate previous response id",
+			payload:         `{"type":"response.create","previous_response_id":null,"previous_response_id":null,"model":"gpt-5.1"}`,
+			threshold:       1,
+			wantRelayReject: true,
+		},
+		{
+			name:            "hidden previous response id",
+			payload:         `{"type":"response.create","previous_response_id":null,"previous_response_id":"resp_foreign","model":"gpt-5.1"}`,
+			threshold:       1,
+			wantRelayReject: true,
+		},
+		{
+			name:            "hidden prompt cache key",
+			payload:         `{"type":"response.create","prompt_cache_key":"allowed","prompt_cache_key":"foreign","model":"gpt-5.1"}`,
+			threshold:       1,
+			wantRelayReject: true,
 		},
 	}
 
@@ -4388,7 +4403,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StoreDisabledStr
 	require.Equal(t, "world", gjson.Get(secondWrite, "input.1.text").String())
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PreviousResponseNotFoundRecoveryRemovesDuplicatePrevID(t *testing.T) {
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PreviousResponseNotFoundRecoveryRemovesPrevID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -4511,8 +4526,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PreviousResponse
 	firstTurn := readMessage()
 	require.Equal(t, "resp_turn_prev_once_1", gjson.GetBytes(firstTurn, "response.id").String())
 
-	// duplicate previous_response_id: 恢复重试时应删除所有重复键，避免再次 previous_response_not_found。
-	writeMessage(`{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"resp_turn_prev_once_1","input":[],"previous_response_id":"resp_turn_prev_duplicate"}`)
+	// 合法续接遭上游拒绝时仍应移除 previous_response_id 并且只恢复一次。
+	writeMessage(`{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"resp_turn_prev_once_1","input":[]}`)
 	secondTurn := readMessage()
 	require.Equal(t, "resp_turn_prev_once_2", gjson.GetBytes(secondTurn, "response.id").String())
 
@@ -4536,7 +4551,46 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PreviousResponse
 	secondWrites := append([]map[string]any(nil), secondConn.writes...)
 	secondConn.mu.Unlock()
 	require.Len(t, secondWrites, 1)
-	require.False(t, gjson.Get(requestToJSONString(secondWrites[0]), "previous_response_id").Exists(), "重复键场景恢复重试后不应保留 previous_response_id")
+	require.False(t, gjson.Get(requestToJSONString(secondWrites[0]), "previous_response_id").Exists(), "恢复重试后不应保留 previous_response_id")
+}
+
+// 每轮发送前拒绝歧义会话字段，不能让本地隔离检查与上游解码使用不同标识。
+func TestOpenAIWSPassthroughRejectsDuplicateSessionControlsOnNextTurn(t *testing.T) {
+	for _, fields := range []string{
+		`"previous_response_id":null,"previous_response_id":"resp_foreign"`,
+		`"previous_response_id":"resp_allowed","Previous_Response_Id":"resp_foreign"`,
+		`"previous_response_id":"resp_allowed","previous_response_\u0069d":"resp_foreign"`,
+		`"prompt_cache_key":"allowed","prompt_cache_key":"foreign"`,
+		`"prompt_cache_key":"allowed","Prompt_Cache_Key":"foreign"`,
+		`"prompt_cache_key":"allowed","prompt_cache_\u006bey":"foreign"`,
+	} {
+		t.Run(fields, func(t *testing.T) {
+			upstream := newStagedPassthroughConn()
+			upstream.Send(`{"type":"response.completed","response":{"id":"resp_allowed","usage":{"input_tokens":1,"output_tokens":1}}}`)
+			server, serverErrors := startPassthroughLifecycleServer(t, t.Context(),
+				newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream), passthroughLifecycleAccount())
+			defer server.Close()
+			client := dialPassthroughLifecycleClient(t, server)
+			defer client.CloseNow()
+			first, err := readPassthroughLifecycleFrame(t, client, 3*time.Second)
+			require.NoError(t, err)
+			require.Equal(t, "resp_allowed", gjson.GetBytes(first, "response.id").String())
+			requirePassthroughUpstreamWrite(t, upstream, 3*time.Second)
+			writeCtx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			err = client.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1",`+fields+`}`))
+			cancel()
+			require.NoError(t, err)
+			_, err = readPassthroughLifecycleFrame(t, client, 3*time.Second)
+			require.Equal(t, coderws.StatusPolicyViolation, coderws.CloseStatus(err))
+			select {
+			case err := <-serverErrors:
+				require.Error(t, err)
+			case <-time.After(3 * time.Second):
+				t.Fatal("歧义会话字段未终止连接")
+			}
+			require.Empty(t, upstream.writes, "坏轮次不得写往上游")
+		})
+	}
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_RejectsMessageIDAsPreviousResponseID(t *testing.T) {

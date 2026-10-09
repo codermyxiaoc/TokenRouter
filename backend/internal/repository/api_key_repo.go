@@ -863,6 +863,7 @@ func (r *apiKeyRepository) listByUserIDWithUsageSort(ctx context.Context, q *dbe
 	}
 
 	sortOrder := params.NormalizedSortOrder(pagination.SortOrderDesc)
+
 	sort.SliceStable(outKeys, func(i, j int) bool {
 		left := usageTotals[outKeys[i].ID]
 		right := usageTotals[outKeys[j].ID]
@@ -1000,6 +1001,26 @@ func (r *apiKeyRepository) ListByGroupID(ctx context.Context, groupID int64, par
 func apiKeyListOrder(params pagination.PaginationParams) []func(*entsql.Selector) {
 	sortBy := strings.ToLower(strings.TrimSpace(params.SortBy))
 	sortOrder := params.NormalizedSortOrder(pagination.SortOrderDesc)
+
+	if sortBy == "group" {
+		direction := "DESC"
+		tieOrder := entsql.Desc
+		if sortOrder == pagination.SortOrderAsc {
+			direction = "ASC"
+			tieOrder = entsql.Asc
+		}
+		return []func(*entsql.Selector){func(s *entsql.Selector) {
+			// 复合和智能 Key 按配置顺序中的首个有效分组排序，不改变原有可见性和筛选。
+			// 使用标量子查询避免多分组连接导致重复行、分页数量变化。
+			name := fmt.Sprintf(`CASE WHEN %s OR %s THEN
+ (SELECT g.name FROM api_key_composite_groups b JOIN groups g ON g.id = b.group_id AND g.deleted_at IS NULL
+  WHERE b.api_key_id = %s ORDER BY b.sort_order, b.id LIMIT 1)
+ ELSE (SELECT g.name FROM groups g WHERE g.id = %s AND g.deleted_at IS NULL) END`,
+				s.C(apikey.FieldIsComposite), s.C(apikey.FieldSmartRouting), s.C(apikey.FieldID), s.C(apikey.FieldGroupID))
+			s.OrderExpr(entsql.Expr(name + " " + direction + " NULLS LAST"))
+			s.OrderBy(tieOrder(s.C(apikey.FieldID)))
+		}}
+	}
 
 	var field string
 	switch sortBy {

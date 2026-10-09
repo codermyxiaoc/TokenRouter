@@ -35,7 +35,7 @@ const Page = defineComponent({ template: '<div><slot name="filters" /><slot name
 const Layout = defineComponent({ template: '<div><slot /></div>' })
 const Table = defineComponent({ props: ['data'], template: '<div><div v-for="row in data" :key="row.id"><slot name="cell-actions" :row="row" /></div></div>' })
 const wrappers: VueWrapper[] = []
-const platforms: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'qoder', 'kimi', 'zhipu', 'deepseek']
+const platforms: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'qoder', 'kimi', 'zhipu', 'deepseek', 'cline', 'command_code']
 
 function group(platform: GroupPlatform): AdminGroup {
   // 只提供界面依赖的存量字段，其他配置由编辑初始化逻辑使用默认值。
@@ -99,6 +99,18 @@ afterEach(() => {
 })
 
 describe.each(['create', 'edit'] as const)('GroupsView %s tabs', mode => {
+  it('TypeSafe 仅保存 SystemOne 平台，不显示或提交文本与 OAuth 配置', async () => {
+    const wrapper = await open(mode, 'typesafe')
+    expect(wrapper.findAll('[data-group-tab-button]').map(button => button.attributes('data-group-tab-button'))).toEqual(['general', 'pricing'])
+    expect(wrapper.findComponent(GroupClientProtocolSelector).exists()).toBe(false)
+    expect(wrapper.find('[data-group-field="reasoning"]').exists()).toBe(false)
+    expect(wrapper.find('[data-group-field="image-capabilities"]').exists()).toBe(false)
+    await wrapper.get(`#${mode}-group-form`).trigger('submit')
+    await flushPromises()
+    const payload = mode === 'create' ? groups.create.mock.calls[0]?.[0] : groups.update.mock.calls[0]?.[1]
+    expect(payload).toMatchObject({ platform: 'typesafe', allowed_client_protocols: [], require_oauth_only: false })
+  })
+
   it('保存显式探测协议且不泄漏 UI 临时字段', async () => {
     const wrapper = await open(mode, 'kimi')
     await wrapper.get('[data-group-setting="availability_probe_enabled"]').trigger('click')

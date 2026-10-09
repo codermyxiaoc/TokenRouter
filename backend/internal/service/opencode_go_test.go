@@ -56,6 +56,9 @@ func TestResolveOpenCodeGoUpstreamProtocol(t *testing.T) {
 	require.Equal(t, APIProtocolSystemOne, zen.ResolveOpenCodeGoUpstreamProtocol("jev-1.13-free"))
 	require.Equal(t, APIProtocolChatCompletions, zen.ResolveOpenCodeGoUpstreamProtocol("minimax-m3"))
 	require.Equal(t, APIProtocolAnthropic, zen.ResolveOpenCodeGoUpstreamProtocol("claude-opus-4-6"))
+	require.Equal(t, APIProtocolChatCompletions, zen.ResolveOpenCodeGoUpstreamProtocol("qwen3.8-max"))
+	require.Equal(t, APIProtocolAnthropic, zen.ResolveOpenCodeGoUpstreamProtocol("qwen3.8-flash"))
+	require.Equal(t, APIProtocolAnthropic, goAccount.ResolveOpenCodeGoUpstreamProtocol("qwen3.8-max"))
 	require.Equal(t, DefaultOpenCodeZenBaseURL, zen.GetOpenAIBaseURL())
 
 	require.Equal(t, "", (&Account{Platform: PlatformKimi}).ResolveOpenCodeGoUpstreamProtocol("glm-5.3"))

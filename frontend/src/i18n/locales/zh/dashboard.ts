@@ -452,6 +452,8 @@ export default {
     latency: '延迟',
     latencyFirstToken: '首字',
     latencyDuration: '总耗时',
+    outputTps: '输出 TPS',
+    outputTpsHint: '输出 Token ÷ 总耗时（包含首字等待），单位 tok/s。输出 Token 可能包含推理 Token；图片、视频和实时请求不统计。',
     detailedTiming: '详细耗时',
     timingRequestSize: '请求体',
     timingSlot: '槽位',

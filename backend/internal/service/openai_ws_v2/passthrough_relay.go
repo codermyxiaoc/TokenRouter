@@ -1,10 +1,10 @@
 package openai_ws_v2
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -14,6 +14,7 @@ import (
 	coderws "github.com/coder/websocket"
 	"github.com/tidwall/gjson"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 )
 
@@ -25,6 +26,7 @@ type FrameConn interface {
 
 type Usage struct {
 	InputTokens              int
+	ImageInputTokens         int
 	OutputTokens             int
 	CacheCreationInputTokens int
 	CacheReadInputTokens     int
@@ -34,8 +36,11 @@ type Usage struct {
 type RelayResult struct {
 	RequestModel string
 	// ResponseServiceTier 是终止响应声明的上游实际服务档位。
-	ResponseServiceTier     string
-	Usage                   Usage
+	ResponseServiceTier string
+	Usage               Usage
+	// PendingUsage 仅保存失败回合在坏计量出现前的可信计量，不能重复并入已完成回合。
+	PendingUsage            Usage
+	PendingRequestID        string
 	RequestID               string
 	TerminalEventType       string
 	FirstTokenMs            *int
@@ -96,8 +101,10 @@ type RelayTraceEvent struct {
 }
 
 type relayState struct {
-	usage                   Usage
-	turnUsage               Usage
+	usage     Usage
+	turnUsage Usage
+	// 计量损坏会终止本次转发；已完成回合仍保留，坏回合不能回调为成功。
+	usageError              error
 	requestModel            string
 	pendingTurnStart        atomic.Pointer[time.Time]
 	lastResponseID          string
@@ -141,6 +148,9 @@ func Relay(
 	options RelayOptions,
 ) (RelayResult, *RelayExit) {
 	result := RelayResult{RequestModel: strings.TrimSpace(gjson.GetBytes(firstClientMessage, "model").String())}
+	if err := validateRelayClientRouting(firstClientMessage); err != nil {
+		return result, &RelayExit{Stage: "relay_init", Err: err}
+	}
 	if clientConn == nil || upstreamConn == nil {
 		return result, &RelayExit{Stage: "relay_init", Err: errors.New("relay connection is nil")}
 	}
@@ -243,6 +253,9 @@ func Relay(
 	dropDownstreamWrites := atomic.Bool{}
 	clientReaderStarted := atomic.Bool{}
 	writeClientFrameUpstream := func(msgType coderws.MessageType, payload []byte) error {
+		if err := validateRelayClientRouting(payload); err != nil {
+			return err
+		}
 		if isClientResponseCreateFrame(msgType, payload) {
 			turnStartedAt := time.Time{}
 			if options.TakeNextTurnStartedAt != nil {
@@ -354,6 +367,12 @@ func Relay(
 	result.ClientToUpstreamFrames = clientToUpstreamFrames.Load()
 	result.UpstreamToClientFrames = upstreamToClientFrames.Load()
 	result.DroppedDownstreamFrames = droppedDownstreamFrames.Load()
+	// 客户端先断开不能掩盖排水期间发现的坏计量。
+	if state.usageError != nil {
+		result.PendingUsage = state.turnUsage
+		result.PendingRequestID = openAIWSRelayActiveTurnID(state)
+		return result, &RelayExit{Stage: "upstream_usage", Err: state.usageError, WroteDownstream: combinedWroteDownstream}
+	}
 	if options.FirstMessageSent && firstExit.stage == "read_client" && firstExit.graceful {
 		emitRelayTrace(onTrace, RelayTraceEvent{
 			Stage:           "relay_client_closed",
@@ -564,6 +583,10 @@ func runUpstreamToClient(
 		case coderws.MessageBinary:
 			// binary frame 直接透传，不进入 JSON 观测路径（避免无效解析开销）。
 		}
+		if state.usageError != nil {
+			exitCh <- relayExitSignal{stage: "upstream_usage", err: state.usageError, wroteDownstream: wroteDownstream}
+			return
+		}
 		emitTurnComplete(onTurnComplete, state, observedEvent)
 		if dropDownstreamWrites != nil && dropDownstreamWrites.Load() {
 			if droppedFrames != nil {
@@ -677,7 +700,7 @@ func relayDirectionFromStage(stage string) string {
 	switch stage {
 	case "read_client", "write_upstream":
 		return "client_to_upstream"
-	case "read_upstream", "write_client", "drain_terminal":
+	case "read_upstream", "write_client", "drain_terminal", "upstream_usage":
 		return "upstream_to_client"
 	case "idle_timeout":
 		return "watchdog"
@@ -764,6 +787,9 @@ func observeUpstreamMessage(
 		}
 	}
 	parsedUsage := parseUsageAndAccumulate(state, message, eventType, onUsageParseFailure)
+	if state.usageError != nil {
+		return observedUpstreamEvent{}
+	}
 	observed := observedUpstreamEvent{
 		eventType:  eventType,
 		responseID: responseID,
@@ -839,6 +865,9 @@ func finalizeObservedRelayTerminal(state *relayState, observed observedUpstreamE
 		return observedUpstreamEvent{}
 	}
 	observed.usage = finalizeRelayTurnUsage(state)
+	if state.usageError != nil {
+		return observedUpstreamEvent{}
+	}
 	observed.terminal = true
 	responseID := strings.TrimSpace(observed.responseID)
 	if responseID != "" {
@@ -894,6 +923,17 @@ func isClientResponseCreateFrame(msgType coderws.MessageType, payload []byte) bo
 		return false
 	}
 	return strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create"
+}
+
+// 不依赖首个 type 的取值判断模型所在层，避免透传与上游 JSON 解码产生分歧。
+func validateRelayClientRouting(payload []byte) error {
+	if !gjson.ValidBytes(payload) {
+		return nil
+	}
+	if err := jsonutil.ValidateUniqueFields(payload, "type", "model", "session", "previous_response_id", "prompt_cache_key"); err != nil {
+		return err
+	}
+	return jsonutil.ValidateRoutingModel([]byte(gjson.GetBytes(payload, "session").Raw))
 }
 
 func openAIWSRelayGetOrInitTurnTiming(state *relayState, responseID string, now time.Time) *relayTurnTiming {
@@ -990,69 +1030,86 @@ func parseUsageAndAccumulate(
 	eventType string,
 	onParseFailure func(eventType string, usageRaw string),
 ) Usage {
-	if state == nil || len(message) == 0 || !shouldParseUsage(eventType) || !bytes.Contains(message, []byte(`"usage"`)) {
+	if state == nil || state.usageError != nil || len(message) == 0 || !shouldParseUsage(eventType) {
 		return Usage{}
 	}
+	// 计量字段按解码后的名称检查，转义同名键不能绕过验证。
+	root := gjson.ParseBytes(message)
+	response := root.Get("response")
 	usageResult := gjson.GetBytes(message, "response.usage")
 	if !usageResult.Exists() {
 		usageResult = gjson.GetBytes(message, "usage")
 	}
-	if !usageResult.Exists() {
-		return Usage{}
-	}
 	usageRaw := strings.TrimSpace(usageResult.Raw)
-	if usageRaw == "" || !strings.HasPrefix(usageRaw, "{") {
+	fail := func() Usage {
+		state.usageError = errors.New("invalid upstream websocket usage")
 		recordUsageParseFailure()
 		if onParseFailure != nil {
-			onParseFailure(eventType, usageRaw)
+			// 错误计量可夹带任意字符串，诊断只暴露固定分类。
+			onParseFailure(eventType, "invalid_usage")
 		}
 		return Usage{}
 	}
+	if jsonutil.ValidateUniqueFields(message, "response", "usage", "tool_usage") != nil ||
+		(response.Exists() && (!response.IsObject() || jsonutil.ValidateUniqueFields([]byte(response.Raw), "usage", "tool_usage") != nil)) ||
+		(usageResult.Exists() && !validRelayUsageObject(gjson.Parse(usageRaw))) {
+		return fail()
+	}
+	// 备用位置也需校验，避免优先字段掩盖其它解析器可能读取的恶意计量。
+	for _, container := range []gjson.Result{root, response} {
+		if candidate := container.Get("usage"); candidate.Exists() && !validRelayUsageObject(candidate) {
+			return fail()
+		}
+		if toolUsage := container.Get("tool_usage"); toolUsage.Exists() && toolUsage.Type != gjson.Null {
+			if !toolUsage.IsObject() || jsonutil.ValidateUniqueFields([]byte(toolUsage.Raw), "image_gen") != nil {
+				return fail()
+			}
+			if imageGen := toolUsage.Get("image_gen"); imageGen.Exists() && !validRelayUsageObject(imageGen) {
+				return fail()
+			}
+		}
+	}
 
-	inputResult := usageResult.Get("input_tokens")
-	if !inputResult.Exists() {
-		inputResult = usageResult.Get("prompt_tokens")
+	if !usageResult.Exists() {
+		return Usage{}
 	}
-	outputResult := usageResult.Get("output_tokens")
-	if !outputResult.Exists() {
-		outputResult = usageResult.Get("completion_tokens")
+	inputResult := firstRelayUsageField(usageResult, "input_tokens", "prompt_tokens")
+	outputResult := firstRelayUsageField(usageResult, "output_tokens", "completion_tokens")
+	cachedResult := firstRelayUsageField(usageResult, "input_tokens_details.cached_tokens", "prompt_tokens_details.cached_tokens")
+	imageResult := firstRelayUsageField(usageResult, "output_tokens_details.image_tokens", "completion_tokens_details.image_tokens")
+	imageInputResult := firstRelayUsageField(usageResult, "input_tokens_details.image_tokens", "prompt_tokens_details.image_tokens")
+	imageGen := firstRelayUsageField(root, "response.tool_usage.image_gen", "tool_usage.image_gen")
+	// 仅缺字段时回填；标准用量显式为零也不能被工具计数覆盖。
+	if !imageResult.Exists() {
+		imageResult = imageGen.Get("output_tokens_details.image_tokens")
 	}
-	cachedResult := usageResult.Get("input_tokens_details.cached_tokens")
-	if !cachedResult.Exists() {
-		cachedResult = usageResult.Get("prompt_tokens_details.cached_tokens")
-	}
-	imageTokens := usageResult.Get("output_tokens_details.image_tokens").Int()
-	if imageTokens == 0 {
-		imageTokens = usageResult.Get("completion_tokens_details.image_tokens").Int()
+	if !imageInputResult.Exists() {
+		imageInputResult = imageGen.Get("input_tokens_details.image_tokens")
 	}
 
 	requireTotals := isTerminalEvent(strings.TrimSpace(eventType))
 	inputTokens, inputOK := parseUsageIntField(inputResult, requireTotals)
 	outputTokens, outputOK := parseUsageIntField(outputResult, requireTotals)
 	cachedTokens, cachedOK := parseUsageIntField(cachedResult, false)
-	if !inputOK || !outputOK || !cachedOK {
-		recordUsageParseFailure()
-		if onParseFailure != nil {
-			onParseFailure(eventType, usageRaw)
-		}
-		// 解析失败时不做部分字段累加，避免计费 usage 出现“半有效”状态。
-		return Usage{}
+	imageTokens, imageOK := parseUsageIntField(imageResult, false)
+	imageInputTokens, imageInputOK := parseUsageIntField(imageInputResult, false)
+	if !inputOK || !outputOK || !cachedOK || !imageOK || !imageInputOK {
+		return fail()
 	}
-	reasoningTokens := usageResult.Get("output_tokens_details.reasoning_tokens").Int()
-	if reasoningTokens == 0 {
-		reasoningTokens = usageResult.Get("completion_tokens_details.reasoning_tokens").Int()
-	}
+	reasoningTokens, _ := parseUsageIntField(firstRelayUsageField(usageResult, "output_tokens_details.reasoning_tokens", "completion_tokens_details.reasoning_tokens"), false)
+	totalTokens, _ := parseUsageIntField(usageResult.Get("total_tokens"), false)
 	if reasoningTokens > 0 {
 		outputTokens = int(xai.IncludeIndependentReasoningTokens(
-			int64(inputTokens), int64(outputTokens), usageResult.Get("total_tokens").Int(), reasoningTokens,
+			int64(inputTokens), int64(outputTokens), int64(totalTokens), int64(reasoningTokens),
 		))
 	}
 	parsedUsage := Usage{
 		InputTokens:              inputTokens,
+		ImageInputTokens:         imageInputTokens,
 		OutputTokens:             outputTokens,
 		CacheCreationInputTokens: openAICacheCreationTokensFromUsage(usageResult),
 		CacheReadInputTokens:     cachedTokens,
-		ImageOutputTokens:        int(imageTokens),
+		ImageOutputTokens:        imageTokens,
 	}
 
 	if isTerminalEvent(strings.TrimSpace(eventType)) {
@@ -1066,10 +1123,49 @@ func parseUsageAndAccumulate(
 	return parsedUsage
 }
 
+// 单个计数采用与同步 SystemOne 一致的宽裕安全上限，机器整型上限不是合法计量边界。
+const maxRelayUsageTokens = 1 << 40
+
+func firstRelayUsageField(value gjson.Result, fields ...string) gjson.Result {
+	for _, field := range fields {
+		if result := value.Get(field); result.Exists() {
+			return result
+		}
+	}
+	return gjson.Result{}
+}
+
+// 所有已知计量路径都精确校验，包括被优先字段遮蔽的兼容别名。
+func validRelayUsageObject(value gjson.Result) bool {
+	if !value.IsObject() || jsonutil.ValidateUniqueFields([]byte(value.Raw)) != nil {
+		return false
+	}
+	for _, field := range []string{"input_tokens", "prompt_tokens", "output_tokens", "completion_tokens", "total_tokens", "cache_write_tokens", "cache_creation_input_tokens", "cache_write_input_tokens", "cache_creation_tokens"} {
+		if _, ok := parseUsageIntField(value.Get(field), false); !ok {
+			return false
+		}
+	}
+	for _, field := range []string{"input_tokens_details", "prompt_tokens_details", "output_tokens_details", "completion_tokens_details"} {
+		details := value.Get(field)
+		if !details.Exists() || details.Type == gjson.Null {
+			continue
+		}
+		if !details.IsObject() || jsonutil.ValidateUniqueFields([]byte(details.Raw)) != nil {
+			return false
+		}
+		for _, counter := range []string{"cached_tokens", "cache_write_tokens", "cache_creation_tokens", "image_tokens", "reasoning_tokens"} {
+			if _, ok := parseUsageIntField(details.Get(counter), false); !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func relayUsageHasTokens(usage Usage) bool {
 	return usage.InputTokens > 0 || usage.OutputTokens > 0 ||
 		usage.CacheCreationInputTokens > 0 || usage.CacheReadInputTokens > 0 ||
-		usage.ImageOutputTokens > 0
+		usage.ImageInputTokens > 0 || usage.ImageOutputTokens > 0
 }
 
 func mergeRelayUsageNonZero(dst *Usage, src Usage) {
@@ -1088,23 +1184,47 @@ func mergeRelayUsageNonZero(dst *Usage, src Usage) {
 	if src.CacheReadInputTokens > 0 {
 		dst.CacheReadInputTokens = src.CacheReadInputTokens
 	}
+	if src.ImageInputTokens > 0 {
+		dst.ImageInputTokens = src.ImageInputTokens
+	}
 	if src.ImageOutputTokens > 0 {
 		dst.ImageOutputTokens = src.ImageOutputTokens
 	}
 }
 
 func finalizeRelayTurnUsage(state *relayState) Usage {
-	if state == nil {
+	if state == nil || state.usageError != nil {
 		return Usage{}
 	}
 	turnUsage := state.turnUsage
-	state.usage.InputTokens += turnUsage.InputTokens
-	state.usage.OutputTokens += turnUsage.OutputTokens
-	state.usage.CacheCreationInputTokens += turnUsage.CacheCreationInputTokens
-	state.usage.CacheReadInputTokens += turnUsage.CacheReadInputTokens
-	state.usage.ImageOutputTokens += turnUsage.ImageOutputTokens
+	accumulated, ok := addRelayUsage(state.usage, turnUsage)
+	if !ok {
+		state.usageError = errors.New("upstream websocket usage accumulation overflow")
+		recordUsageParseFailure()
+		return Usage{}
+	}
+	state.usage = accumulated
 	state.turnUsage = Usage{}
 	return turnUsage
+}
+
+// 先验证所有字段再原子替换聚合值，失败时不留下部分已相加的计量。
+func addRelayUsage(previous, next Usage) (Usage, bool) {
+	result := previous
+	for _, pair := range []struct {
+		target    *int
+		increment int
+	}{
+		{&result.InputTokens, next.InputTokens}, {&result.ImageInputTokens, next.ImageInputTokens},
+		{&result.OutputTokens, next.OutputTokens}, {&result.CacheCreationInputTokens, next.CacheCreationInputTokens},
+		{&result.CacheReadInputTokens, next.CacheReadInputTokens}, {&result.ImageOutputTokens, next.ImageOutputTokens},
+	} {
+		if *pair.target < 0 || pair.increment < 0 || *pair.target > math.MaxInt-pair.increment {
+			return Usage{}, false
+		}
+		*pair.target += pair.increment
+	}
+	return result, true
 }
 
 func parseUsageIntField(value gjson.Result, required bool) (int, bool) {
@@ -1114,7 +1234,7 @@ func parseUsageIntField(value gjson.Result, required bool) (int, bool) {
 	if value.Type != gjson.Number {
 		return 0, false
 	}
-	return int(value.Int()), true
+	return jsonutil.ParseNonNegativeInt(value.Raw, maxRelayUsageTokens)
 }
 
 func openAICacheCreationTokensFromUsage(value gjson.Result) int {
@@ -1126,7 +1246,8 @@ func openAICacheCreationTokensFromUsage(value gjson.Result) int {
 	} {
 		result := value.Get(field)
 		if result.Exists() {
-			return max(int(result.Int()), 0)
+			tokens, _ := parseUsageIntField(result, false)
+			return tokens
 		}
 	}
 	for _, field := range []string{
@@ -1135,7 +1256,7 @@ func openAICacheCreationTokensFromUsage(value gjson.Result) int {
 		"cache_write_input_tokens",
 		"cache_creation_tokens",
 	} {
-		if tokens := int(value.Get(field).Int()); tokens > 0 {
+		if tokens, ok := parseUsageIntField(value.Get(field), false); ok && tokens > 0 {
 			return tokens
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,12 +82,28 @@ func TestNormalizePaymentSource(t *testing.T) {
 func TestCanonicalizeReturnURL(t *testing.T) {
 	t.Parallel()
 
+	// 丢弃客户端查询与片段，防止 return_url 中的键值对混入易支付签名原文。
 	got, err := CanonicalizeReturnURL("https://example.com/payment/result?b=2#a", "example.com", "")
 	if err != nil {
 		t.Fatalf("CanonicalizeReturnURL returned error: %v", err)
 	}
-	if got != "https://example.com/payment/result?b=2" {
-		t.Fatalf("CanonicalizeReturnURL = %q, want %q", got, "https://example.com/payment/result?b=2")
+	if got != "https://example.com/payment/result" {
+		t.Fatalf("CanonicalizeReturnURL = %q, want %q", got, "https://example.com/payment/result")
+	}
+}
+
+func TestCanonicalizeReturnURLStripsSmuggledTradeStatus(t *testing.T) {
+	t.Parallel()
+
+	got, err := CanonicalizeReturnURL(
+		"https://example.com/payment/result?trade_status=TRADE_SUCCESS",
+		"example.com", "",
+	)
+	if err != nil {
+		t.Fatalf("CanonicalizeReturnURL returned error: %v", err)
+	}
+	if strings.Contains(got, "trade_status") {
+		t.Fatalf("CanonicalizeReturnURL kept smuggled trade_status: %q", got)
 	}
 }
 
@@ -117,8 +134,9 @@ func TestCanonicalizeReturnURLAllowsConfiguredFrontendHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CanonicalizeReturnURL returned error: %v", err)
 	}
-	if got != "https://app.example.com/payment/result?from=checkout" {
-		t.Fatalf("CanonicalizeReturnURL = %q, want %q", got, "https://app.example.com/payment/result?from=checkout")
+	// 保留主机白名单，同时丢弃客户端查询参数，阻断签名字段夹带。
+	if got != "https://app.example.com/payment/result" {
+		t.Fatalf("CanonicalizeReturnURL = %q, want %q", got, "https://app.example.com/payment/result")
 	}
 }
 

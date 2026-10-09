@@ -23,6 +23,39 @@ func mustCreateUserForQuota(t *testing.T, client *dbent.Client) int64 {
 	return u.ID
 }
 
+// 新平台迁移必须保留现有平台的数据库约束、个性化限额与用量。
+func TestUserPlatformQuotaRepository_NewProvidersPreserveExistingQuotas(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	txCtx := dbent.NewTxContext(ctx, tx)
+	client := tx.Client()
+	userID := mustCreateUserForQuota(t, client)
+	repo := NewUserPlatformQuotaRepository(client)
+	platforms := []string{"anthropic", "openai", "gemini", "antigravity", "qoder", "grok", "kimi", "zhipu", "deepseek", "minimax", "opencode_go", "video", "typesafe", "cline", "command_code"}
+	daily := 12.0
+	var records []UserPlatformQuotaRecord
+	for _, platform := range platforms {
+		records = append(records, UserPlatformQuotaRecord{UserID: userID, Platform: platform, DailyLimitUSD: &daily})
+	}
+	require.NoError(t, repo.BulkInsertInitial(txCtx, records))
+	require.NoError(t, repo.IncrementUsageWithReset(txCtx, userID, "video", 0.72, time.Now()))
+	changedDefault := 100.0
+	for i := range records {
+		records[i].DailyLimitUSD = &changedDefault
+	}
+	require.NoError(t, repo.BulkInsertInitial(txCtx, records))
+	list, err := repo.ListByUser(txCtx, userID)
+	require.NoError(t, err)
+	require.Len(t, list, len(platforms))
+	for _, record := range list {
+		require.NotNil(t, record.DailyLimitUSD)
+		require.InDelta(t, daily, *record.DailyLimitUSD, 1e-9, record.Platform)
+		if record.Platform == "video" {
+			require.InDelta(t, 0.72, record.DailyUsageUSD, 1e-9)
+		}
+	}
+}
+
 func TestUserPlatformQuotaRepository_BulkInsertInitial_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	tx := testEntTx(t)

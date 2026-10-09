@@ -443,12 +443,14 @@ func (s *PaymentService) QueryAndFinalizeRefund(ctx context.Context, oid int64) 
 	}
 
 	pendingDetail := s.latestRefundPendingDetail(ctx, oid)
+	// 退款快照记录回收权益，查询渠道时须与提交退款一样换算成原实付币种金额。
+	plan := s.refundFinalizePlan(o, pendingDetail)
 	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 	resp, err := queryProvider.QueryRefund(ctx, payment.RefundQueryRequest{
 		TradeNo:  o.PaymentTradeNo,
 		OrderID:  o.OutTradeNo,
 		RefundID: pendingDetail.RefundID,
-		Amount:   formatGatewayRefundAmount(o.RefundAmount, o),
+		Amount:   formatGatewayRefundAmount(plan.GatewayAmount, o),
 	})
 	finishProviderCall()
 	if err != nil {
@@ -458,7 +460,6 @@ func (s *PaymentService) QueryAndFinalizeRefund(ctx context.Context, oid int64) 
 		return s.finalizeRefundFailed(ctx, o, err)
 	}
 
-	plan := s.refundFinalizePlan(o, pendingDetail)
 	switch strings.TrimSpace(resp.Status) {
 	case payment.ProviderStatusSuccess, payment.ProviderStatusRefunded:
 		return s.finalizePendingRefundSuccess(ctx, plan)

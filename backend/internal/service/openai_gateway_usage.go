@@ -958,7 +958,7 @@ func (s *OpenAIGatewayService) filterCNProviderBillingModelCandidates(
 		return candidates
 	}
 	// Zen 可原生服务 Claude；只有映射到其它家族的客户端别名才需要过滤。
-	if account.IsOpenCodeGo() && len(upstreamModels) > 0 &&
+	if (account.IsOpenCodeGo() || account.IsCommandCode() || account.IsCline()) && len(upstreamModels) > 0 &&
 		strings.HasPrefix(strings.ToLower(lastOpenAIModelSegment(upstreamModels[0])), "claude-") {
 		return candidates
 	}

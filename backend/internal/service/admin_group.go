@@ -89,6 +89,12 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 
 func defaultModelsListCandidateIDs(platform string) []string {
 	switch platform {
+	case PlatformTypeSafe:
+		return []string{DefaultTypeSafeModel}
+	case PlatformCline:
+		return []string{DefaultClineTestModel, DefaultClinePassTestModel}
+	case PlatformCommandCode:
+		return []string{DefaultCommandCodeTestModel}
 	case PlatformVideo:
 		// 视频模型只来自显式账号配置，不能继承 Claude 文本默认目录。
 		return []string{}

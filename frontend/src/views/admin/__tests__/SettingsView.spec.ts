@@ -783,6 +783,62 @@ async function openUsersTab(wrapper: ReturnType<typeof mountView>) {
 }
 
 describe("admin SettingsView payment visible method controls", () => {
+  it.each([
+    { field: 'min', value: '-1', error: 'invalidMinAmount' },
+    { field: 'min', value: '100.001', error: 'invalidMinAmount' },
+    { field: 'percent', value: '1001', error: 'invalidPercent' },
+  ])("充值优惠非法已填档位阻止全部设置保存：$field=$value", async ({ field, value, error }) => {
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse,
+      payment_recharge_bonus_tiers: [{ min_amount: 100, bonus_percent: 20 }], payment_recharge_bonus_mode: 'bonus' });
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+    await wrapper.get(`[data-testid="recharge-bonus-tier-${field}-input"]`).setValue(value);
+    await wrapper.get('form').trigger('submit.prevent');
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(updateWebSearchEmulationConfig).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith(`admin.settings.payment.rechargeBonus.${error}`);
+    expect((wrapper.get(`[data-testid="recharge-bonus-tier-${field}-input"]`).element as HTMLInputElement).value).toBe(value);
+    wrapper.unmount();
+  });
+
+  it("充值优惠重复阈值阻止保存而不是静默保留第一行", async () => {
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse,
+      payment_recharge_bonus_tiers: [{ min_amount: 100, bonus_percent: 20 }], payment_recharge_bonus_mode: 'bonus' });
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+    await wrapper.get('[data-testid="recharge-bonus-tier-add"]').trigger('click');
+    await wrapper.findAll('[data-testid="recharge-bonus-tier-min-input"]')[1]!.setValue('100');
+    await wrapper.findAll('[data-testid="recharge-bonus-tier-percent-input"]')[1]!.setValue('30');
+    await wrapper.get('form').trigger('submit.prevent');
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith('admin.settings.payment.rechargeBonus.duplicateMinAmount');
+    expect(wrapper.findAll('[data-testid="recharge-bonus-tier-row"]')).toHaveLength(2);
+    wrapper.unmount();
+  });
+
+  it("充值优惠空白草稿可忽略且合法档位与其他配置保持原值", async () => {
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse,
+      payment_recharge_bonus_tiers: [{ min_amount: 100, bonus_percent: 20 }], payment_recharge_bonus_mode: 'bonus' });
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+    await wrapper.get('[data-testid="recharge-bonus-tier-add"]').trigger('click');
+    await wrapper.get('form').trigger('submit.prevent');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      payment_recharge_bonus_tiers: [{ min_amount: 100, bonus_percent: 20 }],
+      payment_recharge_bonus_mode: 'bonus',
+      payment_wallet_payment_enabled: baseSettingsResponse.payment_wallet_payment_enabled,
+      payment_balance_recharge_multiplier: baseSettingsResponse.payment_balance_recharge_multiplier,
+      payment_subscription_usd_to_cny_rate: baseSettingsResponse.payment_subscription_usd_to_cny_rate,
+    }));
+    wrapper.unmount();
+  });
+
   it("工单页中的表单提交不写入其它系统设置", async () => {
     const wrapper = mountView();
     await flushPromises();

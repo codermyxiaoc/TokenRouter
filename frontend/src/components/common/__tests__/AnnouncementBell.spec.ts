@@ -7,6 +7,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 import type { UserAnnouncement } from '@/types'
 import { useAnnouncementStore } from '@/stores/announcements'
+import { useAppStore } from '@/stores/app'
 import AnnouncementBell from '../AnnouncementBell.vue'
 
 vi.mock('vue-i18n', async () => {
@@ -93,7 +94,7 @@ describe('AnnouncementBell', () => {
       createAnnouncement(1),
       createAnnouncement(2, { read_at: '2026-08-01T13:00:00Z' }),
     ]
-    const markAsRead = vi.spyOn(store, 'markAsRead').mockResolvedValue()
+    const markAsRead = vi.spyOn(store, 'markAsRead').mockResolvedValue(true)
     const wrapper = await openAnnouncementList()
     const items = document.body.querySelectorAll<HTMLButtonElement>(
       '[data-testid="announcement-list-item"]',
@@ -126,4 +127,29 @@ describe('AnnouncementBell', () => {
 
     wrapper.unmount()
   })
+  it('标记失败时提示错误，并保留未读状态供用户重试', async () => {
+    const store = useAnnouncementStore()
+    store.announcements = [createAnnouncement(1)]
+    vi.spyOn(store, 'markAsRead').mockResolvedValue(false)
+    const showError = vi.spyOn(useAppStore(), 'showError')
+    const wrapper = await openAnnouncementList()
+    document.body.querySelector<HTMLButtonElement>('[data-testid="announcement-list-item"]')!.click()
+    await flushPromises()
+    expect(showError).toHaveBeenCalled()
+    expect(store.announcements[0].read_at).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('旧会话标读失效时不向新用户展示错误', async () => {
+    const store = useAnnouncementStore()
+    store.announcements = [createAnnouncement(1)]
+    vi.spyOn(store, 'markAsRead').mockResolvedValue(undefined)
+    const showError = vi.spyOn(useAppStore(), 'showError')
+    const wrapper = await openAnnouncementList()
+    document.body.querySelector<HTMLButtonElement>('[data-testid="announcement-list-item"]')!.click()
+    await flushPromises()
+    expect(showError).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
 })

@@ -43,22 +43,26 @@ func (PaymentOrder) Fields() []ent.Field {
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "text"}),
 
-		// 金额信息
+		// 金额列保留十八位整数容量并支持三位小数币种；到账与赠金仍遵守余额业务舍入规则。
 		field.Float("amount").
-			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}),
+			SchemaType(map[string]string{dialect.Postgres: "decimal(21,3)"}),
 		field.Float("pay_amount").
-			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}),
+			SchemaType(map[string]string{dialect.Postgres: "decimal(21,3)"}),
 		field.Float("fee_rate").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(0),
 		field.Float("fee_fixed").
-			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
+			SchemaType(map[string]string{dialect.Postgres: "decimal(21,3)"}).
 			Default(0),
 		field.Float("fee_rate_amount").
-			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
+			SchemaType(map[string]string{dialect.Postgres: "decimal(21,3)"}).
 			Default(0),
 		field.Float("fee_amount").
-			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
+			SchemaType(map[string]string{dialect.Postgres: "decimal(21,3)"}).
+			Default(0),
+		// 订单到账总额中的优惠额度快照；本站返利和退款继续按原到账规则。
+		field.Float("bonus_amount").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(21,3)"}).
 			Default(0),
 		field.String("recharge_code").
 			MaxLen(64),
@@ -137,7 +141,7 @@ func (PaymentOrder) Fields() []ent.Field {
 
 		// 退款信息
 		field.Float("refund_amount").
-			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
+			SchemaType(map[string]string{dialect.Postgres: "decimal(21,3)"}).
 			Default(0),
 		field.String("refund_reason").
 			Optional().

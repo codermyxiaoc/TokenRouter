@@ -1,6 +1,6 @@
 # 上游账号能力矩阵
 
-本文统一记录 TokenRouter 十二个平台、七类账号和公开网关协议的当前支持边界。它是账号能力的路由入口，不替代各平台专题中的认证、转换、限流和诊断细节，也不把数据导入器能够保存的历史组合视为正式支持。
+本文统一记录 TokenRouter 十五个平台、七类账号和公开网关协议的当前支持边界。它是账号能力的路由入口，不替代各平台专题中的认证、转换、限流和诊断细节，也不把数据导入器能够保存的历史组合视为正式支持。
 
 ## 章节导航
 
@@ -12,7 +12,7 @@
 
 ## 判定口径
 
-后端常量定义十二个平台 `anthropic`、`openai`、`gemini`、`antigravity`、`grok`、`qoder`、`kimi`、`zhipu`、`deepseek`、`minimax`、`opencode_go`、`video`，以及七类账号 `oauth`、`setup-token`、`apikey`、`upstream`、`bedrock`、`service_account`、`cosy`。矩阵使用以下等级：
+后端常量定义十五个平台 `anthropic`、`openai`、`gemini`、`antigravity`、`grok`、`qoder`、`kimi`、`zhipu`、`deepseek`、`minimax`、`opencode_go`、`video`、`typesafe`、`cline`、`command_code`，以及七类账号 `oauth`、`setup-token`、`apikey`、`upstream`、`bedrock`、`service_account`、`cosy`。矩阵使用以下等级：
 
 - **正式支持**：管理端有创建或授权流程，平台运行时也有对应凭据、转发和维护契约。
 - **兼容保留**：通用创建/导入层可以保存，或旧运行路径仍会识别，但管理端不推荐该组合；不能据此推导完整平台能力。
@@ -37,8 +37,11 @@
 | MiniMax | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 | OpenCode Zen / GO | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 | Video | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| TypeSafe | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| Cline | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| Command Code | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 
-除独立 Video 平台外，API Key 账号可以在管理员列表配置并手动查询上游用量。普通兼容上游以及 OpenCode Zen、Zhipu payg、MiniMax payg 缺省使用 Sub2API 适配器，New API 和 Zivv 必须显式选择；实际站点须支持所选协议。Kimi、DeepSeek、Coding Plan 与 OpenCode GO 的原生查询仍按平台和模式固定适配器。手动查询协议错误只影响展示，不改变转发资格。API Key 行同时保留 TokenRouter 本地今日统计/本地配额和上游余额/周期限额两个来源；只有显式开启且具备原生协议资格的 CN/GO 周期监控可以写统一快照并形成身份绑定的临时停调，三个新增按量模式不进入监控，详见[API Key 上游用量查询](upstream_usage.md)。
+除独立 Video 平台外，API Key 账号可以在管理员列表配置并手动查询上游用量。普通兼容上游以及 OpenCode Zen、Zhipu payg、MiniMax payg 缺省使用 Sub2API 适配器，New API 和 Zivv 必须显式选择；实际站点须支持所选协议。Kimi、DeepSeek、Coding Plan 与 OpenCode GO 的原生查询仍按平台和模式固定适配器。手动查询协议错误只影响展示，不改变转发资格。API Key 行同时保留 TokenRouter 本地今日统计/本地配额和上游余额/周期限额两个来源；只有显式开启且具备原生协议资格的 CN/GO 周期监控可以写统一快照并形成身份绑定的临时停调，OpenCode Zen、Zhipu payg、MiniMax payg 不进入监控；Cline 与 Command Code 官方账号支持钱包隔离监控，详见[API Key 上游用量查询](upstream_usage.md)。
 
 Kimi、Zhipu 和 DeepSeek 只接受 `type=apikey`。`credentials.account_mode` 为 `payg` 或 `coding`，其中 DeepSeek 不支持 `coding`；`credentials.api_protocol` 支持 `chat_completions`、`anthropic` 和 `adaptive`，Kimi、DeepSeek 还支持 `responses`。历史账号缺少这两个字段时分别按 `payg` 和 `chat_completions` 读取。自定义 `base_url`、代理、TLS 指纹与受保护的 Header Override 沿用共同传输边界，平台身份不能从中继 URL 反推。
 
@@ -59,6 +62,7 @@ OpenCode 以 `opencode_go` 平台和 `account_mode=zen|go` 接入，按映射后
 - [MiniMax 上游](minimax_upstream.md)
 - [OpenCode 上游](opencode_upstream.md)
 - [独立 Video 上游](video_upstream.md)
+- [TypeSafe、Cline 与 Command Code 上游](aggregator_upstreams.md)
 
 Kimi、Zhipu、DeepSeek 的账号类型、模式与协议矩阵暂由本页和[API Key 上游用量查询](upstream_usage.md)共同拥有；新增独立认证、OAuth 或供应商专属管理 API 前必须先建立对应平台专题。
 
@@ -76,6 +80,8 @@ Video 分组管理只展示通用权益与视频定价，不提供文本高级�
 
 ## 公开网关协议
 
+TypeSafe 与 OpenCode Zen 的结构化决策使用 `POST /v1/systemone` 或 `/systemone`，不经过聊天协议桥。TypeSafe/Cline/Command Code 的账号、钱包和协议目录见[聚合平台专题](aggregator_upstreams.md)。
+
 文本生成协议是否可进入处理器由分组的 `allowed_client_protocols` 控制。支持集合、新建默认值和迁移值如下；默认值只决定初始选择，所有协议都可关闭：
 
 | 上游平台 | 支持协议 | 新建默认 | 已有分组迁移值 |
@@ -92,16 +98,19 @@ Video 分组管理只展示通用权益与视频定价，不提供文本高级�
 | MiniMax | Messages、Responses、Chat | 三项全部启用 | 不适用，新增平台 |
 | OpenCode Zen / GO | Messages、Responses、Chat | 三项全部启用 | 不适用，新增平台 |
 | Video | 无文本协议 | 空集合 | 不适用，新增平台 |
+| TypeSafe | 无文本协议，仅 SystemOne | 空集合 | 不适用，新增平台 |
+| Cline | Messages、Responses、Chat | 三项全部启用 | 不适用，新增平台 |
+| Command Code | Messages、Responses、Chat | 三项全部启用 | 不适用，新增平台 |
 
 集合顺序固定为 Messages、Responses、Chat、Gemini，空集合对所有平台都合法。准入只控制文本生成协议；Live、WebSocket、Embedding、图片和视频继续使用独立能力规则。
 
 | 协议族或入口 | 当前平台边界 | 专题路由 |
 | --- | --- | --- |
 | 独立视频：`/v1/video/generations`、`/v1/videos` 及原生视频路径 | Video API Key 与 Video 分组；原生请求参数保真，同模型多端点按入站协议自适应；Ark 路径兼容保留 OpenAI Seedance，`/v1/videos` 按平台与 Grok 分流 | [独立 Video 上游](video_upstream.md) |
-| Anthropic Messages：`/v1/messages` | 十一个平台均有平台分派；最终分组允许 Messages 时按平台转换或原生转发 | 各平台契约；共同链路见[网关请求生命周期](../architecture/gateway_request_lifecycle.md) |
+| Anthropic Messages：`/v1/messages` | 十三个平台均有平台分派；最终分组允许 Messages 时按平台转换或原生转发 | 各平台契约；共同链路见[网关请求生命周期](../architecture/gateway_request_lifecycle.md) |
 | Anthropic token count：`/v1/messages/count_tokens`、`/messages/count_tokens` | Anthropic、OpenAI、Gemini 进入各自统计路径，Grok、OpenCode 与四个 CN 平台使用本地估算；Antigravity、Qoder 明确返回 `404`，Anthropic Bedrock 账号也不支持 | 各平台契约；客户端仍应保留本地估算回退 |
-| OpenAI Responses：`/v1/responses`、`/responses` 及允许的子路径 | 十一个平台在最终分组允许 Responses 时进入平台适配；Kimi/Zhipu 不要求账号拥有上游原生 Responses，DeepSeek、MiniMax 可显式使用其 `/responses`；Qoder 不支持 Responses 子路径和 WebSocket | 各平台契约；WebSocket/Realtime 重点见 [OpenAI 上游](openai_upstream.md) |
-| OpenAI Chat Completions：`/v1/chat/completions`、`/chat/completions` | 最终分组允许 Chat 时，十一个平台均按平台转换或原生转发 | 各平台契约 |
+| OpenAI Responses：`/v1/responses`、`/responses` 及允许的子路径 | 十三个平台在最终分组允许 Responses 时进入平台适配；Kimi/Zhipu 不要求账号拥有上游原生 Responses，DeepSeek、MiniMax 可显式使用其 `/responses`；Qoder 不支持 Responses 子路径和 WebSocket | 各平台契约；WebSocket/Realtime 重点见 [OpenAI 上游](openai_upstream.md) |
+| OpenAI Chat Completions：`/v1/chat/completions`、`/chat/completions` | 最终分组允许 Chat 时，十三个平台均按平台转换或原生转发 | 各平台契约 |
 | 模型与用量：`/v1/models`、`/models`、`/v1/usage` | 按 Key、分组、账号和渠道解析可请求模型与本地额度；不是上游模型列表或账单的原样代理 | [模型目录与市场](model_catalog_and_marketplace.md)及各平台专题 |
 | Embeddings：`/v1/embeddings`、`/embeddings` | 仅 OpenAI 分组 | [OpenAI 上游](openai_upstream.md) |
 | Realtime、Live 与 Alpha Search | Live/sideband、Codex realtime 和 alpha search 仅 OpenAI 平台；是否可用还受分组和账号能力限制 | [OpenAI 上游](openai_upstream.md) |

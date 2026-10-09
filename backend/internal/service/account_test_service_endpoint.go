@@ -24,6 +24,7 @@ type AccountTestOptions struct {
 // TestAccountConnectionWithOptions 在旧测试入口外提供显式端点和媒体模式。
 // @project-doc docs/interfaces/http_api.md#account_connection_tests
 func (s *AccountTestService) TestAccountConnectionWithOptions(c *gin.Context, accountID int64, modelID, prompt, testType, mode, endpoint string, options AccountTestOptions) error {
+	bindAccountTestLogContext(c, accountID, modelID, mode, nil)
 	// 验证失败也采用同一 SSE 契约，避免浏览器把首个错误误判为普通文本。
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
@@ -61,6 +62,7 @@ func (s *AccountTestService) TestAccountConnectionWithOptions(c *gin.Context, ac
 	if err != nil || account == nil {
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
+	bindAccountTestLogContext(c, accountID, modelID, mode, account)
 	// Compact 是 OpenAI 账号的专项能力，不能在其它平台静默变成普通文字测试。
 	if endpoint != "auto" && account.Platform != PlatformOpenAI && normalizeAccountTestMode(mode) != AccountTestModeDefault {
 		return s.sendErrorAndEnd(c, "Compact tests are only supported for OpenAI accounts")
@@ -119,6 +121,12 @@ func supportsAccountTestEndpoint(account *Account, endpoint string) bool {
 	}
 	textProtocol := endpoint == APIProtocolChatCompletions || endpoint == APIProtocolResponses || endpoint == APIProtocolAnthropic
 	switch account.Platform {
+	case PlatformTypeSafe:
+		return account.Type == AccountTypeAPIKey && endpoint == APIProtocolSystemOne
+	case PlatformCline:
+		return account.Type == AccountTypeAPIKey && endpoint == APIProtocolChatCompletions
+	case PlatformCommandCode:
+		return account.Type == AccountTypeAPIKey && textProtocol
 	case PlatformOpenAI:
 		return account.Type == AccountTypeAPIKey && textProtocol || account.IsOAuth() && endpoint == APIProtocolResponses
 	case PlatformAnthropic:
@@ -140,6 +148,9 @@ func supportsAccountTestEndpoint(account *Account, endpoint string) bool {
 
 // selectedAccountTestBaseURL 保留中继地址；自适应账号优先使用所选协议的专用地址。
 func selectedAccountTestBaseURL(account *Account, protocol string) string {
+	if isAdditionalAPIKeyPlatform(account.Platform) {
+		return account.additionalProviderBaseURL(protocol)
+	}
 	if account.IsOpenCodeGo() {
 		return account.GetCNProtocolBaseURL(protocol)
 	}
@@ -178,6 +189,12 @@ func (s *AccountTestService) testSelectedAPIKeyEndpoint(c *gin.Context, account 
 		}
 	}
 	modelID = account.GetMappedModel(modelID)
+	if account.IsTypeSafe() {
+		if protocol != APIProtocolSystemOne || !account.supportsSystemOneModel(modelID) {
+			return s.sendErrorAndEnd(c, "TypeSafe requires the jev-latest System One endpoint")
+		}
+		return s.testOpenCodeSystemOneConnection(c, account, modelID, prompt, apiKey)
+	}
 	if account.IsOpenCodeGo() {
 		isSystemOne := IsOpenCodeSystemOneModel(modelID)
 		if (protocol == APIProtocolSystemOne) != isSystemOne {

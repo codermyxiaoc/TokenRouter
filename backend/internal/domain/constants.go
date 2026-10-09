@@ -35,7 +35,10 @@ const (
 	PlatformZhipu       = "zhipu"
 	PlatformDeepseek    = "deepseek"
 	PlatformMiniMax     = "minimax"
-	PlatformOpenCodeGo  = "opencode_go" // OpenCode 平台，账号模式区分 Zen 与 GO。
+	PlatformOpenCodeGo  = "opencode_go"  // OpenCode 平台，账号模式区分 Zen 与 GO。
+	PlatformTypeSafe    = "typesafe"     // Jev 原生结构化决策，不参与聊天协议转换。
+	PlatformCline       = "cline"        // Cline 积分与订阅共用 API Key，按钱包隔离冷却。
+	PlatformCommandCode = "command_code" // Command Code 按模型选择原生协议。
 	PlatformComposite   = "composite"
 	PlatformVideo       = "video" // 独立视频平台只接受显式视频端点的 API Key 账号。
 )

@@ -1463,6 +1463,12 @@ func customModelsListAllowsModel(availablePatterns []string, model string) bool 
 
 func defaultModelIDsForPlatform(platform string) []string {
 	switch platform {
+	case service.PlatformTypeSafe:
+		return []string{service.DefaultTypeSafeModel}
+	case service.PlatformCline:
+		return []string{service.DefaultClineTestModel, service.DefaultClinePassTestModel}
+	case service.PlatformCommandCode:
+		return []string{service.DefaultCommandCodeTestModel}
 	case service.PlatformOpenAI:
 		return openai.DefaultModelIDs()
 	case service.PlatformGemini:

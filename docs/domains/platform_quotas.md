@@ -1,6 +1,6 @@
 # 用户平台额度
 
-本文描述用户在十二个平台上的日、周、月 USD 额度，从注册默认值、请求预检查、成功结算到 Redis/数据库同步的完整语义。它不描述上游账号套餐额度、订阅计划窗口或 API Key 自身限速。
+本文描述用户在十五个平台上的日、周、月 USD 额度，从注册默认值、请求预检查、成功结算到 Redis/数据库同步的完整语义。它不描述上游账号套餐额度、订阅计划窗口或 API Key 自身限速。
 
 ## 章节导航
 
@@ -12,7 +12,7 @@
 
 ## 额度模型
 
-每个用户和平台最多一条 `user_platform_quotas` 活跃记录。允许的平台为 Anthropic、OpenAI、Gemini、Antigravity、Grok、Qoder、Kimi、Zhipu、DeepSeek、MiniMax、OpenCode 和独立 Video。每条记录分别保存日/周/月 limit、usage 和 window start。国产供应商的 payg/coding 只是上游账号模式，用户额度仍按各自平台归属，不拆成额外平台。OpenCode 的 Zen/GO 同样共用 `opencode_go` 额度；Video 的四家协议共用 `video` 平台额度，不占用 MiniMax 文本或历史 Seedance 的 OpenAI 额度。迁移 277 与 289 只扩展允许的平台，不写入无限额记录。
+每个用户和平台最多一条 `user_platform_quotas` 活跃记录。允许的平台为 Anthropic、OpenAI、Gemini、Antigravity、Grok、Qoder、Kimi、Zhipu、DeepSeek、MiniMax、OpenCode、独立 Video、TypeSafe、Cline 和 Command Code。每条记录分别保存日/周/月 limit、usage 和 window start。国产供应商的 payg/coding 只是上游账号模式，用户额度仍按各自平台归属，不拆成额外平台。OpenCode 的 Zen/GO 同样共用 `opencode_go` 额度；Video 的四家协议共用 `video` 平台额度，不占用 MiniMax 文本或历史 Seedance 的 OpenAI 额度。迁移 277、289 与 297 只扩展允许的平台（保留数据库 CHECK 与旧平台），不写入无限额记录。
 
 limit 的三态语义是领域不变量：
 
@@ -48,7 +48,7 @@ Flusher 每批 Pop dirty key、批量读取 Redis、写入绝对 usage/window sn
 
 ## 默认值与管理操作
 
-注册时把全局默认和认证来源默认合并为用户快照；后续修改站点默认值不追溯覆盖已有用户。快照写入只包括已配置限额的平台，并保留脱离注册事务、失败不阻断注册的边界。管理员读取、全量替换一个用户的十二个平台配置，或显式重置某个平台的指定窗口。更新与重置后要失效所有相关 Redis entry；其它平台失效失败意味着新 limit/reset 最长可能延迟到缓存 TTL，应产生告警；Video 直接从数据库读取。迁移只扩展数据库平台约束，不为已有用户回填 CN 或 Video 行，也不清理历史无限额用量。
+注册时把全局默认和认证来源默认合并为用户快照；后续修改站点默认值不追溯覆盖已有用户。快照写入只包括已配置限额的平台，并保留脱离注册事务、失败不阻断注册的边界。管理员读取、全量替换一个用户的十五个平台配置，或显式重置某个平台的指定窗口。更新与重置后要失效所有相关 Redis entry；其它平台失效失败意味着新 limit/reset 最长可能延迟到缓存 TTL，应产生告警；Video 直接从数据库读取。迁移只扩展数据库平台约束，不为已有用户回填 CN 或 Video 行，也不清理历史无限额用量。
 
 管理更新不能用缺失字段表达 `0`：JSON `null` 是无限额，显式数值 `0` 是禁用。全量替换需要审计新增、修改和移除的平台，避免未提交的平台静默保留旧限制。
 

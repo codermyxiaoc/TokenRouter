@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/apicompat"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai_compat"
 	"github.com/TokenFlux/TokenRouter/internal/util/responseheaders"
@@ -71,6 +72,11 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	compatPromptCacheTenantIsolated bool,
 	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
 ) (*OpenAIForwardResult, error) {
+	// 内部调用同样拒绝歧义模型，不能在协议转换后掩盖不同解析器的取值差异。
+	if err := jsonutil.ValidateRoutingModel(body); err != nil {
+		return nil, err
+	}
+
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
@@ -124,9 +130,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	// OpenCode Go：按模型原生协议分流（与 inbound 协议正交）。
 	// 规则未命中一律兜底 Chat Completions，只有显式 Responses 才走下方转换链。
-	if account.IsOpenCodeGo() {
+	if account.IsOpenCodeGo() || account.IsCommandCode() {
 		mapped := resolveOpenCodeGoMappedModel(account, body, defaultMappedModel)
-		proto := openCodeGoNativeProtocol(account, mapped)
+		if rejectOpenCodeStandardModel(account, mapped) {
+			return nil, writeOpenCodeUnsupportedModelError(c, false, mapped)
+		}
+		proto := s.modelRoutedUpstreamProtocol(ctx, account, APIProtocolChatCompletions, mapped)
 		if proto == APIProtocolSystemOne {
 			return nil, fmt.Errorf("Jev models must use the /v1/systemone endpoint")
 		}
@@ -164,7 +173,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	// 自适应账号的标准 Chat 入站使用供应商原生 CC 端点；Responses 形状下，
 	// DeepSeek / Kimi 保留原生 Responses，智谱先转换为 Chat。
-	if account.IsAdaptiveAPIProtocol() && !account.IsOpenCodeGo() {
+	if account.IsAdaptiveAPIProtocol() && !account.IsOpenCodeGo() && !account.IsCommandCode() {
 		if !isResponsesShape {
 			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel, tlsRouterMatch...)
 		}

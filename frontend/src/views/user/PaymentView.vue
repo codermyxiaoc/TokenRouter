@@ -51,7 +51,12 @@
                 :amounts="[10, 20, 50, 100, 200, 500, 1000, 2000, 5000]"
                 :min="globalMinAmount"
                 :max="globalMaxAmount"
+                :bonus-tiers="rechargeBonusTiers"
+                :bonus-mode="rechargeBonusMode"
+                :multiplier="balanceRechargeMultiplier"
+                :currency="selectedCurrency"
               />
+              <div v-if="renderedBonusNotice" class="prose prose-sm mt-4 max-w-none dark:prose-invert" v-html="renderedBonusNotice"></div>
               <p v-if="amountError" class="mt-2 text-xs text-amber-600 dark:text-amber-300">{{ amountError }}</p>
             </div>
             <div v-if="enabledMethods.length >= 1" class="card p-6">
@@ -93,11 +98,15 @@
                 </div>
               </div>
             </div>
-            <div v-if="validAmount > 0" class="card p-6">
+            <div v-if="hasValidRechargeQuote" class="card p-6">
               <div class="space-y-2 text-sm">
                 <div class="flex justify-between">
                   <span class="text-gray-500 dark:text-gray-400">{{ t('payment.paymentAmount') }}</span>
                   <span class="text-gray-900 dark:text-white">{{ formatSelectedPaymentAmount(validAmount) }}</span>
+                </div>
+                <div v-if="rechargeQuote.percent > 0" class="flex justify-between text-green-600 dark:text-green-400">
+                  <span>{{ t(rechargeBonusMode === 'discount' ? 'payment.rechargeBonus.discountLabelWithPercent' : 'payment.rechargeBonus.amountLabelWithPercent', { percent: rechargeQuote.percent }) }}</span>
+                  <span>{{ rechargeBonusMode === 'discount' ? formatSelectedPaymentAmount(validAmount - rechargeQuote.payBase) : formatBalanceAmount(rechargeQuote.bonus, { fractionDigits: 2 }) }}</span>
                 </div>
                 <div v-if="rechargeFeeBreakdown.fixedFee > 0" class="flex justify-between">
                   <span class="text-gray-500 dark:text-gray-400">{{ t('payment.fixedFee') }}</span>
@@ -111,11 +120,11 @@
                   <span class="text-gray-500 dark:text-gray-400">{{ t('payment.feeTotal') }}</span>
                   <span class="text-gray-900 dark:text-white">{{ formatSelectedPaymentAmount(rechargeFeeBreakdown.totalFee) }}</span>
                 </div>
-                <div v-if="rechargeFeeBreakdown.totalFee > 0" class="flex justify-between border-t border-gray-200 pt-2 dark:border-dark-600">
+                <div v-if="rechargeFeeBreakdown.totalFee > 0 || rechargeQuote.percent > 0" class="flex justify-between border-t border-gray-200 pt-2 dark:border-dark-600">
                   <span class="font-medium text-gray-700 dark:text-gray-300">{{ t('payment.actualPay') }}</span>
                   <span class="text-lg font-bold text-primary-600 dark:text-primary-400">{{ formatSelectedPaymentAmount(totalAmount) }}</span>
                 </div>
-                <div v-if="balanceRechargeMultiplier !== 1" class="flex justify-between" :class="{ 'border-t border-gray-200 pt-2 dark:border-dark-600': rechargeFeeBreakdown.totalFee <= 0 }">
+                <div v-if="balanceRechargeMultiplier !== 1 || rechargeQuote.percent > 0" class="flex justify-between" :class="{ 'border-t border-gray-200 pt-2 dark:border-dark-600': rechargeFeeBreakdown.totalFee <= 0 }">
                   <span class="text-gray-500 dark:text-gray-400">{{ t('payment.creditedBalance') }}</span>
                   <span class="text-gray-900 dark:text-white">{{ formatBalanceAmount(creditedAmount, { fractionDigits: 2 }) }}</span>
                 </div>
@@ -129,7 +138,7 @@
                 <span class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
                 {{ t('common.processing') }}
               </span>
-              <span v-else>{{ t('payment.createOrder') }} {{ formatSelectedPaymentAmount(totalAmount) }}</span>
+              <span v-else>{{ t('payment.createOrder') }}<template v-if="hasValidRechargeQuote"> {{ formatSelectedPaymentAmount(totalAmount) }}</template></span>
             </button>
             </template>
           </template>
@@ -372,6 +381,7 @@ import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { normalizeRechargeBonusTiers, normalizeRechargeBonusMode, quoteRechargeBonus } from '@/utils/rechargeBonus'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount, normalizePaymentCurrency, paymentCurrencyFractionDigits } from '@/components/payment/currency'
 import { planValiditySuffix as validitySuffixOf } from '@/components/payment/validity'
@@ -660,6 +670,8 @@ function clearWalletPaymentRequest() {
 const validAmount = computed(() => amount.value ?? 0)
 const balanceRechargeMultiplier = computed(() => {
   const multiplier = checkout.value.balance_recharge_multiplier
+  // 缺省/关闭倍率仍沿用一倍；非有限配置交给报价门禁拒绝，不能伪装成一倍。
+  if (!Number.isFinite(multiplier)) return multiplier
   return multiplier > 0 ? multiplier : 1
 })
 // 订阅 CNY 换算汇率（1 USD = X CNY）。0 = 未配置，订阅保持 price 直付（与后端 opt-in 条件严格镜像）。
@@ -667,7 +679,19 @@ const subscriptionUsdToCnyRate = computed(() => {
   const rate = checkout.value.subscription_usd_to_cny_rate
   return Number.isFinite(rate) && rate > 0 ? rate : 0
 })
-const creditedAmount = computed(() => Math.round((validAmount.value * balanceRechargeMultiplier.value) * 100) / 100)
+const rechargeBonusTiers = computed(() => normalizeRechargeBonusTiers(checkout.value.recharge_bonus_tiers))
+const rechargeBonusMode = computed(() => normalizeRechargeBonusMode(checkout.value.recharge_bonus_mode))
+function rechargeQuoteFor(method: string, paymentAmount = validAmount.value) {
+  return quoteRechargeBonus(rechargeBonusTiers.value, paymentAmount, {
+    multiplier: balanceRechargeMultiplier.value,
+    mode: rechargeBonusMode.value,
+    currencyDigits: paymentCurrencyFractionDigits(normalizePaymentCurrency(visibleMethods.value[method]?.currency)),
+  })
+}
+const rechargeQuote = computed(() => rechargeQuoteFor(selectedMethod.value))
+const creditedAmount = computed(() => rechargeQuote.value.credited)
+// 公告遵循帮助文案的清洗规则，不能通过管理员配置注入脚本。
+const renderedBonusNotice = computed(() => DOMPurify.sanitize(marked.parse(checkout.value.recharge_bonus_notice?.trim() || '') as string))
 const renderedHelpText = computed(() => {
   const content = checkout.value.help_text.trim()
   if (!content) return ''
@@ -689,7 +713,7 @@ const planGridClass = computed(() => {
 
 // Check if an amount fits a method's [min, max]. 0 = no limit.
 function amountFitsMethod(amt: number, methodType: string): boolean {
-  if (amt <= 0) return true
+  if (!Number.isFinite(amt) || amt <= 0) return false
   const ml = visibleMethods.value[methodType]
   if (!ml) return false
   if (ml.single_min > 0 && amt < ml.single_min) return false
@@ -699,12 +723,15 @@ function amountFitsMethod(amt: number, methodType: string): boolean {
 
 // Visible methods decide the amount range shown to users.
 const globalMinAmount = computed(() => {
+  // 优惠与手续费使输入金额不再等于收款金额，交给下方逐渠道报价校验。
+  if (rechargeBonusTiers.value.length > 0) return 0
   const limits = Object.values(visibleMethods.value)
   if (limits.length === 0) return 0
   if (limits.some(limit => limit.single_min <= 0)) return 0
   return Math.min(...limits.map(limit => limit.single_min))
 })
 const globalMaxAmount = computed(() => {
+  if (rechargeBonusTiers.value.length > 0) return 0
   const limits = Object.values(visibleMethods.value)
   if (limits.length === 0) return 0
   if (limits.some(limit => limit.single_max <= 0)) return 0
@@ -805,7 +832,7 @@ const methodOptions = computed<PaymentMethodOption[]>(() =>
       fee_fixed: ml?.fee_fixed ?? 0,
       display_name: ml?.display_name,
       fee_rate: ml?.fee_rate ?? 0,
-      available: ml?.available !== false && amountFitsMethod(validAmount.value, type),
+      available: ml?.available !== false && (amount.value === null || rechargeFitsMethod(type)),
     }
   })
 )
@@ -837,8 +864,8 @@ function ceilMoneyForCurrency(value: number, currency: string): number {
 function calculateFeeBreakdown(baseAmount: number, methodType: string): FeeBreakdown {
   const methodLimit = visibleMethods.value[methodType]
   const currency = normalizePaymentCurrency(methodLimit?.currency)
-  const fixedFee = Math.max(0, Number(methodLimit?.fee_fixed) || 0)
-  const feeRate = Math.max(0, Number(methodLimit?.fee_rate) || 0)
+  const fixedFee = Math.max(0, Number(methodLimit?.fee_fixed ?? 0))
+  const feeRate = Math.max(0, Number(methodLimit?.fee_rate ?? 0))
   const normalizedAmount = roundMoneyForCurrency(baseAmount, currency)
   const normalizedFixedFee = roundMoneyForCurrency(fixedFee, currency)
   const rateFee = normalizedAmount > 0 && feeRate > 0 ? ceilMoneyForCurrency((normalizedAmount * feeRate) / 100, currency) : 0
@@ -852,27 +879,39 @@ function calculateFeeBreakdown(baseAmount: number, methodType: string): FeeBreak
   }
 }
 
-const rechargeFeeBreakdown = computed(() => calculateFeeBreakdown(validAmount.value, selectedMethod.value))
+// 先优惠、再收渠道固定费及比例费，限额也使用同一最终实付报价。
+function rechargeFitsMethod(method: string, paymentAmount = validAmount.value): boolean {
+  if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) return false
+  const quote = rechargeQuoteFor(method, paymentAmount)
+  if (!quote.valid) return false
+  const fees = calculateFeeBreakdown(quote.payBase, method)
+  return Object.values(fees).every(Number.isFinite) && amountFitsMethod(fees.payAmount, method)
+}
+const rechargeFeeBreakdown = computed(() => calculateFeeBreakdown(rechargeQuote.value.payBase, selectedMethod.value))
 const totalAmount = computed(() => rechargeFeeBreakdown.value.payAmount)
+// 报价、展示和提交共用有效性；金额或手续费运算溢出时不展示虚假的零元订单。
+const hasValidRechargeQuote = computed(() => Number.isFinite(validAmount.value) && validAmount.value > 0
+  && rechargeQuote.value.valid && Object.values(rechargeFeeBreakdown.value).every(Number.isFinite) && totalAmount.value > 0)
 
 const amountError = computed(() => {
-  if (validAmount.value <= 0) return ''
+  if (amount.value === null) return ''
+  if (!hasValidRechargeQuote.value) return t('payment.invalidAmount')
   // No method can handle this amount
-  if (!enabledMethods.value.some((m) => amountFitsMethod(validAmount.value, m))) {
+  if (!enabledMethods.value.some((m) => rechargeFitsMethod(m))) {
     return t('payment.amountNoMethod')
   }
   // Selected method can't handle this amount (but others can)
   const ml = selectedLimit.value
   if (ml) {
-    if (ml.single_min > 0 && validAmount.value < ml.single_min) return t('payment.amountTooLow', { min: formatSelectedPaymentAmount(ml.single_min) })
-    if (ml.single_max > 0 && validAmount.value > ml.single_max) return t('payment.amountTooHigh', { max: formatSelectedPaymentAmount(ml.single_max) })
+    if (ml.single_min > 0 && totalAmount.value < ml.single_min) return t('payment.amountTooLow', { min: formatSelectedPaymentAmount(ml.single_min) })
+    if (ml.single_max > 0 && totalAmount.value > ml.single_max) return t('payment.amountTooHigh', { max: formatSelectedPaymentAmount(ml.single_max) })
   }
   return ''
 })
 
 const canSubmit = computed(() =>
-  validAmount.value > 0
-    && amountFitsMethod(validAmount.value, selectedMethod.value)
+  hasValidRechargeQuote.value
+    && rechargeFitsMethod(selectedMethod.value)
     && selectedLimit.value?.available !== false
     && (!isStripeSelected.value || (billingInfo.name.trim() !== '' && billingInfo.email.trim() !== ''))
 )
@@ -911,7 +950,8 @@ const subTotalAmount = computed(() => subscriptionFeeBreakdown.value.payAmount)
 const canSubmitSubscription = computed(() => isBalanceSelected.value
   ? checkout.value.wallet_payment_enabled === true && hasSufficientWalletBalance.value
   : selectedPlan.value !== null
-    && amountFitsMethod(selectedPlan.value.price, selectedMethod.value)
+    // 支付方式列表与提交按钮必须使用同一换汇及手续费后的金额。
+    && amountFitsMethod(subscriptionFeeBreakdown.value.payAmount, selectedMethod.value)
     && selectedLimit.value?.available !== false
     && (!isStripeSelected.value || (billingInfo.name.trim() !== '' && billingInfo.email.trim() !== ''))
 )
@@ -927,8 +967,8 @@ watch(() => [activeTab.value, checkout.value.wallet_payment_enabled, enabledMeth
 
 // Auto-switch to first available method when current selection can't handle the amount
 watch(() => [validAmount.value, selectedMethod.value] as const, ([amt, method]) => {
-  if (isBalanceSelected.value || amt <= 0 || amountFitsMethod(amt, method)) return
-  const available = enabledMethods.value.find((m) => amountFitsMethod(amt, m))
+  if (activeTab.value !== 'recharge' || isBalanceSelected.value || amt <= 0 || rechargeFitsMethod(method)) return
+  const available = enabledMethods.value.find((m) => rechargeFitsMethod(m))
   if (available) selectedMethod.value = available
 })
 
@@ -1076,7 +1116,8 @@ async function handleSubmitRecharge() {
 
 async function confirmSubscribe() {
   if (!selectedPlan.value || submitting.value) return
-  if (isBalanceSelected.value && !canSubmitSubscription.value) return
+  // 同步保护直接触发和状态变化后的提交，不能仅依赖按钮 disabled。
+  if (!canSubmitSubscription.value) return
   if (!validateStripeBillingInfo()) return
   const plan = selectedPlan.value
   // 若订阅状态在选中套餐后才刷新出来，提交订单前再兜底提醒一次。
@@ -1091,10 +1132,17 @@ async function confirmSubscribe() {
 }
 
 async function createOrder(orderAmount: number, orderType: OrderType, planId?: number, options: CreateOrderOptions = {}) {
+  const requestType = normalizeVisibleMethod(options.paymentType || selectedMethod.value) || options.paymentType || selectedMethod.value
+  // 微信恢复令牌由服务端恢复原订单；其余充值入口（含旧版回跳）必须重新验证输入和最终实付。
+  if (!options.wechatResumeToken && orderType === 'balance' && !rechargeFitsMethod(requestType, orderAmount)) {
+    errorMessage.value = t('payment.invalidAmount')
+    errorHintMessage.value = ''
+    appStore.showError(errorMessage.value)
+    return
+  }
   submitting.value = true
   errorMessage.value = ''
   errorHintMessage.value = ''
-  const requestType = normalizeVisibleMethod(options.paymentType || selectedMethod.value) || options.paymentType || selectedMethod.value
   try {
     const payload = buildCreateOrderPayload({
       amount: orderAmount,

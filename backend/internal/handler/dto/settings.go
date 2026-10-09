@@ -314,6 +314,9 @@ type SystemSettings struct {
 	PaymentBalanceRechargeMultiplier float64                   `json:"payment_balance_recharge_multiplier"`
 	PaymentSubscriptionUSDToCNYRate  float64                   `json:"payment_subscription_usd_to_cny_rate"`
 	PaymentRechargeFeeRate           float64                   `json:"payment_recharge_fee_rate"`
+	PaymentRechargeBonusTiers        []RechargeBonusTier       `json:"payment_recharge_bonus_tiers"`
+	PaymentRechargeBonusMode         string                    `json:"payment_recharge_bonus_mode"`
+	PaymentRechargeBonusNotice       string                    `json:"payment_recharge_bonus_notice"`
 	PaymentMethodFees                service.MethodFeeSettings `json:"payment_method_fees"`
 	PaymentLoadBalanceStrat          string                    `json:"payment_load_balance_strategy"`
 	PaymentProductNamePrefix         string                    `json:"payment_product_name_prefix"`

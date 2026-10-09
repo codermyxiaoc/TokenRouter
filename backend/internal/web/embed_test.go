@@ -23,6 +23,21 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
+// API 的无版本别名不能被 SPA 中间件误当成页面，模型广场的 HTML 导航仍保留。
+func TestBareAPIAliasesBypassFrontend(t *testing.T) {
+	for _, path := range []string{"/chat/completions", "/embeddings", "/messages/count_tokens", "/alpha/search", "/web_search", "/x_search", "/tts", "/stt", "/realtime", "/custom-voices", "/custom-voices/id", "/systemone", "/contents/generations/tasks", "/contents/generations/tasks/id", "/v3/contents/generations/tasks/id"} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, path, nil)
+			require.True(t, shouldBypassEmbeddedFrontend(request))
+		})
+	}
+	request := httptest.NewRequest(http.MethodGet, "/models", nil)
+	request.Header.Set("Accept", "text/html")
+	require.False(t, shouldBypassEmbeddedFrontend(request))
+	request.Header.Set("Authorization", "Bearer test-key")
+	require.True(t, shouldBypassEmbeddedFrontend(request))
+}
+
 func TestInjectSiteTitle(t *testing.T) {
 	t.Run("replaces_title_with_site_name", func(t *testing.T) {
 		html := []byte(`<html><head><title>Sub2API - AI API Gateway</title></head><body></body></html>`)
@@ -530,6 +545,9 @@ func TestFrontendServer_Middleware(t *testing.T) {
 			"/health",
 			"/responses",
 			"/responses/compact",
+			"/chat/completions",
+			"/models/gpt-5.5",
+			"/v3/contents/generations/tasks/task-123",
 		}
 
 		for _, path := range apiPaths {
@@ -786,6 +804,40 @@ func TestEmbeddedFrontendModelsRouteNegotiation(t *testing.T) {
 	}
 }
 
+func TestEmbeddedFrontendBypassesBareAPIAliases(t *testing.T) {
+	for _, path := range []string{
+		"/chat/completions",
+		"/embeddings",
+		"/messages/count_tokens",
+		"/models/gpt-5.5",
+		"/videos",
+		"/tts",
+		"/stt",
+		"/custom-voices",
+		"/custom-voices/voice-123",
+		"/custom-voices/voice-123/audio",
+		"/realtime",
+		"/web_search",
+		"/x_search",
+		"/contents/generations/tasks",
+		"/contents/generations/tasks/task-123",
+		"/v3/contents/generations/tasks",
+		"/v3/contents/generations/tasks/task-123",
+	} {
+		require.True(t, shouldBypassEmbeddedFrontend(httptest.NewRequest(http.MethodGet, path, nil)), "path=%s", path)
+	}
+
+	for _, path := range []string{
+		"/model-plaza",
+		"/custom/page-1",
+		"/monitor",
+		"/setup",
+		"/v3/other",
+	} {
+		require.False(t, shouldBypassEmbeddedFrontend(httptest.NewRequest(http.MethodGet, path, nil)), "path=%s", path)
+	}
+}
+
 func TestNewFrontendServer(t *testing.T) {
 	t.Run("creates_server_successfully", func(t *testing.T) {
 		provider := &mockSettingsProvider{
@@ -913,6 +965,9 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 			"/health",
 			"/responses",
 			"/responses/compact",
+			"/chat/completions",
+			"/models/gpt-5.5",
+			"/v3/contents/generations/tasks/task-123",
 		}
 
 		for _, path := range apiPaths {

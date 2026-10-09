@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
@@ -229,6 +230,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		if !gjson.ValidBytes(trimmed) {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
+		}
+		// HTTP Bridge 与非透传模式也在任何帧改写之前校验模型唯一性。
+		if err := jsonutil.ValidateUniqueFields(trimmed, "model", "type", "session", "previous_response_id", "prompt_cache_key"); err != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "duplicate model or websocket control field", err)
 		}
 		if applyUserPromptReplacement {
 			// 后续 response.create 帧先执行用户提示词替换，再进入模型归一化、图片桥接和 OpenAI Fast Policy。

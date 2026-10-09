@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
@@ -61,6 +62,11 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	defaultMappedModel string,
 	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
 ) (*OpenAIForwardResult, error) {
+	// 内部调用同样拒绝歧义模型，不能在协议转换后掩盖不同解析器的取值差异。
+	if err := jsonutil.ValidateRoutingModel(body); err != nil {
+		return nil, err
+	}
+
 	startTime := time.Now()
 
 	// 1. Parse minimal fields needed for routing/billing
@@ -493,6 +499,13 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		return nil, fmt.Errorf("read upstream body: %w", err)
 	}
 
+	if account.IsCline() && !isEventStreamResponse(resp.Header) && !bodyHasSSEFraming(respBody) {
+		respBody, err = normalizeClineChatJSON(respBody)
+		if err != nil {
+			return nil, &UpstreamFailoverError{StatusCode: http.StatusBadGateway, ResponseHeaders: resp.Header.Clone(), ResponseBody: []byte(`{"error":{"message":"Invalid Cline upstream response"}}`)}
+		}
+		resp.Header.Set("Content-Type", "application/json")
+	}
 	var usage OpenAIUsage
 	if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
 		usage = parsedUsage

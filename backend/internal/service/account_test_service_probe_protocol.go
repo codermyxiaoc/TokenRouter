@@ -14,10 +14,12 @@ const accountTestExplicitProbeProtocolContextKey = "account_test_explicit_probe_
 // testAccountConnectionForProbeProtocol 仅在分组探测中覆盖单次测试协议。
 // 独立复制可修改的配置，避免污染仓储缓存或改变正常业务与管理员完整账号诊断。
 func (s *AccountTestService) testAccountConnectionForProbeProtocol(c *gin.Context, accountID int64, modelID, prompt, protocol string) error {
+	bindAccountTestLogContext(c, accountID, modelID, protocol, nil)
 	storedAccount, err := s.accountRepo.GetByID(c.Request.Context(), accountID)
 	if err != nil || storedAccount == nil {
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
+	bindAccountTestLogContext(c, accountID, modelID, protocol, storedAccount)
 	if err := ValidateGroupAvailabilityProbeProtocol(storedAccount.Platform, protocol); err != nil {
 		return s.sendErrorAndEnd(c, err.Error())
 	}
@@ -32,7 +34,7 @@ func (s *AccountTestService) testAccountConnectionForProbeProtocol(c *gin.Contex
 	}
 	c.Set(accountTestExplicitProbeProtocolContextKey, true)
 
-	if account.IsCNProvider() || account.IsOpenCodeGo() {
+	if account.IsCNProvider() || account.IsOpenCodeGo() || account.IsCline() || account.IsCommandCode() {
 		if account.Type != AccountTypeAPIKey {
 			return s.sendErrorAndEnd(c, "Selected probe protocol requires an API Key account")
 		}

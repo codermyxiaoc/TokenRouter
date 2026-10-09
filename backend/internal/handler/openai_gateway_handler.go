@@ -18,6 +18,7 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ip"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	middleware2 "github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/service"
@@ -338,7 +339,7 @@ func (h *OpenAIGatewayHandler) handleOpenAISelectionBusinessError(c *gin.Context
 func openAICompatibleRequestPlatform(apiKey *service.APIKey) string {
 	if apiKey != nil && apiKey.Group != nil {
 		switch apiKey.Group.Platform {
-		case service.PlatformGrok, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax, service.PlatformOpenCodeGo:
+		case service.PlatformGrok, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax, service.PlatformOpenCodeGo, service.PlatformTypeSafe, service.PlatformCline, service.PlatformCommandCode:
 			return apiKey.Group.Platform
 		}
 	}
@@ -2341,6 +2342,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "invalid JSON payload")
 		return
 	}
+	// 首帧先拒绝重复模型，避免改写消除歧义后按错误模型选账号或计费。
+	if err := jsonutil.ValidateUniqueFields(firstMessage, "model", "type", "session", "previous_response_id", "prompt_cache_key"); err != nil {
+		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "duplicate model or websocket control field")
+		return
+	}
 	// 用户提示词替换必须在首帧模型解析、内容审计和会话 hash 前执行，保证 WS 首轮请求与 HTTP 入口一致。
 	firstMessage = h.gatewayService.ApplyUserPromptReplacement(ctx, firstMessage, "openai_responses")
 	firstMessage, err = service.RewriteAPIKeyAdditionalModels(firstMessage, apiKey.ModelMapping)
@@ -2696,6 +2702,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "billing check failed")
 			return
 		}
+		var turnBillingAPIKeys openAIWSTurnBillingAPIKeys
 		hooks := &service.OpenAIWSIngressHooks{
 			ClientLifecycleContext:      clientLifecycleCtx,
 			InitialRequestModel:         reqModel,
@@ -2765,6 +2772,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if !gjson.ValidBytes(payload) {
 					return payload, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
 				}
+				if err := jsonutil.ValidateUniqueFields(payload, "model", "type", "session", "previous_response_id", "prompt_cache_key"); err != nil {
+					return payload, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "duplicate model or websocket control field", err)
+				}
 				rewrittenPayload, rewriteErr := service.RewriteAPIKeyAdditionalModels(payload, apiKey.ModelMapping)
 				if rewriteErr != nil {
 					return payload, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket tool model", rewriteErr)
@@ -2807,6 +2817,8 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if turn == 1 {
 					return nil
 				}
+				// 同一连接的后续轮次采用最新分组定价，原连接与在途轮次保持各自快照。
+				turnBillingAPIKeys.begin(ctx, h.apiKeyService, turn, apiKey)
 				// 防御式清理：避免异常路径下旧槽位覆盖导致泄漏。
 				releaseTurnSlots()
 				// 非首轮 turn 需要重新抢占并发槽位，避免长连接空闲占槽。
@@ -2843,6 +2855,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			},
 			AfterTurn: func(capture service.OpenAIWSTurnCapture) {
 				turn := capture.Turn
+				turnBillingAPIKey := turnBillingAPIKeys.forTurn(turn, apiKey)
 				result := capture.Result
 				turnErr := capture.Err
 				turnClientModel := strings.TrimSpace(capture.OriginalModel)
@@ -2910,7 +2923,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					taskCtx = service.PropagateAPIKeyModelRedirectTrace(taskCtx, turnCtx)
 					if err := h.gatewayService.RecordUsage(taskCtx, &service.OpenAIRecordUsageInput{
 						Result:             result,
-						APIKey:             apiKey,
+						APIKey:             turnBillingAPIKey,
 						User:               apiKey.User,
 						Account:            account,
 						Subscription:       subscription,

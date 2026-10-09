@@ -7,6 +7,13 @@ export function nativeUpstreamUsageAdapter(account: UpstreamUsageAccount): strin
   if (account.type !== 'apikey') return null
   const rawMode = account.credentials?.account_mode
   const mode = typeof rawMode === 'string' ? rawMode.trim() : ''
+  // 原生钱包接口只允许官方域名；自定义中继仍走管理员选择的通用查询。
+  if (account.platform === 'cline' || account.platform === 'command_code') {
+    const expected = account.platform === 'cline' ? 'api.cline.bot' : 'api.commandcode.ai'
+    const base = typeof account.credentials?.base_url === 'string' ? account.credentials.base_url.trim() : ''
+    if (!base) return account.platform
+    try { return new URL(base).hostname.toLowerCase() === expected ? account.platform : null } catch { return null }
+  }
   switch (account.platform) {
     case 'kimi': return mode === 'coding' ? 'kimi_coding' : 'kimi_balance'
     case 'zhipu': return mode === 'coding' ? 'zhipu_coding' : null

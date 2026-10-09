@@ -48,6 +48,8 @@
 <script lang="ts">
 let dialogIdCounter = 0
 let openDialogCount = 0
+// 按实际打开顺序保存弹窗，Escape 只能关闭最上层的一次。
+const openDialogs = new Set<string>()
 </script>
 
 <script setup lang="ts">
@@ -111,18 +113,21 @@ const handleClose = () => {
 }
 
 const handleEscape = (event: KeyboardEvent) => {
-  if (props.show && props.closeOnEscape && event.key === 'Escape') {
+  if (props.show && props.closeOnEscape && event.key === 'Escape' && [...openDialogs].pop() === dialogId) {
     emit('close')
   }
 }
 
 const lockBodyScroll = () => {
+  if (bodyScrollLocked.value) return
+  openDialogs.add(dialogId)
   openDialogCount++
   document.body.classList.add('modal-open')
   bodyScrollLocked.value = true
 }
 
 const unlockBodyScroll = () => {
+  openDialogs.delete(dialogId)
   if (!bodyScrollLocked.value) {
     return
   }

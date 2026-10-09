@@ -45,6 +45,15 @@ export function useAccountTestOptions(
         case 'minimax':
           endpoints = ['auto', 'chat_completions', 'responses', 'anthropic']
           break
+        case 'command_code':
+          endpoints = ['auto', 'chat_completions', 'responses', 'anthropic']
+          break
+        case 'typesafe':
+          endpoints = ['auto', 'systemone']
+          break
+        case 'cline':
+          endpoints = ['auto', 'chat_completions']
+          break
         case 'zhipu':
           endpoints = ['auto', 'chat_completions', 'anthropic']
           break

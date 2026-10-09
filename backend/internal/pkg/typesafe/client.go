@@ -37,7 +37,7 @@ type Usage struct {
 
 // Evaluate 只执行单次请求，超时、重试及密钥轮换由调用方管理。
 func Evaluate(ctx context.Context, client *http.Client, baseURL, key string, input Request) (*Result, int, error) {
-	endpoint, err := url.JoinPath(strings.TrimRight(baseURL, "/"), "/v1/systemone")
+	endpoint, err := url.JoinPath(strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(baseURL), "/"), "/v1"), "/v1/systemone")
 	if err != nil {
 		return nil, 0, errors.New("typesafe invalid endpoint")
 	}
@@ -64,8 +64,8 @@ func Evaluate(ctx context.Context, client *http.Client, baseURL, key string, inp
 		return nil, resp.StatusCode, fmt.Errorf("typesafe API status %d", resp.StatusCode)
 	}
 	var out struct {
-		Model   string `json:"model"`
-		Usage   Usage  `json:"usage"`
+		Model   string          `json:"model"`
+		Usage   json.RawMessage `json:"usage"`
 		Answers map[string]struct {
 			Type string   `json:"type"`
 			Noul *float64 `json:"noul"`
@@ -74,7 +74,10 @@ func Evaluate(ctx context.Context, client *http.Client, baseURL, key string, inp
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil || strings.TrimSpace(out.Model) == "" {
 		return nil, resp.StatusCode, errors.New("typesafe invalid response")
 	}
-	result := &Result{Model: out.Model, Usage: out.Usage, Scores: make(map[string]float64, len(input.Questions))}
+	// 用量是审核接口的附加信息，兼容数值字符串，不放宽评分本身的校验。
+	var rawUsage map[string]json.RawMessage
+	_ = json.Unmarshal(out.Usage, &rawUsage)
+	result := &Result{Model: out.Model, Usage: Usage{InputTokens: moderationTokenCount(rawUsage["input_tokens"]), OutputTokens: moderationTokenCount(rawUsage["output_tokens"])}, Scores: make(map[string]float64, len(input.Questions))}
 	for id := range input.Questions {
 		answer, ok := out.Answers[id]
 		if !ok || answer.Type != "noul" || answer.Noul == nil || math.IsNaN(*answer.Noul) || math.IsInf(*answer.Noul, 0) || *answer.Noul < 0 || *answer.Noul > 1 {
@@ -83,4 +86,21 @@ func Evaluate(ctx context.Context, client *http.Client, baseURL, key string, inp
 		result.Scores[id] = *answer.Noul
 	}
 	return result, resp.StatusCode, nil
+}
+
+// 审核附加用量只接受非负有限数值，限界后转换避免溢出。
+func moderationTokenCount(raw json.RawMessage) int {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		raw = json.RawMessage(strings.TrimSpace(text))
+	}
+	var number json.Number
+	if json.Unmarshal(raw, &number) != nil {
+		return 0
+	}
+	value, err := number.Float64()
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+		return 0
+	}
+	return int(math.Round(math.Min(value, 1<<40)))
 }

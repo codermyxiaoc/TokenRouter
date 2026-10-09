@@ -105,6 +105,8 @@ Antigravity 同时提供 Claude 与 Gemini 模型族。Gemini 3.6、3.7、3.8 Fl
 - OAuth credential 被刷新后仍遭拒绝时返回要求重新授权并检查 project ID 的脱敏提示，同时把账号标记为可恢复错误。
 - 只有白名单中的安全上游提示可以透传；响应体日志受开关、字节上限和脱敏约束。
 
+Gemini 原生错误响应统一构造 `application/json` 的 code/status/message，移除 details 等内部结构。message 会清理 GCP 项目标识、服务账号邮箱、敏感查询参数等身份信息；原始上游正文只留给受控的内部错误策略与诊断，不直接返回客户端。
+
 修改适配器时应覆盖非流/流、Claude/Gemini/OpenAI 三种客户端形状、工具/thinking、单/多账号限流、混合调度关闭后的快照失效和用量归属测试。
 
 相关文档：[上游账号能力矩阵](upstream_account_matrix.md)、[网关请求生命周期](../architecture/gateway_request_lifecycle.md)、[路由与结算](../domains/routing_and_billing.md)、[HTTP 接口边界](http_api.md)、[接口目录](index.md)。

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
 	openaiwsv2 "github.com/TokenFlux/TokenRouter/internal/service/openai_ws_v2"
@@ -764,6 +765,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
 	}
+	if err := validateOpenAIWSPassthroughModelFields(firstClientMessage); err != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
+	}
 	firstTurnStartedAt := time.Now()
 	if hooks != nil && !hooks.InitialTurnStartedAt.IsZero() {
 		firstTurnStartedAt = hooks.InitialTurnStartedAt
@@ -1113,6 +1117,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
 				return payload, nil, nil
 			}
+			if err := validateOpenAIWSPassthroughModelFields(payload); err != nil {
+				return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
+			}
 			// 后续 response.create 帧在策略过滤和上游转发前执行同一套用户提示词替换。
 			payload = s.ApplyUserPromptReplacement(ctx, payload, "openai_responses")
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
@@ -1403,6 +1410,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					RequestID: turn.RequestID,
 					Usage: OpenAIUsage{
 						InputTokens:              turn.Usage.InputTokens,
+						ImageInputTokens:         turn.Usage.ImageInputTokens,
 						OutputTokens:             turn.Usage.OutputTokens,
 						CacheCreationInputTokens: turn.Usage.CacheCreationInputTokens,
 						CacheReadInputTokens:     turn.Usage.CacheReadInputTokens,
@@ -1570,6 +1578,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		RequestID: relayResult.RequestID,
 		Usage: OpenAIUsage{
 			InputTokens:              relayResult.Usage.InputTokens,
+			ImageInputTokens:         relayResult.Usage.ImageInputTokens,
 			OutputTokens:             relayResult.Usage.OutputTokens,
 			CacheCreationInputTokens: relayResult.Usage.CacheCreationInputTokens,
 			CacheReadInputTokens:     relayResult.Usage.CacheReadInputTokens,
@@ -1678,12 +1687,39 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	)
 	if hooks != nil && hooks.AfterTurn != nil && turnPayloads.Len() > 0 {
 		turnPayload := turnPayloads.Pop()
+		var partialResult *OpenAIForwardResult
+		if relayExit.Stage == "upstream_usage" {
+			// 坏计量不能成功结算；此前同轮已验证的消耗仍交给既有失败结算路径。
+			partial := *result
+			partial.RequestID = relayResult.PendingRequestID
+			partial.Usage = OpenAIUsage{
+				InputTokens:              relayResult.PendingUsage.InputTokens,
+				ImageInputTokens:         relayResult.PendingUsage.ImageInputTokens,
+				OutputTokens:             relayResult.PendingUsage.OutputTokens,
+				CacheCreationInputTokens: relayResult.PendingUsage.CacheCreationInputTokens,
+				CacheReadInputTokens:     relayResult.PendingUsage.CacheReadInputTokens,
+				ImageOutputTokens:        relayResult.PendingUsage.ImageOutputTokens,
+			}
+			if turnPayload.OriginalModel != "" {
+				partial.Model = turnPayload.OriginalModel
+			}
+			partial.UpstreamModel = turnPayload.UpstreamModel
+			partial.ServiceTier = turnPayload.ServiceTier
+			partial.UpstreamResponseServiceTier = ""
+			partial.ReasoningEffort = turnPayload.ReasoningEffort
+			partial.RequestedReasoningEffort = turnPayload.RequestedReasoningEffort
+			partial.FirstTokenMs = nil
+			partial.Duration = time.Since(turnPayload.StartedAt)
+			partial.UpstreamTerminalEvent = "response.failed"
+			partialResult = &partial
+		}
 		hooks.AfterTurn(OpenAIWSTurnCapture{
 			Turn:               turnCount + 1,
 			StartedAt:          turnPayload.StartedAt,
 			RequestBody:        turnPayload.RequestBody,
 			OriginalModel:      turnPayload.OriginalModel,
 			PreviousResponseID: turnPayload.PreviousResponseID,
+			Result:             partialResult,
 			Err:                turnErr,
 			PayloadSource:      turnPayload.Source,
 		})
@@ -1707,10 +1743,22 @@ func openAIWSPassthroughRelayClientClose(exit openaiwsv2.RelayExit, completedTur
 		}
 		return 0, "", false
 	}
-	if !exit.Graceful && exit.Stage == "read_upstream" {
+	if !exit.Graceful && (exit.Stage == "read_upstream" || exit.Stage == "upstream_usage") {
 		return coderws.StatusInternalError, "upstream websocket proxy failed", true
 	}
 	return 0, "", false
+}
+
+// 模型唯一性必须先于规范化与策略改写；session.update 还会改变后续省略 model 的轮次。
+func validateOpenAIWSPassthroughModelFields(payload []byte) error {
+	if !gjson.ValidBytes(payload) {
+		return nil
+	}
+	if err := jsonutil.ValidateUniqueFields(payload, "type", "model", "session", "previous_response_id", "prompt_cache_key"); err != nil {
+		return err
+	}
+	// 不能依据首个 type 决定是否校验 session，后端解析器可能采用另一个同名 type。
+	return jsonutil.ValidateRoutingModel([]byte(gjson.GetBytes(payload, "session").Raw))
 }
 
 func markOpenAIWSV2PassthroughCyberPolicy(c *gin.Context, payload []byte) bool {

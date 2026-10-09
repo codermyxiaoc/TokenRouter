@@ -1,3 +1,4 @@
+import type { RechargeBonusTier } from '@/utils/rechargeBonus';
 /**
  * 管理员系统设置接口。
  * 负责后台系统设置的读取与保存。
@@ -53,7 +54,7 @@ type DefaultSubscriptionInput = Partial<DefaultSubscriptionSetting> & {
 };
 
 // ── 平台限额类型 ──────────────────────────────────────────────────
-export type PlatformType = "anthropic" | "openai" | "gemini" | "antigravity" | "qoder" | "grok" | "kimi" | "zhipu" | "deepseek" | "minimax" | "opencode_go" | "video"
+export type PlatformType = "anthropic" | "openai" | "gemini" | "antigravity" | "qoder" | "grok" | "kimi" | "zhipu" | "deepseek" | "minimax" | "opencode_go" | "video" | "typesafe" | "cline" | "command_code"
 export type QuotaWindowType = "daily" | "weekly" | "monthly"
 
 /** 单平台三档限额；null = 不限制，undefined = 未填（等价 null） */
@@ -66,9 +67,9 @@ export interface PlatformQuotaLimits {
 /** 全平台默认限额 map（key = PlatformType） */
 export type DefaultPlatformQuotasMap = Partial<Record<PlatformType, PlatformQuotaLimits>>
 
-const PLATFORMS: PlatformType[] = ["anthropic", "openai", "gemini", "antigravity", "qoder", "grok", "kimi", "zhipu", "deepseek", "minimax", "opencode_go", "video"]
+const PLATFORMS: PlatformType[] = ["anthropic", "openai", "gemini", "antigravity", "qoder", "grok", "kimi", "zhipu", "deepseek", "minimax", "opencode_go", "video", "typesafe", "cline", "command_code"]
 
-export type SchedulingThresholdPlatformType = "openai" | "anthropic" | "grok" | "kimi" | "zhipu" | "minimax" | "opencode_go"
+export type SchedulingThresholdPlatformType = "openai" | "anthropic" | "grok" | "kimi" | "zhipu" | "minimax" | "opencode_go" | "command_code"
 
 export type AccountSchedulingThresholdsMap = Record<SchedulingThresholdPlatformType, number>
 
@@ -82,6 +83,7 @@ export const SCHEDULING_THRESHOLD_PLATFORMS: SchedulingThresholdPlatformType[] =
   "zhipu",
   "minimax",
   "opencode_go",
+  "command_code",
 ]
 
 /** 将各平台自动停调阈值归一化到 1 到 100，100 表示关闭。 */
@@ -748,6 +750,9 @@ export interface SystemSettings {
   payment_balance_recharge_multiplier: number;
   payment_subscription_usd_to_cny_rate: number;
   payment_recharge_fee_rate: number;
+  payment_recharge_bonus_tiers?: RechargeBonusTier[];
+  payment_recharge_bonus_mode?: string;
+  payment_recharge_bonus_notice?: string;
   payment_method_fees: Record<string, PaymentMethodFeeConfig>;
   payment_load_balance_strategy: string;
   payment_product_name_prefix: string;
@@ -1073,6 +1078,9 @@ export interface UpdateSettingsRequest {
   payment_balance_recharge_multiplier?: number;
   payment_subscription_usd_to_cny_rate?: number;
   payment_recharge_fee_rate?: number;
+  payment_recharge_bonus_tiers?: RechargeBonusTier[];
+  payment_recharge_bonus_mode?: string;
+  payment_recharge_bonus_notice?: string;
   payment_method_fees?: Record<string, PaymentMethodFeeConfig>;
   payment_load_balance_strategy?: string;
   payment_product_name_prefix?: string;

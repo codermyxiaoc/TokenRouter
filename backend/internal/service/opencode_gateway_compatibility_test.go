@@ -18,7 +18,7 @@ import (
 // 三种客户端均根据映射后模型选协议，且不能重复应用映射或提前写出可恢复错误。
 func TestOpenCodeGatewayProtocolMatrixAndRecoverableErrors(t *testing.T) {
 	for _, mode := range []string{AccountModeZen, AccountModeGo} {
-		for _, model := range []string{"gpt-5.6-luna", "qwen3.8-max", "glm-5.3"} {
+		for _, model := range []string{"gpt-5.6-luna", "qwen3.8-max", "qwen3.8-flash", "glm-5.3"} {
 			for _, ingress := range cnProtocolIngressCases() {
 				t.Run(mode+"/"+model+"/"+ingress.name, func(t *testing.T) {
 					account := adaptiveProtocolTestAccount(PlatformOpenCodeGo, map[string]any{
@@ -42,7 +42,7 @@ func TestOpenCodeGatewayProtocolMatrixAndRecoverableErrors(t *testing.T) {
 					if strings.HasPrefix(model, "gpt-") {
 						wantHost, wantEndpoint = "responses.example", "/v1/responses"
 					}
-					if strings.HasPrefix(model, "qwen") {
+					if strings.HasPrefix(model, "qwen") && !(mode == AccountModeZen && model == "qwen3.8-max") {
 						wantHost, wantEndpoint = "anthropic.example", "/v1/messages"
 					}
 					require.Equal(t, wantHost, upstream.lastReq.URL.Host)

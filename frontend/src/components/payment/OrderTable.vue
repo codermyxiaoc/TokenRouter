@@ -18,8 +18,11 @@
         <span v-if="row.fee_rate > 0" class="ml-1 text-xs text-gray-400" :title="t('payment.orders.fee') + ': ' + row.fee_rate + '%'">
           ({{ t('payment.orders.fee') }} {{ row.fee_rate }}%)
         </span>
-        <div v-if="row.amount !== row.pay_amount" class="text-xs text-gray-500">
+        <div v-if="row.amount !== row.pay_amount || (row.bonus_amount || 0) > 0" class="text-xs text-gray-500">
           {{ t('payment.orders.creditedAmount') }}: {{ formatOrderAmount(row.amount, row) }}
+        </div>
+        <div v-if="row.order_type === 'balance' && (row.bonus_amount || 0) > 0" class="text-xs text-green-600 dark:text-green-400">
+          {{ t('payment.orders.bonusIncluded', { amount: formatOrderAmount(row.bonus_amount, row) }) }}
         </div>
       </div>
     </template>

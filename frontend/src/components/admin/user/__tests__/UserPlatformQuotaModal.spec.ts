@@ -109,6 +109,7 @@ describe('UserPlatformQuotaModal', () => {
     expect(html).toContain('zhipu')
     expect(html).toContain('deepseek')
     expect(html).toContain('minimax')
+    for (const platform of ['video', 'opencode_go', 'typesafe', 'cline', 'command_code']) expect(html).toContain(platform)
   })
 
   it('已有数据正确填充 limit input', async () => {

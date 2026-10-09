@@ -57,25 +57,31 @@ export function useStepUp() {
   const visible = ref(false)
   const blockedReason = ref<string>('')
   let resolver: ((ok: boolean) => void) | null = null
+  // 并发敏感操作共享同一次验证，避免覆盖第一个调用者的回调。
+  let pendingPrompt: Promise<boolean> | null = null
 
   /** 打开 TOTP 对话框，取得授权后返回 true。 */
   function prompt(): Promise<boolean> {
+    if (pendingPrompt) return pendingPrompt
     visible.value = true
-    return new Promise<boolean>((resolve) => {
+    pendingPrompt = new Promise<boolean>((resolve) => {
       resolver = resolve
     })
+    return pendingPrompt
   }
 
   function onVerified() {
     visible.value = false
     resolver?.(true)
     resolver = null
+    pendingPrompt = null
   }
 
   function onCancel() {
     visible.value = false
     resolver?.(false)
     resolver = null
+    pendingPrompt = null
   }
 
   /**

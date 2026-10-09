@@ -29,6 +29,7 @@ import { nextTick } from 'vue'
 import UsageTable from '../UsageTable.vue'
 
 const messages: Record<string, string> = {
+  'usage.outputTps': 'Output TPS',
   'admin.usage.userDeletedBadge': 'Deleted',
   'usage.costDetails': 'Cost Breakdown',
   'admin.usage.inputCost': 'Input Cost',
@@ -126,6 +127,7 @@ const DataTableStub = {
         <slot name="cell-billing_mode" :row="row" />
         <slot name="cell-billing_type" :row="row" />
         <slot name="cell-tokens" :row="row" />
+        <slot name="cell-latency" :row="row" />
         <slot name="cell-cost" :row="row" />
         <slot name="cell-latency" :row="row" />
         <slot name="cell-request_id" :row="row" />
@@ -304,6 +306,25 @@ describe('admin UsageTable detailed timing tooltip', () => {
 })
 
 describe('admin UsageTable tooltip', () => {
+  it('文本 TPS 使用完整耗时，图片与全部视频模式不展示文本速度', () => {
+    const row = { ...baseImageRow, image_count: 0, image_output_tokens: 0, billing_mode: 'token', output_tokens: 1000, duration_ms: 20_000, first_token_ms: 10_000 }
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [row, { ...row, request_id: 'no-duration', duration_ms: null }, { ...row, request_id: 'image', image_count: 1 },
+          ...['video', 'video_token', 'video_per_request'].map(billing_mode => ({ ...row, request_id: billing_mode, billing_mode }))],
+        loading: false,
+        columns: [{ key: 'latency', label: 'Latency' }],
+      },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    // 桌面与手机两种耗时展示均应应用同一媒体排除规则。
+    expect(wrapper.findAll('[data-testid="output-tps"]').map(cell => cell.text())).toEqual(
+      ['50.0 tok/s', '—', '—', '—', '—', '—'].flatMap(value => [value, value])
+    )
+    expect(wrapper.text()).toContain('Output TPS')
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
       x: 0,
@@ -891,6 +912,7 @@ const DataTableStubWithUser = {
         <slot name="cell-model" :row="row" :value="row.model" />
         <slot name="cell-billing_mode" :row="row" />
         <slot name="cell-tokens" :row="row" />
+        <slot name="cell-latency" :row="row" />
         <slot name="cell-cost" :row="row" />
       </div>
     </div>

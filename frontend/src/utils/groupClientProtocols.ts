@@ -51,6 +51,17 @@ const GROUP_CLIENT_PROTOCOL_POLICIES: Record<GroupPlatform, GroupClientProtocolP
     supported: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
     defaults: ['anthropic_messages', 'openai_responses', 'openai_chat_completions']
   },
+  // 新平台保留现有三种客户端入口，账号适配器负责桥接到其原生协议。
+  // TypeSafe 仅支持 SystemOne，不开放对话客户端协议。
+  typesafe: { supported: [], defaults: [] },
+  cline: {
+    supported: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
+    defaults: ['anthropic_messages', 'openai_responses', 'openai_chat_completions']
+  },
+  command_code: {
+    supported: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
+    defaults: ['anthropic_messages', 'openai_responses', 'openai_chat_completions']
+  },
   // OpenCode 可接入三种客户端协议，由账号模型规则选择上游。
   opencode_go: {
     supported: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],

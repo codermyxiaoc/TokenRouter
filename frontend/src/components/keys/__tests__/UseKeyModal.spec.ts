@@ -22,6 +22,16 @@ vi.mock('@/composables/useClipboard', () => ({
 import UseKeyModal from '../UseKeyModal.vue'
 
 describe('UseKeyModal', () => {
+  it('TypeSafe 只生成 SystemOne 调用，不能误用对话 CLI', () => {
+    const wrapper = mount(UseKeyModal, { props: { show: true, platform: 'typesafe', apiKey: 'sk-test', baseUrl: 'https://example.test/v1', allowedClientProtocols: [] },
+      global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } } })
+    expect(wrapper.text()).toContain('/v1/systemone')
+    expect(wrapper.text()).toContain('jev-latest')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.cliTabs.claudeCode')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.cliTabs.codexCli')
+    wrapper.unmount()
+  })
+
   // 引导保留部署前缀、消除版本后缀，空白配置回退本站，不假设任何兼容入口已启用。
   it.each([
     { baseUrl: 'https://example.test', expected: 'https://example.test' },

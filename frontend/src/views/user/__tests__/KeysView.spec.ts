@@ -1016,7 +1016,7 @@ describe('user KeysView column settings', () => {
     expect(composite.vm.$slots.option).toBeTypeOf('function')
   })
 
-  it('keeps filters and selected page size when sorting by current concurrency', async () => {
+  it.each(['current_concurrency', 'group'])('keeps filters and selected page size when sorting by %s', async (sortBy) => {
     getAvailableGroups.mockResolvedValue([{ id: 42, name: 'OpenAI' }])
     const wrapper = await mountView()
 
@@ -1035,7 +1035,7 @@ describe('user KeysView column settings', () => {
 
     listKeys.mockClear()
 
-    await wrapper.get('[data-test="sort-current-concurrency"]').trigger('click')
+    await wrapper.findComponent({ name: 'DataTable' }).vm.$emit('sort', sortBy, 'asc')
     await flushPromises()
 
     expect(listKeys).toHaveBeenLastCalledWith(
@@ -1046,7 +1046,7 @@ describe('user KeysView column settings', () => {
         status: 'active',
         group_id: 42,
         scope: 'personal',
-        sort_by: 'current_concurrency',
+        sort_by: sortBy,
         sort_order: 'asc',
       },
       expect.objectContaining({ signal: expect.any(AbortSignal) })

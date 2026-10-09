@@ -34,6 +34,7 @@ import type { GroupPlatform } from '@/types'
 import { currentServerTimezoneLabel, formatPeakRateWindow } from '@/utils/peak-rate'
 import PlatformIcon from './PlatformIcon.vue'
 import ProviderIcon from './ProviderIcon.vue'
+import { platformBadgeLightClass } from '@/utils/platformColors'
 import { resolveProviderBrand } from '@/utils/providerBrand'
 
 interface Props {
@@ -165,6 +166,7 @@ const badgeClass = computed(() => {
   if (brandName.value) {
     return `ring-1 ring-inset ${resolveProviderBrand(brandName.value).badgeClass}`
   }
+  if (['typesafe', 'cline', 'command_code'].includes(props.platform ?? '')) return platformBadgeLightClass(props.platform!)
   if (props.platform === 'anthropic') {
     return 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
   }

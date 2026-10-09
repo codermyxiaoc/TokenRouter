@@ -421,6 +421,9 @@ const openCodeProtocolPriority: Record<GroupPlatform, readonly GroupClientProtoc
   deepseek: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
   minimax: ['anthropic_messages', 'openai_responses', 'openai_chat_completions'],
   video: [],
+  typesafe: [],
+  cline: ['openai_chat_completions', 'openai_responses', 'anthropic_messages'],
+  command_code: ['openai_chat_completions', 'openai_responses', 'anthropic_messages'],
   opencode_go: ['openai_chat_completions', 'openai_responses', 'anthropic_messages']
 }
 
@@ -496,6 +499,7 @@ const SparkleIcon = {
 
 const clientTabs = computed((): TabConfig[] => {
   if (!props.platform) return []
+  if (props.platform === 'typesafe') return [{ id: 'systemone', label: 'SystemOne', icon: TerminalIcon }]
   const tabs = new Map<string, TabConfig>()
   if (props.platform === 'grok' && allowsNonClaudeProtocol('openai_responses')) {
     tabs.set('grok', { id: 'grok', label: t('keys.useKeyModal.cliTabs.grokCli'), icon: TerminalIcon })
@@ -712,6 +716,7 @@ const currentTabs = computed(() => {
 })
 
 const platformDescription = computed(() => {
+  if (props.platform === 'typesafe') return t('admin.accounts.additionalProviders.systemOneDescription')
   switch (props.platform) {
     case 'openai':
       if (activeClientTab.value === 'claude') {
@@ -736,6 +741,7 @@ const platformDescription = computed(() => {
 })
 
 const platformNote = computed(() => {
+  if (props.platform === 'typesafe') return t('admin.accounts.additionalProviders.systemOneNote')
   switch (props.platform) {
     case 'openai':
       if (activeClientTab.value === 'claude') {
@@ -814,6 +820,8 @@ const currentFiles = computed((): FileConfig[] => {
     return trimmed.endsWith('/v1beta') ? trimmed : `${trimmed}/v1beta`
   })()
 
+  if (props.platform === 'typesafe') return [generateSystemOneCurl(baseRoot, apiKey)]
+
   if (activeClientTab.value === 'opencode') {
     if (props.platform === 'antigravity') {
       const nativeConfigs: FileConfig[] = []
@@ -864,6 +872,9 @@ const currentFiles = computed((): FileConfig[] => {
     if (props.platform === 'opencode_go') {
       return generateModelBoundClaudeFiles(baseRoot, apiKey, OPENCODE_DEFAULT_MODEL)
     }
+    if (props.platform === 'cline' || props.platform === 'command_code') {
+      return generateModelBoundClaudeFiles(baseRoot, apiKey, 'deepseek/deepseek-v4-flash')
+    }
     if (props.platform === 'minimax') {
       return generateModelBoundClaudeFiles(baseRoot, apiKey, MINIMAX_DEFAULT_MODEL)
     }
@@ -894,6 +905,47 @@ const currentFiles = computed((): FileConfig[] => {
 
   return []
 })
+
+// SystemOne 使用独立入口，不能生成普通对话客户端配置。
+function generateSystemOneCurl(baseUrl: string, apiKey: string): FileConfig {
+  const endpoint = `${baseUrl}/v1/systemone`
+  const payload = `{
+  "model": "jev-latest",
+  "state": "Text to evaluate",
+  "questions": {
+    "safety": {
+      "type": "noul",
+      "instructions": "Evaluate whether the text is unsafe"
+    }
+  }
+}`
+  if (activeTab.value === 'powershell') {
+    return {
+      path: 'PowerShell',
+      content: `$headers = @{ Authorization = "Bearer ${apiKey}" }
+$body = @'
+${payload}
+'@
+Invoke-RestMethod -Method Post -Uri "${endpoint}" -Headers $headers -ContentType "application/json" -Body $body`
+    }
+  }
+  if (activeTab.value === 'cmd') {
+    return {
+      path: 'Command Prompt',
+      content: `curl -X POST "${endpoint}" ^
+  -H "Authorization: Bearer ${apiKey}" ^
+  -H "Content-Type: application/json" ^
+  --data "{\"model\":\"jev-latest\",\"state\":\"Text to evaluate\",\"questions\":{\"safety\":{\"type\":\"noul\",\"instructions\":\"Evaluate whether the text is unsafe\"}}}"`
+    }
+  }
+  return {
+    path: 'Terminal',
+    content: `curl -X POST "${endpoint}" \\
+  -H "Authorization: Bearer ${apiKey}" \\
+  -H "Content-Type: application/json" \\
+  --data '${payload}'`
+  }
+}
 
 function generateAnthropicFiles(baseUrl: string, apiKey: string): FileConfig[] {
   let path: string
@@ -1098,15 +1150,18 @@ function generateCompatibleCodexFiles(
   apiKey: string,
   platform: GroupPlatform
 ): FileConfig[] {
+  // 独立视频与 SystemOne 平台不生成不可调用的对话客户端配置。
+  if (platform === 'video' || platform === 'typesafe') return []
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
-  const platformConfig: Record<GroupPlatform, {
+  const platformConfig: Record<Exclude<GroupPlatform, 'video' | 'typesafe'>, {
     provider: string
     name: string
     model: string
     contextWindow: number
   }> = {
-    video: { provider: 'tokenrouter_video', name: 'TokenRouter Video', model: '', contextWindow: 0 },
+    cline: { provider: 'tokenrouter_cline', name: 'TokenRouter Cline', model: 'deepseek/deepseek-v4-flash', contextWindow: 262144 },
+    command_code: { provider: 'tokenrouter_command_code', name: 'TokenRouter Command Code', model: 'deepseek/deepseek-v4-flash', contextWindow: 262144 },
     anthropic: {
       provider: 'tokenrouter_anthropic',
       name: 'TokenRouter Anthropic',
@@ -2039,6 +2094,11 @@ function generateOpenCodeConfig(
     provider[profile].models = withOpenCodeToolCalling(Object.fromEntries(
       OPENCODE_MODELS.map(model => [model, { name: model }])
     ))
+  } else if (profile === 'cline' || profile === 'command_code') {
+    provider[profile].name = profile === 'cline' ? 'Cline' : 'Command Code'
+    // 仅提供该平台已确认的模型示例，不套用其他平台的完整模型目录。
+    const models = profile === 'cline' ? ['deepseek/deepseek-v4-flash', 'cline-pass/glm-5.3-flash'] : ['deepseek/deepseek-v4-flash']
+    provider[profile].models = withOpenCodeToolCalling(Object.fromEntries(models.map(model => [model, { name: model }])))
   } else if (profile === 'minimax') {
     provider[profile].name = 'MiniMax'
     provider[profile].models = withOpenCodeToolCalling(Object.fromEntries(

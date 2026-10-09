@@ -297,7 +297,7 @@ func (a *Account) IsCNProvider() bool {
 // 兼容上游，也经 OpenAI 网关转发。
 func (a *Account) IsOpenAICompatible() bool {
 	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok ||
-		a.Platform == PlatformKimi || a.Platform == PlatformZhipu || a.Platform == PlatformDeepseek || a.Platform == PlatformMiniMax || a.Platform == PlatformOpenCodeGo)
+		a.Platform == PlatformKimi || a.Platform == PlatformZhipu || a.Platform == PlatformDeepseek || a.Platform == PlatformMiniMax || a.Platform == PlatformOpenCodeGo || isAdditionalAPIKeyPlatform(a.Platform))
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -965,6 +965,9 @@ func normalizeQoderModelForWhitelist(model string) string {
 // 5. 为兼容旧数据，非 Qoder 平台若未配置独立 model_whitelist，会继续把精确自映射条目视作最终白名单。
 // 6. OpenAI OAuth 非透传账号排除明确的其它厂商模型；DeepSeek 无有效映射/白名单时按平台目录校验。
 func (a *Account) IsModelSupported(requestedModel string) bool {
+	if a.IsTypeSafe() && !a.supportsSystemOneModel(a.GetMappedModel(requestedModel)) {
+		return false
+	}
 	// 仅限制 OpenCode GO 的 Jev 能力，仍保留 Zen 的显式白名单与其它平台语义。
 	if a.IsOpenCodeGoPlan() && IsOpenCodeSystemOneModel(a.GetMappedModel(requestedModel)) {
 		return false
@@ -1626,6 +1629,9 @@ func (a *Account) IsOpenAIApiKey() bool {
 // 适用 openai 与国产 OpenAI 兼容供应商；grok 走 GetGrokBaseURL，
 // 此处对 grok 返回 "" 以保持原有行为。
 func (a *Account) GetOpenAIBaseURL() string {
+	if a != nil && isAdditionalAPIKeyPlatform(a.Platform) {
+		return a.additionalProviderBaseURL(APIProtocolChatCompletions)
+	}
 	if a.IsOpenCodeGo() {
 		return a.openCodeProtocolBaseURL(APIProtocolChatCompletions)
 	}
@@ -1668,6 +1674,9 @@ func (a *Account) GetOpenAIBaseURL() string {
 // GetAccountMode 返回国产供应商账号的接入模式（payg / coding）。历史账号缺少字段时
 // 按 payg 读取；非国产供应商返回空串。存储于 credentials["account_mode"]。
 func (a *Account) GetAccountMode() string {
+	if a != nil && isAdditionalAPIKeyPlatform(a.Platform) {
+		return AccountModePayG
+	}
 	if a == nil || !a.IsCNProvider() {
 		return ""
 	}
@@ -1687,6 +1696,18 @@ func (a *Account) IsCodingPlan() bool {
 // credentials["api_protocol"]；缺失或与平台不匹配时回退 chat_completions
 // （与既有行为完全一致）。DeepSeek、Kimi、MiniMax 支持原生 Responses；Zhipu 无此端点。
 func (a *Account) GetAPIProtocol() string {
+	if a.IsTypeSafe() {
+		return APIProtocolSystemOne
+	}
+	if a.IsCline() {
+		return APIProtocolChatCompletions
+	}
+	if a.IsCommandCode() {
+		if protocol := strings.TrimSpace(a.GetCredential("api_protocol")); isNativeOpenCodeGoProtocol(protocol) {
+			return protocol
+		}
+		return APIProtocolAdaptive
+	}
 	if a.IsOpenCodeGo() {
 		if protocol := strings.TrimSpace(a.GetCredential("api_protocol")); isNativeOpenCodeGoProtocol(protocol) {
 			return protocol
@@ -1719,7 +1740,7 @@ func (a *Account) SupportsNativeCNResponses() bool {
 		return false
 	}
 	switch a.Platform {
-	case PlatformDeepseek, PlatformKimi, PlatformMiniMax:
+	case PlatformDeepseek, PlatformKimi, PlatformMiniMax, PlatformCommandCode:
 		return true
 	default:
 		return false
@@ -1749,6 +1770,9 @@ func (a *Account) IsAdaptiveAPIProtocol() bool {
 // adaptive 账号优先使用 api_base_urls 中的分协议地址，缺失时按平台和
 // account_mode 使用官方默认端点。base_url 继续作为 Chat Completions 地址兼容旧字段。
 func (a *Account) GetCNProtocolBaseURL(protocol string) string {
+	if a != nil && isAdditionalAPIKeyPlatform(a.Platform) {
+		return a.additionalProviderBaseURL(protocol)
+	}
 	if a.IsOpenCodeGo() {
 		return a.openCodeProtocolBaseURL(protocol)
 	}
@@ -1817,6 +1841,9 @@ func (a *Account) IsAnthropicProtocol() bool {
 // （上游路径为 {base}/v1/messages）。优先取凭证 base_url，缺失时按
 // 供应商 × 接入模式返回默认端点。非 Anthropic 协议账号返回空串。
 func (a *Account) GetAnthropicProtocolBaseURL() string {
+	if a.IsCommandCode() {
+		return a.additionalProviderBaseURL(APIProtocolAnthropic)
+	}
 	if a.IsOpenCodeGo() {
 		return a.openCodeProtocolBaseURL(APIProtocolAnthropic)
 	}
@@ -1853,6 +1880,9 @@ func (a *Account) GetAnthropicProtocolBaseURL() string {
 // 一致；anthropic 协议下，官方端点映射到对应的 OpenAI 格式端点，自定义中继则
 // 只移除末尾的 /anthropic 协议段，保留中继 host 与路径前缀。
 func (a *Account) GetOpenAIFormatBaseURL() string {
+	if a != nil && isAdditionalAPIKeyPlatform(a.Platform) {
+		return a.additionalProviderBaseURL(APIProtocolChatCompletions)
+	}
 	if a.IsOpenCodeGo() {
 		return a.openCodeProtocolBaseURL(APIProtocolChatCompletions)
 	}
@@ -1925,7 +1955,7 @@ func stripCNAnthropicPathSuffix(baseURL string) string {
 // GetCNAPIKey 返回国产 OpenAI 兼容供应商账号的 api_key 凭据。
 // 与 openai 的 GetOpenAIApiKey 区分：后者仅对 openai 平台返回。
 func (a *Account) GetCNAPIKey() string {
-	if a == nil || !a.IsMultiProtocolAPIKey() {
+	if a == nil || (!a.IsMultiProtocolAPIKey() && !a.IsTypeSafe()) {
 		return ""
 	}
 	return a.GetCredential("api_key")
@@ -2058,7 +2088,7 @@ func (a *Account) GetOpenAIProtocolAPIKey() string {
 	if a == nil {
 		return ""
 	}
-	if a.IsMultiProtocolAPIKey() {
+	if a.IsMultiProtocolAPIKey() || a.IsTypeSafe() {
 		if a.Type != AccountTypeAPIKey {
 			return ""
 		}
@@ -2130,7 +2160,10 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 	}
 	// System One 不借用通用文本能力，避免 GO 或其它平台被选中。
 	if capability == OpenAIEndpointCapabilitySystemOne {
-		return a.IsOpenCodeZen() && a.Type == AccountTypeAPIKey
+		return (a.IsOpenCodeZen() || a.IsTypeSafe()) && a.Type == AccountTypeAPIKey
+	}
+	if a.IsTypeSafe() {
+		return false
 	}
 	// 方舟原生视频必须由管理员显式开启，不能落到普通 OpenAI 或 OAuth 账号。
 	if capability == OpenAIEndpointCapabilitySeedance {

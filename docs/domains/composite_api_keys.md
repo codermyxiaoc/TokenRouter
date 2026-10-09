@@ -29,6 +29,8 @@
 
 更新接口对 `composite_groups` 使用完整替换语义。复合 Key 不能同时提交 `group_id`。从复合 Key 转回普通 Key 时必须提交 `is_composite: false` 和目标 `group_id`。
 
+密钥列表的分组列支持升降序。普通 Key 使用绑定分组名，复合与智能 Key 使用配置顺序中的首个未删除分组名；无有效分组排在最后，同名按 Key ID 稳定排序。排序不改变分组成员筛选、个人/团队范围、托管 Key 隐藏或分页总数，也不改变候选顺序。
+
 每个复合 Key 可配置 1 至 20 个映射。同一 Key 内分组不能重复，前缀按小写判重。前缀去除首尾空格后长度必须为 1 至 32，只能包含字母、数字、下划线和连字符。
 
 <a id="group_selection"></a>
@@ -44,6 +46,8 @@
 ```
 
 前缀匹配不区分大小写。服务只按第一个 `/` 拆分，因此 `GPT/vendor/model` 的实际模型 ID 是 `vendor/model`。
+
+JSON 请求先拒绝重复的顶层 `model`、`previous_response_id` 和 `prompt_cache_key` 字段，再读取前缀和改写请求体。字段名解码后忽略大小写判重，避免客户端、路由和上游解析出不同模型；拒绝时不写入选组后的模型上下文。
 
 Gemini 原生入口将前缀放在模型 URL 中：
 
@@ -69,6 +73,7 @@ POST /v1beta/models/Gemini/gemini-2.5-pro:generateContent
 
 缺少前缀、未知前缀或非法前缀均返回 HTTP 400，并使用对应入口的 OpenAI、Anthropic 或 Google 错误结构。主要错误码如下：
 
+- `COMPOSITE_KEY_INVALID_REQUEST`（重复的顶层模型或显式会话字段）
 - `COMPOSITE_KEY_MODEL_PREFIX_REQUIRED`
 - `COMPOSITE_KEY_PREFIX_NOT_FOUND`
 - `COMPOSITE_KEY_PREFIX_INVALID`

@@ -56,6 +56,9 @@ const (
 	PlatformDeepseek    = domain.PlatformDeepseek
 	PlatformMiniMax     = domain.PlatformMiniMax
 	PlatformOpenCodeGo  = domain.PlatformOpenCodeGo
+	PlatformTypeSafe    = domain.PlatformTypeSafe
+	PlatformCline       = domain.PlatformCline
+	PlatformCommandCode = domain.PlatformCommandCode
 	PlatformComposite   = domain.PlatformComposite
 	PlatformVideo       = domain.PlatformVideo
 )
@@ -115,7 +118,7 @@ func IsCNProvider(platform string) bool {
 
 // IsMultiProtocolAPIKeyProvider 复用三协议桥接，不把 OpenCode 归类为国产供应商。
 func IsMultiProtocolAPIKeyProvider(platform string) bool {
-	return IsCNProvider(platform) || platform == PlatformOpenCodeGo
+	return IsCNProvider(platform) || platform == PlatformOpenCodeGo || platform == PlatformCline || platform == PlatformCommandCode
 }
 
 // AllowedQuotaPlatforms 是允许设置 user × platform quota 的平台列表（单一权威来源）。
@@ -134,6 +137,9 @@ var AllowedQuotaPlatforms = []string{
 	PlatformMiniMax,
 	PlatformOpenCodeGo,
 	PlatformVideo,
+	PlatformTypeSafe,
+	PlatformCline,
+	PlatformCommandCode,
 }
 
 // AllowedSchedulingThresholdPlatforms 是允许设置账号自动停调阈值的平台列表。
@@ -147,6 +153,7 @@ var AllowedSchedulingThresholdPlatforms = []string{
 	PlatformZhipu,
 	PlatformMiniMax,
 	PlatformOpenCodeGo,
+	PlatformCommandCode,
 }
 
 // IsAllowedQuotaPlatform 报告 s 是否为合法的 quota platform 标识。

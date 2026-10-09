@@ -145,7 +145,10 @@
             <span
               :class="[
                 'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium',
-                value === 'anthropic'
+                value === 'typesafe' ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
+                              : value === 'cline' ? 'bg-lime-100 text-lime-700 dark:bg-lime-900/30 dark:text-lime-400'
+                              : value === 'command_code' ? 'bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-400'
+                              : value === 'anthropic'
                   ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
                   : value === 'openai'
                     ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
@@ -1603,6 +1606,7 @@
           </template>
           <template #protocol>
             <GroupClientProtocolSelector
+              v-if="createForm.platform !== 'typesafe'"
               v-model="createForm.allowed_client_protocols"
               :platform="createForm.platform"
               class="mt-4"
@@ -3331,6 +3335,7 @@
           </template>
           <template #protocol>
             <GroupClientProtocolSelector
+              v-if="editForm.platform !== 'typesafe'"
               v-model="editForm.allowed_client_protocols"
               :platform="editForm.platform"
               class="mt-4"
@@ -3830,7 +3835,10 @@
                 <span
                   :class="[
                     'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
-                    group.platform === 'anthropic'
+                    group.platform === 'typesafe' ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
+                              : group.platform === 'cline' ? 'bg-lime-100 text-lime-700 dark:bg-lime-900/30 dark:text-lime-400'
+                              : group.platform === 'command_code' ? 'bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-400'
+                              : group.platform === 'anthropic'
                       ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
                       : group.platform === 'openai'
                         ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'

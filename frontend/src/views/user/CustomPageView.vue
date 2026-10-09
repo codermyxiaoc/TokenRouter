@@ -141,6 +141,8 @@ const tocItems = ref<TocItem[]>([])
 const tocVisible = ref(typeof window !== 'undefined' ? window.innerWidth > 768 : true)
 const activeHeadingId = ref('')
 let themeObserver: MutationObserver | null = null
+// 页面地址或展示模式变化时，旧正文和旧错误都不能覆盖当前页面。
+let markdownRequestVersion = 0
 let scrollRafId = 0
 
 const menuItemId = computed(() => route.params.id as string)
@@ -217,6 +219,7 @@ function buildPageImageUrl(slug: string, src: string): string {
 }
 
 async function fetchAndRenderMarkdown(slug: string) {
+  const version = ++markdownRequestVersion
   loading.value = true
   tocItems.value = []
   activeHeadingId.value = ''
@@ -224,11 +227,13 @@ async function fetchAndRenderMarkdown(slug: string) {
     const resp = await fetch(buildApiUrl(`/pages/${encodeURIComponent(slug)}`), {
       headers: authStore.token ? { Authorization: `Bearer ${authStore.token}` } : {},
     })
+    if (version !== markdownRequestVersion) return
     if (!resp.ok) {
       renderedHtml.value = `<p class="text-red-500">${t('customPage.markdownNotFound')}</p>`
       return
     }
     let raw = await resp.text()
+    if (version !== markdownRequestVersion) return
 
     raw = raw.replace(
       /!\[([^\]]*)\]\(([^)]+)\)/g,
@@ -257,12 +262,16 @@ async function fetchAndRenderMarkdown(slug: string) {
     renderedHtml.value = withIds
     tocItems.value = toc
   } catch {
-    renderedHtml.value = `<p class="text-red-500">${t('customPage.markdownLoadFailed')}</p>`
+    if (version === markdownRequestVersion) {
+      renderedHtml.value = `<p class="text-red-500">${t('customPage.markdownLoadFailed')}</p>`
+    }
   } finally {
-    loading.value = false
-    await nextTick()
-    await nextTick()
-    injectCopyButtons()
+    if (version === markdownRequestVersion) {
+      loading.value = false
+      await nextTick()
+      await nextTick()
+      if (version === markdownRequestVersion) injectCopyButtons()
+    }
   }
 }
 
@@ -328,6 +337,8 @@ watch(markdownSlug, (slug) => {
   if (slug) {
     fetchAndRenderMarkdown(slug)
   } else {
+    markdownRequestVersion++
+    loading.value = false
     renderedHtml.value = ''
     tocItems.value = []
   }
@@ -356,6 +367,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  markdownRequestVersion++
   if (scrollRafId) {
     cancelAnimationFrame(scrollRafId)
     scrollRafId = 0

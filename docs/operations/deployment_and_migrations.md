@@ -46,7 +46,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.4`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.5`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -61,11 +61,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.4`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.5`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.4 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.5 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -74,6 +74,12 @@
 ## 初始化与启动
 
 进程入口先判断是否需要 setup。未安装时可使用 Web setup、`--setup` CLI 或容器的 `AUTO_SETUP`；setup 测试 PostgreSQL/Redis，执行迁移，创建首个管理员，写入配置，最后创建只读安装锁。安装锁用于阻止重新初始化攻击，不能用删除它的方式修复普通配置问题。
+
+首次安装不提供固定管理员邮箱或密码。未配置邮箱时生成随机 `admin-…@sub2api.local`，未配置密码时生成随机密码；显式邮箱需通过登录邮箱校验，密码长度为 8–72 字节。仅在数据库没有用户且确需创建首个管理员时校验，已有部署中的历史环境变量不能阻断启动，也不修改已有账号。
+
+本轮兼容迁移 `296_add_payment_order_bonus_amount.sql` 给历史订单增加默认零的优惠快照，`297_add_gateway_provider_platforms.sql` 扩展平台额度约束且保留 Video/Qoder 等既有平台。均为增量迁移，未改写旧价格、订阅或余额；不照搬上游迁移编号，不移除数据库平台保护。邮箱重置摘要使用新命名空间，升级前发出的找回密码链接需重新申请。
+
+`298_payment_order_currency_precision.sql` 将订单金额、实付、固定手续费、比例手续费金额、总手续费、赠金和退款快照扩为 `decimal(21,3)`，保留十八位整数容量并支持三位小数币种，不重算历史价格、余额或优惠。迁移会取得订单表 DDL 锁，应在支付低峰执行并观察锁等待；旧程序可读取扩展后的列，但回退旧版本不能保证三位小数业务完整性。已经被旧列舍入的历史金额无法从数据库自动还原，相关订单须按原渠道记录核对后处理；不能通过放宽回调容差修复。
 
 正常启动在依赖注入创建 Ent 客户端时再次运行同一套嵌入迁移，因此每个新版本在监听 HTTP 前完成 schema 对齐。迁移或安全密钥初始化失败会使应用初始化失败，不允许带着部分 schema 提供流量。默认的兼容迁移允许多实例滚动启动，并由迁移锁保证只有一个实例执行 SQL；“升级与恢复”中标记为一次性或破坏性的变更优先于该默认规则，必须按专题停机顺序执行。
 
@@ -132,7 +138,16 @@ v2.8 独立 Video 新增迁移 289–293：
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.4`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `295_image_billing_reservations.sql`。
+当前发布版本为 `v0.1.278-ct-v3.5`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `298_payment_order_currency_precision.sql`。
+
+<a id="v3_5_upgrade"></a>
+### v3.5 上游兼容同步升级
+
+本版兼容同步上游 v0.2.12–v0.2.15，并修复异常请求、精确计量、充值优惠并发、订单币种精度及前端会话隔离问题。新增迁移 296–298 的内容与锁边界见上文首次初始化；原有 Video/Qoder、异步媒体账本和订阅扣费规则保留，不重算历史余额和用量。
+
+升级前备份数据库与配置，在支付低峰排空在途请求和 WebSocket 连接；先启动一个新实例完成迁移，再更新其余实例及前端，让客户端重连。完整升级前不要启用新平台或充值优惠，避免旧程序忽略新增配置。升级前签发的找回密码链接需要重新申请。迁移 298 可能等待订单表锁，应观察启动日志和数据库锁等待。
+
+升级后核对最高迁移 298、健康与版本、登录和密码找回、充值报价及到账、HTTP/WS 网关和异步任务扣费。回退程序不会撤销已结算赠金、订单和媒体资金合同，旧版本不能保证新平台或三位小数金额语义完整；回退前排空任务并按数据库备份与实际业务写入评估恢复范围。
 
 <a id="async_image_billing_upgrade"></a>
 ### 异步图片资金保护升级

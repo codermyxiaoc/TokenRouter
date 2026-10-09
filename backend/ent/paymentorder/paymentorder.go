@@ -34,6 +34,8 @@ const (
 	FieldFeeRateAmount = "fee_rate_amount"
 	// FieldFeeAmount holds the string denoting the fee_amount field in the database.
 	FieldFeeAmount = "fee_amount"
+	// FieldBonusAmount holds the string denoting the bonus_amount field in the database.
+	FieldBonusAmount = "bonus_amount"
 	// FieldRechargeCode holds the string denoting the recharge_code field in the database.
 	FieldRechargeCode = "recharge_code"
 	// FieldOutTradeNo holds the string denoting the out_trade_no field in the database.
@@ -134,6 +136,7 @@ var Columns = []string{
 	FieldFeeFixed,
 	FieldFeeRateAmount,
 	FieldFeeAmount,
+	FieldBonusAmount,
 	FieldRechargeCode,
 	FieldOutTradeNo,
 	FieldPaymentType,
@@ -196,6 +199,8 @@ var (
 	DefaultFeeRateAmount float64
 	// DefaultFeeAmount holds the default value on creation for the "fee_amount" field.
 	DefaultFeeAmount float64
+	// DefaultBonusAmount holds the default value on creation for the "bonus_amount" field.
+	DefaultBonusAmount float64
 	// RechargeCodeValidator is a validator for the "recharge_code" field. It is called by the builders before save.
 	RechargeCodeValidator func(string) error
 	// DefaultOutTradeNo holds the default value on creation for the "out_trade_no" field.
@@ -298,6 +303,11 @@ func ByFeeRateAmount(opts ...sql.OrderTermOption) OrderOption {
 // ByFeeAmount orders the results by the fee_amount field.
 func ByFeeAmount(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldFeeAmount, opts...).ToFunc()
+}
+
+// ByBonusAmount orders the results by the bonus_amount field.
+func ByBonusAmount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBonusAmount, opts...).ToFunc()
 }
 
 // ByRechargeCode orders the results by the recharge_code field.

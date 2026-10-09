@@ -88,6 +88,9 @@ var migrationChecksumCompatibilityRules = map[string]migrationChecksumCompatibil
 	"123_fix_legacy_auth_source_grant_on_signup_defaults.sql": newMigrationChecksumCompatibilityRule("2ce43c2cd89e9f9e1febd34a407ed9e84d177386c5544b6f02c1f58a21129f57", "6cd33422f215dcd1f486ab6f35c0ea5805d9ca69bb25906d94bc649156657145"),
 	"180_batch_image_foundation.sql":                          newMigrationChecksumCompatibilityRule("d902b70982025ec519749faf058aab7631e82c3f48167b9a4ae4db718eb72cce", "82da85b5d98e67a0507647b873a40373e84538e4adafdeed6767c0ac8b6570b2"),
 	"183_batch_image_pricing_snapshot.sql":                    newMigrationChecksumCompatibilityRule("4012af3e43636cb6af22e0176d59d1fcc70615c0f310194329461ae462c4fbd6", "96d915c9b7a6941ae99039e0ff3f1a61481eb9bddd933d11c6fadb2274554e87"),
+	// 这两条历史 Windows 发布包使用 CRLF；仅接受已核实的 LF/CRLF 两个哈希，不改写旧库记录或放宽其他文件校验。
+	"286_content_moderation_engine_meta.sql": newMigrationChecksumCompatibilityRule("32072ca5a51ca04f68f4c9e41fde7901d8711c0dd745f1b3e4a93f2ae878d3a7", "ce84191f20247ccc03e386f25f43317a5b8f9af6d1ce623e86902a17219f1efa"),
+	"288_affiliate_ledger_operation_id.sql":  newMigrationChecksumCompatibilityRule("3823bfea5f64feb58f5fcebc341c6877eaefc97834b4cd652c8e83ad08ed78da", "3ea23cf05adc7578dad4f0fe5da94870ef741173fac6462d94b863d273649753"),
 }
 
 // ApplyMigrations 将嵌入的 SQL 迁移文件应用到指定的数据库。

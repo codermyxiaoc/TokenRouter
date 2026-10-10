@@ -9,6 +9,7 @@
 - [账号与认证](#账号与认证)：修改 OAuth 变体、API Key 或 Vertex 凭据时读取。
 - [协议分派](#协议分派)：修改 Gemini 原生、Messages、Responses 或 Chat 转换时读取。
 - [模型与会话](#模型与会话)：修改模型解析、thinking、signature 或缓存连续性时读取。
+- [管理员模型同步](#gemini_model_list_sync)：修改第三方模型目录兼容、创建预览或同步错误提示时读取。
 - [配额与调度](#配额与调度)：修改 tier、模型限流、混合调度或粘性时读取。
 - [错误与诊断](#错误与诊断)：修改 Google 错误、刷新或 failover 时读取。
 
@@ -44,6 +45,15 @@ Antigravity 专用 `/antigravity/v1beta/*` 强制选择 Antigravity 账号，其
 兼容层维护 thinking/推理字段、tool/schema、图片输入、usage、finish reason 和 Gemini thought signature。工具 schema 会递归移除 Gemini 不支持的字段；INTEGER 的整数 `exclusiveMinimum` 转换为加一后的包含式 `minimum`，且不覆盖更严格的既有下界，无法等价转换的独占下界只清理不伪造。需要跨轮次的 signature、session 和 cache 连续性时，粘性会话优先复用账号；切换账号必须重新评估可继续性，不能把另一个账号的内部状态当作通用上下文。
 
 原生与 Claude 兼容生图响应按上游实际返回的 `inlineData`/`inline_data` 图片 part 数量计费，自定义模型别名也适用。流式响应按单个 payload 中观测到的最大图片数记录，避免累积式 SSE 重复计费；未观测到内联图片时才回退到请求模型名或映射后模型名的生图启发式。
+
+<a id="gemini_model_list_sync"></a>
+## 管理员模型同步
+
+账号管理的“同步上游模型”首先请求配置地址的 `/v1beta/models`，API Key 使用 `x-goog-api-key`。显式选择第三方提供商（`provider_type=third_party`）且配置非 Google 官方地址的 API Key 账号，在原生列表返回 404/405 或明确的 Cloudflare 403 HTML 拦截页时，才额外尝试同站点、同部署路径前缀的 `/v1/models`，该次请求使用 Bearer Key；一次同步最多两次列表请求，复用原代理、TLS、请求取消和响应大小限制。官方来源、OAuth、401、普通 JSON 403、429、5xx、网络错误、超限、无效 JSON 或空模型列表不触发兼容尝试。不会读取上游错误正文提供的新地址，也不会用默认模型清单伪造成功。
+
+新增账号的同步预览需携带当前 Gemini 接入来源，与已保存账号保持相同策略。编辑账号的同步仍读取已保存配置，修改 Base URL 或 Key 后须先保存。Base URL 使用服务根地址（允许部署子路径）；模型列表兼容不改变实际生成的 Gemini 原生端点、鉴权、模型权限、调度和计费，列表成功不代表生成端点可用。
+
+同步失败仅向管理员返回安全诊断消息，包含上游 HTTP 状态或 Cloudflare 拦截分类；两种列表都失败时分别保留端点和失败分类，不返回原始 HTML、凭据或内部网络错误。前端读取 API 客户端归一化后的错误消息，避免重复拼接“同步上游模型失败”。
 
 ## 配额与调度
 

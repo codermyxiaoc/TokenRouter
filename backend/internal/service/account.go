@@ -317,7 +317,7 @@ func (a *Account) GeminiTierID() string {
 }
 
 // IsGeminiThirdPartyProvider 判断 Gemini API Key 是否通过第三方提供商接入。
-// 该标记只影响本地官方配额模拟，不改变 Gemini 请求的认证和转发协议。
+// 该标记区分官方配额与第三方模型目录；生成请求仍使用 Gemini 认证和转发协议。
 func (a *Account) IsGeminiThirdPartyProvider() bool {
 	if a == nil || a.Platform != PlatformGemini || a.Type != AccountTypeAPIKey {
 		return false

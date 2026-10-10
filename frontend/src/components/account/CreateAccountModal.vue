@@ -4797,6 +4797,8 @@ const syncPreviewCredentials = computed(() => {
   return {
     platform: form.platform,
     type: form.type,
+    // 模型同步预览与保存账号使用相同的 Gemini 接入来源。
+    ...(form.platform === 'gemini' ? { provider_type: geminiProviderType.value } : {}),
     base_url: baseUrl || undefined,
     api_key: apiKeyValue.value
   }

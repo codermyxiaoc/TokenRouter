@@ -667,7 +667,7 @@ describe('CreateAccountModal OpenAI account options', () => {
       .setValue('https://relay.example.com/v1')
     await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-relay')
 
-    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('syncCredentials')).toMatchObject({
+    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('syncCredentials')).toEqual({
       platform: 'kimi',
       type: 'apikey',
       base_url: 'https://relay.example.com/v1',
@@ -820,6 +820,25 @@ describe('CreateAccountModal OpenAI account options', () => {
 describe('CreateAccountModal Gemini API Key provider source', () => {
   beforeEach(() => {
     createAccountMock.mockReset().mockResolvedValue({ id: 43, platform: 'gemini', type: 'apikey' })
+  })
+
+  it.each(['official', 'third_party'])('同步模型预览携带 Gemini 接入来源 %s', async (providerType) => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="create-account-platform-gemini"]').trigger('click')
+    await wrapper.get('[data-testid="create-gemini-apikey-type"]').trigger('click')
+    await wrapper.get('[data-testid="create-gemini-provider-type"]').setValue(providerType)
+    await wrapper.get('[data-testid="create-account-base-url"]').setValue('https://provider.example.test')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('provider-key')
+
+    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('syncCredentials')).toEqual({
+      platform: 'gemini',
+      type: 'apikey',
+      provider_type: providerType,
+      base_url: 'https://provider.example.test',
+      api_key: 'provider-key'
+    })
+    expect(createAccountMock).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('creates a third-party Gemini API Key without an official tier', async () => {

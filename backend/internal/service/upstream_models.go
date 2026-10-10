@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/antigravity"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/geminicli"
+	"github.com/TokenFlux/TokenRouter/internal/util/httputil"
 )
 
 // ChatGPT Codex 模型清单地址仅供管理员手动同步 OAuth 账号模型使用；
@@ -36,6 +38,8 @@ type UpstreamModelSyncError struct {
 	Kind    UpstreamModelSyncErrorKind
 	Message string
 	Err     error
+	// 仅原生列表端点缺失或明确的边缘拦截允许尝试兼容列表，不用于生成请求重试。
+	allowGeminiListFallback bool
 }
 
 func (e *UpstreamModelSyncError) Error() string {
@@ -97,6 +101,45 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 		return nil, err
 	}
 
+	models, err := s.fetchUpstreamModelsWithRequest(req, account)
+	var nativeErr *UpstreamModelSyncError
+	if err == nil || !account.HasGeminiThirdPartyBaseURL() ||
+		!errors.As(err, &nativeErr) || !nativeErr.allowGeminiListFallback || ctx.Err() != nil {
+		return models, err
+	}
+
+	// 兼容请求只替换已校验 URL 的末尾路径，保留同站点及部署前缀，不使用响应中的跳转地址。
+	// @project-doc docs/interfaces/gemini_upstream.md#gemini_model_list_sync
+	const nativeModelsPath = "/v1beta/models"
+	if !strings.HasSuffix(req.URL.Path, nativeModelsPath) {
+		return nil, err
+	}
+	compatReq := req.Clone(ctx)
+	compatReq.URL.Path = strings.TrimSuffix(req.URL.Path, nativeModelsPath) + "/v1/models"
+	if compatReq.URL.RawPath != "" {
+		compatReq.URL.RawPath = strings.TrimSuffix(req.URL.RawPath, nativeModelsPath) + "/v1/models"
+	}
+	compatReq.Header.Del("x-goog-api-key")
+	compatReq.Header.Set("Authorization", "Bearer "+strings.TrimSpace(account.GetCredential("api_key")))
+	models, compatErr := s.fetchUpstreamModelsWithRequest(compatReq, account)
+	if compatErr == nil {
+		return models, nil
+	}
+
+	// 只合并已经脱敏的诊断文案，不能将上游 HTML、网络错误或凭据送回管理页面。
+	compatMessage := "Failed to request compatible model list"
+	var syncErr *UpstreamModelSyncError
+	if errors.As(compatErr, &syncErr) {
+		compatMessage = syncErr.SafeMessage()
+	}
+	return nil, newUpstreamModelSyncUpstreamError(
+		fmt.Sprintf("Gemini /v1beta/models: %s; compatible /v1/models: %s", nativeErr.SafeMessage(), compatMessage),
+		compatErr,
+	)
+}
+
+// fetchUpstreamModelsWithRequest 统一处理单次列表请求，复用代理、TLS、响应大小限制和模型解析。
+func (s *AccountTestService) fetchUpstreamModelsWithRequest(req *http.Request, account *Account) ([]string, error) {
 	proxyURL := upstreamModelsProxyURL(account)
 	resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
 	if err != nil {
@@ -114,10 +157,27 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, newUpstreamModelSyncUpstreamError(
-			fmt.Sprintf("Upstream model list request failed with HTTP %d", resp.StatusCode),
-			fmt.Errorf("upstream model list returned HTTP %d", resp.StatusCode),
-		)
+		message := fmt.Sprintf("Upstream model list request failed with HTTP %d", resp.StatusCode)
+		// JSON 权限错误即使经过 Cloudflare 也不能触发兼容重试，避免掩盖真实鉴权问题。
+		isHTML := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") ||
+			strings.HasPrefix(strings.TrimSpace(string(body)), "<")
+		preview := strings.ToLower(httputil.TruncateBody(body, 4096))
+		explicitBlock := strings.Contains(preview, "cloudflare") &&
+			(strings.Contains(preview, "sorry, you have been blocked") || strings.Contains(preview, "access denied"))
+		cloudflareBlocked := resp.StatusCode == http.StatusForbidden && isHTML && !json.Valid(body) &&
+			httputil.IsCloudflareChallengeResponse(resp.StatusCode, resp.Header, body) &&
+			(explicitBlock || strings.EqualFold(resp.Header.Get("cf-mitigated"), "challenge") ||
+				strings.Contains(preview, "__cf_chl_") || strings.Contains(preview, "challenge-platform") ||
+				strings.Contains(preview, "just a moment"))
+		if cloudflareBlocked {
+			message += " (Cloudflare blocked the API request; check upstream API access rules)"
+		}
+		return nil, &UpstreamModelSyncError{
+			Kind: UpstreamModelSyncErrorUpstream, Message: message,
+			Err: fmt.Errorf("upstream model list returned HTTP %d", resp.StatusCode),
+			allowGeminiListFallback: resp.StatusCode == http.StatusNotFound ||
+				resp.StatusCode == http.StatusMethodNotAllowed || cloudflareBlocked,
+		}
 	}
 
 	extractModels := extractUpstreamModelIDs

@@ -152,6 +152,7 @@ import { useAppStore } from '@/stores/app'
 import { accountsAPI } from '@/api/admin/accounts'
 import type { SyncUpstreamPreviewParams } from '@/api/admin/accounts'
 import { useClipboard } from '@/composables/useClipboard'
+import { upstreamModelSyncErrorMessage } from '@/utils/upstreamModelSyncError'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { supportsAccountModelSync } from '@/constants/platforms'
@@ -166,12 +167,7 @@ const props = defineProps<{
   platforms?: string[]
   models?: string[]
   accountId?: number
-  syncCredentials?: {
-    platform: string
-    type: string
-    base_url?: string
-    api_key: string
-  }
+  syncCredentials?: SyncUpstreamPreviewParams
 }>()
 
 const emit = defineEmits<{
@@ -310,7 +306,7 @@ const syncUpstreamModels = async () => {
     if (props.accountId) {
       result = await accountsAPI.syncUpstreamModels(props.accountId)
     } else if (props.syncCredentials) {
-      result = await accountsAPI.syncUpstreamModelsPreview(props.syncCredentials as SyncUpstreamPreviewParams)
+      result = await accountsAPI.syncUpstreamModelsPreview(props.syncCredentials)
     } else {
       return
     }
@@ -337,8 +333,7 @@ const syncUpstreamModels = async () => {
       appStore.showInfo(t('admin.accounts.syncUpstreamModelsNoChanges', { count: upstreamModels.length }))
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : t('admin.accounts.syncUpstreamModelsFailed')
-    appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))
+    appStore.showError(upstreamModelSyncErrorMessage(error, t('admin.accounts.syncUpstreamModelsFailed')))
   } finally {
     isSyncingUpstream.value = false
   }

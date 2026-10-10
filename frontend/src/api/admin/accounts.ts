@@ -844,6 +844,7 @@ export async function syncUpstreamModels(id: number): Promise<SyncUpstreamModels
 export interface SyncUpstreamPreviewParams {
   platform: string
   type: string
+  provider_type?: 'official' | 'third_party'
   base_url?: string
   api_key: string
 }

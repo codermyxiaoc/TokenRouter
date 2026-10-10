@@ -43,7 +43,11 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string, params?: Record<string, unknown>) => params ? `${key}:${JSON.stringify(params)}` : key
+      t: (key: string, params?: Record<string, unknown>) => {
+        if (key === 'admin.accounts.syncUpstreamModelsFailed') return '同步上游模型失败'
+        if (key === 'admin.accounts.syncUpstreamModelsError') return `同步上游模型失败：${params?.message}`
+        return params ? `${key}:${JSON.stringify(params)}` : key
+      }
     })
   }
 })
@@ -165,5 +169,58 @@ describe('ModelWhitelistSelector', () => {
     expect(syncUpstreamModels).toHaveBeenCalledWith(7)
     expect(syncUpstreamModelsPreview).not.toHaveBeenCalled()
     expect(wrapper.emitted('update:modelValue')?.[0]?.[0]).toEqual(['claude-sonnet-4-5'])
+  })
+
+  it.each([
+    ['客户端普通错误对象', { status: 502, message: '上游模型接口返回 HTTP 403（Cloudflare）' }, '上游模型接口返回 HTTP 403（Cloudflare）'],
+    ['Axios 错误', { message: 'Request failed with status code 502', response: { data: { message: '上游模型接口返回 HTTP 403（Cloudflare）' } } }, '上游模型接口返回 HTTP 403（Cloudflare）'],
+    ['旧版 detail 字段', { response: { data: { detail: '上游未开放模型列表接口' } } }, '上游未开放模型列表接口'],
+    ['附带安全详情', { message: '同步上游模型失败', details: '上游模型接口返回 HTTP 403' }, '同步上游模型失败: 上游模型接口返回 HTTP 403'],
+    ['详情已经包含在说明中', { message: '同步上游模型失败: HTTP 403', details: 'HTTP 403' }, '同步上游模型失败: HTTP 403'],
+    ['标准 Error', new Error('连接超时，请重试'), '连接超时，请重试'],
+    ['缺少错误说明', { status: 502 }, '同步上游模型失败'],
+    ['HTML 错误页', { response: { data: '<html><body>secret-key</body></html>' }, config: { headers: { Authorization: 'secret-key' } } }, '同步上游模型失败'],
+    ['HTML 说明字段', { message: '<html>secret-key</html>', details: { api_key: 'secret-key' } }, '同步上游模型失败']
+  ])('Gemini 同步失败时正确展示%s，且允许重试', async (_name, error, expectedMessage) => {
+    syncUpstreamModelsPreview.mockRejectedValueOnce(error).mockResolvedValueOnce({ models: ['gemini-2.5-pro'] })
+    const syncCredentials = {
+      platform: 'gemini',
+      type: 'apikey',
+      provider_type: 'third_party',
+      base_url: 'https://gemini.example.test',
+      api_key: 'provider-key'
+    }
+    const wrapper = mountSelector({ platform: 'gemini', modelValue: ['existing-model'], syncCredentials })
+    const button = wrapper.findAll('button').find(item => item.text().includes('admin.accounts.syncUpstreamModels'))!
+
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(syncUpstreamModelsPreview).toHaveBeenCalledWith(syncCredentials)
+    expect(showError).toHaveBeenCalledTimes(1)
+    expect(showError).toHaveBeenCalledWith(expectedMessage)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    expect(button.attributes('disabled')).toBeUndefined()
+
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.emitted('update:modelValue')?.[0]?.[0]).toEqual(['existing-model', 'gemini-2.5-pro'])
+    wrapper.unmount()
+  })
+
+  it('编辑账号同步失败时保留客户端归一化后的错误说明', async () => {
+    syncUpstreamModels.mockRejectedValue({ status: 502, message: '上游模型接口返回 HTTP 404' })
+    const wrapper = mountSelector({ platform: 'gemini', accountId: 7 })
+    const button = wrapper.findAll('button').find(item => item.text().includes('admin.accounts.syncUpstreamModels'))!
+
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(syncUpstreamModels).toHaveBeenCalledWith(7)
+    expect(showError).toHaveBeenCalledTimes(1)
+    expect(showError).toHaveBeenCalledWith('上游模型接口返回 HTTP 404')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    wrapper.unmount()
   })
 })

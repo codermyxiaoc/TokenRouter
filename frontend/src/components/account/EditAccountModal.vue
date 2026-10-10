@@ -2965,6 +2965,7 @@ import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import UpstreamUsageConfigEditor from '@/components/account/UpstreamUsageConfigEditor.vue'
 import { nativeUpstreamUsageAdapter } from '@/utils/upstreamUsage'
+import { upstreamModelSyncErrorMessage } from '@/utils/upstreamModelSyncError'
 import {
   ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY,
   applyAntigravityProjectID,
@@ -4499,8 +4500,7 @@ const syncAntigravityUpstreamModels = async () => {
       appStore.showInfo(t('admin.accounts.syncUpstreamModelsNoChanges', { count: upstreamModels.length }))
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : t('admin.accounts.syncUpstreamModelsFailed')
-    appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))
+    appStore.showError(upstreamModelSyncErrorMessage(error, t('admin.accounts.syncUpstreamModelsFailed')))
   } finally {
     isSyncingAntigravityUpstream.value = false
   }

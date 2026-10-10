@@ -10,6 +10,7 @@
 - [迁移执行](#migration_execution)：修改 runner 或迁移格式时读取。
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
+- [v3.6 视频模型详情](#v3_6_upgrade)：升级详情配置、检查纯说明条目或回退时读取。
 - [异步图片资金保护升级](#async_image_billing_upgrade)：上线资金预占、倍率修复或回退时读取。
 - [v3.3 Z-Pay 查单与取消订单](#v3_3_upgrade)：从 v3.2 升级支付查询、取消与配置探测修复时读取。
 - [v3.2 画图缩略图滑动](#v3_2_upgrade)：从 v3.1 升级画廊滑动与缩略图滚动隔离修复时读取。
@@ -46,7 +47,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.5`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.6`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -61,11 +62,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.5`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.6`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.5 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.6 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -103,6 +104,8 @@
 
 ## 新增与同步迁移
 
+视频模型详情使用 `299_channel_model_details.sql`，为渠道价卡增加默认 `{}` 的 `model_details` JSONB 列；分组继续使用既有 `model_pricing` JSON，不新增分组列。此迁移不改写历史价格、任务快照、订阅或余额，旧数据默认不展示说明。应完成后端及前端升级后再编辑详情；旧版渠道编辑会替换价卡，无法保留新字段。回退程序不会删除新列，但旧版编辑渠道或分组可能丢失详情配置。旧版也不识别纯说明条目，回退前必须清除这些没有任何收费设置的条目，或恢复升级前的配置备份；保留含任意显式收费设置（包括零价、倍率、预扣和附加费）的价卡，不可直接混用旧版编辑或回退。展示与继承契约见[视频模型详情](../interfaces/model_catalog_and_marketplace.md#marketplace_video_model_details)，具体升级顺序见[v3.6 升级](#v3_6_upgrade)。
+
 v2.9 新增 `294_intelligence_tests.sql`，创建独立的 `intelligence_test_configs`、`intelligence_test_runs` 表及活动任务唯一索引、轮询和历史索引，不修改既有账本、余额、订阅或计费数据。升级和恢复要求见下文 [v2.9 降智检测升级](#v2_9_upgrade)。
 
 v2.8 独立 Video 新增迁移 289–293：
@@ -138,7 +141,16 @@ v2.8 独立 Video 新增迁移 289–293：
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.5`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `298_payment_order_currency_precision.sql`。
+当前发布版本为 `v0.1.278-ct-v3.6`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `299_channel_model_details.sql`。
+
+<a id="v3_6_upgrade"></a>
+### v3.6 视频模型详情
+
+本版新增视频模型的独立纯文本详情配置，并在模型广场按分组覆盖、渠道继承规则展示。新增迁移 299 仅增加渠道详情 JSONB 列；分组沿用既有价卡 JSON，纯说明条目不参与新版本计费匹配，不修改价格、倍率、任务或资金快照。
+
+升级前备份数据库与配置，先完成迁移及全部后端、前端升级，再编辑模型详情。旧版不会保留新详情字段，也不能识别纯说明条目；直接回退可能把它当成空收费价卡，遮住后续渠道价格或改变模型准入。回退前应使用新版本清除分组和渠道中仅含详情且无任何收费设置的条目，或恢复升级前的配置备份。含显式价格（包括零价）、倍率、预扣、图片附加费或收费层级的价卡必须保留，不能按“无视频价格”批量删除。不要混用新旧实例编辑配置，也不要只替换程序而忽略这些配置兼容边界。
+
+升级后核对版本、迁移 299、健康状态以及渠道/分组详情保存和模型广场显示；抽查原视频报价与纯说明条目的价格继承保持一致。
 
 <a id="v3_5_upgrade"></a>
 ### v3.5 上游兼容同步升级

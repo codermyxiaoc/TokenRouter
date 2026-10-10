@@ -89,9 +89,9 @@ func TestChannelVideoImageInputPricingCreateAndReplace(t *testing.T) {
 				mock.ExpectBegin()
 				mock.ExpectExec(`DELETE FROM channel_model_pricing`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
 			}
-			mock.ExpectQuery(`INSERT INTO channel_model_pricing .*video_token_prepay\)`).
+			mock.ExpectQuery(`INSERT INTO channel_model_pricing .*video_token_prepay, model_details\)`).
 				WithArgs(int64(7), "video", []byte(`["model"]`), service.BillingModeVideo,
-					nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, `{}`, `[]`, tc.json, nil, nil).
+					nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, `{}`, `[]`, tc.json, nil, nil, `{}`).
 				WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).AddRow(int64(11), time.Time{}, time.Time{}))
 			if tc.replace {
 				mock.ExpectCommit()
@@ -117,9 +117,9 @@ func TestChannelVideoImageInputPricingUpdateAndClear(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			repo, mock := newChannelPricingTimeRepo(t)
 			pricing := &service.ChannelModelPricing{ID: 11, Platform: "video", Models: []string{"model"}, BillingMode: service.BillingModeVideoToken, VideoImageInputPricing: tc.config}
-			mock.ExpectExec(`UPDATE channel_model_pricing .*video_image_input_pricing = \$20.*WHERE id = \$23`).
+			mock.ExpectExec(`UPDATE channel_model_pricing .*video_image_input_pricing = \$20.*WHERE id = \$24`).
 				WithArgs([]byte(`["model"]`), service.BillingModeVideoToken,
-					nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "video", `{}`, `[]`, tc.json, nil, nil, int64(11)).
+					nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "video", `{}`, `[]`, tc.json, nil, nil, `{}`, int64(11)).
 				WillReturnResult(sqlmock.NewResult(0, 1))
 			require.NoError(t, repo.UpdateModelPricing(context.Background(), pricing))
 			require.NoError(t, mock.ExpectationsWereMet())
@@ -134,5 +134,5 @@ func videoImageInputPricing(free int, price float64) *service.VideoImageInputPri
 func videoImageInputPricingRows(raw any) *sqlmock.Rows {
 	return sqlmock.NewRows(channelPricingTimeColumns).AddRow(
 		int64(11), int64(7), "video", `["model"]`, service.BillingModeVideo,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, time.Time{}, time.Time{}, `{}`, `[]`, raw, nil, nil)
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, time.Time{}, time.Time{}, `{}`, `[]`, raw, nil, nil, `{}`)
 }

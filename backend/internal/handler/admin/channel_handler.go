@@ -82,6 +82,7 @@ type channelModelPricingRequest struct {
 	VideoFallbackPrice           *float64                        `json:"video_fallback_price,omitempty"`
 	VideoTokenPrepay             *service.VideoTokenPrepayConfig `json:"video_token_prepay,omitempty"`
 	VideoImageInputPricing       *service.VideoImageInputPricing `json:"video_image_input_pricing,omitempty"`
+	ModelDetails                 map[string]service.ModelDetails `json:"model_details,omitempty"`
 }
 
 // channelTimePricingRequest 是管理端提交的每日分时倍率配置。
@@ -164,6 +165,7 @@ type channelModelPricingResponse struct {
 	VideoFallbackPrice           *float64                        `json:"video_fallback_price,omitempty"`
 	VideoTokenPrepay             *service.VideoTokenPrepayConfig `json:"video_token_prepay,omitempty"`
 	VideoImageInputPricing       *service.VideoImageInputPricing `json:"video_image_input_pricing,omitempty"`
+	ModelDetails                 map[string]service.ModelDetails `json:"model_details,omitempty"`
 }
 
 type channelTimePricingResponse struct {
@@ -312,6 +314,7 @@ func pricingToResponse(p *service.ChannelModelPricing) channelModelPricingRespon
 		VideoFallbackPrice:           p.Clone().VideoFallbackPrice,
 		VideoTokenPrepay:             p.VideoTokenPrepay.Clone(),
 		VideoImageInputPricing:       p.VideoImageInputPricing.Clone(),
+		ModelDetails:                 service.CloneModelDetails(p.ModelDetails),
 	}
 }
 
@@ -405,6 +408,7 @@ func pricingRequestToService(reqs []channelModelPricingRequest) []service.Channe
 			VideoFallbackPrice:           (service.ChannelModelPricing{VideoFallbackPrice: r.VideoFallbackPrice}).Clone().VideoFallbackPrice,
 			VideoTokenPrepay:             r.VideoTokenPrepay.Clone(),
 			VideoImageInputPricing:       r.VideoImageInputPricing.Clone(),
+			ModelDetails:                 service.CloneModelDetails(r.ModelDetails),
 		})
 	}
 	return result

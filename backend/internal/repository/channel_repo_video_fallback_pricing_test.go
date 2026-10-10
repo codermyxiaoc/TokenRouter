@@ -38,7 +38,7 @@ func TestChannelVideoFallbackPrepayReadAndBatch(t *testing.T) {
 			}
 			query.WillReturnRows(sqlmock.NewRows(channelPricingTimeColumns).AddRow(
 				int64(11), int64(7), "video", `["model"]`, service.BillingModeVideoToken,
-				nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, time.Time{}, time.Time{}, `{}`, `[]`, nil, tc.fallback, tc.prepay))
+				nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, time.Time{}, time.Time{}, `{}`, `[]`, nil, tc.fallback, tc.prepay, `{}`))
 			if !tc.bad {
 				mock.ExpectQuery(`SELECT id, pricing_id, min_tokens`).WithArgs(sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"id"}))
 			}
@@ -89,8 +89,8 @@ func TestChannelVideoFallbackPrepayWriteAndClear(t *testing.T) {
 					fallback, prepay = 0.0, `{"price_per_second":0}`
 				}
 				if action == "update" {
-					mock.ExpectExec(`UPDATE channel_model_pricing .*video_fallback_price = \$21, video_token_prepay = \$22.*WHERE id = \$23`).
-						WithArgs([]byte(`["model"]`), service.BillingModeVideoToken, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "video", `{}`, `[]`, nil, fallback, prepay, int64(11)).
+					mock.ExpectExec(`UPDATE channel_model_pricing .*video_fallback_price = \$21, video_token_prepay = \$22.*WHERE id = \$24`).
+						WithArgs([]byte(`["model"]`), service.BillingModeVideoToken, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "video", `{}`, `[]`, nil, fallback, prepay, `{}`, int64(11)).
 						WillReturnResult(sqlmock.NewResult(0, 1))
 					require.NoError(t, repo.UpdateModelPricing(context.Background(), pricing))
 				} else {
@@ -98,8 +98,8 @@ func TestChannelVideoFallbackPrepayWriteAndClear(t *testing.T) {
 						mock.ExpectBegin()
 						mock.ExpectExec(`DELETE FROM channel_model_pricing`).WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
 					}
-					mock.ExpectQuery(`INSERT INTO channel_model_pricing .*video_fallback_price, video_token_prepay\)`).
-						WithArgs(int64(7), "video", []byte(`["model"]`), service.BillingModeVideoToken, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, `{}`, `[]`, nil, fallback, prepay).
+					mock.ExpectQuery(`INSERT INTO channel_model_pricing .*video_fallback_price, video_token_prepay, model_details\)`).
+						WithArgs(int64(7), "video", []byte(`["model"]`), service.BillingModeVideoToken, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, `{}`, `[]`, nil, fallback, prepay, `{}`).
 						WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).AddRow(int64(11), time.Time{}, time.Time{}))
 					if action == "replace" {
 						mock.ExpectCommit()

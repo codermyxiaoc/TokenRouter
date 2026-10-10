@@ -228,6 +228,10 @@ func newEmptyChannelCache() *channelCache {
 func expandPricingToCache(cache *channelCache, ch *Channel, gid int64, platform string) {
 	for j := range ch.ModelPricing {
 		pricing := &ch.ModelPricing[j]
+		// 纯说明不授权新模型，也不覆盖已有收费候选；原渠道对象仍保留展示配置。
+		if pricing.IsModelDetailsOnly() {
+			continue
+		}
 		if !isPlatformPricingMatch(platform, pricing.Platform) {
 			continue // 跳过非本平台的定价
 		}
@@ -674,6 +678,9 @@ func validateChannelConfig(pricing []ChannelModelPricing, mapping map[string]map
 // validatePricingEntries 校验定价条目（冲突检测 + 区间校验 + 计费模式校验），
 // 同时用于主渠道定价和 account_stats_pricing_rules 的内部定价。
 func validatePricingEntries(pricing []ChannelModelPricing) error {
+	if err := validateModelDetails(pricing); err != nil {
+		return err
+	}
 	if err := validateNoConflictingModels(pricing); err != nil {
 		return err
 	}
@@ -728,6 +735,10 @@ func validatePricingBillingMode(pricing []ChannelModelPricing) error {
 func checkBillingModeRequirements(p ChannelModelPricing) error {
 	if !p.BillingMode.IsValid() {
 		return infraerrors.BadRequest("INVALID_BILLING_MODE", "unsupported billing mode")
+	}
+	// 纯说明行不声明收费合同；旧空价卡仍执行原来的缺价拒绝。
+	if p.IsModelDetailsOnly() {
+		return nil
 	}
 	if p.BillingMode == BillingModeVideoToken && !strings.EqualFold(strings.TrimSpace(p.Platform), PlatformVideo) {
 		return infraerrors.BadRequest("VIDEO_TOKEN_UNSUPPORTED_PLATFORM", "video_token pricing requires the video platform")
@@ -879,6 +890,9 @@ func checkPricesNotNegative(p ChannelModelPricing) error {
 // validateAccountStatsPricingEntries 校验账号统计定价，并拒绝仅用于实际请求计费的 Fast 倍率。
 func validateAccountStatsPricingEntries(pricing []ChannelModelPricing) error {
 	for _, p := range pricing {
+		if len(p.ModelDetails) > 0 {
+			return infraerrors.BadRequest("ACCOUNT_STATS_MODEL_DETAILS_UNSUPPORTED", "model details are not supported for account stats pricing")
+		}
 		// 回退价和预扣合同仅属于用户收费，不扩展现有账号统计成本语义。
 		if p.VideoFallbackPrice != nil || p.VideoTokenPrepay != nil {
 			return infraerrors.BadRequest("ACCOUNT_STATS_VIDEO_PRICING_UNSUPPORTED", "video fallback and token prepay are not supported for account stats pricing")

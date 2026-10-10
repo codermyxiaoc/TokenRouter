@@ -18,7 +18,7 @@ func TestChannelVideoPricingReadPreservesZeroAndReferenceCondition(t *testing.T)
 	mock.ExpectQuery(`SELECT .*reasoning_effort_multipliers, video_prices`).WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows(channelPricingTimeColumns).AddRow(
 			int64(11), int64(7), "video", `["video-model"]`, service.BillingModeVideoToken,
-			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, time.Time{}, time.Time{}, `{}`, videoJSON, nil, nil, nil))
+			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, time.Time{}, time.Time{}, `{}`, videoJSON, nil, nil, nil, `{}`))
 	mock.ExpectQuery(`SELECT id, pricing_id, min_tokens`).WithArgs(sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	entries, err := repo.ListModelPricing(context.Background(), 7)
 	require.NoError(t, err)

@@ -658,6 +658,7 @@ import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import PricingEntryCard from '@/components/admin/channel/PricingEntryCard.vue'
+import { copyModelDetails } from '@/components/admin/channel/modelDetails'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useKeyedDebouncedSearch } from '@/composables/useKeyedDebouncedSearch'
 
@@ -1193,6 +1194,7 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
       model_pricing.push({
         platform: section.platform,
         models: entry.models,
+        model_details: section.platform === 'video' ? copyModelDetails(entry.models, entry.model_details) : undefined,
         billing_mode: entry.billing_mode,
         video_prices: videoPricesToAPI(entry.video_prices),
         video_image_input_pricing: videoImageInputPricingToAPI(entry.video_image_input_pricing),
@@ -1295,6 +1297,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
       .filter(p => (p.platform || 'anthropic') === platform)
       .map(p => ({
         models: p.models || [],
+        model_details: platform === 'video' ? copyModelDetails(p.models || [], p.model_details) : undefined,
         billing_mode: p.billing_mode,
         video_prices: videoPricesFromAPI(p.video_prices),
         video_image_input_pricing: videoImageInputPricingFromAPI(p.video_image_input_pricing),

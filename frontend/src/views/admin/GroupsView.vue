@@ -1225,7 +1225,7 @@
                 />
               </div>
               <div class="mt-3 space-y-2">
-                <PricingEntryCard v-for="(entry, index) in createForm.model_pricing" :key="index" :entry="entry" :platform="createForm.platform" hide-token-intervals enable-tier-multipliers @update="createForm.model_pricing[index] = $event" @remove="createForm.model_pricing.splice(index, 1)" />
+                <PricingEntryCard v-for="(entry, index) in createForm.model_pricing" :key="index" :entry="entry" :platform="createForm.platform" hide-token-intervals enable-tier-multipliers model-details-scope="group" @update="createForm.model_pricing[index] = $event" @remove="createForm.model_pricing.splice(index, 1)" />
               </div>
             </div>
             <div
@@ -2954,7 +2954,7 @@
                 />
               </div>
               <div class="mt-3 space-y-2">
-                <PricingEntryCard v-for="(entry, index) in editForm.model_pricing" :key="index" :entry="entry" :platform="editForm.platform" hide-token-intervals enable-tier-multipliers @update="editForm.model_pricing[index] = $event" @remove="editForm.model_pricing.splice(index, 1)" />
+                <PricingEntryCard v-for="(entry, index) in editForm.model_pricing" :key="index" :entry="entry" :platform="editForm.platform" hide-token-intervals enable-tier-multipliers model-details-scope="group" @update="editForm.model_pricing[index] = $event" @remove="editForm.model_pricing.splice(index, 1)" />
               </div>
             </div>
             <div
@@ -3975,6 +3975,7 @@ import GroupAdvancedSchedulerOverridesModal from "@/components/admin/group/Group
 import GroupFormTabs from "@/components/admin/group/GroupFormTabs.vue";
 import { getAvailabilityProbeProtocols } from "./groupsAvailabilityProbe";
 import PricingEntryCard from "@/components/admin/channel/PricingEntryCard.vue";
+import { copyModelDetails } from "@/components/admin/channel/modelDetails";
 import type { PricingFormEntry } from "@/components/admin/channel/types";
 import { reasoningEffortMultipliersToAPI } from "@/components/admin/channel/types";
 import {
@@ -4078,6 +4079,7 @@ const groupPricingFromAPI = (
 ): PricingFormEntry[] =>
   (pricing || []).map((entry) => ({
     models: entry.models || [],
+    model_details: entry.platform === "video" ? copyModelDetails(entry.models || [], entry.model_details) : undefined,
     billing_mode: entry.billing_mode || "token",
     video_prices: videoPricesFromAPI(entry.video_prices),
     video_image_input_pricing: videoImageInputPricingFromAPI(entry.video_image_input_pricing),
@@ -4110,6 +4112,7 @@ const groupPricingToAPI = (
     .map((entry) => ({
       platform,
       models: entry.models,
+      model_details: platform === "video" ? copyModelDetails(entry.models, entry.model_details) : undefined,
       billing_mode: entry.billing_mode,
       video_prices: videoPricesToAPI(entry.video_prices),
       video_image_input_pricing: videoImageInputPricingToAPI(entry.video_image_input_pricing),

@@ -680,6 +680,8 @@ export interface MarketplaceVideoEndpoint {
 export interface MarketplaceModel {
   id: string
   display_name: string
+  // 视频详情由后端按分组和模型投影，仅包含允许公开展示的纯文本。
+  model_description?: string
   video_endpoints?: MarketplaceVideoEndpoint[]
   pricing: MarketplaceModelPricing
   input_modalities?: ModelModality[]

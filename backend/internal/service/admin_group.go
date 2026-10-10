@@ -1008,6 +1008,9 @@ func normalizeGroupModelPricing(platform string, pricing []ChannelModelPricing) 
 	out := make([]ChannelModelPricing, len(pricing))
 	for i := range pricing {
 		out[i] = pricing[i].Clone()
+		if len(out[i].ModelDetails) > 0 && platform != PlatformVideo {
+			return nil, infraerrors.BadRequest("MODEL_DETAILS_UNSUPPORTED_PLATFORM", "model details require a video group")
+		}
 		out[i].ID = 0
 		out[i].ChannelID = 0
 		if out[i].TimePricing != nil && len(out[i].TimePricing.Periods) > 0 {

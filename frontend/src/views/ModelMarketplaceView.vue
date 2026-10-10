@@ -315,6 +315,13 @@
                 <!-- ID 独占整行，避免跟随标题列被右侧能力图标挤窄。 -->
                 <ModelIdLabel :model-id="model.id" class="mt-1" />
 
+                <!-- 说明按模型独立展示并保留换行；使用文本插值，不能执行管理员输入的 HTML。 -->
+                <p
+                  v-if="group.platform === 'video' && model.model_description?.trim()"
+                  class="mt-3 min-w-0 whitespace-pre-line text-sm leading-6 text-gray-600 [overflow-wrap:anywhere] dark:text-dark-300"
+                  data-testid="model-description"
+                >{{ model.model_description }}</p>
+
                 <ModelVideoEndpoints :endpoints="model.video_endpoints" />
 
                 <!-- 价格预览改为无边框列表，避免卡片里再嵌套一层卡片。 -->

@@ -1,4 +1,4 @@
-import type { BillingMode, ChannelTimePricing, PricingInterval } from '@/api/admin/channels'
+import type { BillingMode, ChannelTimePricing, PricingInterval, ModelDisplayDetail } from '@/api/admin/channels'
 import type { VideoPriceFormEntry, VideoImageInputPricingForm, VideoTokenPrepayForm } from './videoPricing'
 
 type TranslateFn = (key: string, params?: Record<string, unknown>) => string
@@ -22,6 +22,7 @@ export interface IntervalFormEntry {
 
 export interface PricingFormEntry {
   models: string[]
+  model_details?: Record<string, ModelDisplayDetail>
   billing_mode: BillingMode
   video_prices?: VideoPriceFormEntry[]
   video_image_input_pricing?: VideoImageInputPricingForm | null

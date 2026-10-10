@@ -219,6 +219,57 @@ describe('ModelMarketplaceView', () => {
     copyToClipboard.mockClear()
   })
 
+  // 同一模型在不同分组可展示不同说明，未定价也不应丢失已公开的能力说明。
+  it('shows independent video model descriptions scoped to each group', async () => {
+    const first = {
+      ...marketplaceModel('seedance-2.5', 'Seedance 2.5', unpricedPricing),
+      model_description: '支持480p/720p/1080p，30图10视频10音频\n时长5～30秒，比例9:16、16:9、1:1',
+    }
+    const second = {
+      ...marketplaceModel('minimax-h3', 'MiniMax H3', unpricedPricing),
+      model_description: '支持768p，最多5张参考图',
+    }
+    getMarketplaceModels.mockResolvedValue([
+      { ...marketplaceGroup(1, 'Video A', [first, second]), platform: 'video' },
+      { ...marketplaceGroup(2, 'Video B', [{ ...first, model_description: '本分组仅提供720p' }]), platform: 'video' },
+    ])
+    const wrapper = await mountMarketplace()
+    expect(wrapper.find('[data-testid="model-description"]').exists()).toBe(false)
+    for (const toggle of wrapper.findAll('[data-testid="marketplace-group-pricing-toggle"]')) {
+      await toggle.trigger('click')
+    }
+    const cards = wrapper.findAll('article')
+    expect(cards.map(card => card.get('[data-testid="model-description"]').text())).toEqual([
+      first.model_description, second.model_description, '本分组仅提供720p',
+    ])
+    expect(cards[0].text()).toContain('marketplace.pricingUnavailable')
+    wrapper.unmount()
+  })
+
+  // 新字段缺省不影响旧数据，富文本外观的内容也只能作为说明文字显示。
+  it('renders descriptions as plain text and hides empty or non-video descriptions', async () => {
+    const unsafe = '<img src=x onerror="alert(1)"><script>alert(2)</script>'
+    const video = marketplaceModel('video-a', 'Video A', unpricedPricing)
+    getMarketplaceModels.mockResolvedValue([
+      { ...marketplaceGroup(1, 'Video', [
+        { ...video, model_description: unsafe },
+        { ...video, id: 'video-b' },
+        { ...video, id: 'video-c', model_description: ' \n ' },
+      ]), platform: 'video' },
+      marketplaceGroup(2, 'Chat', [{ ...video, model_description: 'should not display' }]),
+    ])
+    const wrapper = await mountMarketplace()
+    for (const toggle of wrapper.findAll('[data-testid="marketplace-group-pricing-toggle"]')) {
+      await toggle.trigger('click')
+    }
+    const details = wrapper.findAll('[data-testid="model-description"]')
+    expect(details).toHaveLength(1)
+    expect(details[0].text()).toBe(unsafe)
+    expect(details[0].find('img').exists()).toBe(false)
+    expect(details[0].find('script').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   // 兼容入口来自分组内模型的后端能力投影，与定价是否可展示无关，也不能给文字模型补视频入口。
   it('shows and copies only advertised video endpoints within the model card', async () => {
     const video = marketplaceModel('video-alias', 'Video Alias', unpricedPricing)

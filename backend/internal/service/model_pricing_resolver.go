@@ -214,6 +214,11 @@ func (r *ModelPricingResolver) resolveConfiguredPricing(config *ChannelModelPric
 }
 
 func matchGroupModelPricing(group *Group, model string) *ChannelModelPricing {
+	return matchGroupModelPricingEntry(group, model, false)
+}
+
+// 计费先排除新增纯说明行再匹配，保留精确及通配价卡原有顺序；展示读取包含说明行。
+func matchGroupModelPricingEntry(group *Group, model string, includeDetails bool) *ChannelModelPricing {
 	if group == nil {
 		return nil
 	}
@@ -221,6 +226,9 @@ func matchGroupModelPricing(group *Group, model string) *ChannelModelPricing {
 	var wildcard *ChannelModelPricing
 	for i := range group.ModelPricing {
 		entry := &group.ModelPricing[i]
+		if !includeDetails && entry.IsModelDetailsOnly() {
+			continue
+		}
 		for _, pattern := range entry.Models {
 			normalized := normalizeChannelPricingModelName(pattern)
 			if normalized == model {

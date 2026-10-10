@@ -49,7 +49,9 @@ type ModelMarketplaceGroup struct {
 type ModelMarketplaceModel struct {
 	ID          string
 	DisplayName string
-	Pricing     ModelDisplayPricing
+	// ModelDescription 仅投影开启的纯文本公开说明。
+	ModelDescription string
+	Pricing          ModelDisplayPricing
 	// InputModalities/OutputModalities 来自定价文件的模型能力元数据；
 	// 查询不到时为 nil，前端能力标签降级为本地规则。
 	InputModalities  []string
@@ -422,6 +424,7 @@ func (s *ModelMarketplaceService) buildPublicModelsForGroup(ctx context.Context,
 		models = append(models, ModelMarketplaceModel{
 			ID:               modelDef.ID,
 			DisplayName:      modelDef.DisplayName,
+			ModelDescription: s.marketplaceModelDescription(ctx, group, modelDef),
 			Pricing:          pricing,
 			InputModalities:  inputModalities,
 			OutputModalities: outputModalities,

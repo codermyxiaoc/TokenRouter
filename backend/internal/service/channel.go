@@ -83,15 +83,35 @@ type AccountStatsPricingRule struct {
 	UpdatedAt  time.Time
 }
 
+// ModelDetails 是公开模型说明；关闭时保留草稿，但不向模型广场公开。
+type ModelDetails struct {
+	Enabled     bool   `json:"enabled"`
+	Description string `json:"description"`
+}
+
+// CloneModelDetails 隔离模型说明映射，防止编辑污染缓存、渠道副本或分组配置。
+func CloneModelDetails(details map[string]ModelDetails) map[string]ModelDetails {
+	if details == nil {
+		return nil
+	}
+	clone := make(map[string]ModelDetails, len(details))
+	for model, detail := range details {
+		clone[model] = detail
+	}
+	return clone
+}
+
 // ChannelModelPricing 渠道模型定价条目
 type ChannelModelPricing struct {
-	ID                 int64       `json:"id,omitempty"`
-	ChannelID          int64       `json:"channel_id,omitempty"`
-	Platform           string      `json:"platform"` // 所属平台（anthropic/openai/gemini/...）
-	Models             []string    `json:"models"`
-	BillingMode        BillingMode `json:"billing_mode"`
-	PriceMultiplier    *float64    `json:"price_multiplier"`     // 最终定价倍率；nil 表示不调整价格
-	FastModeMultiplier *float64    `json:"fast_mode_multiplier"` // OpenAI Fast 模式收费倍率；nil 表示沿用模型默认 Fast 定价
+	ID        int64    `json:"id,omitempty"`
+	ChannelID int64    `json:"channel_id,omitempty"`
+	Platform  string   `json:"platform"` // 所属平台（anthropic/openai/gemini/...）
+	Models    []string `json:"models"`
+	// ModelDetails 仅描述当前价卡模型，不参与价格有效性、倍率或路由判定。
+	ModelDetails       map[string]ModelDetails `json:"model_details,omitempty"`
+	BillingMode        BillingMode             `json:"billing_mode"`
+	PriceMultiplier    *float64                `json:"price_multiplier"`     // 最终定价倍率；nil 表示不调整价格
+	FastModeMultiplier *float64                `json:"fast_mode_multiplier"` // OpenAI Fast 模式收费倍率；nil 表示沿用模型默认 Fast 定价
 	// FastMultiplier 是新的通用 Fast/priority 倍率；为空时兼容旧字段。
 	FastMultiplier *float64 `json:"fast_multiplier,omitempty"`
 	// FlexMultiplier 是渠道级 Flex 倍率；为空时使用系统默认 0.5。
@@ -308,6 +328,7 @@ func (p *ChannelModelPricing) HasEffectivePricing() bool {
 // Clone 返回 ChannelModelPricing 的拷贝；模型、区间和分时配置切片彼此独立。
 func (p ChannelModelPricing) Clone() ChannelModelPricing {
 	cp := p
+	cp.ModelDetails = CloneModelDetails(p.ModelDetails)
 	cp.VideoPrices = cloneVideoPriceTiers(p.VideoPrices)
 	cp.VideoFallbackPrice = multiplyPricePointer(p.VideoFallbackPrice, 1)
 	cp.VideoTokenPrepay = p.VideoTokenPrepay.Clone()

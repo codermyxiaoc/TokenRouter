@@ -60,6 +60,8 @@ export interface ChannelModelPricing {
   id?: number
   platform: string
   models: string[]
+  // Video 模型说明仅用于模型广场；缺少键表示继承，关闭时保留说明草稿。
+  model_details?: Record<string, ModelDisplayDetail>
   billing_mode: BillingMode
   video_prices?: VideoPriceEntry[]
   video_image_input_pricing?: VideoImageInputPricing | null
@@ -84,6 +86,11 @@ export interface ChannelModelPricing {
   per_request_price: number | null
   intervals: PricingInterval[]
   time_pricing?: ChannelTimePricing | null
+}
+
+export interface ModelDisplayDetail {
+  enabled: boolean
+  description: string
 }
 
 export interface AccountStatsPricingRule {

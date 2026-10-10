@@ -220,7 +220,7 @@ describe('GroupsView duplicate action', () => {
   it.each([['video', false], ['video', true], ['video_token', false], ['video_token', true], ['video_per_request', false], ['video_per_request', true]] as const)('round-trips Video %s pricing, fallback-only=%s', async (billingMode, fallbackOnly) => {
     const videoGroup = { ...sourceGroup, platform: 'video', scheduler_type: 'basic', allowed_client_protocols: [],
       video_rate_independent: true, video_rate_multiplier: 1.25,
-      model_pricing: [{ platform: 'video', models: ['seedance-v2'], billing_mode: billingMode,
+      model_pricing: [{ platform: 'video', models: ['seedance-v2'], model_details: { 'seedance-v2': { enabled: false, description: '5–30 秒，草稿' }, removed: { enabled: true, description: '失效模型' } }, billing_mode: billingMode,
         video_image_input_pricing: { free_images: 0, price: 0.05 }, video_fallback_price: 0, video_token_prepay: billingMode === 'video_token' ? { price_per_second: 0.3 } : null,
         video_prices: fallbackOnly ? [] : [{ resolution: '480p', has_reference_video: false, price: 0 }, { resolution: '480P', has_reference_video: true, price: 0 }, { resolution: '720p', has_reference_video: true, price: 15 }] }] }
     listGroups.mockResolvedValue({ items: [videoGroup], total: 1, page: 1, page_size: 20, pages: 1 })
@@ -234,6 +234,8 @@ describe('GroupsView duplicate action', () => {
     await wrapper.get('[data-group-tab-button="pricing"]').trigger('click')
     const card = wrapper.getComponent({ name: 'PricingEntryCard' })
     expect(card.props('platform')).toBe('video')
+    expect(card.props('modelDetailsScope')).toBe('group')
+    expect(card.props('entry').model_details).toEqual({ 'seedance-v2': { enabled: false, description: '5–30 秒，草稿' } })
     const expectedPrices = fallbackOnly ? [] : [{ resolution: '480p', price: 0 }, { resolution: '720p', price: 15 }]
     expect(card.props('entry').video_prices).toEqual(expectedPrices)
     expect(card.props('entry').video_image_input_pricing).toEqual({ free_images: 0, price: 0.05 })
@@ -245,8 +247,89 @@ describe('GroupsView duplicate action', () => {
     const request = updateGroup.mock.calls[0][1]
     expect(request).toMatchObject({ scheduler_type: 'basic', video_rate_independent: true, video_rate_multiplier: 1.25, allowed_client_protocols: [] })
     expect(request.model_pricing[0].video_prices).toEqual(expectedPrices)
+    expect(request.model_pricing[0].model_details).toEqual({ 'seedance-v2': { enabled: false, description: '5–30 秒，草稿' } })
     expect(request.model_pricing[0].video_image_input_pricing).toEqual({ free_images: 0, price: 0.05 })
     expect(request.model_pricing[0]).toMatchObject({ billing_mode: billingMode, video_fallback_price: 0, video_token_prepay: billingMode === 'video_token' ? { price_per_second: 0.3 } : null })
+    wrapper.unmount()
+  })
+
+  // 纯说明条目保存后恢复继承会删除空卡，不能拦截已有渠道定价。
+  it.each(['video', 'video_token', 'video_per_request'] as const)('分组 %s 可只设置说明而不增加独立价格', async billingMode => {
+    const details = { 'seedance-v2': { enabled: false, description: '临时关闭的草稿' } }
+    const videoGroup = { ...sourceGroup, platform: 'video', scheduler_type: 'basic', allowed_client_protocols: [],
+      model_pricing: [{ platform: 'video', models: ['seedance-v2'], billing_mode: billingMode, model_details: details }] }
+    listGroups.mockImplementation(async () => ({ items: [videoGroup], total: 1, page: 1, page_size: 20, pages: 1 }))
+    updateGroup.mockImplementation(async (_id, request) => {
+      videoGroup.model_pricing = JSON.parse(JSON.stringify(request.model_pricing))
+      return videoGroup
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'common.edit')!.trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-group-tab-button="pricing"]').trigger('click')
+    const card = wrapper.getComponent({ name: 'PricingEntryCard' })
+    const original = { ...card.props('entry') }
+    card.vm.$emit('update', { ...original, video_fallback_price: -1 })
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(updateGroup).not.toHaveBeenCalled()
+    card.vm.$emit('update', original)
+    await wrapper.vm.$nextTick()
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(updateGroup).toHaveBeenCalledOnce()
+    expect(updateGroup.mock.calls[0][1].model_pricing[0]).toMatchObject({
+      model_details: details, billing_mode: billingMode, video_prices: [], video_fallback_price: null,
+      video_token_prepay: null, video_image_input_pricing: null, price_multiplier: null,
+      input_price: null, output_price: null, per_request_price: null, intervals: [], time_pricing: null,
+    })
+    await wrapper.findAll('button').find(button => button.text() === 'common.edit')!.trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-group-tab-button="pricing"]').trigger('click')
+    await wrapper.get('[data-testid="inherit-model-detail"]').trigger('click')
+    expect(wrapper.findComponent({ name: 'PricingEntryCard' }).exists()).toBe(false)
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(updateGroup.mock.calls[1][1].model_pricing).toEqual([])
+    wrapper.unmount()
+  })
+
+  // 实际表单保存再重开，确保“显式关闭”和“恢复继承”不被同一空值覆盖。
+  it('保存逐模型详情并可重新打开、关闭及恢复渠道继承', async () => {
+    const details = { 'seedance-v2': { enabled: true, description: '480p，5–30 秒' }, kling: { enabled: false, description: '1080p 草稿' } }
+    const videoGroup = { ...sourceGroup, platform: 'video', scheduler_type: 'basic', allowed_client_protocols: [],
+      model_pricing: [{ platform: 'video', models: ['seedance-v2', 'kling'], billing_mode: 'video_token', video_fallback_price: 12,
+        model_details: details as typeof details | undefined }] }
+    listGroups.mockImplementation(async () => ({ items: [videoGroup], total: 1, page: 1, page_size: 20, pages: 1 }))
+    updateGroup.mockImplementation(async (_id, request) => {
+      videoGroup.model_pricing = JSON.parse(JSON.stringify(request.model_pricing))
+      return videoGroup
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    const open = async () => {
+      await wrapper.findAll('button').find(button => button.text() === 'common.edit')!.trigger('click')
+      await flushPromises()
+      await wrapper.get('[data-group-tab-button="pricing"]').trigger('click')
+      return wrapper.getComponent({ name: 'PricingEntryCard' })
+    }
+    let card = await open()
+    expect(card.props('entry').model_details).toEqual(details)
+    const updated = { 'seedance-v2': { enabled: false, description: '480p，5–30 秒' }, kling: { enabled: true, description: '1080p 新说明' } }
+    card.vm.$emit('update', { ...card.props('entry'), model_details: updated })
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(updateGroup.mock.calls[0][1].model_pricing[0]).toMatchObject({ video_fallback_price: 12, model_details: updated })
+    card = await open()
+    expect(card.props('entry').model_details).toEqual(updated)
+    card.vm.$emit('update', { ...card.props('entry'), model_details: undefined })
+    await wrapper.get('#edit-group-form').trigger('submit')
+    await flushPromises()
+    expect(updateGroup.mock.calls[1][1].model_pricing[0].model_details).toBeUndefined()
+    card = await open()
+    expect(card.props('entry').model_details).toBeUndefined()
+    expect(card.props('entry').video_fallback_price).toBe(12)
     wrapper.unmount()
   })
 

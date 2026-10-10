@@ -338,6 +338,17 @@ riskControl: {
     },
 // Channel Management
     channels: {
+      modelDetails: {
+        title: 'Model details',
+        enabled: 'Show model details',
+        description: 'Description',
+        channelHint: 'Set a plain-text marketplace description for each model. This does not change endpoints or request limits. Leaving all billing fields empty keeps existing pricing. Turning it off keeps the saved text.',
+        groupHint: 'Models inherit channel details until configured here. Enable to use this group’s description; explicitly disable to hide channel details. Use “Inherit channel details” to reset. Marketplace display only; leaving all billing fields empty keeps existing pricing.',
+        empty: 'Add models above to configure their details individually.',
+        inherited: 'Inherit channel details',
+        reset: 'Inherit channel details',
+        placeholder: 'For example: 480p / 720p / 1080p; up to 30 images, 10 videos and 10 audio clips; 5–30 seconds; aspect ratios 9:16, 16:9 and 1:1.',
+      },
       videoTokenPrepay: {
         title: 'Prepay by duration',
         hint: 'Prepay duration × a fixed USD price per second, plus reference image fees, with no channel, video, group, plan or balance multipliers. Final billing uses actual Token usage and normal rates, with a refund or additional charge. When disabled, billing occurs on completion.',

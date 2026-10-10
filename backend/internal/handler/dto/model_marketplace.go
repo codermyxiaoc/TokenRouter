@@ -73,6 +73,7 @@ type ModelMarketplacePricingInterval struct {
 }
 
 type ModelMarketplaceModel struct {
+	ModelDescription string                          `json:"model_description,omitempty"`
 	ID               string                          `json:"id"`
 	DisplayName      string                          `json:"display_name"`
 	Pricing          ModelMarketplacePricing         `json:"pricing"`
@@ -145,6 +146,7 @@ func ModelMarketplaceGroupsFromService(groups []service.ModelMarketplaceGroup) [
 			models = append(models, ModelMarketplaceModel{
 				ID:               model.ID,
 				DisplayName:      model.DisplayName,
+				ModelDescription: model.ModelDescription,
 				Pricing:          modelMarketplacePricingFromService(model.Pricing),
 				InputModalities:  model.InputModalities,
 				OutputModalities: model.OutputModalities,

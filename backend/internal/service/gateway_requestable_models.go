@@ -183,7 +183,8 @@ func mergeRequestableModelCandidates(baseModels []string, accounts []Account, ch
 	if channel != nil {
 		for i := range channel.ModelPricing {
 			pricing := &channel.ModelPricing[i]
-			if pricing.Platform == platform {
+			if pricing.Platform == platform && !pricing.IsModelDetailsOnly() {
+				// 说明只修饰已有模型目录，不凭空增加可调用模型。
 				appendModels(pricing.Models...)
 			}
 		}

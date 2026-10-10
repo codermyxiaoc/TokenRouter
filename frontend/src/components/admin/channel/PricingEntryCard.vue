@@ -162,6 +162,14 @@
           </div>
         </div>
 
+        <VideoModelDetails
+          v-if="props.platform === 'video' && !props.hideVideoUserPricing"
+          :models="entry.models"
+          :model-value="entry.model_details"
+          :scope="props.modelDetailsScope"
+          @update:model-value="onModelDetailsUpdate"
+        />
+
         <!-- Token mode -->
         <div v-if="entry.billing_mode === 'token'">
           <!-- Default prices (fallback when no interval matches) -->
@@ -396,6 +404,8 @@
 import VideoPricingMatrix from './VideoPricingMatrix.vue'
 import VideoTokenPrepay from './VideoTokenPrepay.vue'
 import VideoImageInputPricing from './VideoImageInputPricing.vue'
+import VideoModelDetails from './VideoModelDetails.vue'
+import { copyModelDetails, isModelDetailsOnly } from './modelDetails'
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
@@ -405,7 +415,7 @@ import ModelTagInput from './ModelTagInput.vue'
 import TimePricingSection from './TimePricingSection.vue'
 import type { PricingFormEntry, IntervalFormEntry } from './types'
 import { perTokenToMTok, getPlatformTagClass, REASONING_EFFORT_LEVELS } from './types'
-import type { BillingMode } from '@/api/admin/channels'
+import type { BillingMode, ModelDisplayDetail } from '@/api/admin/channels'
 import channelsAPI from '@/api/admin/channels'
 
 const { t } = useI18n()
@@ -418,12 +428,14 @@ const props = withDefaults(defineProps<{
   enableTimePricing?: boolean
   enableTierMultipliers?: boolean
   hideVideoUserPricing?: boolean
+  modelDetailsScope?: 'group' | 'channel'
 }>(), {
   showFastModeMultiplier: false,
   hideTokenIntervals: false,
   enableTimePricing: false,
   enableTierMultipliers: false,
   hideVideoUserPricing: false,
+  modelDetailsScope: 'channel',
 })
 
 const emit = defineEmits<{
@@ -480,6 +492,20 @@ function updateReasoningEffort(effort: string, value: string) {
 
 function emitField(field: keyof PricingFormEntry, value: string) {
   emit('update', { ...props.entry, [field]: value === '' ? null : value })
+}
+
+// 改模型列表和重置说明共用清理边界，避免最后一份说明消失后留下空价卡。
+function emitModelDetailsUpdate(models: string[], details: Record<string, ModelDisplayDetail> | undefined) {
+  const next = copyModelDetails(models, details)
+  if (!next && props.platform === 'video' && isModelDetailsOnly(props.entry)) {
+    emit('remove')
+    return
+  }
+  emit('update', { ...props.entry, models, model_details: next })
+}
+
+function onModelDetailsUpdate(details: Record<string, ModelDisplayDetail> | undefined) {
+  emitModelDetailsUpdate(props.entry.models, details)
 }
 
 // 服务层级倍率只适用于 token 计费，切换模式时清除隐藏字段，避免提交无效配置。
@@ -546,7 +572,7 @@ function removeInterval(idx: number) {
 
 async function onModelsUpdate(newModels: string[]) {
   const oldModels = props.entry.models
-  emit('update', { ...props.entry, models: newModels })
+  emitModelDetailsUpdate(newModels, props.entry.model_details)
   // 视频只能显式配置矩阵价格，不使用文本默认价自动填充。
   if (props.platform === 'video') return
 

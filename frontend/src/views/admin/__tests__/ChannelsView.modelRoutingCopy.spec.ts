@@ -181,20 +181,52 @@ describe('ChannelsView model routing copy', () => {
       await flushPromises()
       expect(createChannel).not.toHaveBeenCalled()
     }
-    card.vm.$emit('update', { ...card.props('entry'), billing_mode: billingMode, models: ['video-model'], video_prices: videoPrices, video_fallback_price: '0', video_token_prepay: { price_per_second: '0.3' }, video_image_input_pricing: { free_images: '2', price: '0.05' } })
+    card.vm.$emit('update', { ...card.props('entry'), billing_mode: billingMode, models: ['video-model'], model_details: { 'video-model': { enabled: true, description: '支持 480p，5–30 秒' }, removed: { enabled: true, description: '已删除模型' } }, video_prices: videoPrices, video_fallback_price: '0', video_token_prepay: { price_per_second: '0.3' }, video_image_input_pricing: { free_images: '2', price: '0.05' } })
     await wrapper.get('#channel-form').trigger('submit')
     await flushPromises()
     expect(createChannel).toHaveBeenCalledOnce()
+    expect(createChannel.mock.calls[0][0].model_pricing[0].model_details).toEqual({ 'video-model': { enabled: true, description: '支持 480p，5–30 秒' } })
     expect(createChannel.mock.calls[0][0].model_pricing[0]).toMatchObject({ platform: 'video', billing_mode: billingMode, video_prices: fallbackOnly ? [] : [
       { resolution: '480p', price: 0 }, { resolution: '2k', price: 15 },
     ], video_image_input_pricing: { free_images: 2, price: 0.05 }, video_fallback_price: 0, video_token_prepay: billingMode === 'video_token' ? { price_per_second: 0.3 } : null })
     wrapper.unmount()
   })
 
+  // 详情配置不伪造收费字段，也不能掩盖非法价格或倍率。
+  it.each(['video', 'video_token', 'video_per_request'] as const)('允许 %s 仅保存模型详情，但不能绕过价格或倍率校验', async billingMode => {
+    const details = { 'video-model': { enabled: true, description: '480p，5–30 秒' } }
+    const channel = { id: 9, name: 'Video details', status: 'active', group_ids: [77],
+      model_pricing: [{ platform: 'video', models: ['video-model'], billing_mode: billingMode, model_details: details }] }
+    listChannels.mockResolvedValue({ items: [channel], total: 1 })
+    getGroups.mockResolvedValue([{ id: 77, name: 'VideoGroup', platform: 'video', rate_multiplier: 1 }])
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'common.edit')!.trigger('click')
+    await flushPromises()
+    const card = wrapper.getComponent({ name: 'PricingEntryCard' })
+    const original = { ...card.props('entry') }
+    for (const invalid of [{ price_multiplier: 2 }, { video_fallback_price: -1 }, { video_token_prepay: { price_per_second: '' } }]) {
+      card.vm.$emit('update', { ...original, ...invalid })
+      await wrapper.get('#channel-form').trigger('submit')
+      await flushPromises()
+      expect(updateChannel).not.toHaveBeenCalled()
+    }
+    card.vm.$emit('update', original)
+    await wrapper.get('#channel-form').trigger('submit')
+    await flushPromises()
+    expect(updateChannel).toHaveBeenCalledOnce()
+    expect(updateChannel.mock.calls[0][1].model_pricing[0]).toMatchObject({
+      model_details: details, billing_mode: billingMode, video_prices: [], video_fallback_price: null,
+      video_token_prepay: null, video_image_input_pricing: null, price_multiplier: null,
+      input_price: null, output_price: null, per_request_price: null, intervals: [], time_pricing: null,
+    })
+    wrapper.unmount()
+  })
+
   // 使用接口回写后的响应重新打开表单，区分显式零价与关闭，不能只验证输入控件。
   it('saves, reloads and clears zero fallback and zero fixed prepayment', async () => {
     const channel = { id: 9, name: 'Video channel', status: 'active', group_ids: [77],
-      model_pricing: [{ platform: 'video', models: ['video-model'], billing_mode: 'video_token',
+      model_pricing: [{ platform: 'video', models: ['video-model'], model_details: { 'video-model': { enabled: false, description: '关闭仍保留的说明' } }, billing_mode: 'video_token',
         video_prices: [{ resolution: '720p', has_reference_video: false, price: 15 }, { resolution: '720P', has_reference_video: true, price: 15 }],
         price_multiplier: 4, video_fallback_price: 12 as number | null,
         video_token_prepay: { price_per_second: 0.3 } as { price_per_second: number } | null }] }
@@ -212,6 +244,7 @@ describe('ChannelsView model routing copy', () => {
       return wrapper.getComponent({ name: 'PricingEntryCard' })
     }
     let card = await open()
+    expect(card.props('entry').model_details).toEqual({ 'video-model': { enabled: false, description: '关闭仍保留的说明' } })
     expect(card.props('entry').video_prices).toEqual([{ resolution: '720p', price: 15 }])
     card.vm.$emit('update', { ...card.props('entry'), video_fallback_price: '0', video_token_prepay: { price_per_second: '0' } })
     await wrapper.get('#channel-form').trigger('submit')
@@ -221,6 +254,8 @@ describe('ChannelsView model routing copy', () => {
     })
     expect(updateChannel.mock.calls[0][1].model_pricing[0].video_prices).toEqual([{ resolution: '720p', price: 15 }])
     card = await open()
+    expect(card.props('entry').model_details).toEqual({ 'video-model': { enabled: false, description: '关闭仍保留的说明' } })
+    expect(updateChannel.mock.calls[0][1].model_pricing[0].model_details).toEqual(card.props('entry').model_details)
     expect(card.props('entry').video_prices).toEqual([{ resolution: '720p', price: 15 }])
     expect(card.props('entry')).toMatchObject({ video_fallback_price: 0, video_token_prepay: { price_per_second: 0 } })
     card.vm.$emit('update', { ...card.props('entry'), video_fallback_price: '', video_token_prepay: null })

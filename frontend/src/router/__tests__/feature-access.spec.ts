@@ -142,6 +142,24 @@ describe('feature route guard', () => {
     expect(next).toHaveBeenCalledWith()
   })
 
+  it('每日活动未登录不能读取个人页面，登录后保留返回地址', async () => {
+    authStore.isAuthenticated = false
+    const route = routerHarness.routes.find(route => route.path === '/daily-activities')!
+    const { navigation, next } = runGuard(route.meta!, '/daily-activities')
+    await navigation
+    expect(next).toHaveBeenCalledWith({ path: '/login', query: { redirect: '/daily-activities' } })
+    expect(appStore.fetchPublicSettings).not.toHaveBeenCalled()
+  })
+
+  it('普通用户不能通过系统设置地址进入活动管理配置', async () => {
+    const route = routerHarness.routes.find(route => route.path === '/admin/settings')!
+    expect(route.meta?.requiresAdmin).toBe(true)
+    const { navigation, next } = runGuard(route.meta!, '/admin/settings')
+    await navigation
+    expect(next).toHaveBeenCalledWith('/dashboard')
+    expect(appStore.fetchPublicSettings).not.toHaveBeenCalled()
+  })
+
   it('waits for the first public-settings request before deciding payment access', async () => {
     const deferred = createDeferred<{ payment_enabled: boolean }>()
     appStore.fetchPublicSettings.mockImplementation(async () => {

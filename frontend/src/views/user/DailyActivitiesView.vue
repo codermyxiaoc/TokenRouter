@@ -19,9 +19,6 @@
           {{ t('common.refresh') }}
         </button>
       </header>
-      <p class="text-xs leading-relaxed text-gray-500">
-        {{ t('dailyActivities.eligibilityHint') }}
-      </p>
       <p
         v-if="error"
         role="alert"
@@ -53,18 +50,17 @@
             })
           }}
         </p>
-        <!-- 礼包占满首行，两个累计活动在桌面并排，手机自然堆叠。 -->
-        <div class="grid min-w-0 gap-5 md:grid-cols-2">
+        <!-- 礼包独占首行，累计活动仅剩一个时铺满；关闭卡片不影响历史。 -->
+        <div v-if="orderedActivities.length" class="grid min-w-0 gap-5 md:grid-cols-2">
           <section
             v-for="activity in orderedActivities"
             :key="activity.type"
             :data-activity="activity.type"
             class="card min-w-0 border-l-4 p-5 sm:p-7"
-            :class="
-              activity.type === 'daily_gift'
-                ? 'border-l-amber-400 md:col-span-2'
-                : 'border-l-emerald-400'
-            "
+            :class="[
+              activity.type === 'daily_gift' ? 'border-l-amber-400' : 'border-l-emerald-400',
+              { 'md:col-span-2': activity.type === 'daily_gift' || cumulativeActivityCount === 1 },
+            ]"
           >
             <div class="flex items-start justify-between gap-4">
               <div>
@@ -75,14 +71,6 @@
                   {{
                     t(`dailyActivities.rules.${activity.type}`, {
                       amount: money(activity.threshold),
-                    })
-                  }}
-                </p>
-                <p class="mt-2 text-sm text-emerald-600 dark:text-emerald-400">
-                  {{
-                    t('dailyActivities.rewardRange', {
-                      min: money(0.1),
-                      max: money(activity.reward_max),
                     })
                   }}
                 </p>
@@ -207,6 +195,26 @@
             </div>
           </section>
         </div>
+        <p v-else-if="status.enabled" class="text-sm text-gray-500">
+          {{ t('dailyActivities.noActiveActivities') }}
+        </p>
+        <div
+          v-for="type in hiddenPendingActivities"
+          :key="type"
+          :data-pending-hidden="type"
+          class="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+        >
+          <p>{{ t(`dailyActivities.types.${type}`) }} · {{ t('dailyActivities.pendingHint') }}</p>
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm"
+            :data-confirm-pending="type"
+            :disabled="loading || !!claiming"
+            @click="claim(type, false)"
+          >
+            {{ t('dailyActivities.retryClaim') }}
+          </button>
+        </div>
       </template>
       <section class="card min-w-0 overflow-hidden">
         <div
@@ -308,6 +316,7 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import {
   clearPendingClaim,
   createClaimKey,
+  isValidClaimResult,
   readPendingClaim,
   storePendingClaim,
 } from '@/utils/dailyActivityClaims'
@@ -359,7 +368,20 @@ const paymentEnabled = computed(
 const orderedActivities = computed(() =>
   dailyActivityTypes.flatMap(
     (type) =>
-      status.value?.activities.filter((item) => item.type === type) || [],
+      status.value?.activities.filter(
+        (item) => item.type === type && item.enabled !== false,
+      ) || [],
+  ),
+)
+const cumulativeActivityCount = computed(
+  () =>
+    orderedActivities.value.filter((item) => item.type !== 'daily_gift').length,
+)
+// 单项关闭后隐藏卡片，但未确认请求必须还能复用原请求号取得结果。
+const hiddenPendingActivities = computed(() =>
+  dailyActivityTypes.filter(
+    (type) =>
+      pending[type] && !orderedActivities.value.some((item) => item.type === type),
   ),
 )
 const filterOptions = computed(() => [
@@ -376,7 +398,9 @@ function cannotClaim(activity: DailyActivityStatus) {
     !!claiming.value ||
     loading.value ||
     (!pending[activity.type] &&
-      (!status.value?.enabled || activity.available_count < 1))
+      (!status.value?.enabled ||
+        activity.enabled === false ||
+        activity.available_count < 1))
   )
 }
 async function loadStatus() {
@@ -458,6 +482,9 @@ async function claim(type: DailyActivityType, all: boolean) {
       throw new Error(t('dailyActivities.storageUnavailable'))
     }
     const result = await dailyActivitiesAPI.claim(input)
+    if (!isValidClaimResult(result, input)) {
+      throw new Error(t('dailyActivities.claimFailed'))
+    }
     // 确认响应后才能清除请求号；后续刷新失败不能把已入账结果当成失败重发。
     clearPendingClaim(userId, type)
     delete pending[type]

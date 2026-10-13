@@ -1,8 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
+	"fmt"
 	"math"
 	"math/big"
 	"regexp"
@@ -16,31 +19,65 @@ const DailyActivitySettingKey = "daily_activity_config"
 const DailyActivityBatchLimit = 100
 
 var (
-	ErrDailyActivityDisabled    = infraerrors.Forbidden("DAILY_ACTIVITY_DISABLED", "每日活动尚未开启")
-	ErrDailyActivityUnavailable = infraerrors.Conflict("DAILY_ACTIVITY_UNAVAILABLE", "暂无可领取次数")
-	ErrDailyActivityIdempotency = infraerrors.Conflict("DAILY_ACTIVITY_IDEMPOTENCY_CONFLICT", "该领取请求标识已用于其他操作")
-	dailyActivityKeyPattern     = regexp.MustCompile(`^[A-Za-z0-9_-]{16,100}$`)
+	ErrDailyActivityDisabled     = infraerrors.Forbidden("DAILY_ACTIVITY_DISABLED", "每日活动尚未开启")
+	ErrDailyActivityRuleDisabled = infraerrors.Forbidden("DAILY_ACTIVITY_RULE_DISABLED", "该活动暂未开启")
+	ErrDailyActivityUnavailable  = infraerrors.Conflict("DAILY_ACTIVITY_UNAVAILABLE", "暂无可领取次数")
+	ErrDailyActivityIdempotency  = infraerrors.Conflict("DAILY_ACTIVITY_IDEMPOTENCY_CONFLICT", "该领取请求标识已用于其他操作")
+	dailyActivityKeyPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]{16,100}$`)
 )
 
 type DailyActivityRule struct {
+	Enabled   bool    `json:"enabled"`
 	Threshold float64 `json:"threshold"`
 	RewardMax float64 `json:"reward_max"`
 }
 
+// UnmarshalJSON 为存量规则补上启用默认值，同时保留管理接口对未知字段的严格校验。
+func (r *DailyActivityRule) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return fmt.Errorf("daily activity rule cannot be null")
+	}
+	var decoded struct {
+		Enabled   json.RawMessage `json:"enabled"`
+		Threshold float64         `json:"threshold"`
+		RewardMax float64         `json:"reward_max"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	enabled := true
+	if len(decoded.Enabled) > 0 {
+		if bytes.Equal(bytes.TrimSpace(decoded.Enabled), []byte("null")) {
+			return fmt.Errorf("daily activity enabled must be a boolean")
+		}
+		if err := json.Unmarshal(decoded.Enabled, &enabled); err != nil {
+			return err
+		}
+	}
+	*r = DailyActivityRule{Enabled: enabled, Threshold: decoded.Threshold, RewardMax: decoded.RewardMax}
+	return nil
+}
+
 type DailyActivityConfig struct {
-	Enabled     bool              `json:"enabled"`
-	StartedAt   *time.Time        `json:"started_at"`
-	DailyGift   DailyActivityRule `json:"daily_gift"`
-	Recharge    DailyActivityRule `json:"recharge"`
-	Consumption DailyActivityRule `json:"consumption"`
+	Enabled bool `json:"enabled"`
+	// 两种可选充值来源默认关闭，仅记录来源开关开启后的新增到账正金额。
+	IncludeRedeemBalance bool              `json:"include_redeem_balance"`
+	IncludeAdminBalance  bool              `json:"include_admin_balance"`
+	StartedAt            *time.Time        `json:"started_at"`
+	DailyGift            DailyActivityRule `json:"daily_gift"`
+	Recharge             DailyActivityRule `json:"recharge"`
+	Consumption          DailyActivityRule `json:"consumption"`
 }
 
 // DefaultDailyActivityConfig 默认不开启，首次开启时间只能由仓储写入。
 func DefaultDailyActivityConfig() DailyActivityConfig {
-	return DailyActivityConfig{DailyGift: DailyActivityRule{10, .5}, Recharge: DailyActivityRule{50, .8}, Consumption: DailyActivityRule{50, .8}}
+	return DailyActivityConfig{DailyGift: DailyActivityRule{Enabled: true, Threshold: 10, RewardMax: .5}, Recharge: DailyActivityRule{Enabled: true, Threshold: 50, RewardMax: .8}, Consumption: DailyActivityRule{Enabled: true, Threshold: 50, RewardMax: .8}}
 }
 
 type DailyActivityState struct {
+	Enabled        bool    `json:"enabled"`
 	Type           string  `json:"type"`
 	Threshold      float64 `json:"threshold"`
 	RewardMax      float64 `json:"reward_max"`
@@ -51,10 +88,12 @@ type DailyActivityState struct {
 }
 
 type DailyActivityStatus struct {
-	Enabled    bool                 `json:"enabled"`
-	StartedAt  *time.Time           `json:"started_at"`
-	Day        string               `json:"day"`
-	Activities []DailyActivityState `json:"activities"`
+	Enabled              bool                 `json:"enabled"`
+	IncludeRedeemBalance bool                 `json:"include_redeem_balance"`
+	IncludeAdminBalance  bool                 `json:"include_admin_balance"`
+	StartedAt            *time.Time           `json:"started_at"`
+	Day                  string               `json:"day"`
+	Activities           []DailyActivityState `json:"activities"`
 }
 
 type DailyActivityClaimInput struct {

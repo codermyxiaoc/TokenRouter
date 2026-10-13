@@ -45,6 +45,43 @@
               :aria-label="t('dailyActivities.settings.enabled')"
             />
           </div>
+          <div class="space-y-6 border-t border-gray-100 pt-6 dark:border-dark-700">
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <label for="daily-activity-include-redeem" class="input-label">{{
+                  t('dailyActivities.settings.includeRedeem')
+                }}</label>
+                <p class="mt-2 text-sm text-gray-500">
+                  {{ t('dailyActivities.settings.includeRedeemHint') }}
+                </p>
+              </div>
+              <Toggle
+                id="daily-activity-include-redeem"
+                v-model="form.include_redeem_balance"
+                :disabled="saving"
+                :aria-label="t('dailyActivities.settings.includeRedeem')"
+              />
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <label for="daily-activity-include-admin" class="input-label">{{
+                  t('dailyActivities.settings.includeAdmin')
+                }}</label>
+                <p class="mt-2 text-sm text-gray-500">
+                  {{ t('dailyActivities.settings.includeAdminHint') }}
+                </p>
+              </div>
+              <Toggle
+                id="daily-activity-include-admin"
+                v-model="form.include_admin_balance"
+                :disabled="saving"
+                :aria-label="t('dailyActivities.settings.includeAdmin')"
+              />
+            </div>
+            <p class="text-xs leading-relaxed text-gray-500">
+              {{ t('dailyActivities.settings.sourcesHint') }}
+            </p>
+          </div>
           <p
             class="rounded-xl bg-primary-50 p-4 text-sm text-primary-700 dark:bg-primary-900/20 dark:text-primary-300"
           >
@@ -65,9 +102,25 @@
         <p>{{ t('dailyActivities.settings.changeHint') }}</p>
       </div>
       <div v-for="type in dailyActivityTypes" :key="type" class="card p-6">
-        <h3 class="text-base font-semibold text-gray-900 dark:text-white">
-          {{ t(`dailyActivities.types.${type}`) }}
-        </h3>
+        <div class="flex items-center justify-between gap-4">
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">
+            <label :for="`${type}-enabled`">{{
+              t(`dailyActivities.types.${type}`)
+            }}</label>
+          </h3>
+          <Toggle
+            :id="`${type}-enabled`"
+            :model-value="form[type].enabled !== false"
+            :disabled="saving"
+            :aria-label="t('dailyActivities.settings.activityEnabled', {
+              activity: t(`dailyActivities.types.${type}`),
+            })"
+            @update:model-value="form[type].enabled = $event"
+          />
+        </div>
+        <p class="mt-2 text-xs text-gray-500">
+          {{ t('dailyActivities.settings.activityEnabledHint') }}
+        </p>
         <p class="mt-2 text-sm text-gray-500">
           {{
             t(
@@ -184,12 +237,30 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    form.value = await dailyActivitiesAPI.config()
+    form.value = normalizeConfig(await dailyActivitiesAPI.config())
   } catch (err) {
     form.value = undefined
     error.value = extractApiErrorMessage(err, t('dailyActivities.loadFailed'))
   } finally {
     loading.value = false
+  }
+}
+function normalizeConfig(config: DailyActivityConfig): DailyActivityConfig {
+  // 兼容缺少新字段的旧配置，两个来源必须由管理员显式开启。
+  return {
+    ...config,
+    include_redeem_balance: config.include_redeem_balance === true,
+    include_admin_balance: config.include_admin_balance === true,
+    // 三类活动在旧版本均可领取；缺少单项开关时保持原状态。
+    daily_gift: {
+      ...config.daily_gift,
+      enabled: config.daily_gift.enabled !== false,
+    },
+    recharge: { ...config.recharge, enabled: config.recharge.enabled !== false },
+    consumption: {
+      ...config.consumption,
+      enabled: config.consumption.enabled !== false,
+    },
   }
 }
 async function save() {
@@ -198,13 +269,24 @@ async function save() {
   error.value = ''
   try {
     // 首次开启时间由服务端固定，不随开关或前端提交改变。
-    const { enabled, daily_gift, recharge, consumption } = form.value
-    form.value = await dailyActivitiesAPI.saveConfig({
+    const {
       enabled,
+      include_redeem_balance,
+      include_admin_balance,
       daily_gift,
       recharge,
       consumption,
-    })
+    } = form.value
+    form.value = normalizeConfig(
+      await dailyActivitiesAPI.saveConfig({
+        enabled,
+        include_redeem_balance,
+        include_admin_balance,
+        daily_gift,
+        recharge,
+        consumption,
+      }),
+    )
     app.showSuccess(t('dailyActivities.settings.saved'))
     // 独立配置保存后同步公共开关，避免旧 GET 覆盖已确认的值。
     await app.syncDailyActivityEnabled(form.value.enabled)

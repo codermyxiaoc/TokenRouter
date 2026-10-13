@@ -83,12 +83,18 @@ func (r *dailyActivityRepository) SaveConfig(ctx context.Context, c service.Dail
 	return &c, nil
 }
 
-// dailyActivityRechargeSQL 统一使用实际到账的USD本金，赠金、兑换码、余额购买订阅不参与。
-// 退款待定状态暂不计入；退款失败且未退款的原本金保留，已退本金按权益退款比例扣除。
-const dailyActivityRechargeSQL = `SELECT COALESCE(SUM(GREATEST(amount-COALESCE(bonus_amount,0),0) *
- CASE WHEN refund_at IS NOT NULL AND amount>0 THEN GREATEST(0,1-GREATEST(0,LEAST(refund_amount,amount))/amount) ELSE 1 END),0)::text
- FROM payment_orders WHERE user_id=$1 AND order_type='balance' AND payment_type<>'balance'
- AND status IN ('COMPLETED','PARTIALLY_REFUNDED','REFUND_FAILED') AND completed_at >= $2 AND completed_at < $3`
+// dailyActivityRechargeSQL 使用余额充值本金、外部订阅实付数值与已开启来源的入账事件。
+// 订阅按支付订单实付数值累计，不换算币种；站内余额购买订阅始终排除。
+// 关闭来源只停止产生新事件，已累计金额与已领取次数不能被重新解释。
+// 曾履约成功的订单在退款各阶段都保留原累计金额，礼包仍按原到账日期归属。
+const dailyActivityRechargeSQL = `SELECT COALESCE(SUM(amount),0)::text FROM (
+ SELECT CASE WHEN order_type='subscription' THEN GREATEST(pay_amount,0) ELSE GREATEST(amount-COALESCE(bonus_amount,0),0) END AS amount
+ FROM payment_orders WHERE user_id=$1 AND order_type IN ('balance','subscription') AND payment_type<>'balance'
+ AND status IN ('COMPLETED','REFUND_REQUESTED','REFUNDING','REFUND_PENDING','PARTIALLY_REFUNDED','REFUNDED','REFUND_FAILED') AND completed_at >= $2 AND completed_at < $3
+ UNION ALL
+ SELECT amount FROM daily_activity_credit_events
+ WHERE user_id=$1 AND created_at >= $2 AND created_at < $3
+) AS credits`
 
 func dailyActivityDecimal(ctx context.Context, q dailyActivityQuerier, query string, args ...any) (decimal.Decimal, error) {
 	var raw string
@@ -115,12 +121,12 @@ func dailyActivityState(kind string, rule service.DailyActivityRule, eligible de
 	}
 	amount, _ := eligible.Float64()
 	progress, _ := eligible.Div(threshold).Float64()
-	return service.DailyActivityState{Type: kind, Threshold: rule.Threshold, RewardMax: rule.RewardMax, EligibleAmount: amount, ClaimedCount: claimed, AvailableCount: available, Progress: progress}, nil
+	return service.DailyActivityState{Enabled: rule.Enabled, Type: kind, Threshold: rule.Threshold, RewardMax: rule.RewardMax, EligibleAmount: amount, ClaimedCount: claimed, AvailableCount: available, Progress: progress}, nil
 }
 
 func dailyActivityStatus(ctx context.Context, q dailyActivityQuerier, uid int64, c *service.DailyActivityConfig, now time.Time) (*service.DailyActivityStatus, error) {
 	day, dayStart, dayEnd := service.DailyActivityDay(now)
-	out := &service.DailyActivityStatus{Enabled: c.Enabled && c.StartedAt != nil, StartedAt: c.StartedAt, Day: day, Activities: make([]service.DailyActivityState, 0, 3)}
+	out := &service.DailyActivityStatus{Enabled: c.Enabled && c.StartedAt != nil, StartedAt: c.StartedAt, IncludeRedeemBalance: c.IncludeRedeemBalance, IncludeAdminBalance: c.IncludeAdminBalance, Day: day, Activities: make([]service.DailyActivityState, 0, 3)}
 	var daily, recharge, spent decimal.Decimal
 	if c.StartedAt != nil {
 		start := *c.StartedAt
@@ -233,6 +239,10 @@ func (r *dailyActivityRepository) Claim(ctx context.Context, uid int64, in servi
 			state = s
 			break
 		}
+	}
+	// 已成功的幂等请求已在上方重放；关闭单项活动只拒绝新领取，不抹去累计资格。
+	if !state.Enabled {
+		return nil, service.ErrDailyActivityRuleDisabled
 	}
 	if state.AvailableCount < 1 {
 		return nil, service.ErrDailyActivityUnavailable

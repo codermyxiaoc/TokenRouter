@@ -50,6 +50,50 @@ describe('每日活动页面', () => {
     expect(wrapper.text()).toContain('+\u00240.25')
     expect(wrapper.text()).toContain('dailyActivities.disabled'); wrapper.unmount()
   })
+  it('不展示奖励区间和充值口径长提示，保留奖励记录金额', async () => {
+    history.mockResolvedValue({ items: reward.items, total: 1, page: 1, page_size: 20 })
+    const wrapper = mountPage(); await flushPromises()
+    expect(wrapper.text()).not.toContain('dailyActivities.rewardRange')
+    expect(wrapper.text()).not.toContain('dailyActivities.eligibilityHint')
+    expect(wrapper.find('[data-recharge-sources]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('$0.25')
+    wrapper.unmount()
+  })
+  it.each([
+    [true, true, true], [true, true, false], [true, false, true], [true, false, false],
+    [false, true, true], [false, true, false], [false, false, true], [false, false, false],
+  ])('独立开关控制卡片与布局：礼包%s、充值%s、消费%s', async (giftEnabled, rechargeEnabled, consumptionEnabled) => {
+    const enabled = [giftEnabled, rechargeEnabled, consumptionEnabled]
+    const result = fixture()
+    result.activities.forEach((activity, index) => { activity.enabled = enabled[index] })
+    status.mockResolvedValue(result)
+    history.mockResolvedValue({ items: reward.items, total: 1, page: 1, page_size: 20 })
+    const wrapper = mountPage(); await flushPromises()
+    expect(wrapper.findAll('[data-activity]').map(item => item.attributes('data-activity'))).toEqual(result.activities.filter(item => item.enabled).map(item => item.type))
+    const cumulativeCount = Number(rechargeEnabled) + Number(consumptionEnabled)
+    for (const activity of result.activities.filter(item => item.enabled)) {
+      expect(wrapper.get(`[data-activity="${activity.type}"]`).classes().includes('md:col-span-2')).toBe(activity.type === 'daily_gift' || cumulativeCount === 1)
+    }
+    expect(wrapper.text()).toContain('$0.25')
+    if (enabled.every(item => !item)) expect(wrapper.text()).toContain('dailyActivities.noActiveActivities')
+    expect(claim).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+  it('单项关闭后隐藏卡片，仍可用原请求号确认未完成的领取', async () => {
+    const original = { activity_type: 'recharge', all: true, idempotency_key: '00000000-0000-4000-8000-000000000000' }
+    sessionStorage.setItem(pendingClaimStorageKey(12, 'recharge'), JSON.stringify(original))
+    const result = fixture()
+    result.activities[1].enabled = false
+    status.mockResolvedValue(result)
+    const wrapper = mountPage(); await flushPromises()
+    expect(wrapper.find('[data-activity="recharge"]').exists()).toBe(false)
+    expect(wrapper.find('[data-claim="recharge"]').exists()).toBe(false)
+    await wrapper.get('[data-confirm-pending="recharge"]').trigger('click'); await flushPromises()
+    expect(claim).toHaveBeenCalledWith(original)
+    expect(sessionStorage.getItem(pendingClaimStorageKey(12, 'recharge'))).toBeNull()
+    expect(wrapper.find('[data-pending-hidden="recharge"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('关闭后允许确认原领取请求，不开启新的奖励请求', async () => {
     const original = { activity_type: 'recharge', all: true, idempotency_key: '00000000-0000-4000-8000-000000000000' }
     sessionStorage.setItem(pendingClaimStorageKey(12, 'recharge'), JSON.stringify(original))
@@ -132,5 +176,105 @@ describe('每日活动页面', () => {
     const wrapper = mountPage(); await flushPromises()
     expect(wrapper.find('[data-claim]').exists()).toBe(false)
     expect(wrapper.get('[role="alert"]').text()).toContain('unavailable'); wrapper.unmount()
+  })
+  it('服务端拒绝包含具体原因且渲染为文本，重试保留原请求', async () => {
+    const message = '<img src=x onerror=alert(1)> 此活动已停用'
+    claim.mockRejectedValueOnce({ status: 403, reason: 'DAILY_ACTIVITY_RULE_DISABLED', message })
+    const wrapper = mountPage(); await flushPromises()
+    await wrapper.get('[data-claim="recharge"]').trigger('click'); await flushPromises()
+    const original = claim.mock.calls[0][0]
+    expect(wrapper.get('[role="alert"]').text()).toBe(message)
+    expect(wrapper.get('[role="alert"]').find('img').exists()).toBe(false)
+    expect(JSON.parse(sessionStorage.getItem(pendingClaimStorageKey(12, 'recharge'))!)).toEqual(original)
+    await wrapper.get('[data-claim="recharge"]').trigger('click'); await flushPromises()
+    expect(claim.mock.calls[1][0]).toEqual(original)
+    wrapper.unmount()
+  })
+  it('分页旧响应晚到不会覆盖新筛选结果', async () => {
+    const wrapper = mountPage(); await flushPromises()
+    let resolve!: (value: unknown) => void
+    history.mockReturnValueOnce(new Promise(r => { resolve = r }))
+    await wrapper.get('[data-page]').trigger('click')
+    const oldSignal = history.mock.calls.at(-1)![2] as AbortSignal
+    history.mockResolvedValueOnce({ items: reward.items, total: 1, page: 1, page_size: 20 })
+    await wrapper.get('[data-filter]').trigger('click'); await flushPromises()
+    expect(oldSignal.aborted).toBe(true)
+    resolve({ items: [{ ...reward.items[0], amount: 9.99 }], total: 100, page: 2, page_size: 20 }); await flushPromises()
+    expect(wrapper.text()).toContain('$0.25')
+    expect(wrapper.text()).not.toContain('$9.99')
+    expect(wrapper.get('[data-page]').text()).toBe('1 / 1')
+    wrapper.unmount()
+  })
+  it('领取成功后刷新失败不能把原领取当成失败再次提交', async () => {
+    const wrapper = mountPage(); await flushPromises()
+    status.mockRejectedValueOnce({ status: 503, message: 'refresh unavailable' })
+    history.mockRejectedValueOnce({ status: 503, message: 'history unavailable' })
+    refreshUser.mockRejectedValueOnce({ status: 503 })
+    await wrapper.get('[data-claim="recharge"]').trigger('click'); await flushPromises()
+    expect(claim).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[role="status"]').text()).toContain('$0.25')
+    expect(sessionStorage.getItem(pendingClaimStorageKey(12, 'recharge'))).toBeNull()
+    expect(wrapper.find('[data-claim="recharge"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+  it.each([
+    ['缺少明细', { amount: 0.25 }],
+    ['空响应', null],
+    ['数组响应', []],
+    ['空明细', { ...reward, items: [] }],
+    ['错误明细类型', { ...reward, items: {} }],
+    ['空明细项', { ...reward, items: [null] }],
+    ['总金额为字符串', { ...reward, amount: '0.25' }],
+    ['总金额非有限数', { ...reward, amount: Number.NaN }],
+    ['总金额不匹配', { ...reward, amount: 0.5 }],
+    ['缺少余额', { ...reward, balance: undefined }],
+    ['余额非有限数', { ...reward, balance: Number.POSITIVE_INFINITY }],
+    ['缺少剩余次数', { ...reward, remaining_count: undefined }],
+    ['剩余次数为负', { ...reward, remaining_count: -1 }],
+    ['剩余次数非整数', { ...reward, remaining_count: 0.5 }],
+    ['缺少重放标记', { ...reward, replayed: undefined }],
+    ['重放标记类型错误', { ...reward, replayed: 'false' }],
+    ['明细缺少标识', { ...reward, items: [{ ...reward.items[0], id: undefined }] }],
+    ['明细类型不匹配', { ...reward, items: [{ ...reward.items[0], activity_type: 'consumption' }] }],
+    ['明细金额非有限数', { ...reward, items: [{ ...reward.items[0], amount: Number.POSITIVE_INFINITY }] }],
+    ['明细金额为负', { ...reward, items: [{ ...reward.items[0], amount: -0.25 }] }],
+    ['明细时间无效', { ...reward, items: [{ ...reward.items[0], created_at: 'invalid' }] }],
+    ['单次返回多条', { ...reward, amount: 0.5, items: [reward.items[0], { ...reward.items[0], id: 2 }] }],
+  ])('损坏的领取成功响应不能清除原请求号或重复新领：%s', async (_case, malformed) => {
+    claim.mockResolvedValueOnce(malformed).mockResolvedValueOnce({ ...reward, replayed: true })
+    let wrapper = mountPage(); await flushPromises()
+    await wrapper.get('[data-claim="recharge"]').trigger('click'); await flushPromises()
+    const original = claim.mock.calls[0][0]
+    expect(JSON.parse(sessionStorage.getItem(pendingClaimStorageKey(12, 'recharge'))!)).toEqual(original)
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
+    expect(wrapper.get('[role="alert"]').text()).toContain('dailyActivities.claimFailed')
+    expect(refreshUser).not.toHaveBeenCalled()
+    // 页面重建后仍从会话存储恢复同一个请求，不能用新请求重复消耗领取资格。
+    wrapper.unmount()
+    wrapper = mountPage(); await flushPromises()
+    await wrapper.get('[data-claim="recharge"]').trigger('click'); await flushPromises()
+    expect(claim.mock.calls[1][0]).toEqual(original)
+    expect(sessionStorage.getItem(pendingClaimStorageKey(12, 'recharge'))).toBeNull()
+    expect(wrapper.get('[role="status"]').text()).toContain('$0.25')
+    wrapper.unmount()
+  })
+  it('批量明细重复时保留原批量请求，完整重放可确认小数金额和既有负余额', async () => {
+    const duplicate = { ...reward, amount: 0.5, items: [reward.items[0], reward.items[0]] }
+    const complete = {
+      ...reward, amount: 0.3, balance: -5.3, replayed: true,
+      items: [{ ...reward.items[0], amount: 0.1 }, { ...reward.items[0], id: 2, amount: 0.2 }],
+    }
+    claim.mockResolvedValueOnce(duplicate).mockResolvedValueOnce(complete)
+    const wrapper = mountPage(); await flushPromises()
+    await wrapper.get('[data-claim-all="recharge"]').trigger('click'); await flushPromises()
+    const original = claim.mock.calls[0][0]
+    expect(original.all).toBe(true)
+    expect(JSON.parse(sessionStorage.getItem(pendingClaimStorageKey(12, 'recharge'))!)).toEqual(original)
+    await wrapper.get('[data-claim="recharge"]').trigger('click'); await flushPromises()
+    expect(claim.mock.calls[1][0]).toEqual(original)
+    expect(sessionStorage.getItem(pendingClaimStorageKey(12, 'recharge'))).toBeNull()
+    expect(wrapper.get('[role="status"]').text()).toContain('$0.30')
+    expect(wrapper.get('[role="status"]').text()).toContain('"count":2')
+    wrapper.unmount()
   })
 })

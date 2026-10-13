@@ -341,6 +341,25 @@ func (r *redeemCodeRepository) useInTx(ctx context.Context, id, userID int64) er
 }
 
 func (r *redeemCodeRepository) CreateUsage(ctx context.Context, usage *service.RedeemCodeUsage) error {
+	// 使用记录及活动资格必须同事务提交，调用方已有权益事务时直接复用。
+	if dbent.TxFromContext(ctx) != nil {
+		return r.createUsageInTx(ctx, usage)
+	}
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		if errors.Is(err, dbent.ErrTxStarted) {
+			return r.createUsageInTx(ctx, usage)
+		}
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := r.createUsageInTx(dbent.NewTxContext(ctx, tx), usage); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *redeemCodeRepository) createUsageInTx(ctx context.Context, usage *service.RedeemCodeUsage) error {
 	client := clientFromContext(ctx, r.client)
 	created, err := client.RedeemCodeUsage.Create().
 		SetRedeemCodeID(usage.RedeemCodeID).
@@ -351,7 +370,7 @@ func (r *redeemCodeRepository) CreateUsage(ctx context.Context, usage *service.R
 		return err
 	}
 	usage.ID = created.ID
-	return nil
+	return recordDailyActivityCredit(ctx, client, usage)
 }
 
 func (r *redeemCodeRepository) GetUsageByRedeemCodeAndUser(ctx context.Context, redeemCodeID, userID int64) (*service.RedeemCodeUsage, error) {

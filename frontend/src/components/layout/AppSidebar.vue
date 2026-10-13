@@ -579,21 +579,21 @@ const flagUsageRankingAccess = () => appStore.cachedPublicSettings?.usage_rankin
 // 文档入口复用现有图标，不增加外部文档框架或图标依赖。
 const ApiDocsIcon = { render: () => h(Icon, { name: 'book', size: 'md' }) }
 
-// 普通用户导航项。
+// 普通用户导航项：活动紧随仪表盘，文档位于检测前，任务紧随使用记录。
 const userNavItems = computed((): NavItem[] => {
   const items: NavItem[] = [
     { path: '/dashboard', label: t('nav.dashboard'), icon: DashboardIcon },
-    { path: '/models', label: t('nav.modelMarketplace'), icon: ModelMarketplaceIcon },
-    { path: '/docs', label: t('apiDocs.title'), icon: ApiDocsIcon },
+    { path: '/daily-activities', label: t('dailyActivities.title'), icon: DailyActivityIcon, featureFlag: flagDailyActivityAccess },
     { path: '/usage-ranking', label: t('nav.usageRanking'), icon: RankingIcon, hideInSimpleMode: true, featureFlag: flagUsageRankingAccess },
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/team', label: t('nav.team'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagTeamAccess },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/creative', label: t('nav.creative'), icon: CreativeIcon, hideInSimpleMode: true, featureFlag: flagCreativeStudioAccess },
-    { path: '/media-tasks', label: t('nav.mediaTasks'), icon: BatchImageIcon },
-    { path: '/daily-activities', label: t('dailyActivities.title'), icon: DailyActivityIcon, featureFlag: flagDailyActivityAccess },
+    { path: '/models', label: t('nav.modelMarketplace'), icon: ModelMarketplaceIcon },
+    { path: '/docs', label: t('apiDocs.title'), icon: ApiDocsIcon },
     { path: '/intelligence', label: t('intelligence.title'), icon: ChartIcon, featureFlag: flagIntelligenceAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
+    { path: '/media-tasks', label: t('nav.mediaTasks'), icon: BatchImageIcon },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     ...(appStore.cachedPublicSettings?.payment_enabled
       ? [
@@ -639,21 +639,21 @@ const userNavItems = computed((): NavItem[] => {
   return authStore.isSimpleMode ? visibleItems.filter(item => !item.hideInSimpleMode) : visibleItems
 })
 
-// 管理员“我的账户”分组使用的个人导航项
+// 管理员“我的账户”分组保持与普通用户相同的个人导航顺序。
 const personalNavItems = computed((): NavItem[] => {
   const items: NavItem[] = [
     { path: '/dashboard', label: t('nav.dashboard'), icon: DashboardIcon },
-    { path: '/models', label: t('nav.modelMarketplace'), icon: ModelMarketplaceIcon },
-    { path: '/docs', label: t('apiDocs.title'), icon: ApiDocsIcon },
+    { path: '/daily-activities', label: t('dailyActivities.title'), icon: DailyActivityIcon, featureFlag: flagDailyActivityAccess },
     { path: '/usage-ranking', label: t('nav.usageRanking'), icon: RankingIcon, hideInSimpleMode: true, featureFlag: flagUsageRankingAccess },
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/team', label: t('nav.team'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagTeamAccess },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/creative', label: t('nav.creative'), icon: CreativeIcon, hideInSimpleMode: true, featureFlag: flagCreativeStudioAccess },
-    { path: '/media-tasks', label: t('nav.mediaTasks'), icon: BatchImageIcon },
-    { path: '/daily-activities', label: t('dailyActivities.title'), icon: DailyActivityIcon, featureFlag: flagDailyActivityAccess },
+    { path: '/models', label: t('nav.modelMarketplace'), icon: ModelMarketplaceIcon },
+    { path: '/docs', label: t('apiDocs.title'), icon: ApiDocsIcon },
     { path: '/intelligence', label: t('intelligence.title'), icon: ChartIcon, featureFlag: flagIntelligenceAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
+    { path: '/media-tasks', label: t('nav.mediaTasks'), icon: BatchImageIcon },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     ...(appStore.cachedPublicSettings?.payment_enabled
       ? [
@@ -727,7 +727,6 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
     { path: '/admin/intelligence-tests', label: t('intelligence.adminTitle'), icon: ChartIcon, featureFlag: flagIntelligenceAccess },
-    { path: '/admin/media-tasks', label: t('nav.mediaTasks'), icon: BatchImageIcon },
     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
     { path: '/admin/tickets', label: t('nav.ticketManagement'), icon: TicketIcon, featureFlag: flagTicketAccess },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },
@@ -774,6 +773,7 @@ const adminNavItems = computed((): NavItem[] => {
         ]
       : []),
     { path: '/admin/usage', label: t('nav.usage'), icon: ChartIcon },
+    { path: '/admin/media-tasks', label: t('nav.mediaTasks'), icon: BatchImageIcon },
     { path: '/admin/audit-logs', label: t('nav.auditLogs'), icon: ShieldIcon, hideInSimpleMode: true }
   ]
 

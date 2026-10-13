@@ -913,7 +913,8 @@ func (s *adminServiceImpl) createAppliedAdjustmentRedeemRecord(ctx context.Conte
 		Notes:     notes,
 	}
 
-	if s.entClient == nil {
+	// 余额调账已开启事务时复用它，不能在另一事务单独提交资格记录。
+	if dbent.TxFromContext(ctx) != nil || s.entClient == nil {
 		if err := s.redeemCodeRepo.Create(ctx, record); err != nil {
 			return fmt.Errorf("create adjustment redeem code: %w", err)
 		}

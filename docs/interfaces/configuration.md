@@ -75,7 +75,7 @@ setup 使用 `DATA_DIR > 可写 /app/data > 当前目录` 选择 `config.yaml` �
 
 ## 数据库运行时设置
 
-`daily_activity_config` 由系统设置“每日活动”独立保存，默认关闭，包含三类达标门槛和随机奖励上限。首次开启的数据库时间 `started_at` 不可由客户端覆盖，关闭再开也不重置。公开设置及 HTML 注入只返回 `daily_activity_enabled`；详细规则和资格见[每日活动](../domains/daily_activities.md#daily_activity_configuration)。
+`daily_activity_config` 由系统设置“每日活动”独立保存，默认关闭，包含三类规则各自的 `enabled` 开关（旧配置缺失按开启）、达标门槛和随机奖励上限，以及默认关闭的 `include_redeem_balance`、`include_admin_balance` 两个来源开关；来源只累计对应开关开启后的新增到账，关闭不清除已累计资格，历史流水不补计。首次开启的数据库时间 `started_at` 不可由客户端覆盖，关闭再开也不重置。公开设置及 HTML 注入只返回 `daily_activity_enabled`；详细规则和资格见[每日活动](../domains/daily_activities.md#daily_activity_configuration)。
 
 `intelligence_enabled` 对应“开启降智检测”，缺失、无效或读取失败均关闭；管理设置省略该字段保留旧值，公开设置与 HTML 注入同步提供。关闭阻止新检测与用户结果访问，但已提交任务继续只读查询、管理员仍可管理配置。模型、站内测试 Key 引用和定时计划存储在独立配置表，不放入通用 settings JSON。检测费用继续走配置 Key 的原有结算规则，见[降智检测](../domains/intelligence_tests.md#intelligence_access)。
 

@@ -177,7 +177,8 @@ func (r *userRepository) createWithNormalizationGuard(ctx context.Context, userI
 }
 
 func (r *userRepository) GetByID(ctx context.Context, id int64) (*service.User, error) {
-	m, err := r.client.User.Query().Where(dbuser.IDEQ(id)).Only(ctx)
+	// 调账等事务内回读必须使用同一连接，避免返回尚未提交前的旧余额。
+	m, err := clientFromContext(ctx, r.client).User.Query().Where(dbuser.IDEQ(id)).Only(ctx)
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrUserNotFound, nil)
 	}
@@ -930,7 +931,7 @@ func (r *userRepository) AdjustBalance(ctx context.Context, id int64, delta floa
 	return service.BalanceChange{Old: current, New: current + delta}, service.ErrBalanceNegative
 }
 
-// SetBalance 原子地把余额置为 value，并返回变更前后的值。
+// SetBalance 原子地把余额置为 value，并锁定旧值，确保并发时返回真实变更增量。
 func (r *userRepository) SetBalance(ctx context.Context, id int64, value float64) (service.BalanceChange, error) {
 	if value < 0 {
 		// 连同当前余额一起返回，便于上层给出可读的错误信息。
@@ -943,7 +944,7 @@ func (r *userRepository) SetBalance(ctx context.Context, id int64, value float64
 	const updateSQL = `
 		UPDATE users AS u
 		SET balance = $1, updated_at = NOW()
-		FROM (SELECT id, balance FROM users WHERE id = $2 AND deleted_at IS NULL) AS prev
+		FROM (SELECT id, balance FROM users WHERE id = $2 AND deleted_at IS NULL FOR NO KEY UPDATE) AS prev
 		WHERE u.id = prev.id AND u.deleted_at IS NULL
 		RETURNING prev.balance, u.balance
 	`
@@ -1483,7 +1484,7 @@ func (r *userRepository) loadAllowedGroups(ctx context.Context, userIDs []int64)
 		return out, nil
 	}
 
-	rows, err := r.client.UserAllowedGroup.Query().
+	rows, err := clientFromContext(ctx, r.client).UserAllowedGroup.Query().
 		Where(userallowedgroup.UserIDIn(userIDs...)).
 		All(ctx)
 	if err != nil {
@@ -1507,7 +1508,7 @@ func (r *userRepository) loadDisabledPublicGroups(ctx context.Context, userIDs [
 		return out, nil
 	}
 
-	rows, err := r.client.UserDisabledPublicGroup.Query().
+	rows, err := clientFromContext(ctx, r.client).UserDisabledPublicGroup.Query().
 		Where(userdisabledpublicgroup.UserIDIn(userIDs...)).
 		All(ctx)
 	if err != nil {

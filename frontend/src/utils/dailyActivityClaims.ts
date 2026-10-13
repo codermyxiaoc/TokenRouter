@@ -1,7 +1,41 @@
 import type {
   DailyActivityClaimInput,
+  DailyActivityClaimResult,
   DailyActivityType,
 } from '@/api/dailyActivities'
+
+// HTTP 成功不代表领取结果完整；确认奖励明细前不能丢弃用于安全重放的请求号。
+export function isValidClaimResult(
+  value: unknown,
+  input: DailyActivityClaimInput,
+): value is DailyActivityClaimResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const result = value as Record<string, unknown>
+  if (
+    typeof result.amount !== 'number' || !Number.isFinite(result.amount) || result.amount <= 0 ||
+    typeof result.balance !== 'number' || !Number.isFinite(result.balance) ||
+    typeof result.remaining_count !== 'number' || !Number.isSafeInteger(result.remaining_count) || result.remaining_count < 0 ||
+    typeof result.replayed !== 'boolean' ||
+    !Array.isArray(result.items) || result.items.length < 1 || result.items.length > 100 ||
+    ((!input.all || input.activity_type === 'daily_gift') && result.items.length !== 1)
+  ) return false
+
+  const ids = new Set<number>()
+  let total = 0
+  for (const item of result.items) {
+    if (
+      !item || typeof item !== 'object' || Array.isArray(item) ||
+      typeof item.id !== 'number' || !Number.isSafeInteger(item.id) || item.id <= 0 || ids.has(item.id) ||
+      item.activity_type !== input.activity_type ||
+      typeof item.amount !== 'number' || !Number.isFinite(item.amount) || item.amount <= 0 ||
+      typeof item.created_at !== 'string' || !Number.isFinite(Date.parse(item.created_at))
+    ) return false
+    ids.add(item.id)
+    total += item.amount
+  }
+  // 奖励总额须与明细一致，只容忍十进制金额累加产生的浮点误差。
+  return Math.abs(total - result.amount) <= Math.max(1, result.amount) * Number.EPSILON * 100
+}
 
 // 按用户及活动隔离未确认请求；网络超时、刷新页面后仍用原请求号重试。
 const prefix = 'daily-activity-claim:'

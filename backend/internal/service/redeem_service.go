@@ -470,7 +470,8 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 		return nil, unsupportedRedeemTypeError(redeemCode.Type)
 	}
 
-	_, err = s.userRepo.GetByID(ctx, userID)
+	// 复用兑换事务查询用户，避免连接池满载时持有事务又等待第二个连接。
+	_, err = s.userRepo.GetByID(txCtx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}

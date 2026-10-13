@@ -44,16 +44,25 @@ func (s *balanceUserRepoStub) apply(next func(current float64) float64) (Balance
 
 type balanceRedeemRepoStub struct {
 	*redeemRepoStub
-	created []*RedeemCode
+	created   []*RedeemCode
+	createErr error
+	usageErr  error
 }
 
 func (s *balanceRedeemRepoStub) Create(ctx context.Context, code *RedeemCode) error {
+	if s.createErr != nil {
+		return s.createErr
+	}
 	if code == nil {
 		return nil
 	}
 	clone := *code
 	s.created = append(s.created, &clone)
 	return nil
+}
+
+func (s *balanceRedeemRepoStub) CreateUsage(context.Context, *RedeemCodeUsage) error {
+	return s.usageErr
 }
 
 type authCacheInvalidatorStub struct {
@@ -261,4 +270,33 @@ func TestAdminService_UpdateUserBalance_AffiliateFailureDoesNotRollbackRecharge(
 	require.Equal(t, 15.0, user.Balance)
 	require.Equal(t, []adminRechargeAffiliateAccrual{{userID: 7, amount: 5}}, affiliate.calls)
 	require.Len(t, redeemRepo.created, 1)
+}
+
+// 即使是未配置真实事务的测试替身，记录失败也必须向调用方返回，不能触发成功副作用。
+func TestAdminService_UpdateUserBalance_RecordFailureStopsSuccessEffects(t *testing.T) {
+	for _, stage := range []string{"code", "usage"} {
+		t.Run(stage, func(t *testing.T) {
+			failure := errors.New("adjustment history unavailable")
+			redeemRepo := &balanceRedeemRepoStub{redeemRepoStub: &redeemRepoStub{}}
+			if stage == "code" {
+				redeemRepo.createErr = failure
+			} else {
+				redeemRepo.usageErr = failure
+			}
+			invalidator := &authCacheInvalidatorStub{}
+			affiliate := &adminRechargeAffiliateAccruerStub{}
+			svc := &adminServiceImpl{
+				userRepo:             &balanceUserRepoStub{userRepoStub: &userRepoStub{user: &User{ID: 7, Balance: 10}}},
+				redeemCodeRepo:       redeemRepo,
+				authCacheInvalidator: invalidator,
+				settingService:       adminRechargeSettingService(true),
+				affiliateService:     affiliate,
+			}
+			user, err := svc.UpdateUserBalance(context.Background(), 7, 5, "add", "")
+			require.ErrorIs(t, err, failure)
+			require.Nil(t, user)
+			require.Empty(t, invalidator.userIDs)
+			require.Empty(t, affiliate.calls)
+		})
+	}
 }

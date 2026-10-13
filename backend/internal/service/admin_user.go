@@ -581,13 +581,24 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 		change BalanceChange
 		err    error
 	)
+	// 余额及其调账记录必须同事务提交，活动资格不能缺少已到账流水。
+	var tx *dbent.Tx
+	opCtx := ctx
+	if s.entClient != nil {
+		tx, err = s.entClient.Tx(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("begin balance adjustment transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		opCtx = dbent.NewTxContext(ctx, tx)
+	}
 	switch operation {
 	case "set":
-		change, err = s.userRepo.SetBalance(ctx, userID, balance)
+		change, err = s.userRepo.SetBalance(opCtx, userID, balance)
 	case "add":
-		change, err = s.userRepo.AdjustBalance(ctx, userID, balance)
+		change, err = s.userRepo.AdjustBalance(opCtx, userID, balance)
 	case "subtract":
-		change, err = s.userRepo.AdjustBalance(ctx, userID, -balance)
+		change, err = s.userRepo.AdjustBalance(opCtx, userID, -balance)
 	default:
 		return nil, fmt.Errorf("unsupported balance operation: %q", operation)
 	}
@@ -598,12 +609,23 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 		return nil, err
 	}
 
-	user, err := s.userRepo.GetByID(ctx, userID)
+	balanceDiff := change.New - change.Old
+	if balanceDiff != 0 {
+		if err := s.createAppliedAdjustmentRedeemRecord(opCtx, userID, AdjustmentTypeAdminBalance, balanceDiff, notes); err != nil {
+			return nil, fmt.Errorf("record balance adjustment: %w", err)
+		}
+	}
+	// 返回快照也在提交前取得，读取失败时一并回滚，避免成功入账却跳过缓存失效。
+	user, err := s.userRepo.GetByID(opCtx, userID)
 	if err != nil {
 		return nil, err
 	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit balance adjustment transaction: %w", err)
+		}
+	}
 
-	balanceDiff := change.New - change.Old
 	if s.authCacheInvalidator != nil && balanceDiff != 0 {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 	}
@@ -617,12 +639,6 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 				logger.LegacyPrintf("service.admin", "invalidate user balance cache failed: user_id=%d err=%v", userID, err)
 			}
 		}()
-	}
-
-	if balanceDiff != 0 {
-		if err := s.createAppliedAdjustmentRedeemRecord(ctx, user.ID, AdjustmentTypeAdminBalance, balanceDiff, notes); err != nil {
-			logger.LegacyPrintf("service.admin", "failed to create balance adjustment redeem code: %v", err)
-		}
 	}
 
 	return user, nil

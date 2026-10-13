@@ -22,9 +22,70 @@ describe('每日活动独立设置', () => {
     await button.trigger('click'); await flushPromises()
     const expected = { ...defaults() }
     Reflect.deleteProperty(expected, 'started_at')
-    expect(saveConfig).toHaveBeenCalledWith({ ...expected, enabled: true, recharge: { threshold: 50, reward_max: 1 }, consumption: { threshold: 25, reward_max: 0.8 } })
+    expect(saveConfig).toHaveBeenCalledWith({ ...expected, enabled: true, include_redeem_balance: false, include_admin_balance: false, daily_gift: { ...expected.daily_gift, enabled: true }, recharge: { enabled: true, threshold: 50, reward_max: 1 }, consumption: { enabled: true, threshold: 25, reward_max: 0.8 } })
     expect(syncDailyActivityEnabled).toHaveBeenCalledWith(true)
     expect(showSuccess).toHaveBeenCalled(); wrapper.unmount()
+  })
+  it('旧配置未返回来源字段时两个开关默认关闭，单独开启互不影响', async () => {
+    const wrapper = mount(DailyActivitySettingsTab); await flushPromises()
+    expect(wrapper.get('#daily-activity-include-redeem').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('#daily-activity-include-admin').attributes('aria-checked')).toBe('false')
+    await wrapper.get('#daily-activity-include-redeem').trigger('click')
+    await wrapper.get('[data-testid="save-daily-activities"]').trigger('click'); await flushPromises()
+    expect(saveConfig).toHaveBeenLastCalledWith(expect.objectContaining({ include_redeem_balance: true, include_admin_balance: false }))
+    await wrapper.get('#daily-activity-include-redeem').trigger('click')
+    await wrapper.get('#daily-activity-include-admin').trigger('click')
+    await wrapper.get('[data-testid="save-daily-activities"]').trigger('click'); await flushPromises()
+    expect(saveConfig).toHaveBeenLastCalledWith(expect.objectContaining({ include_redeem_balance: false, include_admin_balance: true }))
+    wrapper.unmount()
+  })
+  it('旧配置的三个活动默认启用，独立关闭后保留各自规则与其他开关', async () => {
+    const wrapper = mount(DailyActivitySettingsTab); await flushPromises()
+    for (const type of ['daily_gift', 'recharge', 'consumption']) {
+      expect(wrapper.get(`#${type}-enabled`).attributes('aria-checked')).toBe('true')
+    }
+    await wrapper.get('#recharge-enabled').trigger('click')
+    await wrapper.get('#daily-activity-include-admin').trigger('click')
+    await wrapper.get('[data-testid="save-daily-activities"]').trigger('click'); await flushPromises()
+    expect(saveConfig).toHaveBeenLastCalledWith(expect.objectContaining({
+      include_admin_balance: true,
+      daily_gift: { ...defaults().daily_gift, enabled: true },
+      recharge: { ...defaults().recharge, enabled: false },
+      consumption: { ...defaults().consumption, enabled: true },
+    }))
+    expect(wrapper.get('#recharge-enabled').attributes('aria-checked')).toBe('false')
+    wrapper.unmount()
+  })
+  it('读取单独关闭的活动时不自动重开，失败保存仍保留状态', async () => {
+    config.mockResolvedValue({ ...defaults(), daily_gift: { ...defaults().daily_gift, enabled: false } })
+    saveConfig.mockRejectedValueOnce(new Error('unavailable'))
+    const wrapper = mount(DailyActivitySettingsTab); await flushPromises()
+    expect(wrapper.get('#daily_gift-enabled').attributes('aria-checked')).toBe('false')
+    await wrapper.get('#consumption-enabled').trigger('click')
+    await wrapper.get('[data-testid="save-daily-activities"]').trigger('click'); await flushPromises()
+    expect(wrapper.get('#daily_gift-enabled').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('#consumption-enabled').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('#recharge-enabled').attributes('aria-checked')).toBe('true')
+    expect(syncDailyActivityEnabled).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+  it('读取已开启的来源且保存时禁止重复切换，成功后保留服务端结果', async () => {
+    config.mockResolvedValue({ ...defaults(), include_redeem_balance: true, include_admin_balance: true })
+    let resolve!: (value: unknown) => void
+    saveConfig.mockReturnValue(new Promise(r => { resolve = r }))
+    const wrapper = mount(DailyActivitySettingsTab); await flushPromises()
+    expect(wrapper.get('#daily-activity-include-redeem').attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('#daily-activity-include-admin').attributes('aria-checked')).toBe('true')
+    await wrapper.get('[data-testid="save-daily-activities"]').trigger('click')
+    expect(wrapper.get('#daily-activity-include-redeem').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('#daily-activity-include-admin').attributes('disabled')).toBeDefined()
+    for (const type of ['daily_gift', 'recharge', 'consumption']) {
+      expect(wrapper.get(`#${type}-enabled`).attributes('disabled')).toBeDefined()
+    }
+    resolve({ ...defaults(), include_redeem_balance: true, include_admin_balance: true }); await flushPromises()
+    expect(wrapper.get('#daily-activity-include-redeem').attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('#daily-activity-include-admin').attributes('aria-checked')).toBe('true')
+    wrapper.unmount()
   })
   it.each(['0.09', '-1', '1.001', '', '1000000.01'])('无效奖励上限%s不可保存', async value => {
     const wrapper = mount(DailyActivitySettingsTab); await flushPromises()

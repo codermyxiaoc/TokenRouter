@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 	"time"
@@ -57,4 +58,28 @@ func TestDailyActivityClaimInput(t *testing.T) {
 	input.ActivityType = "consumption"
 	input.IdempotencyKey = "x"
 	require.Error(t, ValidateDailyActivityClaim(input))
+}
+
+// 存量配置不含子开关时继续可用，显式关闭必须保留且不能绕过字段校验。
+func TestDailyActivityRuleEnabledCompatibility(t *testing.T) {
+	var config DailyActivityConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"daily_gift":{"threshold":10,"reward_max":1},"recharge":{"threshold":10,"reward_max":1},"consumption":{"threshold":10,"reward_max":1}}`), &config))
+	require.True(t, config.DailyGift.Enabled)
+	require.True(t, config.Recharge.Enabled)
+	require.True(t, config.Consumption.Enabled)
+	require.NoError(t, ValidateDailyActivityConfig(config))
+	var rule DailyActivityRule
+	require.NoError(t, json.Unmarshal([]byte(`{"enabled":false,"threshold":10,"reward_max":1}`), &rule))
+	require.False(t, rule.Enabled)
+	raw, err := json.Marshal(rule)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"enabled":false`)
+	for _, raw := range []string{`null`, `{"enabled":null,"threshold":10,"reward_max":1}`, `{"enabled":"false","threshold":10,"reward_max":1}`, `{"threshold":10,"reward_max":1,"reward_override":999}`} {
+		require.Error(t, json.Unmarshal([]byte(raw), &rule))
+	}
+	defaults := DefaultDailyActivityConfig()
+	require.False(t, defaults.Enabled)
+	require.True(t, defaults.DailyGift.Enabled)
+	require.True(t, defaults.Recharge.Enabled)
+	require.True(t, defaults.Consumption.Enabled)
 }

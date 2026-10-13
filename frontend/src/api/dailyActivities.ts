@@ -8,11 +8,15 @@ export const dailyActivityTypes: DailyActivityType[] = [
   'consumption',
 ]
 export interface DailyActivityRule {
+  // 旧配置未提供单项开关时沿用开启状态，避免升级后隐藏原有活动。
+  enabled?: boolean
   threshold: number
   reward_max: number
 }
 export interface DailyActivityConfig {
   enabled: boolean
+  include_redeem_balance: boolean
+  include_admin_balance: boolean
   started_at: string | null
   daily_gift: DailyActivityRule
   recharge: DailyActivityRule
@@ -27,6 +31,9 @@ export interface DailyActivityStatus extends DailyActivityRule {
 }
 export interface DailyActivitiesStatus {
   enabled: boolean
+  // 老版本响应缺少来源开关时，按关闭处理，不误展示额外充值来源。
+  include_redeem_balance?: boolean
+  include_admin_balance?: boolean
   started_at: string | null
   day: string
   activities: DailyActivityStatus[]

@@ -572,6 +572,8 @@ const flagBatchImageAccess = () => canUseBatchImage.value
 const flagCreativeStudioAccess = () => appStore.cachedPublicSettings?.creative_enabled !== false
 const flagTeamAccess = () => appStore.cachedPublicSettings?.team_enabled !== false
 const flagTicketAccess = () => appStore.cachedPublicSettings?.ticket_enabled !== false
+const flagDailyActivityAccess = () => appStore.cachedPublicSettings?.daily_activity_enabled === true
+const DailyActivityIcon = { render: () => h(Icon, { name: 'gift', size: 'md' }) }
 const flagIntelligenceAccess = () => appStore.cachedPublicSettings?.intelligence_enabled === true
 const flagUsageRankingAccess = () => appStore.cachedPublicSettings?.usage_ranking_enabled !== false
 // 文档入口复用现有图标，不增加外部文档框架或图标依赖。
@@ -589,6 +591,7 @@ const userNavItems = computed((): NavItem[] => {
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/creative', label: t('nav.creative'), icon: CreativeIcon, hideInSimpleMode: true, featureFlag: flagCreativeStudioAccess },
     { path: '/media-tasks', label: t('nav.mediaTasks'), icon: BatchImageIcon },
+    { path: '/daily-activities', label: t('dailyActivities.title'), icon: DailyActivityIcon, featureFlag: flagDailyActivityAccess },
     { path: '/intelligence', label: t('intelligence.title'), icon: ChartIcon, featureFlag: flagIntelligenceAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
@@ -648,6 +651,7 @@ const personalNavItems = computed((): NavItem[] => {
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/creative', label: t('nav.creative'), icon: CreativeIcon, hideInSimpleMode: true, featureFlag: flagCreativeStudioAccess },
     { path: '/media-tasks', label: t('nav.mediaTasks'), icon: BatchImageIcon },
+    { path: '/daily-activities', label: t('dailyActivities.title'), icon: DailyActivityIcon, featureFlag: flagDailyActivityAccess },
     { path: '/intelligence', label: t('intelligence.title'), icon: ChartIcon, featureFlag: flagIntelligenceAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },

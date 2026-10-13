@@ -412,6 +412,7 @@ type PublicSettings struct {
 	TicketEnabled bool
 	// CreativeEnabled 暴露给前端用于控制创作台页面入口与路由守卫。
 	CreativeEnabled       bool
+	DailyActivityEnabled  bool
 	IntelligenceEnabled   bool
 	OIDCOAuthEnabled      bool
 	OIDCOAuthProviderName string

@@ -35,6 +35,8 @@ export const useAppStore = defineStore('app', () => {
   const cachedPublicSettings = ref<PublicSettings | null>(null)
   let publicSettingsRequest: Promise<PublicSettings | null> | null = null
   let ticketSettingsRevision = 0
+  let dailyActivitySettingsRevision = 0
+  let lastSavedDailyActivityEnabled: boolean | undefined
   let lastSavedTicketEnabled: boolean | undefined
 
   // 版本信息缓存状态
@@ -394,6 +396,7 @@ export const useAppStore = defineStore('app', () => {
         ticket_enabled: true,
         creative_enabled: true,
         intelligence_enabled: false,
+        daily_activity_enabled: false,
         table_default_page_size: 20,
         table_page_size_options: [10, 20, 50, 100],
         usage_ranking_limit: 20,
@@ -442,11 +445,16 @@ export const useAppStore = defineStore('app', () => {
     }
 
     const ticketRevisionAtRequest = ticketSettingsRevision
+    const dailyActivityRevisionAtRequest = dailyActivitySettingsRevision
     const request = apiRequest
       .then((data) => {
         // 管理员保存工单开关后，在途旧 GET 不能重新覆盖已确认的新值。
         if (ticketRevisionAtRequest !== ticketSettingsRevision && lastSavedTicketEnabled !== undefined) {
           data = { ...data, ticket_enabled: lastSavedTicketEnabled }
+        }
+        // 每日活动独立保存与公共设置 GET 并发时，旧响应不可重新覆盖入口开关。
+        if (dailyActivityRevisionAtRequest !== dailyActivitySettingsRevision && lastSavedDailyActivityEnabled !== undefined) {
+          data = { ...data, daily_activity_enabled: lastSavedDailyActivityEnabled }
         }
         applySettings(data)
         return data
@@ -473,6 +481,16 @@ export const useAppStore = defineStore('app', () => {
     const config = cachedPublicSettings.value ?? await fetchPublicSettings()
     if (config && revision === ticketSettingsRevision) {
       applySettings({ ...config, ticket_enabled: enabled })
+    }
+  }
+
+  // 与独立工单设置一样，保存成功后立即同步导航及服务端注入缓存。
+  async function syncDailyActivityEnabled(enabled: boolean): Promise<void> {
+    const revision = ++dailyActivitySettingsRevision
+    lastSavedDailyActivityEnabled = enabled
+    const config = cachedPublicSettings.value ?? await fetchPublicSettings()
+    if (config && revision === dailyActivitySettingsRevision) {
+      applySettings({ ...config, daily_activity_enabled: enabled })
     }
   }
 
@@ -555,6 +573,7 @@ export const useAppStore = defineStore('app', () => {
     // Public settings actions
     fetchPublicSettings,
     syncTicketModuleEnabled,
+    syncDailyActivityEnabled,
     clearPublicSettingsCache,
     initFromInjectedConfig
   }

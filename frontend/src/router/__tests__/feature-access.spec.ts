@@ -29,6 +29,7 @@ const appStore = vi.hoisted(() => ({
     team_enabled?: boolean
     ticket_enabled?: boolean
     intelligence_enabled?: boolean
+    daily_activity_enabled?: boolean
     usage_ranking_enabled?: boolean
     custom_menu_items?: []
   },
@@ -125,6 +126,20 @@ describe('feature route guard', () => {
     appStore.publicSettingsLoaded = false
     appStore.cachedPublicSettings = null
     appStore.fetchPublicSettings.mockReset()
+  })
+
+  it('daily activities loads settings but keeps personal history accessible when disabled', async () => {
+    const route = routerHarness.routes.find(route => route.path === '/daily-activities')!
+    expect(route.meta?.requiresAuth).toBe(true)
+    expect(route.meta?.loadsDailyActivitySettings).toBe(true)
+    appStore.fetchPublicSettings.mockImplementation(async () => {
+      appStore.publicSettingsLoaded = true
+      appStore.cachedPublicSettings = { daily_activity_enabled: false }
+    })
+    const { navigation, next } = runGuard(route.meta!, '/daily-activities')
+    await navigation
+    expect(appStore.fetchPublicSettings).toHaveBeenCalledTimes(1)
+    expect(next).toHaveBeenCalledWith()
   })
 
   it('waits for the first public-settings request before deciding payment access', async () => {

@@ -3,6 +3,18 @@ export default {
     accounts: {
       additionalProviders: { systemOneDescription: 'TypeSafe uses the dedicated SystemOne structured evaluation endpoint.', systemOneNote: 'Adapt state and questions to your task. This platform does not provide standard chat endpoints.', inheritBaseUrl: 'Leave empty to use the account Base URL', customRules: 'Custom model protocol rules', catalogHint: 'Protocols follow the upstream model catalog by default. Custom rules override the catalog; unmatched models use Chat Completions.' },
       video: {
+  "testType": "Video",
+  "testEndpointPlaceholder": "Select video endpoint",
+  "testEndpointHint": "Only endpoints allowed for this model on the account are listed. Changing the model updates the options.",
+  "testModelsRequired": "No video models are available. Configure model bindings, an allowlist, or mappings first.",
+  "testEndpointsRequired": "This model has no test endpoint. Check the account video endpoints and model bindings.",
+  "testDuration": "Video duration (seconds)",
+  "testDurationHint": "A single test supports 1–60 seconds. Choose a duration supported by the upstream model.",
+  "testDurationInvalid": "Video duration must be an integer from 1 to 60.",
+  "testResolution": "Resolution (optional)",
+  "testRatio": "Aspect ratio (optional)",
+  "testResolutionHint": "Use values supported by the model, such as 768p and 16:9. Leave blank to use upstream defaults.",
+  "testHint": "Submit through the selected model endpoint, poll for up to 10 minutes, and preview the result. Upstream charges apply. Closing this window stops waiting; a submitted task may continue generating.",
   "endpoints": {
     "compat": "OpenAI Videos (/v1/video/generations)",
     "openai_videos": "OpenAI Videos (/v1/videos)",
@@ -29,7 +41,7 @@ export default {
   "maxDurationSeconds": "Automatic duration reserve (seconds)",
   "budgetHint": "The automatic duration limit estimates the task budget without changing upstream generation parameters. Configure Token prepayment in the user video pricing card.",
   "nativePath": "Use request native path",
-  "apiKeyOnly": "Video supports API keys only. Configure model names explicitly; text and paid video tests are unavailable.",
+  "apiKeyOnly": "Video supports API keys only. Configure models explicitly and test videos manually from the account menu. Automatic video tests are unavailable.",
   "endpointsRequired": "Select at least one endpoint",
   "baseUrlRequired": "Provide a URL for every endpoint or a default Base URL",
   "pendingInvalid": "Maximum pending tasks must be an integer from 1 to 1000",

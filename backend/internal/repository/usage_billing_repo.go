@@ -74,6 +74,9 @@ func (r *usageBillingRepository) applyOnce(ctx context.Context, cmd *service.Usa
 	if err := r.applyUsageBillingEffects(ctx, tx, cmd, result); err != nil {
 		return nil, err
 	}
+	if err := recordDailyActivitySpending(ctx, tx, cmd.UserID, cmd.APIKeyID, cmd.RequestID, result.SubscriptionAmountUSD, result.BalanceAmountUSD); err != nil {
+		return nil, err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -391,6 +394,12 @@ func (r *usageBillingRepository) applyBatchImageBalanceHoldOnce(
 	}
 	if cmd.VideoEntity {
 		if err := finishVideoBudgetOperation(ctx, tx, cmd, operation, result); err != nil {
+			return nil, err
+		}
+	}
+	// 只累计最终捕获的真实资金，预占、释放和视频预扣退差都不产生重复消费资格。
+	if operation == batchImageAllowanceCapture {
+		if err := recordDailyActivitySpending(ctx, tx, cmd.UserID, cmd.APIKeyID, cmd.RequestID, result.SubscriptionAmountUSD, result.BalanceAmountUSD); err != nil {
 			return nil, err
 		}
 	}

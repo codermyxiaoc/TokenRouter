@@ -38,6 +38,7 @@ func RegisterUserRoutes(
 		// 工单始终按当前登录用户隔离。
 		registerTicketRoutes(authenticated, h)
 		registerIntelligenceRoutes(authenticated, h)
+		registerDailyActivityRoutes(authenticated, h, panelRateLimiter.Heavy())
 		registerMediaTaskRoutes(authenticated, h, false)
 
 		// 用户接口

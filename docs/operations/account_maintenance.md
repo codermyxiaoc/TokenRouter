@@ -44,6 +44,8 @@ MiniMax 复用上述连接测试边界，默认测试模型为 `MiniMax-M2.7`；
 
 管理端连接测试显式选择 `test_type=text|image` 并传入自定义 `prompt`；Grok 还提供视频、搜索、TTS、STT 和 Realtime 模式，素材与结果边界见 [Grok 管理员连接测试](../interfaces/grok_upstream.md#grok_account_tests)。文字测试不因模型名称含图片标记而生图；仅未携带 `test_type` 的历史调用保留旧推断。OpenAI 的 `compact` 与 `legacy_compact` 使用固定载荷，不显示或使用自定义提示词。
 
+Video 账号仅提供管理员主动视频测试，先选择模型与其已配置端点，再设置提示词、时长及可选参考图、分辨率和比例。目录不回退聊天模型，旧测试入口和计划探针不能触发视频生成；测试只创建一次上游任务，不产生站内用户账单或媒体任务记录。参数和轮询语义见 [Video 管理员测试](../interfaces/video_upstream.md#video_account_tests)。
+
 文字测试可在账号支持的范围内选择 `test_endpoint`，显式选择只验证当前协议；默认自动仍使用原有账号协议及自适应诊断流程。选项不写入账号配置，不改变用户路由、计费和定时测试。OAuth、Bedrock、Vertex 等凭据只开放其原生协议；不支持的组合直接报错，不能静默改测其他端点。详细参数与协议矩阵见 [管理员账号连接测试](../interfaces/http_api.md#account_connection_tests)。
 
 ## 额度与能力探测

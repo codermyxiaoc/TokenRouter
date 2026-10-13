@@ -721,6 +721,7 @@ function mountView() {
         ImageUpload: ImageUploadStub,
         BackupSettings: true,
         TicketSettingsTab: true,
+        DailyActivitySettingsTab: true,
       },
     },
   });
@@ -849,6 +850,18 @@ describe("admin SettingsView payment visible method controls", () => {
     await wrapper.get("form").trigger("submit.prevent");
     await flushPromises();
     expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("每日活动独立设置不会提交通用表单", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get("#settings-tab-dailyActivities").trigger("click");
+    await flushPromises();
+    expect(wrapper.find("daily-activity-settings-tab-stub").exists()).toBe(true);
+    await wrapper.get("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    wrapper.unmount();
   });
 
   beforeEach(() => {

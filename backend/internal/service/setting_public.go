@@ -254,6 +254,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyTeamEnabled,
 		SettingKeyCreativeEnabled,
 		SettingKeyIntelligenceEnabled,
+		DailyActivitySettingKey,
 		SettingKeyTicketEnabled,
 		SettingKeyRiskControlEnabled,
 		SettingKeyAllowUserViewErrorRequests,
@@ -344,6 +345,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		TeamSelfServiceEnabled:              s.cfg == nil || s.cfg.Team.SelfServiceEnabled,
 		CreativeEnabled:                     settings[SettingKeyCreativeEnabled] != "false",
 		IntelligenceEnabled:                 settings[SettingKeyIntelligenceEnabled] == "true",
+		DailyActivityEnabled:                dailyActivityPublicEnabled(settings[DailyActivitySettingKey]),
 		TicketEnabled:                       parseTicketConfigBool(settings[SettingKeyTicketEnabled], true),
 		AffiliateEnabled:                    settings[SettingKeyAffiliateEnabled] == "true",
 		TotpEnabled:                         settings[SettingKeyTotpEnabled] == "true",
@@ -506,6 +508,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		TeamSelfServiceEnabled              bool                     `json:"team_self_service_enabled"`
 		CreativeEnabled                     bool                     `json:"creative_enabled"`
 		IntelligenceEnabled                 bool                     `json:"intelligence_enabled"`
+		DailyActivityEnabled                bool                     `json:"daily_activity_enabled"`
 		TicketEnabled                       bool                     `json:"ticket_enabled"`
 		OIDCOAuthEnabled                    bool                     `json:"oidc_oauth_enabled"`
 		OIDCOAuthProviderName               string                   `json:"oidc_oauth_provider_name"`
@@ -595,6 +598,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		TeamSelfServiceEnabled:              settings.TeamSelfServiceEnabled,
 		CreativeEnabled:                     settings.CreativeEnabled,
 		IntelligenceEnabled:                 settings.IntelligenceEnabled,
+		DailyActivityEnabled:                settings.DailyActivityEnabled,
 		TicketEnabled:                       settings.TicketEnabled,
 		OIDCOAuthEnabled:                    settings.OIDCOAuthEnabled,
 		OIDCOAuthProviderName:               settings.OIDCOAuthProviderName,

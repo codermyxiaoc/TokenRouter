@@ -342,6 +342,23 @@ describe('useAppStore', () => {
   // --- 公开设置 ---
 
   describe('公开设置加载', () => {
+    it('保存每日活动开关立即同步入口，旧 GET 不能覆盖，后续新刷新以服务端为准', async () => {
+      const store = useAppStore()
+      vi.mocked(getPublicSettings).mockResolvedValueOnce(createPublicSettings({ daily_activity_enabled: false }))
+      await store.fetchPublicSettings()
+      const oldResponse = createDeferred<PublicSettings>()
+      vi.mocked(getPublicSettings).mockReturnValueOnce(oldResponse.promise)
+      const refresh = store.fetchPublicSettings(true)
+      await store.syncDailyActivityEnabled(true)
+      expect(store.cachedPublicSettings?.daily_activity_enabled).toBe(true)
+      expect(window.__APP_CONFIG__?.daily_activity_enabled).toBe(true)
+      oldResponse.resolve(createPublicSettings({ daily_activity_enabled: false }))
+      await refresh
+      expect(store.cachedPublicSettings?.daily_activity_enabled).toBe(true)
+      vi.mocked(getPublicSettings).mockResolvedValueOnce(createPublicSettings({ daily_activity_enabled: false }))
+      await store.fetchPublicSettings(true)
+      expect(store.cachedPublicSettings?.daily_activity_enabled).toBe(false)
+    })
     it('保存工单关闭立即更新缓存，旧在途请求不能恢复入口', async () => {
       const store = useAppStore()
       vi.mocked(getPublicSettings).mockResolvedValueOnce(createPublicSettings({ ticket_enabled: true }))

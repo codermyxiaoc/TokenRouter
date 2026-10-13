@@ -435,6 +435,7 @@ type PublicSettings struct {
 	TeamSelfServiceEnabled              bool                     `json:"team_self_service_enabled"`
 	CreativeEnabled                     bool                     `json:"creative_enabled"`
 	IntelligenceEnabled                 bool                     `json:"intelligence_enabled"`
+	DailyActivityEnabled                bool                     `json:"daily_activity_enabled"`
 	TicketEnabled                       bool                     `json:"ticket_enabled"`
 	Version                             string                   `json:"version"`
 	// 服务器全局时区与当前 UTC 偏移，供前端标注高峰计费窗口等服务端本地时间。

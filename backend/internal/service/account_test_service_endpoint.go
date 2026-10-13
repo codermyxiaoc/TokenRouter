@@ -19,6 +19,11 @@ import (
 type AccountTestOptions struct {
 	ImageDataURL string `json:"image_data_url"`
 	AudioDataURL string `json:"audio_data_url"`
+	// 视频参数只用于本次主动诊断，不保存到账号，也不改变正常网关请求。
+	VideoEndpoint string `json:"video_endpoint"`
+	Duration      *int   `json:"duration"`
+	Resolution    string `json:"resolution"`
+	Ratio         string `json:"ratio"`
 }
 
 // TestAccountConnectionWithOptions 在旧测试入口外提供显式端点和媒体模式。
@@ -63,6 +68,15 @@ func (s *AccountTestService) TestAccountConnectionWithOptions(c *gin.Context, ac
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
 	bindAccountTestLogContext(c, accountID, modelID, mode, account)
+	if account.Platform == PlatformVideo {
+		if testType != "video" || endpoint != "auto" || normalizeAccountTestMode(mode) != AccountTestModeDefault {
+			return s.sendErrorAndEnd(c, "Video accounts require an explicit video test and video_endpoint")
+		}
+		return s.testVideoAccountConnection(c, account, modelID, prompt, options)
+	}
+	if options.VideoEndpoint != "" || options.Duration != nil || options.Resolution != "" || options.Ratio != "" {
+		return s.sendErrorAndEnd(c, "Video test settings are only supported for Video accounts")
+	}
 	// Compact 是 OpenAI 账号的专项能力，不能在其它平台静默变成普通文字测试。
 	if endpoint != "auto" && account.Platform != PlatformOpenAI && normalizeAccountTestMode(mode) != AccountTestModeDefault {
 		return s.sendErrorAndEnd(c, "Compact tests are only supported for OpenAI accounts")

@@ -337,6 +337,9 @@ func (r *usageBillingRepository) captureImageBillingOnce(ctx context.Context, id
 		result = $4::jsonb, updated_at = NOW() WHERE request_id = $1 AND api_key_id = $2`, id, cmd.APIKeyID, cmd.RequestFingerprint, string(encoded)); err != nil {
 		return nil, err
 	}
+	if err := recordDailyActivitySpending(ctx, tx, cmd.UserID, cmd.APIKeyID, cmd.RequestID, result.SubscriptionAmountUSD, result.BalanceAmountUSD); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}

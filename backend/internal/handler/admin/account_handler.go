@@ -1130,7 +1130,7 @@ type TestAccountRequest struct {
 	ModelID string `json:"model_id"`
 	Prompt  string `json:"prompt"`
 	Mode    string `json:"mode"`
-	// TestType 由管理端明确指定文字、图片或 Grok 媒体测试，避免服务端猜测模型能力。
+	// TestType 由管理端明确指定文字、图片或平台媒体测试，避免服务端猜测模型能力。
 	TestType string `json:"test_type"`
 	// TestEndpoint 只覆盖本次文字测试，不修改账号保存的协议。
 	TestEndpoint string `json:"test_endpoint"`
@@ -2875,6 +2875,27 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 					CreatedAt:   "",
 				})
 			}
+		}
+		response.Success(c, models)
+		return
+	}
+
+	// 视频目录仅来自账号配置；空配置不能回落到聊天默认模型或默认开放兼容端点。
+	if account.Platform == service.PlatformVideo {
+		type videoTestModel struct {
+			ID             string                  `json:"id"`
+			Object         string                  `json:"object"`
+			Type           string                  `json:"type"`
+			DisplayName    string                  `json:"display_name"`
+			VideoEndpoints []service.VideoEndpoint `json:"video_endpoints"`
+		}
+		models := make([]videoTestModel, 0)
+		for _, model := range account.GetConfiguredRequestModels() {
+			if strings.ContainsAny(model, "*?") {
+				continue
+			}
+			models = append(models, videoTestModel{ID: model, Object: "model", Type: "model", DisplayName: model,
+				VideoEndpoints: service.VideoAccountTestEndpoints(account, model)})
 		}
 		response.Success(c, models)
 		return

@@ -49,6 +49,7 @@ RequestLogger
 | `/api/v1/payment/*` | 用户 JWT | `routes/payment.go`；配置/套餐读取、下单、查单、取消、invoice 和退款申请 |
 | `/api/v1/tickets/*`、`/api/v1/admin/tickets/*` | 个人入口为用户 JWT，管理入口为管理员认证 | `routes/tickets.go`；工单、私有附件、后台对话与工单设置，继承面板限流和审计 |
 | `/api/v1/intelligence-tests`、`/api/v1/admin/intelligence-tests` 及子路径 | 用户 JWT / 管理员认证；预览内容使用短期单作品票据 | 管理员配置和发起检测，用户仅查看获授权分组的结果，见[降智检测](../domains/intelligence_tests.md) |
+| `/api/v1/daily-activities`、`/claim`、`/history` 与 `/api/v1/admin/settings/daily-activity` | 用户 JWT / 管理员认证 | 本人活动资格、幂等领取与分页历史；管理员独立保存开关和规则，见[每日活动](../domains/daily_activities.md) |
 | `/api/v1/media-tasks`、`/api/v1/admin/media-tasks` 及 `/models`、`/:id`、`/:id/preview` | 个人入口为用户 JWT，管理入口为管理员认证 | 图片/视频任务只读列表、全量可见模型选项、详情及结果预览，用户仅本人、管理员可筛选用户，见[任务记录观测](../domains/media_tasks.md#media_task_observation) |
 | `/api/v1/media-tasks/preview-content/:ticket` | 由已鉴权预览签发的短期任务专属票据 | 仅 `GET`/`HEAD`，支持单段 Range，读取缓存产物且不进入模型状态查询或计费，见[任务结果预览](../domains/media_tasks.md#media_task_preview) |
 | `/api/v1/payment/public/*` | 签名 resume token 或遗留订单验证约束 | 支付结果恢复；不得扩展为匿名订单枚举接口 |
@@ -141,7 +142,7 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 <a id="account_connection_tests"></a>
 ## 管理员账号连接测试
 
-`POST /api/v1/admin/accounts/:id/test` 只对管理员开放，正常测试和测试失败均通过 SSE 事件返回。请求包含 `model_id`、`prompt`、`test_type`、可选 `test_endpoint` 与 OpenAI 专用的 `mode`；历史客户端可用 `test_mode` 作为 `test_type` 的低优先级别名。管理端显式发送 `test_type=text|image`，Grok 还支持 `video|search|tts|stt|realtime`，媒体素材字段及能力约束见 [Grok 上游](grok_upstream.md)。
+`POST /api/v1/admin/accounts/:id/test` 只对管理员开放，正常测试和测试失败均通过 SSE 事件返回。请求包含 `model_id`、`prompt`、`test_type`、可选 `test_endpoint` 与 OpenAI 专用的 `mode`；历史客户端可用 `test_mode` 作为 `test_type` 的低优先级别名。管理端显式发送 `test_type=text|image`，Grok 还支持 `video|search|tts|stt|realtime`，媒体素材字段及能力约束见 [Grok 上游](grok_upstream.md)。独立 Video 账号只允许显式 `test_type=video`，使用 `video_endpoint` 选择模型允许的端点，以及 `duration`、`resolution`、`ratio` 和可选参考图；详情见 [Video 管理员测试](video_upstream.md#video_account_tests)。Video 的模型列表额外返回每个模型的 `video_endpoints`，不提供聊天默认目录。
 
 `test_endpoint` 省略、空值或 `auto` 时沿用账号的原测试流程，包括 CN 自适应账号的多协议诊断和 OpenCode 按模型选择协议。文字测试可以显式选择下表端点；选择只作用于当前请求，不保存到账号的 `api_protocol`、文本路由模式或分协议 Base URL，也不改变正常网关或计划测试的分派规则。
 

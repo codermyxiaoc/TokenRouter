@@ -41,7 +41,7 @@
         </span>
       </div>
 
-      <div class="space-y-1.5">
+      <div v-if="!isVideoAccount" class="space-y-1.5">
         <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
           {{ isGrokAccount ? t('admin.accounts.grok.testMode') : t('admin.accounts.testType') }}
         </label>
@@ -59,6 +59,7 @@
         </label>
         <Select
           v-model="selectedModelId"
+          data-testid="account-test-model"
           :options="modelOptionsForMode"
           :disabled="loadingModels || status === 'connecting'"
           value-key="id"
@@ -66,6 +67,47 @@
           :placeholder="loadingModels ? t('common.loading') + '...' : t('admin.accounts.selectTestModel')"
         />
       </div>
+
+      <template v-if="isVideoAccount">
+        <div class="space-y-1.5">
+          <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.testEndpoint') }}</label>
+          <Select
+            v-model="videoEndpoint"
+            :options="videoEndpointOptions"
+            :disabled="loadingModels || status === 'connecting' || !selectedModelId || !videoEndpointOptions.length"
+            :placeholder="t('admin.accounts.video.testEndpointPlaceholder')"
+            data-testid="account-test-video-endpoint"
+          />
+          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.video.testEndpointHint') }}</p>
+        </div>
+        <div class="space-y-1.5">
+          <label for="account-test-video-duration" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testDuration') }}</label>
+          <input
+            id="account-test-video-duration"
+            v-model.number="videoDuration"
+            type="number"
+            min="1"
+            max="60"
+            step="1"
+            class="input"
+            :disabled="status === 'connecting'"
+            data-testid="account-test-video-duration"
+          />
+          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.video.testDurationHint') }}</p>
+        </div>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div class="space-y-1.5">
+            <label for="account-test-video-resolution" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testResolution') }}</label>
+            <input id="account-test-video-resolution" v-model="videoResolution" class="input" type="text" maxlength="32" placeholder="768p" :disabled="status === 'connecting'" data-testid="account-test-video-resolution" />
+          </div>
+          <div class="space-y-1.5">
+            <label for="account-test-video-ratio" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testRatio') }}</label>
+            <input id="account-test-video-ratio" v-model="videoRatio" class="input" type="text" maxlength="32" placeholder="16:9" :disabled="status === 'connecting'" data-testid="account-test-video-ratio" />
+          </div>
+        </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.video.testResolutionHint') }}</p>
+        <p v-if="!loadingModels && videoTestValidationMessage" class="text-xs text-amber-600 dark:text-amber-400" role="alert">{{ videoTestValidationMessage }}</p>
+      </template>
 
       <div v-if="showEndpointSelect" class="space-y-1.5">
         <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -365,6 +407,7 @@ const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-ima
 // 图片/文字请求类型完全由管理员选择，不再从模型名称推断。
 const supportsImageTest = computed(() => testType.value === 'image')
 const {
+  isVideoAccount, videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
   testEndpoint, isGrokAccount, testTypeOptions, endpointOptions, showEndpointSelect,
   showModelSelect, modelOptionsForMode, supportsImageUpload, supportsAudioUpload,
   supportsPromptInput, promptInputLabel, promptInputPlaceholder, promptInputHint,
@@ -380,7 +423,8 @@ const {
 const generatedAudios = ref<PreviewImage[]>([])
 const generatedVideos = ref<PreviewImage[]>([])
 const canStartTest = computed(() => status.value !== 'connecting' && !loadingModels.value &&
-  !loadingUpload.value && (!showModelSelect.value || Boolean(selectedModelId.value)))
+  !loadingUpload.value && (!showModelSelect.value || Boolean(selectedModelId.value)) &&
+  !videoTestValidationMessage.value)
 
 
 const sortTestModels = (models: ClaudeModel[]) => {
@@ -404,8 +448,12 @@ watch(
       testPrompt.value = ''
       lastDefaultPrompt = ''
       testMode.value = 'default'
-      testType.value = 'text'
+      testType.value = isVideoAccount.value ? 'video' : 'text'
       testEndpoint.value = 'auto'
+      videoEndpoint.value = ''
+      videoDuration.value = 5
+      videoResolution.value = ''
+      videoRatio.value = '16:9'
       resetState()
       await loadAvailableModels()
     } else {
@@ -440,7 +488,8 @@ const loadAvailableModels = async () => {
 
   const current = ++modelLoadGeneration
   loadingModels.value = true
-  selectedModelId.value = '' // Reset selection before loading
+  selectedModelId.value = '' // 加载前清空模型及其端点，避免使用上一个账号配置。
+  availableModels.value = []
   try {
     const models = await adminAPI.accounts.getAvailableModels(props.account.id)
     if (current !== modelLoadGeneration || !props.show) return
@@ -449,7 +498,7 @@ const loadAvailableModels = async () => {
       : models
     // Default selection by platform
     if (availableModels.value.length > 0) {
-      if (props.account.platform === 'gemini') {
+      if (props.account.platform === 'gemini' || isVideoAccount.value) {
         selectedModelId.value = availableModels.value[0].id
       } else {
         // Try to select Sonnet as default, otherwise use first model
@@ -525,6 +574,13 @@ const startTest = async () => {
       model_id: showModelSelect.value ? selectedModelId.value : '',
       prompt: isCompactTestMode.value || !supportsPromptInput.value ? '' : testPrompt.value.trim(),
       test_type: testType.value
+    }
+    if (isVideoAccount.value && videoEndpoint.value) {
+      requestBody.test_type = 'video'
+      requestBody.video_endpoint = videoEndpoint.value
+      requestBody.duration = Number(videoDuration.value)
+      if (videoResolution.value.trim()) requestBody.resolution = videoResolution.value.trim()
+      if (videoRatio.value.trim()) requestBody.ratio = videoRatio.value.trim()
     }
     if (isOpenAIAccount.value) requestBody.mode = testMode.value
     // 自动测试省略端点，保持历史客户端和既有账号协议的默认行为。

@@ -49,13 +49,18 @@ const getBodyText = () => document.body.textContent ?? ''
 const getBodyButtons = () => Array.from(document.body.querySelectorAll('button'))
 
 describe('AccountActionMenu — spark shadow 按钮可见性', () => {
-  it('Video hides text tests, scheduled tests and advanced scoring but keeps management actions', () => {
-    const wrapper = mount(AccountActionMenu, { props: { show: true, account: makeAccount({ platform: 'video', type: 'apikey' }), position }, attachTo: document.body })
-    expect(getBodyText()).not.toContain('admin.accounts.testConnection')
+  it('Video 提供手动视频测试，仍隐藏定时测试和高级调度评分', async () => {
+    const account = makeAccount({ platform: 'video', type: 'apikey' })
+    const wrapper = mount(AccountActionMenu, { props: { show: true, account, position }, attachTo: document.body })
+    expect(getBodyText()).toContain('admin.accounts.testConnection')
     expect(getBodyText()).not.toContain('admin.scheduledTests.schedule')
     expect(getBodyText()).not.toContain('admin.accounts.advancedSchedulerScore.action')
     expect(getBodyText()).toContain('admin.accounts.viewStats')
     expect(getBodyText()).toContain('admin.accounts.duplicateAccount')
+    getBodyButtons().find(button => button.textContent?.includes('admin.accounts.testConnection'))!.click()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('test')?.[0]).toEqual([account])
+    expect(wrapper.emitted('close')).toHaveLength(1)
     wrapper.unmount()
   })
 

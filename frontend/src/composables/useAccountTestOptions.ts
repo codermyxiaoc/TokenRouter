@@ -1,6 +1,7 @@
 import { computed, ref, watch, type Ref } from 'vue'
 import type { Account, ClaudeModel } from '@/types'
 import type { AccountTestEndpoint, AccountTestType } from '@/types/accountTest'
+import { VIDEO_ENDPOINTS, type VideoEndpoint } from '@/components/account/videoAccountConfig'
 
 type Translate = (key: string) => string
 
@@ -13,13 +14,20 @@ export function useAccountTestOptions(
   t: Translate
 ) {
   const testEndpoint = ref<AccountTestEndpoint>('auto')
+  const videoEndpoint = ref<VideoEndpoint | ''>('')
+  const videoDuration = ref<number | string>(5)
+  const videoResolution = ref('')
+  const videoRatio = ref('16:9')
+  const isVideoAccount = computed(() => account.value?.platform === 'video')
   const isGrokAccount = computed(() => account.value?.platform === 'grok')
   const imageTestAvailable = computed(() => {
     const platform = account.value?.platform
     return platform === 'openai' || platform === 'gemini' || platform === 'grok' ||
       (platform === 'antigravity' && account.value?.type === 'apikey')
   })
-  const testTypeOptions = computed(() => isGrokAccount.value
+  const testTypeOptions = computed(() => isVideoAccount.value
+    ? [{ value: 'video', label: t('admin.accounts.video.testType') }]
+    : isGrokAccount.value
     ? (['text', 'image', 'video', 'search', 'tts', 'stt', 'realtime'] as const).map((value) => ({
       value,
       label: t(`admin.accounts.grok.testMode${({ text: 'Text', image: 'Image', video: 'Video', search: 'Search', tts: 'TTS', stt: 'STT', realtime: 'Realtime' })[value]}`)
@@ -29,6 +37,25 @@ export function useAccountTestOptions(
       { value: 'image', label: t('admin.accounts.testTypeImage'), disabled: !imageTestAvailable.value }
     ])
 
+  // 端点只来自服务端已应用映射和绑定的模型目录，不在前端猜测默认协议。
+  const videoEndpointOptions = computed(() => {
+    if (!isVideoAccount.value) return []
+    const endpoints = availableModels.value.find(model => model.id === selectedModelId.value)?.video_endpoints
+    return VIDEO_ENDPOINTS.filter(endpoint => Array.isArray(endpoints) && endpoints.includes(endpoint))
+      .map(value => ({ value, label: t(`admin.accounts.video.endpoints.${value}`) }))
+  })
+  const videoTestValidationMessage = computed(() => {
+    if (!isVideoAccount.value) return ''
+    if (!selectedModelId.value || !availableModels.value.some(model => model.id === selectedModelId.value)) {
+      return t('admin.accounts.video.testModelsRequired')
+    }
+    if (!videoEndpointOptions.value.some(option => option.value === videoEndpoint.value)) {
+      return t('admin.accounts.video.testEndpointsRequired')
+    }
+    const duration = Number(videoDuration.value)
+    if (!Number.isInteger(duration) || duration < 1 || duration > 60) return t('admin.accounts.video.testDurationInvalid')
+    return ''
+  })
   const endpointOptions = computed(() => {
     const current = account.value
     let endpoints: AccountTestEndpoint[] = ['auto']
@@ -69,7 +96,7 @@ export function useAccountTestOptions(
     }
     return endpoints.map((value) => ({ value, label: t(`admin.accounts.testEndpoints.${value}`) }))
   })
-  const showEndpointSelect = computed(() => !isGrokAccount.value && testType.value === 'text')
+  const showEndpointSelect = computed(() => !isGrokAccount.value && !isVideoAccount.value && testType.value === 'text')
   const showModelSelect = computed(() => !isGrokAccount.value || ['text', 'image', 'video'].includes(testType.value))
   const isImageModel = (id: string) => /^(grok-imagine(?:-edit)?$|grok-imagine-image)/i.test(id)
   const isVideoModel = (id: string) => /^(grok-imagine-video|grok-video)/i.test(id)
@@ -81,7 +108,7 @@ export function useAccountTestOptions(
       return !isImageModel(model.id) && !isVideoModel(model.id)
     }).map((model) => ({ ...model }))
   })
-  const supportsImageUpload = computed(() => isGrokAccount.value && ['image', 'video'].includes(testType.value))
+  const supportsImageUpload = computed(() => isVideoAccount.value || (isGrokAccount.value && ['image', 'video'].includes(testType.value)))
   const supportsAudioUpload = computed(() => isGrokAccount.value && testType.value === 'stt')
   const supportsPromptInput = computed(() => !isGrokAccount.value || !['stt', 'realtime'].includes(testType.value))
   const promptKeys = computed(() => {
@@ -95,19 +122,25 @@ export function useAccountTestOptions(
   })
   const promptInputLabel = computed(() => t(`admin.accounts.${promptKeys.value[0]}`))
   const promptInputPlaceholder = computed(() => t(`admin.accounts.${promptKeys.value[1]}`))
-  const promptInputHint = computed(() => t(`admin.accounts.${promptKeys.value[2]}`))
+  const promptInputHint = computed(() => isVideoAccount.value
+    ? t('admin.accounts.video.testHint')
+    : t(`admin.accounts.${promptKeys.value[2]}`))
   const defaultPrompt = computed(() => t(`admin.accounts.${promptKeys.value[3]}`))
   const testTypeSummary = computed(() => testTypeOptions.value.find((option) => option.value === testType.value)?.label || '')
 
+  watch(videoEndpointOptions, (options) => {
+    if (!options.some(option => option.value === videoEndpoint.value)) videoEndpoint.value = options[0]?.value || ''
+  })
   watch(endpointOptions, (options) => {
     if (!options.some((option) => option.value === testEndpoint.value)) testEndpoint.value = 'auto'
   })
   watch(modelOptionsForMode, (models) => {
-    if (isGrokAccount.value && !models.some((model) => model.id === selectedModelId.value)) {
+    if ((isGrokAccount.value || isVideoAccount.value) && !models.some((model) => model.id === selectedModelId.value)) {
       selectedModelId.value = models[0]?.id || ''
     }
   })
   return {
+    isVideoAccount, videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
     testEndpoint, isGrokAccount, testTypeOptions, endpointOptions, showEndpointSelect,
     showModelSelect, modelOptionsForMode, supportsImageUpload, supportsAudioUpload,
     supportsPromptInput, promptInputLabel, promptInputPlaceholder, promptInputHint,

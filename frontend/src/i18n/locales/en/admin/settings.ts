@@ -4,6 +4,7 @@ export default {
       title: 'System Settings',
       description: 'Manage registration, email verification, default values, and SMTP settings',
       tabs: {
+        dailyActivities: 'Daily activities',
         tickets: 'Tickets',
         general: 'General',
         agreement: 'Agreement',

@@ -416,6 +416,10 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
 	bindAccountTestLogContext(c, accountID, modelID, mode, account)
+	// 视频生成必须由管理员明确选择模型和端点，旧入口与计划探针不能意外触发付费生成。
+	if account.Platform == PlatformVideo {
+		return s.sendErrorAndEnd(c, "Video accounts require an explicit video test with configured endpoint")
+	}
 	// 图片测试仅允许支持图像接口的平台，Antigravity 仅开放 API Key 账号。
 	if explicitTestType && testType == AccountTestTypeImage &&
 		!account.IsOpenAI() && !account.IsGemini() &&

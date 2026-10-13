@@ -843,6 +843,7 @@ var ProviderSet = wire.NewSet(
 	NewTicketService,
 	ProvideTicketRuntime,
 	ProvideIntelligenceService,
+	ProvideDailyActivityService,
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	ProvideAuthCacheInvalidationWorker,
@@ -1061,5 +1062,16 @@ func ProvideClaudeResetCreditService(accounts AccountRepository, tokens *ClaudeT
 func ProvideIntelligenceService(repo IntelligenceRepository, keys APIKeyRepository, groups GroupRepository, keyService *APIKeyService, settings *SettingService) *IntelligenceService {
 	svc := NewIntelligenceService(repo, keys, groups, keyService, manxue.NewClient(nil), settings.IsIntelligenceEnabled)
 	svc.Start()
+	return svc
+}
+
+// ProvideDailyActivityService 领奖提交后清理资金缓存，配置保存后刷新公开设置注入缓存。
+func ProvideDailyActivityService(repo DailyActivityRepository, keys *APIKeyService, billing *BillingCacheService, settings *SettingService) *DailyActivityService {
+	svc := NewDailyActivityService(repo, keys, billing)
+	svc.onUpdate = func() {
+		if settings != nil && settings.onUpdate != nil {
+			settings.onUpdate()
+		}
+	}
 	return svc
 }

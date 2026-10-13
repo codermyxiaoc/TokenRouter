@@ -70,6 +70,7 @@ type Handlers struct {
 	Team              *TeamHandler
 	Ticket            *TicketHandler
 	IntelligenceTests *IntelligenceHandler
+	DailyActivities   *DailyActivityHandler
 }
 
 // BuildInfo contains build-time information

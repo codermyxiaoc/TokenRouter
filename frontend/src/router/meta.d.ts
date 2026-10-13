@@ -64,6 +64,8 @@ declare module 'vue-router' {
     requiresTickets?: boolean
     /** 降智检测缺省关闭，管理员配置页不受此门禁限制。 */
     requiresIntelligence?: boolean
+    /** 每日活动加载公共开关；关闭时仍可直达查看本人历史，不拦截路由。 */
+    loadsDailyActivitySettings?: boolean
 
     /**
      * 是否要求用量排行功能开关已启用

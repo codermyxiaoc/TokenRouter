@@ -268,6 +268,7 @@ export interface PublicSettings {
   // 旧版公开设置可能缺少该字段，调用方应仅在明确为 false 时关闭创作台入口。
   creative_enabled?: boolean
   intelligence_enabled?: boolean
+  daily_activity_enabled?: boolean
   table_default_page_size: number
   table_page_size_options: number[]
   usage_ranking_limit: number
@@ -1164,6 +1165,8 @@ export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
 
 // Claude Model type (returned by /v1/models and account models API)
 export interface ClaudeModel {
+  // 管理员账号模型接口返回的有效视频端点，已应用账号模型规则。
+  video_endpoints?: string[]
   id: string
   type: string
   display_name: string

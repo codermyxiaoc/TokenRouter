@@ -389,6 +389,13 @@ const routes: RouteRecordRaw[] = [
       requiresPayment: true
     }
   },
+  // 活动入口受开关控制，关闭后仍可直达查看本人奖励历史。
+  {
+    path: '/daily-activities',
+    name: 'DailyActivities',
+    component: () => import('@/views/user/DailyActivitiesView.vue'),
+    meta: { requiresAuth: true, loadsDailyActivitySettings: true, hidePageHeading: true, title: 'Daily activities', titleKey: 'dailyActivities.title' }
+  },
   // 检测结果由专用开关控制，管理员配置入口始终保留。
   {
     path: '/intelligence',
@@ -980,6 +987,7 @@ router.beforeEach(async (to, _from, next) => {
     || to.meta.requiresCreative
     || to.meta.requiresTickets
     || to.meta.requiresIntelligence
+    || to.meta.loadsDailyActivitySettings
   if (requiresPublicFeature && !appStore.publicSettingsLoaded) {
     try {
       await appStore.fetchPublicSettings()

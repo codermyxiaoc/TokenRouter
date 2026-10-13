@@ -3,6 +3,18 @@ export default {
     accounts: {
       additionalProviders: { systemOneDescription: 'TypeSafe 使用独立的 SystemOne 结构化判断接口。', systemOneNote: '请根据业务调整 state 与 questions；此平台不提供普通对话接口。', inheritBaseUrl: '留空继承账号 Base URL', customRules: '自定义模型协议规则', catalogHint: '默认按上游模型目录适配协议；开启自定义后按规则匹配，未命中使用 Chat Completions。' },
       video: {
+  "testType": "视频",
+  "testEndpointPlaceholder": "选择视频端点",
+  "testEndpointHint": "仅列出该模型在当前账号允许的端点；切换模型后会更新。",
+  "testModelsRequired": "该账号暂无可测试的视频模型，请先配置模型绑定、白名单或映射。",
+  "testEndpointsRequired": "该模型暂无可测试端点，请检查账号的视频端点及模型绑定。",
+  "testDuration": "视频时长（秒）",
+  "testDurationHint": "单次测试支持 1–60 秒，请填写该模型实际支持的时长。",
+  "testDurationInvalid": "视频时长必须是 1–60 的整数。",
+  "testResolution": "分辨率（可选）",
+  "testRatio": "画面比例（可选）",
+  "testResolutionHint": "按上游模型要求填写，例如 768p、16:9；留空使用上游默认值。",
+  "testHint": "使用所选模型端点提交视频任务，最多轮询 10 分钟，完成后预览。测试会产生上游费用；关闭窗口只停止等待，已提交任务可能继续生成。",
   "endpoints": {
     "compat": "OpenAI Videos（/v1/video/generations）",
     "openai_videos": "OpenAI Videos（/v1/videos）",
@@ -29,7 +41,7 @@ export default {
   "maxDurationSeconds": "自动时长预留上限（秒）",
   "budgetHint": "自动时长上限仅用于估算任务预算，不修改上游生成参数。按 Token 计费的预扣规则在用户视频价卡中配置。",
   "nativePath": "使用请求原生路径",
-  "apiKeyOnly": "Video 仅支持 API Key，模型列表需显式配置，不运行文本或付费视频测试。",
+  "apiKeyOnly": "Video 仅支持 API Key，模型列表需显式配置。可在账号菜单中手动测试视频，不运行自动视频测试。",
   "endpointsRequired": "请至少选择一个视频端点",
   "baseUrlRequired": "请为每个视频端点设置地址或填写默认 Base URL",
   "pendingInvalid": "最大在途任务数必须是 1–1000 的整数",

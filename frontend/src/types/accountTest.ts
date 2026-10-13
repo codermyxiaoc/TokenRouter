@@ -1,3 +1,5 @@
+import type { VideoEndpoint } from '@/components/account/videoAccountConfig'
+
 /** 管理员账号连接测试协议；仅用于单次探测，不保存账号配置。 */
 export type AccountTestType = 'text' | 'image' | 'video' | 'search' | 'tts' | 'stt' | 'realtime'
 export type AccountTestEndpoint = 'auto' | 'chat_completions' | 'responses' | 'anthropic' | 'gemini' | 'systemone'
@@ -11,4 +13,9 @@ export interface AccountTestRequest {
   mode?: AccountTestMode
   image_data_url?: string
   audio_data_url?: string
+  // 视频账号仅测试所选模型已配置的协议，时长单位为秒。
+  video_endpoint?: VideoEndpoint
+  duration?: number
+  resolution?: string
+  ratio?: string
 }

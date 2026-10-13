@@ -10,6 +10,7 @@
 - [协议分派](#协议分派)：修改 Gemini 原生、Messages、Responses 或 Chat 转换时读取。
 - [模型与会话](#模型与会话)：修改模型解析、thinking、signature 或缓存连续性时读取。
 - [管理员模型同步](#gemini_model_list_sync)：修改第三方模型目录兼容、创建预览或同步错误提示时读取。
+- [显式上下文缓存](#gemini_explicit_cache)：修改缓存资源、有效期、归属或存储费用时读取。
 - [配额与调度](#配额与调度)：修改 tier、模型限流、混合调度或粘性时读取。
 - [错误与诊断](#错误与诊断)：修改 Google 错误、刷新或 failover 时读取。
 
@@ -20,8 +21,10 @@ Gemini 正式支持：
 | 类型 | 当前契约 |
 | --- | --- |
 | `oauth` | 支持 `code_assist`、`google_one` 和 `ai_studio` 变体；前两者使用内置 Gemini CLI 客户端，AI Studio 需要配置的 OAuth client |
-| `apikey` | 使用 Base URL 和 API Key 直连；`credentials.provider_type=third_party` 表示 Gemini 兼容第三方提供商，缺失或 `official` 表示 Google AI Studio 官方接入 |
-| `service_account` | 使用 Google Service Account 换取 Vertex token，并解析 project/location 上下文 |
+| `apikey` | 使用 Base URL 和 API Key 直连；`credentials.provider_type=third_party` 表示 Gemini 兼容第三方提供商，缺失或 `official` 表示默认来源；实际官方能力还校验 Base URL |
+| `service_account` | Agent Platform (Vertex)：支持 Service Account JSON 换取 token，或 `auth_mode=apikey` 使用 Vertex API Key；project/location 决定区域或 Express 路径 |
+
+AI Studio API Key 同时接受传统 `AIza` 和 `AQ.Ab` 格式，使用后者时按相应认证方式发出请求，日志与安全错误同时脱敏。Vertex API Key 不换取 OAuth token；模型同步只对 Service Account JSON 开放，API Key 认证缺少可靠列模型接口时明确返回不支持。第三方地址和 Vertex 均不套用 AI Studio 等级或本地模拟配额，即使历史来源标签仍写作 `official` 也以实际地址判定。
 
 Code Assist/Google One 需要有效 project；AI Studio 的 project 可选并使用选择的 tier。第三方 API Key 保持 `type=apikey` 和 Gemini 兼容请求形状，但必须配置非 Google 官方域名的 Base URL；它没有 Google 官方账号等级，因此不写 `tier_id`，也不参与本地模拟 RPD/RPM 预检或用量窗口。第三方上游实际返回 `429` 时始终使用通用冷却，不解析 Google 日配额的重置语义。OAuth refresh 会重试并兼容历史 client 元数据；token provider 使用过期前偏移和并发锁，避免同账号重复刷新。其它导入类型没有 Gemini 正式转发契约，见[上游账号能力矩阵](upstream_account_matrix.md)。
 
@@ -53,11 +56,30 @@ Antigravity 专用 `/antigravity/v1beta/*` 强制选择 Antigravity 账号，其
 
 新增账号的同步预览需携带当前 Gemini 接入来源，与已保存账号保持相同策略。编辑账号的同步仍读取已保存配置，修改 Base URL 或 Key 后须先保存。Base URL 使用服务根地址（允许部署子路径）；模型列表兼容不改变实际生成的 Gemini 原生端点、鉴权、模型权限、调度和计费，列表成功不代表生成端点可用。
 
+模型同步在令牌刷新及列表请求前检查账号显式配置的代理。代理缺失、停用、过期或关联身份不符时明确失败，不静默直连；未配置代理时保持直接请求。共享模型列表传输禁止 HTTP 重定向，包含 Gemini 原生列表、同站兼容列表和 Vertex 分页请求，避免凭据被带到重定向地址；其它使用共享传输的平台遵守相同规则。
+
 同步失败仅向管理员返回安全诊断消息，包含上游 HTTP 状态或 Cloudflare 拦截分类；两种列表都失败时分别保留端点和失败分类，不返回原始 HTML、凭据或内部网络错误。前端读取 API 客户端归一化后的错误消息，避免重复拼接“同步上游模型失败”。
+
+<a id="gemini_explicit_cache"></a>
+## 显式上下文缓存
+
+固定 Gemini 分组的 API Key 可通过 `/v1beta/cachedContents` 创建或分页列举缓存，通过 `/{cache_id}` 查询、修改有效期或删除，再在原生生成请求中以 `cachedContent` 引用。缓存绑定创建时的用户、API Key、分组和实际上游账号；查询和修改只允许同一密钥及分组，生成请求固定回原账号，不跨账号故障转移。复合和智能路由 Key 不支持此资源接口或缓存引用，避免无模型参数的管理操作无法选择原分组；无缓存的已有请求不变。
+
+列表、查询和删除是非消费操作，余额或 Key 消费额度耗尽后仍可管理已付费缓存，但身份有效性、停用状态、IP、分组权限和资源归属仍须通过。创建及 PATCH 保留原资金准入。PATCH 与 DELETE 使用同一修改租约，不能通过并发删除破坏续期结算。
+
+AI Studio 官方 API Key 与 Vertex Service Account JSON 账号按各自认证和资源路径执行；OAuth 和 Vertex API Key 账号不支持显式缓存；兼容网关必须显式声明支持缓存，并可设置上游最大 TTL。站点 `gateway.gemini_cached_content_max_ttl_seconds` 默认 86400 秒，未指定请求有效期默认 3600 秒，实际受站点与账号上限共同限制。创建内容仍经过现有模型准入、协议门禁、并发和内容审核。出站缓存操作禁止 HTTP 重定向，不能将正文或 `x-goog-api-key` 转交其它地址。已经发出的创建操作与客户端断连脱钩，并发槽持有至实际上游操作结束；创建成功后的预留、保存和结算使用有界独立上下文，客户端离线不能跳过扣费。
+
+创建收取输入费和缓存存储费，输入费继续遵守现有渠道计费模式；延长只收新增 Token-hour 存储费；缩短和删除不退回已付存储费。创建按上游确认且不超过请求上限的实际有效期收存储费，已过期的创建响应会拒绝并清理；续期按调用前固定的目标到期时间封顶，慢响应不能把缩短变成未预留资金的延长。存储单价优先取定价目录或覆盖文件的 `cache_storage_cost_per_token_per_hour`，否则使用内置已知模型或 Pro/Flash 系列价；完全缺少价格时拒绝创建。存储费用不视为额外模型调用，延长沿用创建时记录的模型与渠道计费口径。
+
+资金操作使用本站持久预留、捕获和释放机制，保留自动选择订阅/余额、套餐分组倍率、团队付款及个人额度边界。费用已知后才按数据库中的最新资金状态建立独立 `gemini_cache` 合同；创建后资金不足会尝试删除上游缓存，不回退为可透支的普通后付费。结算同步执行且幂等；明确失败释放预留，上游结果不明或数据库捕获失败则保留待核对合同，不能推测已退款。创建已经生效但本地保存失败时，只有确认上游清理成功或资源已经不存在才释放预留；保存与清理都失败则保留待核对合同。待核对标记暂时也无法写入时，原始预留及过期扫描时间仍保留，不执行退款。此时本地缓存记录可能缺失，管理员须结合资金合同 ID 与错误日志中的 `upstream_name`、账号 ID 人工核对上游资源及费用，不能视作资源已自动恢复。
+
+缓存修改使用数据库租约串行化，未提交的有效期保持旧值；进程重启后的恢复只在确认上游状态后回滚未完成修改。账号暂时不支持缓存与账号已删除分别处理，不把临时不可用当作可删除记录。原缓存已确定过期时可作废修改意图。低概率上游状态不明或数据库结算故障的资金合同需要按账本核对，不能仅因租约到期自动退款。缓存绑定表和租约由迁移 303–305 创建，不修改旧图片/视频任务表。
 
 ## 配额与调度
 
 Gemini tier、上游配额和按模型 reset 信息作为账号资格与容量信号。普通账号的 429 响应可以更新账号或模型的 `rate_limited_until`，后续调度在恢复时间前过滤该候选；公共池账号由请求级同账号重试或切号消化 429，不写默认本地账号限流，但管理员显式配置的自定义错误策略仍然优先。实时配额查询失败不应伪造剩余额度。
+
+显式配置 `provider_type=third_party` 的账号保留本站原有第三方冷却规则（默认 5 分钟）；旧账号仅凭非官方 Base URL 被识别为第三方时，优先使用响应明确给出的重试时间，没有重试时间则遵守全局 429 秒级兜底设置（默认 5 秒，可关闭）。两类第三方都不从 Google 每日配额文案推断午夜恢复，官方 AI Studio 与 Vertex 各自规则不变。
 
 显式开启 mixed scheduling 的 Antigravity 账号可以加入 Gemini 分组候选，但仍需满足目标分组、模型、endpoint、额度、并发和凭据约束。普通 Gemini 请求保持 Gemini 协议和计费归属；专用 Antigravity 路由不混入 Gemini 账号。
 

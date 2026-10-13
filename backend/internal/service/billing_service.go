@@ -531,13 +531,18 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown: false,
 	}
 
-	// Gemini 3.6 Flash（Google AI 定价：输入 $1.50、输出 $7.50、缓存输入
-	// $0.15/百万 token）。下方会匹配 Antigravity 的 -high/-low/-medium/-tiered
-	// 别名，避免远端定价不可用时把有 token 的请求记为 $0。
+	// Haiku 5.5 采用独立兜底价，避免退回旧 Haiku 的单价。
+	s.fallbackPrices["claude-haiku-5-5"] = &ModelPricing{
+		InputPricePerToken: 1e-7, OutputPricePerToken: 5e-7,
+		CacheCreationPricePerToken: 1.25e-7, CacheReadPricePerToken: 1e-8,
+		CacheCreation5mPrice: 1.25e-7, CacheCreation1hPrice: 2e-7, SupportsCacheBreakdown: true,
+		LongContextInputThreshold: 100000, LongContextInputMultiplier: 5, LongContextOutputMultiplier: 5,
+	}
+	// Gemini 3.6 Flash 采用当前促销价；兼容分档别名，避免离线时漏记费用。
 	s.fallbackPrices["gemini-3.6-flash"] = &ModelPricing{
-		InputPricePerToken:     1.5e-6,
-		OutputPricePerToken:    7.5e-6,
-		CacheReadPricePerToken: 0.15e-6,
+		InputPricePerToken:     0.75e-6,
+		OutputPricePerToken:    3.75e-6,
+		CacheReadPricePerToken: 0.075e-6,
 		SupportsCacheBreakdown: false,
 	}
 
@@ -1003,6 +1008,9 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 	if strings.Contains(modelLower, "fable-5") || strings.Contains(modelLower, "fable5") {
 		return s.fallbackPrices["claude-fable-5"]
+	}
+	if claude.IsHaiku55Model(modelLower) {
+		return s.fallbackPrices["claude-haiku-5-5"]
 	}
 	if strings.Contains(modelLower, "opus") {
 		if strings.Contains(modelLower, "opus-5") || strings.Contains(modelLower, "opus5") {
@@ -2878,4 +2886,14 @@ func getDefaultGrokImagineVideoPrice(model string, resolution string) (float64, 
 	default:
 		return 0, false
 	}
+}
+
+// CacheStoragePricePerTokenHour 返回显式缓存每 token 每小时美元价格，先查精确配置再使用官方型号兜底。
+func (s *BillingService) CacheStoragePricePerTokenHour(model string) float64 {
+	if s != nil && s.pricingService != nil {
+		if p := s.pricingService.getIdentifiedCacheStoragePricing(model); p != nil && p.CacheStorageCostPerTokenPerHour > 0 && !math.IsInf(p.CacheStorageCostPerTokenPerHour, 0) {
+			return p.CacheStorageCostPerTokenPerHour
+		}
+	}
+	return builtinGeminiCacheStoragePrice(model)
 }

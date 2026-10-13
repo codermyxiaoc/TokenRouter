@@ -9,13 +9,16 @@ import (
 
 // ValidateSonnet55Request 供各协议桥共用映射后的 Sonnet 5.5 参数边界。
 func ValidateSonnet55Request(body []byte, model string) error {
+	if err := claude.ValidateHaiku55Request(body, model); err != nil {
+		return err
+	}
 	return claude.ValidateSonnet55Request(body, model)
 }
 
 // filterSonnet55ToolsetBeta 移除与稳定 computer/browser 工具集不兼容的旧流式 beta。
 // 每个工具自己的 eager_input_streaming 字段仍保持不变。
 func filterSonnet55ToolsetBeta(header string, body []byte, model string) string {
-	if !claude.IsSonnet55Model(model) {
+	if !claude.IsSonnet55Model(model) && !claude.IsHaiku55Model(model) {
 		return header
 	}
 	for _, tool := range gjson.GetBytes(body, "tools").Array() {

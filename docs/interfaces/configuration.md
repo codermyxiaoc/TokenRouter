@@ -63,6 +63,8 @@ OpenAI WS 的 `oauth_max_conns_factor` 与 `apikey_max_conns_factor` 缺省为 5
 
 环境变量优先于 YAML，因此排查“文件修改不生效”时先检查容器环境。不得在日志、错误或管理响应中输出数据库密码、JWT/TOTP secret、OAuth secret、对象存储 secret 或账号凭据。
 
+Gemini 显式缓存有效期受启动配置 `gateway.gemini_cached_content_max_ttl_seconds`（环境变量 `GATEWAY_GEMINI_CACHED_CONTENT_MAX_TTL_SECONDS`）约束，默认及非正或溢出配置的回退值为 86400 秒。第三方账号可另设更低的上游上限；存储价格与费用契约见[Gemini 上游](gemini_upstream.md#gemini_explicit_cache)。
+
 ## 首次初始化
 
 setup 使用 `DATA_DIR > 可写 /app/data > 当前目录` 选择 `config.yaml` 和 `.installed` 的位置。正常情况下，配置文件或安装锁任一存在就不会重新开放初始化；`SKIP_SETUP` 是部署者的显式旁路。修改这套判断必须保持“删除一个文件不能远程强制重装”的防重置边界。
@@ -74,6 +76,8 @@ setup 使用 `DATA_DIR > 可写 /app/data > 当前目录` 选择 `config.yaml` �
 主服务使用 `LoadForBootstrap`，只在引导阶段允许 `jwt.secret` 暂时为空。数据库 repository 初始化会从 `security_secrets` 读取既有 JWT secret，或原子生成并持久化一个新 secret，然后重新执行完整配置校验。多个实例不能各自使用临时随机 JWT key；显式配置与数据库已有 secret 不一致时，以已持久化的安全边界处理，避免滚动部署让会话随机失效。
 
 ## 数据库运行时设置
+
+`upstream_billing_probe_settings` 是管理员专用 JSON 设置，控制[上游声明倍率探测](upstream_billing_probe.md)的全局周期（默认 30 分钟，范围 5–1440 分钟）与运行开关。全局启用不会自动开启账号探测；账号的自动探测和同步倍率开关分别存放在 `extra`，缺省关闭。设置不进入用户公共配置，也不影响现有上游钱包查询或调度权重。
 
 `daily_activity_config` 由系统设置“每日活动”独立保存，默认关闭，包含三类规则各自的 `enabled` 开关（旧配置缺失按开启）、达标门槛和随机奖励上限，以及默认关闭的 `include_redeem_balance`、`include_admin_balance` 两个来源开关；来源只累计对应开关开启后的新增到账，关闭不清除已累计资格，历史流水不补计。首次开启的数据库时间 `started_at` 不可由客户端覆盖，关闭再开也不重置。公开设置及 HTML 注入只返回 `daily_activity_enabled`；详细规则和资格见[每日活动](../domains/daily_activities.md#daily_activity_configuration)。
 

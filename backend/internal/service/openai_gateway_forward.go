@@ -206,7 +206,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		case APIProtocolSystemOne:
 			return nil, fmt.Errorf("Jev models must use the /v1/systemone endpoint")
 		default:
-			return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, tlsRouterMatch)
+			return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, startTime, tlsRouterMatch)
 		}
 	}
 
@@ -215,7 +215,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, reqModel)
 	}
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
-		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, tlsRouterMatch)
+		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, startTime, tlsRouterMatch)
 	}
 	if account.Platform == PlatformOpenAI && (account.Type == AccountTypeAPIKey || account.IsOpenAIOAuthLike()) {
 		normalizedReasoningBody, reasoningChanged, reasoningErr := normalizeOpenAIResponsesReasoningContentReplay(body)

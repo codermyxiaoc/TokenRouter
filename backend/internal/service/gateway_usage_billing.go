@@ -34,21 +34,25 @@ func (s *GatewayService) getUserGroupRateMultiplier(ctx context.Context, userID,
 // RecordUsageInput 记录使用量的输入参数。
 // 异步 worker 只接收计费所需快照，不能持有 ParsedRequest/RequestBodyRef 这类大请求体引用。
 type RecordUsageInput struct {
-	Result             *ForwardResult
-	APIKey             *APIKey
-	User               *User
-	Account            *Account
-	Subscription       *UserSubscription  // 可选：订阅信息
-	InboundEndpoint    string             // 入站端点（客户端请求路径）
-	UpstreamEndpoint   string             // 上游端点（标准化后的上游路径）
-	UserAgent          string             // 请求的 User-Agent
-	IPAddress          string             // 请求的客户端 IP 地址
-	ClientSessionID    string             // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
-	RequestPayloadHash string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
-	RequestBody        []byte             // 原始请求体，用于解析客户端请求的计费推理档位
-	ForceCacheBilling  bool               // 强制缓存计费：将 input_tokens 转为 cache_read 计费（用于粘性会话切换）
-	APIKeyService      APIKeyQuotaUpdater // 可选：用于更新API Key配额
-	QuotaPlatform      string             // user×platform 配额计量平台：handler 在请求 ctx 内经 QuotaPlatform() 算定后传入（后扣运行在 worker 池 background ctx 上，取不到 ForcePlatform）
+	FrozenCacheStorageCost *float64                 // 持久缓存合同冻结的存储分量，防止改价影响统计。
+	FrozenCost             *CostBreakdown           // 仅内部持久资金合同可使用冻结报价。
+	PricingAt              time.Time                // 显式缓存冻结报价时刻，普通请求留空沿用现有时钟。
+	ImageReservation       *ImageBillingReservation // 复用持久资金合同，缓存与图片分别标识请求。
+	Result                 *ForwardResult
+	APIKey                 *APIKey
+	User                   *User
+	Account                *Account
+	Subscription           *UserSubscription  // 可选：订阅信息
+	InboundEndpoint        string             // 入站端点（客户端请求路径）
+	UpstreamEndpoint       string             // 上游端点（标准化后的上游路径）
+	UserAgent              string             // 请求的 User-Agent
+	IPAddress              string             // 请求的客户端 IP 地址
+	ClientSessionID        string             // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
+	RequestPayloadHash     string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
+	RequestBody            []byte             // 原始请求体，用于解析客户端请求的计费推理档位
+	ForceCacheBilling      bool               // 强制缓存计费：将 input_tokens 转为 cache_read 计费（用于粘性会话切换）
+	APIKeyService          APIKeyQuotaUpdater // 可选：用于更新API Key配额
+	QuotaPlatform          string             // user×platform 配额计量平台：handler 在请求 ctx 内经 QuotaPlatform() 算定后传入（后扣运行在 worker 池 background ctx 上，取不到 ForcePlatform）
 
 	ChannelUsageFields // 渠道映射信息（由 handler 在 Forward 前解析）
 }
@@ -117,7 +121,7 @@ func isForcedUsageBillingRequestID(requestID string) bool {
 	return strings.HasPrefix(id, "web_search:") ||
 		strings.HasPrefix(id, "grok-video:") ||
 		strings.HasPrefix(id, "grok_audio:") ||
-		strings.HasPrefix(id, "grok_realtime:")
+		strings.HasPrefix(id, "grok_realtime:") || strings.HasPrefix(id, GeminiCachedContentUsageRequestIDPrefix)
 }
 
 // StableGrokAudioBillingRequestID 为单次 TTS/STT HTTP 调用生成持久用量去重键，优先沿用上游请求 ID。
@@ -553,6 +557,8 @@ func writeUsageLogBestEffort(ctx context.Context, repo UsageLogRepository, usage
 
 // recordUsageOpts 保存请求级计费时刻。长上下文规则已改由模型目录驱动。
 type recordUsageOpts struct {
+	// RequirePricing 仅用于新缓存报价；缺价返回失败，显式零价仍是有效报价。
+	RequirePricing bool
 	// PricingAt 固定本次请求的计费时刻，供渠道分时倍率和高峰倍率共用。
 	PricingAt time.Time
 }
@@ -560,6 +566,7 @@ type recordUsageOpts struct {
 // RecordUsage 记录使用量并扣费（或更新订阅用量）
 func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInput) error {
 	return s.recordUsageCore(ctx, &recordUsageCoreInput{
+		PricingAt: input.PricingAt, ImageReservation: input.ImageReservation, FrozenCost: input.FrozenCost, FrozenCacheStorageCost: input.FrozenCacheStorageCost,
 		Result:             input.Result,
 		APIKey:             input.APIKey,
 		User:               input.User,
@@ -627,21 +634,25 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 
 // recordUsageCoreInput 是 recordUsageCore 的公共输入字段，从两种输入结构体中提取。
 type recordUsageCoreInput struct {
-	Result             *ForwardResult
-	APIKey             *APIKey
-	User               *User
-	Account            *Account
-	Subscription       *UserSubscription
-	InboundEndpoint    string
-	UpstreamEndpoint   string
-	UserAgent          string
-	IPAddress          string
-	ClientSessionID    string
-	RequestPayloadHash string
-	RequestBody        []byte
-	ForceCacheBilling  bool
-	APIKeyService      APIKeyQuotaUpdater
-	QuotaPlatform      string
+	FrozenCacheStorageCost *float64 // 持久缓存合同冻结的存储分量，防止改价影响统计。
+	FrozenCost             *CostBreakdown
+	PricingAt              time.Time
+	ImageReservation       *ImageBillingReservation
+	Result                 *ForwardResult
+	APIKey                 *APIKey
+	User                   *User
+	Account                *Account
+	Subscription           *UserSubscription
+	InboundEndpoint        string
+	UpstreamEndpoint       string
+	UserAgent              string
+	IPAddress              string
+	ClientSessionID        string
+	RequestPayloadHash     string
+	RequestBody            []byte
+	ForceCacheBilling      bool
+	APIKeyService          APIKeyQuotaUpdater
+	QuotaPlatform          string
 	ChannelUsageFields
 }
 
@@ -701,6 +712,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	if s.usageBillingNow != nil {
 		rateNow = s.usageBillingNow()
 	}
+	if !input.PricingAt.IsZero() {
+		rateNow = input.PricingAt
+	}
 	opts.PricingAt = rateNow
 	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, multiplier, rateNow)
 	peakScale, _ := computePeakAwareMultipliers(apiKey, 1, rateNow)
@@ -725,11 +739,19 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// 计算费用
 	cost := s.calculateRecordUsageCost(ctx, result, apiKey, account, billingModel, requestedModel, input.BillingModelSource, input.ChannelMappedModel, multiplier, imageMultiplier, opts)
+	if input.ImageReservation != nil && input.FrozenCost != nil {
+		frozen := *input.FrozenCost
+		cost = &frozen
+	}
 	mediaMode := BillingMode("")
 	if result.ImageCount > 0 {
 		mediaMode = BillingModeImage
 	}
 	allocationRates := resolveUsageBillingAllocationRates(apiKey, cost.BillingMode, mediaMode, subscriptionMultiplier, balanceMultiplier, peakScale)
+	if input.ImageReservation != nil {
+		hold := input.ImageReservation.Hold
+		allocationRates = usageBillingAllocationRates{SubscriptionRateMultiplier: hold.SubscriptionRateMultiplier, SubscriptionRateMultiplierScale: hold.SubscriptionRateMultiplierScale, BalanceRateMultiplier: hold.BalanceRateMultiplier, DisablePlanGroupRateMultiplier: hold.DisablePlanGroupRateMultiplier}
+	}
 
 	// 预填 billing_type 仅用于 simple mode / 持久化前对象，真实扣费结果会在统一扣费后回填。
 	isSubscriptionBilling := subscription != nil
@@ -743,8 +765,12 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	usageLog := s.buildRecordUsageLog(ctx, input, result, apiKey, user, account, subscription,
 		requestedModel, multiplier, imageMultiplier, accountRateMultiplier, billingType, cacheTTLOverridden, cost, opts)
 
-	// 计算账号统计定价费用（Qoder 会先按原始请求 alias、再按渠道 route key / 最终 upstream 匹配自定义规则）
-	if apiKey.GroupID != nil {
+	// 计算账号统计定价费用；冻结的存储费用与创建时的合同保持一致。
+	storageCost := s.cacheStorageCost(result, billingModel)
+	if input.ImageReservation != nil && input.FrozenCacheStorageCost != nil {
+		storageCost = *input.FrozenCacheStorageCost
+	}
+	if apiKey.GroupID != nil && !isCacheStorageOnlyResult(result) {
 		applyAccountStatsCost(ctx, usageLog, s.channelService, s.billingService,
 			account.ID, *apiKey.GroupID, result.UpstreamModel, requestedModel, input.ChannelMappedModel,
 			// Anthropic's input_tokens excludes cache_read and cache_creation (billed separately);
@@ -756,8 +782,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 				CacheReadTokens:     result.Usage.CacheReadInputTokens,
 				ImageOutputTokens:   result.Usage.ImageOutputTokens,
 			},
-			cost.TotalCost,
+			cost.TotalCost-storageCost,
 		)
+		addCacheStorageToAccountStatsCost(usageLog, storageCost)
 	}
 
 	simpleModeKeyRateLimitOnly := simpleModeKeyRateLimitBillingEnabled(s.cfg, apiKey)
@@ -777,6 +804,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 	requestID := usageLog.RequestID
 	_, billingErr := applyUsageBilling(ctx, requestID, usageLog, &usageBillingParams{
+		ImageReservation:                input.ImageReservation,
 		SimpleModeKeyRateLimitOnly:      simpleModeKeyRateLimitOnly,
 		Cost:                            cost,
 		User:                            user,
@@ -821,6 +849,11 @@ func (s *GatewayService) calculateRecordUsageCost(
 	if opts == nil {
 		opts = &recordUsageOpts{}
 	}
+	// 延长缓存只收存储费，不能被渠道按次价当作一次模型调用。
+	if isCacheStorageOnlyResult(result) {
+		cost := s.cacheStorageCost(result, billingModel)
+		return &CostBreakdown{TotalCost: cost, ActualCost: cost * multiplier, BillingMode: string(BillingModeToken)}
+	}
 	// 图片生成：渠道定价为令牌计费时走令牌路径，否则走图片计费
 	if result.ImageCount > 0 {
 		if resolved, pricingModel := s.resolveChannelPricingForUsage(ctx, billingModel, requestedModel, billingModelSource, channelMappedModel, result.UpstreamModel, apiKey, account); resolved != nil && resolved.Mode == BillingModeToken {
@@ -861,6 +894,9 @@ func (s *GatewayService) calculateRecordUsageCost(
 
 	// Token 费用与搜索附加费分别计算，搜索不会替代模型本身的 token 费用。
 	tokenCost := s.calculateTokenCost(ctx, result, apiKey, account, billingModel, requestedModel, billingModelSource, channelMappedModel, multiplier, opts)
+	if opts.RequirePricing && tokenCost == nil {
+		return nil
+	}
 	if result.SearchCount > 0 {
 		price := groupSearchPricePer1kFromAPIKey(apiKey)
 		if price != nil && *price == 0 {
@@ -874,6 +910,13 @@ func (s *GatewayService) calculateRecordUsageCost(
 			tokenCost.TotalCost += searchCost.TotalCost
 			tokenCost.ActualCost += searchCost.ActualCost
 		}
+	}
+	if storageCost := s.cacheStorageCost(result, billingModel); storageCost > 0 {
+		if tokenCost == nil {
+			tokenCost = &CostBreakdown{BillingMode: string(BillingModeToken)}
+		}
+		tokenCost.TotalCost += storageCost
+		tokenCost.ActualCost += storageCost * multiplier
 	}
 	return tokenCost
 }
@@ -1047,6 +1090,9 @@ func (s *GatewayService) calculateTokenCost(
 	}
 	if err != nil {
 		logger.LegacyPrintf("service.gateway", "Calculate cost failed: %v", err)
+		if opts.RequirePricing {
+			return nil
+		}
 		return &CostBreakdown{ActualCost: 0}
 	}
 	return cost

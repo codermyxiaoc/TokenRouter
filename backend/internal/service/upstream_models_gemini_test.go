@@ -166,7 +166,7 @@ func TestFetchUpstreamSupportedModelsGeminiFallbackPreservesRequestSettings(t *t
 			account := geminiModelSyncAccount("https://relay.example:8443/customer/gateway" + suffix)
 			proxyID := int64(12)
 			account.ProxyID = &proxyID
-			account.Proxy = &Proxy{Protocol: "http", Host: "proxy.example", Port: 8080, Username: "user", Password: "pass"}
+			account.Proxy = &Proxy{ID: proxyID, Status: StatusActive, Protocol: "http", Host: "proxy.example", Port: 8080, Username: "user", Password: "pass"}
 			type contextKey struct{}
 			ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), contextKey{}, "request-marker"), time.Minute)
 			defer cancel()
@@ -177,6 +177,7 @@ func TestFetchUpstreamSupportedModelsGeminiFallbackPreservesRequestSettings(t *t
 			require.Equal(t, "https://relay.example:8443/customer/gateway/v1beta/models", upstream.calls[0].request.URL.String())
 			require.Equal(t, "https://relay.example:8443/customer/gateway/v1/models", upstream.calls[1].request.URL.String())
 			for _, call := range upstream.calls {
+				require.True(t, HTTPUpstreamRedirectsDisabled(call.request.Context()))
 				require.Equal(t, http.MethodGet, call.request.Method)
 				require.Equal(t, "application/json", call.request.Header.Get("Accept"))
 				require.Equal(t, "http://user:pass@proxy.example:8080", call.proxyURL)

@@ -264,7 +264,9 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	// temperature：真实 Claude Code CLI 总是发送 temperature（默认 1，客户端可覆盖）。
 	// 之前的实现直接 delete 会导致 payload 缺字段，与真实 CLI 字节级不一致。
 	// 策略：客户端传了什么就透传；没传则补默认 1。
-	if !gjson.GetBytes(out, "temperature").Exists() {
+	// 采样锁定型号只传 top_p 时不补 temperature，避免网关生成冲突参数。
+	samplingLocked := claude.IsSonnet55Model(modelID) || claude.IsHaiku55Model(modelID)
+	if !gjson.GetBytes(out, "temperature").Exists() && (!samplingLocked || !gjson.GetBytes(out, "top_p").Exists()) {
 		if next, ok := setJSONValueBytes(out, "temperature", 1); ok {
 			out = next
 			modified = true

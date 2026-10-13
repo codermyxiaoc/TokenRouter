@@ -784,6 +784,16 @@ export interface ReasoningEffortMapping {
   model?: string
 }
 
+/** 分组名称与描述在某个语言下的译文；字段为空表示沿用分组自身的 name/description。 */
+export interface GroupLocaleText {
+  name?: string
+  description?: string
+}
+
+/** 以语言代码（en、zh…）为键的分组文案译文。 */
+export type GroupI18n = Record<string, GroupLocaleText>
+
+// 用户侧接口返回的 name / description 已由后端按请求语言（Accept-Language）选好
 export interface Group {
   id: number
   name: string
@@ -851,6 +861,8 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
+  // 管理接口保留默认文案，译文单独维护。
+  i18n?: GroupI18n
   // 仅管理端可配置，公开分组接口不返回该策略。
   force_openai_fast?: boolean
   // 仅管理端可配置，公开分组接口不返回该计费策略。
@@ -1012,6 +1024,7 @@ export interface UpdateApiKeyRequest {
 }
 
 export interface CreateGroupRequest {
+  i18n?: GroupI18n
   name: string
   description?: string | null
   platform?: GroupPlatform
@@ -1077,6 +1090,7 @@ export interface CreateGroupRequest {
 }
 
 export interface UpdateGroupRequest {
+  i18n?: GroupI18n
   name?: string
   description?: string | null
   platform?: GroupPlatform
@@ -1240,6 +1254,7 @@ export interface ProxyQualityCheckResult {
 
 // Gemini credentials structure for OAuth and API Key authentication
 export interface GeminiCredentials {
+  base_url?: string
   // API Key authentication
   api_key?: string
   // Gemini API Key 的接入来源；缺失值兼容历史官方 AI Studio 账号。
@@ -1268,11 +1283,15 @@ export interface GeminiCredentials {
   model_mapping?: Record<string, string>
 }
 
+export type TempUnschedulableScope = 'account' | 'model'
+
 export interface TempUnschedulableRule {
   error_code: number
   keywords: string[]
   duration_minutes: number
   description: string
+  // 作用范围：account 暂停整个账号，model 只冷却本次请求的模型；缺省时 401 按 account、其余按 model 处理。
+  scope?: TempUnschedulableScope
 }
 
 export interface TempUnschedulableState {
@@ -1280,6 +1299,8 @@ export interface TempUnschedulableState {
   triggered_at_unix: number
   status_code: number
   matched_keyword: string
+  scope?: TempUnschedulableScope
+  model?: string
   rule_index: number
   error_message: string
   trigger_count?: number
@@ -1342,6 +1363,50 @@ export interface OllamaCloudUsageSettings {
   debounce_minutes: number
 }
 
+export interface UpstreamBillingData {
+  object: 'sub2api.key_billing'
+  schema_version: 1
+  billing_scope: 'token'
+  group_rate_multiplier: number
+  user_rate_multiplier?: number
+  resolved_rate_multiplier: number
+  peak_rate_enabled: boolean
+  peak_start?: string
+  peak_end?: string
+  peak_rate_multiplier?: number
+  applied_peak_multiplier?: number
+  effective_rate_multiplier: number
+  timezone?: string
+  observed_at: string
+}
+
+export type UpstreamBillingProbeStatus = 'ok' | 'unsupported' | 'failed'
+
+export interface UpstreamBillingProbeSnapshot {
+  status: UpstreamBillingProbeStatus
+  data?: UpstreamBillingData
+  received_at?: string
+  fresh_until?: string
+  last_attempt_at: string
+  next_probe_at: string
+  failure_count?: number
+  http_status?: number
+  last_error?: string
+  // 本次探测写入的账号倍率，未同步时省略。
+  synced_rate_multiplier?: number
+}
+
+export interface UpstreamBillingProbeSettings {
+  enabled: boolean
+  interval_minutes: number
+}
+
+export interface UpstreamBillingProbeResult {
+  account_id: number
+  snapshot?: UpstreamBillingProbeSnapshot
+  error?: string
+}
+
 export interface Account {
   id: number
   name: string
@@ -1358,6 +1423,9 @@ export interface Account {
   ollama_cloud_usage?: OllamaCloudUsageState
   // Extra 包含 Codex 用量、OpenAI 文本协议、两类 Compact 能力和模型级限流状态等扩展字段。
   extra?: (CodexUsageSnapshot & OpenAITextProtocolState & OpenAICompactState & OpenAINativeCompactionV2State & {
+    upstream_billing_probe_enabled?: boolean
+    upstream_billing_rate_sync_enabled?: boolean
+    upstream_billing_probe?: UpstreamBillingProbeSnapshot
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
     // 管理端只读积分与邀请资格快照，不参与本地计费。
@@ -1797,6 +1865,8 @@ export interface OpenAITextProtocolState {
 }
 
 export interface CreateAccountRequest {
+  upstream_billing_probe_enabled?: boolean
+  upstream_billing_rate_sync_enabled?: boolean
   name: string
   notes?: string | null
   platform: AccountPlatform
@@ -1815,6 +1885,8 @@ export interface CreateAccountRequest {
 }
 
 export interface UpdateAccountRequest {
+  upstream_billing_probe_enabled?: boolean
+  upstream_billing_rate_sync_enabled?: boolean
   name?: string
   notes?: string | null
   type?: AccountType

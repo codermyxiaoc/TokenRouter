@@ -80,6 +80,7 @@ func (s *SubscriptionService) EnrichSubscriptionPlanGroups(ctx context.Context, 
 			if s.groupRepo != nil {
 				if resolved, err := s.groupRepo.GetByIDLite(ctx, groupID); err == nil && resolved != nil {
 					group.Name = resolved.Name
+					group.I18n = resolved.I18n
 					group.Platform = resolved.Platform
 					group.DisplayBrand = resolved.DisplayBrand
 					rateMultiplier := resolved.RateMultiplier

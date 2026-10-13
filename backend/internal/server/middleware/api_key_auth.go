@@ -204,6 +204,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		applyAPIKeyModelRedirect(c, apiKey)
 		// 批任务管理只读取已有数据或释放冻结；即使任务耗尽额度，结果仍应可取回或取消。
 		skipBilling := isAPIKeyUsageRequest(c.Request.Method, c.Request.URL.Path) ||
+			isGeminiCacheNonConsumingRequest(c.Request.Method, c.Request.URL.Path) ||
 			isVideoTaskBillingBypassRequest(c.Request.Method, c.Request.URL.Path, apiKey) ||
 			isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path) ||
 			isSeedanceTaskManagementRequest(c.Request.Method, c.Request.URL.Path) ||
@@ -398,9 +399,31 @@ func isBatchImageBillingBypassRequest(method, path string) bool {
 	return path != "/v1/images/batches/models" && isBatchImageManagementRequest(method, path)
 }
 
+// isGeminiCacheNonConsumingRequest 只放行已付费缓存的查询和删除，不放行创建或延长 TTL。
+// 精确校验资源路径；基础鉴权、分组权限和处理器内的资源归属校验仍照常执行。
+func isGeminiCacheNonConsumingRequest(method, path string) bool {
+	const root = "/v1beta/cachedContents"
+	if path == root {
+		return method == http.MethodGet
+	}
+	if method != http.MethodGet && method != http.MethodDelete {
+		return false
+	}
+	if !strings.HasPrefix(path, root+"/") {
+		return false
+	}
+	id := strings.TrimPrefix(path, root+"/")
+	parsedID, ok := service.ParseGeminiCachedContentPublicID(id)
+	// 解析器兼容完整资源名和首尾空白，网关豁免必须限定为原样合法的单段 ID。
+	return ok && parsedID == id
+}
+
 // isAPIKeyNonConsumingRequest 标识只读取已有状态或释放资源的网关请求。
 // 未知路径默认视为会产生消费，避免新增路由自动绕过团队限额。
 func isAPIKeyNonConsumingRequest(method, path string) bool {
+	if isGeminiCacheNonConsumingRequest(method, path) {
+		return true
+	}
 	path = strings.TrimRight(path, "/")
 	if isVideoTaskManagementRequest(method, path) || isAsyncImageTaskRead(method, path) || isSeedanceTaskManagementRequest(method, path) {
 		return true

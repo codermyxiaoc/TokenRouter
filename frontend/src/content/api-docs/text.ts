@@ -34,6 +34,7 @@ const geminiParameters: ApiDocParameter[] = [
   { name: 'contents', type: 'array', required: true, description: 'Body · 每项包含 role（user / model）及 parts。文本 part 使用 {text:"你好"}，多模态结构遵循 Gemini 原生协议。' },
   { name: 'systemInstruction', type: 'object', required: false, description: 'Body · 系统指令，例如 {parts:[{text:"简洁回答"}]}。' },
   { name: 'generationConfig', type: 'object', required: false, description: 'Body · temperature、maxOutputTokens、responseMimeType、thinkingConfig 等模型支持的生成配置。图片输出仅在对应图片模型及账号能力可用时支持。' },
+  { name: 'cachedContent', type: 'string', required: false, description: 'Body · 本站 /v1beta/cachedContents 创建响应中的 name。仅固定 Gemini 分组 Key 可用，必须使用原 Key、原分组和同一模型；复合 Key、智能路由与 Antigravity 不支持。详见 Gemini 显式缓存指南。' },
   { name: 'tools / toolConfig / safetySettings', type: 'array / object / array', required: false, description: 'Body · Gemini 原生工具、工具选择和安全配置。Antigravity 兼容转换有独立能力限制，不能假定所有内置工具均可组合。' }
 ]
 const geminiRequest = JSON.stringify({ contents: [{ role: 'user', parts: [{ text: '用一句话介绍你自己。' }] }], generationConfig: { maxOutputTokens: 512 } }, null, 2)

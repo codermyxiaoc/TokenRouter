@@ -134,9 +134,15 @@ type ModelMarketplaceGroup struct {
 	Models                     []ModelMarketplaceModel       `json:"models"`
 }
 
-func ModelMarketplaceGroupsFromService(groups []service.ModelMarketplaceGroup) []ModelMarketplaceGroup {
+// ModelMarketplaceGroupsFromService 按请求语言翻译展示字段，不改变模型与定价。
+func ModelMarketplaceGroupsFromService(groups []service.ModelMarketplaceGroup, languages ...string) []ModelMarketplaceGroup {
+	language := ""
+	if len(languages) > 0 {
+		language = languages[0]
+	}
 	out := make([]ModelMarketplaceGroup, 0, len(groups))
 	for _, group := range groups {
+		name, description := group.I18n.Localize(language, group.Name, group.Description)
 		models := make([]ModelMarketplaceModel, 0, len(group.Models))
 		for _, model := range group.Models {
 			endpoints := make([]ModelMarketplaceVideoEndpoint, 0, len(model.VideoEndpoints))
@@ -156,8 +162,8 @@ func ModelMarketplaceGroupsFromService(groups []service.ModelMarketplaceGroup) [
 
 		out = append(out, ModelMarketplaceGroup{
 			ID:                         group.ID,
-			Name:                       group.Name,
-			Description:                group.Description,
+			Name:                       name,
+			Description:                description,
 			Platform:                   group.Platform,
 			DisplayBrand:               group.DisplayBrand,
 			SortOrder:                  group.SortOrder,

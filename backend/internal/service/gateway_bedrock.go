@@ -132,7 +132,8 @@ func (s *GatewayService) forwardBedrock(
 
 	// 错误/failover 处理
 	if resp.StatusCode >= 400 {
-		return s.handleBedrockUpstreamErrors(ctx, resp, c, account, mappedModel)
+		// 冷却键须与调度查询一致；Bedrock 协议转换出的区域模型 ID 不是账号映射键。
+		return s.handleBedrockUpstreamErrors(ctx, resp, c, account, account.GetMappedModel(reqModel))
 	}
 
 	// Bedrock 分支绕过通用 Forward 成功路径，这里保持上游接受回调语义一致。
@@ -263,7 +264,8 @@ func (s *GatewayService) executeBedrockUpstream(
 	return resp, nil
 }
 
-// handleBedrockUpstreamErrors 处理 Bedrock 上游 4xx/5xx 错误（failover + 错误响应）
+// handleBedrockUpstreamErrors 处理 Bedrock 上游 4xx/5xx 错误（failover + 错误响应）；
+// mappedModel 是调度器按模型隔离账号状态时使用的模型键（account.GetMappedModel 的结果）。
 func (s *GatewayService) handleBedrockUpstreamErrors(
 	ctx context.Context,
 	resp *http.Response,

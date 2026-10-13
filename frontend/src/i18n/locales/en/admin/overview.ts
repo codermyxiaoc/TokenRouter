@@ -1005,6 +1005,12 @@ affiliates: {
         yes: 'Yes',
         no: 'No'
       },
+      i18nField: {
+        default: 'Default',
+        add: 'Add {language} version',
+        edit: 'Edit {language} version',
+        placeholder: '{language} version; leave empty to show the default text'
+      },
       enterGroupName: 'Enter group name',
       optionalDescription: 'Optional description',
       displayBrandPlaceholder: 'e.g. DeepSeek / Claude / OpenAI',

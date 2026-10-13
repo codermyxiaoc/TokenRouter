@@ -117,16 +117,17 @@ type APIKeyCompositeGroup struct {
 }
 
 type Group struct {
-	ID             int64          `json:"id"`
-	Name           string         `json:"name"`
-	Description    string         `json:"description"`
-	Platform       string         `json:"platform"`
-	DisplayBrand   string         `json:"display_brand"`
-	RateMultiplier float64        `json:"rate_multiplier"`
-	Capacity       *GroupCapacity `json:"capacity,omitempty"`
-	IsExclusive    bool           `json:"is_exclusive"`
-	IsDefault      bool           `json:"is_default"`
-	Status         string         `json:"status"`
+	I18n           domain.GroupI18n `json:"i18n,omitempty"` // 用户响应经 Localized 清除此字段。
+	ID             int64            `json:"id"`
+	Name           string           `json:"name"`
+	Description    string           `json:"description"`
+	Platform       string           `json:"platform"`
+	DisplayBrand   string           `json:"display_brand"`
+	RateMultiplier float64          `json:"rate_multiplier"`
+	Capacity       *GroupCapacity   `json:"capacity,omitempty"`
+	IsExclusive    bool             `json:"is_exclusive"`
+	IsDefault      bool             `json:"is_default"`
+	Status         string           `json:"status"`
 	// 会话隔离开启后，目标分组会拒绝其它分组已归属的显式会话切入。
 	SessionIsolationEnabled   bool `json:"session_isolation_enabled"`
 	LongContextPricingEnabled bool `json:"long_context_pricing_enabled"`
@@ -226,11 +227,12 @@ type SubscriptionPlan struct {
 }
 
 type SubscriptionPlanGroup struct {
-	ID             int64    `json:"id"`
-	Name           string   `json:"name"`
-	Platform       string   `json:"platform,omitempty"`
-	DisplayBrand   string   `json:"display_brand,omitempty"`
-	RateMultiplier *float64 `json:"rate_multiplier,omitempty"`
+	I18n           domain.GroupI18n `json:"-"` // 仅响应本地化时使用。
+	ID             int64            `json:"id"`
+	Name           string           `json:"name"`
+	Platform       string           `json:"platform,omitempty"`
+	DisplayBrand   string           `json:"display_brand,omitempty"`
+	RateMultiplier *float64         `json:"rate_multiplier,omitempty"`
 }
 
 // AdminGroup 是管理员接口使用的 group DTO（包含敏感/内部字段）。

@@ -100,15 +100,12 @@ const duplicateAccountOperationIDExtraKey = "duplicate_operation_id"
 
 const (
 	// 废弃账号扩展键只用于阻止历史客户端重新写入，业务代码不得再读取这些值。
-	deprecatedUpstreamBillingProbeExtraKey        = "upstream_billing_probe"
-	deprecatedUpstreamBillingProbeEnabledExtraKey = "upstream_billing_probe_enabled"
-	deprecatedOpenAILongContextBillingExtraKey    = "openai_long_context_billing_enabled"
+	deprecatedOpenAILongContextBillingExtraKey = "openai_long_context_billing_enabled"
 )
 
-// DiscardDeprecatedAccountExtra 静默移除旧客户端可能继续提交的废弃账号扩展键。
+// DiscardDeprecatedAccountExtra 移除废弃配置和普通写入不得伪造的探测快照；有效开关保留。
 func DiscardDeprecatedAccountExtra(extra map[string]any) {
-	delete(extra, deprecatedUpstreamBillingProbeExtraKey)
-	delete(extra, deprecatedUpstreamBillingProbeEnabledExtraKey)
+	delete(extra, UpstreamBillingProbeExtraKey)
 	delete(extra, deprecatedOpenAILongContextBillingExtraKey)
 }
 
@@ -169,53 +166,52 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	// Codex 收敛 seed 由系统按账号生成，复制账号时必须重新生成。
 	codexFingerprintSeedExtraKey: {},
 	// 上游观测、能力探测与临时调度状态不属于可复制配置。
-	"model_rate_limits":                           {},
-	"session_window_utilization":                  {},
-	"passive_usage_7d_utilization":                {},
-	"passive_usage_7d_reset":                      {},
-	"passive_usage_7d_oi_utilization":             {},
-	"passive_usage_7d_oi_reset":                   {},
-	"passive_usage_sampled_at":                    {},
-	"grok_usage_snapshot":                         {},
-	"grok_billing_snapshot":                       {},
-	"openai_responses_supported":                  {},
-	"openai_responses_probe_status":               {},
-	"openai_native_compaction_v2_supported":       {},
-	"openai_native_compaction_v2_checked_at":      {},
-	"openai_native_compaction_v2_last_status":     {},
-	"openai_native_compaction_v2_last_error":      {},
-	"openai_compact_supported":                    {},
-	"openai_compact_checked_at":                   {},
-	"openai_compact_last_status":                  {},
-	"openai_compact_last_error":                   {},
-	"qoder_quota_snapshot":                        {},
-	"qoder_quota_updated_at":                      {},
-	CNUsageMonitorSnapshotExtraKey:                {},
-	"antigravity_credits_overages":                {},
-	"antigravity_force_token_refresh":             {},
-	"antigravity_force_token_refresh_at":          {},
-	"antigravity_force_token_refresh_reason":      {},
-	"drive_storage_limit":                         {},
-	"drive_storage_usage":                         {},
-	"drive_tier_updated_at":                       {},
-	"codex_primary_used_percent":                  {},
-	"codex_primary_reset_after_seconds":           {},
-	"codex_primary_window_minutes":                {},
-	"codex_secondary_used_percent":                {},
-	"codex_secondary_reset_after_seconds":         {},
-	"codex_secondary_window_minutes":              {},
-	"codex_primary_over_secondary_percent":        {},
-	"codex_usage_updated_at":                      {},
-	"codex_5h_used_percent":                       {},
-	"codex_5h_reset_after_seconds":                {},
-	"codex_5h_window_minutes":                     {},
-	"codex_5h_reset_at":                           {},
-	"codex_7d_used_percent":                       {},
-	"codex_7d_reset_after_seconds":                {},
-	"codex_7d_window_minutes":                     {},
-	"codex_7d_reset_at":                           {},
-	deprecatedUpstreamBillingProbeExtraKey:        {},
-	deprecatedUpstreamBillingProbeEnabledExtraKey: {},
+	"model_rate_limits":                       {},
+	"session_window_utilization":              {},
+	"passive_usage_7d_utilization":            {},
+	"passive_usage_7d_reset":                  {},
+	"passive_usage_7d_oi_utilization":         {},
+	"passive_usage_7d_oi_reset":               {},
+	"passive_usage_sampled_at":                {},
+	"grok_usage_snapshot":                     {},
+	"grok_billing_snapshot":                   {},
+	"openai_responses_supported":              {},
+	"openai_responses_probe_status":           {},
+	"openai_native_compaction_v2_supported":   {},
+	"openai_native_compaction_v2_checked_at":  {},
+	"openai_native_compaction_v2_last_status": {},
+	"openai_native_compaction_v2_last_error":  {},
+	"openai_compact_supported":                {},
+	"openai_compact_checked_at":               {},
+	"openai_compact_last_status":              {},
+	"openai_compact_last_error":               {},
+	"qoder_quota_snapshot":                    {},
+	"qoder_quota_updated_at":                  {},
+	CNUsageMonitorSnapshotExtraKey:            {},
+	"antigravity_credits_overages":            {},
+	"antigravity_force_token_refresh":         {},
+	"antigravity_force_token_refresh_at":      {},
+	"antigravity_force_token_refresh_reason":  {},
+	"drive_storage_limit":                     {},
+	"drive_storage_usage":                     {},
+	"drive_tier_updated_at":                   {},
+	"codex_primary_used_percent":              {},
+	"codex_primary_reset_after_seconds":       {},
+	"codex_primary_window_minutes":            {},
+	"codex_secondary_used_percent":            {},
+	"codex_secondary_reset_after_seconds":     {},
+	"codex_secondary_window_minutes":          {},
+	"codex_primary_over_secondary_percent":    {},
+	"codex_usage_updated_at":                  {},
+	"codex_5h_used_percent":                   {},
+	"codex_5h_reset_after_seconds":            {},
+	"codex_5h_window_minutes":                 {},
+	"codex_5h_reset_at":                       {},
+	"codex_7d_used_percent":                   {},
+	"codex_7d_reset_after_seconds":            {},
+	"codex_7d_window_minutes":                 {},
+	"codex_7d_reset_at":                       {},
+	UpstreamBillingProbeExtraKey:              {},
 }
 
 func duplicateAccountExtra(value map[string]any) (map[string]any, error) {
@@ -599,6 +595,10 @@ func validateGeminiThirdPartyBaseURL(account *Account) error {
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	probeEnabled, rateSyncEnabled, switchErr := normalizeBillingProbeSwitches(input.Extra, input.UpstreamBillingProbeEnabled, input.UpstreamBillingRateSyncEnabled)
+	if switchErr != nil {
+		return nil, switchErr
+	}
 	accountExtra := maps.Clone(input.Extra)
 	DiscardDeprecatedAccountExtra(accountExtra)
 	if err := NormalizeUpstreamUsageExtra(accountExtra); err != nil {
@@ -651,6 +651,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err := validateQoderCosyCredentials(ctx, account, s.httpUpstream, s.tlsFPProfileService); err != nil {
 		return nil, err
 	}
+	if err := applyBillingProbeSwitches(account, probeEnabled, rateSyncEnabled); err != nil {
+		return nil, err
+	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
 	}
@@ -695,6 +698,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	probeEnabled, rateSyncEnabled, switchErr := normalizeBillingProbeSwitches(nil, input.UpstreamBillingProbeEnabled, input.UpstreamBillingRateSyncEnabled)
+	if switchErr != nil {
+		return nil, switchErr
+	}
+	previousBillingRate := account.BillingRateMultiplier()
+	previousBillingExtra := maps.Clone(account.Extra)
 	previousCNUsageIdentity := cnUsageMonitorIdentityFingerprint(account)
 	originalQoderSite, originalQoderSiteErr := qoderSiteForAccount(account)
 	originalQoderPAT := strings.TrimSpace(account.GetCredential("pat"))
@@ -830,6 +839,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				}
 			}
 		}
+		// 旧客户端整份 Extra 不能重新开启或关闭未明确编辑的倍率开关。
+		for _, key := range []string{UpstreamBillingProbeEnabledExtraKey, UpstreamBillingRateSyncEnabledExtraKey} {
+			delete(normalizedExtra, key)
+			if value, ok := previousBillingExtra[key]; ok {
+				normalizedExtra[key] = value
+			}
+		}
 		normalizedExtra = prepareCodexFingerprintExtraForUpdate(account, normalizedExtra)
 		account.Extra = normalizedExtra
 		if account.Platform == PlatformAntigravity && wasOveragesEnabled && !account.IsOveragesEnabled() {
@@ -890,6 +906,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Priority != nil {
 		account.Priority = *input.Priority
 	}
+	if err := applyBillingProbeSwitches(account, probeEnabled, rateSyncEnabled); err != nil {
+		return nil, err
+	}
+	if input.RateMultiplier != nil && upstreamBillingRateSyncEnabled(account) && *input.RateMultiplier != previousBillingRate {
+		return nil, ErrUpstreamBillingRateSyncConflict
+	}
 	if input.RateMultiplier != nil {
 		if *input.RateMultiplier < 0 {
 			return nil, errors.New("rate_multiplier must be >= 0")
@@ -946,8 +968,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err := validateQoderCosyCredentialsWithOptions(ctx, account, s.httpUpstream, s.tlsFPProfileService, deferQoderPATValidation); err != nil {
 		return nil, err
 	}
-	if err := s.accountRepo.Update(ctx, account); err != nil {
-		return nil, err
+	var persistErr error
+	if writer, ok := s.accountRepo.(accountBillingSettingsWriter); ok {
+		persistErr = writer.UpdateWithAccountBillingSettings(ctx, account, probeEnabled, rateSyncEnabled, input.RateMultiplier)
+	} else {
+		persistErr = s.accountRepo.Update(ctx, account)
+	}
+	if persistErr != nil {
+		return nil, persistErr
 	}
 
 	// 将 proxy 变更传播到 spark 影子账号（同步；Update 内部已触发调度快照）。
@@ -976,6 +1004,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对账号 Extra JSONB 做 key 级合并，避免覆盖运行态或持久化配置键。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
+	delete(updates, UpstreamBillingProbeEnabledExtraKey)
+	delete(updates, UpstreamBillingRateSyncEnabledExtraKey)
+
 	DiscardDeprecatedAccountExtra(updates)
 	if err := NormalizeUpstreamUsageExtra(updates); err != nil {
 		return err
@@ -1008,6 +1039,26 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts 在单次请求中更新多个账号。
 // 凭据和 extra 使用键级合并，不覆盖整个对象。
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	probeEnabled, rateSyncEnabled, switchErr := normalizeBillingProbeSwitches(nil, input.UpstreamBillingProbeEnabled, input.UpstreamBillingRateSyncEnabled)
+	if switchErr != nil {
+		return nil, switchErr
+	}
+	input.Extra = maps.Clone(input.Extra)
+	delete(input.Extra, UpstreamBillingProbeEnabledExtraKey)
+	delete(input.Extra, UpstreamBillingRateSyncEnabledExtraKey)
+
+	if probeEnabled != nil || rateSyncEnabled != nil {
+		input.Extra = maps.Clone(input.Extra)
+		if input.Extra == nil {
+			input.Extra = map[string]any{}
+		}
+		if probeEnabled != nil {
+			input.Extra[UpstreamBillingProbeEnabledExtraKey] = *probeEnabled
+		}
+		if rateSyncEnabled != nil {
+			input.Extra[UpstreamBillingRateSyncEnabledExtraKey] = *rateSyncEnabled
+		}
+	}
 	// 受管会话状态只能通过专用类型接口更新，废弃账号扩展字段直接丢弃。
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	DiscardDeprecatedAccountExtra(input.Extra)
@@ -1046,12 +1097,24 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
 	hasOpenAIConfigPatch := hasOpenAIConfigurationPatch(input.Credentials, input.Extra)
-	if len(input.Credentials) > 0 || input.ProxyID != nil || input.GroupIDs != nil || needMixedChannelCheck || hasOpenAIConfigPatch {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || input.GroupIDs != nil || needMixedChannelCheck || hasOpenAIConfigPatch || probeEnabled != nil || rateSyncEnabled != nil || input.RateMultiplier != nil {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
 		}
 		cachedTargets = loaded
+	}
+	for _, account := range cachedTargets {
+		if account == nil {
+			continue
+		}
+		prospective := *account
+		if err := applyBillingProbeSwitches(&prospective, probeEnabled, rateSyncEnabled); err != nil {
+			return nil, err
+		}
+		if input.RateMultiplier != nil && upstreamBillingRateSyncEnabled(&prospective) && *input.RateMultiplier != account.BillingRateMultiplier() {
+			return nil, ErrUpstreamBillingRateSyncBulkConflict
+		}
 	}
 	if input.GroupIDs != nil {
 		platforms := make([]string, 0, len(cachedTargets))

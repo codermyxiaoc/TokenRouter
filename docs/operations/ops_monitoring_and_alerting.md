@@ -24,6 +24,8 @@ OpenAI 原生 Responses 与透传流的已确认最终上游失败，在客户�
 
 Gemini 原生 2xx 中的错误信封按语义状态登记，正常 finishReason 不记为上游失败。promptFeedback.blockReason 和内容过滤类 finishReason 独立按请求级 400 记录，不继承此前 attempt 的上游归因或监控跳过状态；此前可恢复的上游错误另存恢复记录。非流聚合已读到真实错误后即使又发生读取异常，也保留已观测错误，不能被泛化读错误替代。具体边界见[Gemini 上游](../interfaces/gemini_upstream.md#错误与诊断)。
 
+Gemini 原生的 Google 错误体没有 OpenAI/Claude 的 `type` 字段，因此 handler 在回写时登记本地错误分类：参数、鉴权、配额与并发错误保持客户端归因，管理员未配置存储价格、持久化失败等保持平台归因。缺失或失效的显式缓存按请求级错误统计，并保留上游原始状态供诊断；不会因此停用整个账号或错误拉低账号 SLA。
+
 `OpsMetricsCollector` 在 Ops 和 monitoring 开关启用时周期采集数据库、Redis、主机/容器、账号负载和运行时指标。多实例通过 Redis leader lock，必要路径可用 PostgreSQL advisory lock，确保一个周期只持久化一次；运行结果写 job heartbeat、耗时和错误。
 
 系统日志 sink 与 request/error capture 使用有界队列。拥塞时按各自策略丢弃或降级，并累计 dropped/health 计数；它们不得反压网关核心转发。系统日志落库失败会执行 2 秒起、60 秒封顶的指数退避，退避窗口内的批次计入 dropped 而不访问数据库，成功后立即清除失败状态。敏感字段在进入存储前清理，request ID、平台、Group、账号和 endpoint 用于关联。

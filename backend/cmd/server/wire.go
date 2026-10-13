@@ -101,6 +101,7 @@ func provideCleanup(
 	announcementExpiry *service.AnnouncementExpiryService,
 	usageCleanup *service.UsageCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
+	geminiCachedContent *service.GeminiCachedContentService,
 	batchImageCleanup *service.BatchImageCleanupService,
 	batchImageWorker *service.BatchImageWorkerRuntime,
 	creativeWorker *service.CreativeWorkerRuntime,
@@ -129,6 +130,7 @@ func provideCleanup(
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
 	cnUsageMonitor *service.CNProviderBalanceCheckService,
+	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ticketRuntime *service.TicketRuntime,
 	intelligenceTests *service.IntelligenceService,
 	pluginManager *service.PluginManager,
@@ -172,6 +174,12 @@ func provideCleanup(
 			{"IntelligenceService", func() error {
 				if intelligenceTests != nil {
 					intelligenceTests.Stop()
+				}
+				return nil
+			}},
+			{"UpstreamBillingProbe", func() error {
+				if upstreamBillingProbe != nil {
+					upstreamBillingProbe.Stop()
 				}
 				return nil
 			}},
@@ -262,6 +270,12 @@ func provideCleanup(
 			{"IdempotencyCleanupService", func() error {
 				if idempotencyCleanup != nil {
 					idempotencyCleanup.Stop()
+				}
+				return nil
+			}},
+			{"GeminiCachedContentService", func() error {
+				if geminiCachedContent != nil {
+					geminiCachedContent.Stop()
 				}
 				return nil
 			}},

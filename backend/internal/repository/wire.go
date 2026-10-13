@@ -98,6 +98,7 @@ var ProviderSet = wire.NewSet(
 	NewDurableImageTaskStore,
 	ProvideImageStorageFactory,
 	NewBatchImageRepository,
+	NewGeminiCachedContentRepository,
 	NewCreativeRunRepository,
 	NewCreativeRunOutboxRepository,
 	NewCreativeTransientStore,

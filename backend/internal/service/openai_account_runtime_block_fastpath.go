@@ -250,12 +250,13 @@ func (s *OpenAIGatewayService) applyOpenAIAccountUpstreamErrorInternal(
 	}
 	// 普通账号先保留模型不存在等精确处理，再应用管理员临时规则。
 	// 已知模型的规则只暂停账号与模型组合；模型未知时仍同步整号运行时阻断。
-	if s.rateLimitService != nil && statusCode != http.StatusUnauthorized &&
+	if s.rateLimitService != nil && tempUnschedRulesApply(account, statusCode, responseBody, tempUnschedulableModel(stateCtx, canonicalModel)) &&
 		!account.IsPoolMode() && !account.IsCustomErrorCodesEnabled() &&
 		s.rateLimitService.HandleTempUnschedulable(stateCtx, account, statusCode, responseBody, canonicalModel...) {
 		decision.Policy = ErrorPolicyTempUnscheduled
 		decision.StopScheduling = true
-		if len(canonicalModel) == 0 || strings.TrimSpace(canonicalModel[0]) == "" {
+		matches := matchTempUnschedulableRules(account, statusCode, responseBody)
+		if len(matches) == 0 || !tempUnschedHitUsesModelScope(account, matches[0].rule, tempUnschedulableModel(stateCtx, canonicalModel), statusCode, responseBody) {
 			s.BlockAccountScheduling(account, time.Time{}, "upstream_disable")
 		}
 		return decision
@@ -274,8 +275,9 @@ func (s *OpenAIGatewayService) applyOpenAIAccountUpstreamErrorInternal(
 		return decision
 	}
 	decision.StopScheduling = s.rateLimitService.handleDefaultUpstreamError(stateCtx, account, statusCode, headers, responseBody)
-	modelTempMatched := statusCode != http.StatusUnauthorized && tempUnschedulableModel(stateCtx, nil) != "" &&
-		len(matchTempUnschedulableRules(account, statusCode, responseBody)) > 0
+	tempModel := tempUnschedulableModel(stateCtx, nil)
+	matches := matchTempUnschedulableRules(account, statusCode, responseBody)
+	modelTempMatched := len(matches) > 0 && tempUnschedHitUsesModelScope(account, matches[0].rule, tempModel, statusCode, responseBody)
 	if decision.StopScheduling && !modelTempMatched {
 		s.BlockAccountScheduling(account, time.Time{}, "upstream_disable")
 	}

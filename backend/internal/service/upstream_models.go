@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/antigravity"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
@@ -35,9 +37,10 @@ const (
 
 // UpstreamModelSyncError 包装内部失败细节，同时提供可安全返回给客户端的消息。
 type UpstreamModelSyncError struct {
-	Kind    UpstreamModelSyncErrorKind
-	Message string
-	Err     error
+	StatusCode int
+	Kind       UpstreamModelSyncErrorKind
+	Message    string
+	Err        error
 	// 仅原生列表端点缺失或明确的边缘拦截允许尝试兼容列表，不用于生成请求重试。
 	allowGeminiListFallback bool
 }
@@ -87,6 +90,11 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 	if account == nil {
 		return nil, newUpstreamModelSyncConfigError("Account is required", nil)
 	}
+	// 必须在令牌刷新和模型请求之前检查代理，禁止已配置的代理失效后静默直连。
+	if account.ProxyID != nil && (account.Proxy == nil || account.Proxy.ID != *account.ProxyID ||
+		!account.Proxy.IsActive() || account.Proxy.IsExpired(time.Now())) {
+		return nil, newUpstreamModelSyncConfigError("Configured proxy is unavailable", nil)
+	}
 
 	if account.Platform == PlatformAntigravity && account.Type != AccountTypeAPIKey {
 		return s.fetchAntigravityOAuthUpstreamModels(ctx, account)
@@ -94,6 +102,11 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 
 	if s.httpUpstream == nil {
 		return nil, newUpstreamModelSyncConfigError("Upstream HTTP client is not configured", nil)
+	}
+
+	if account.IsGemini() && account.IsVertexServiceAccount() {
+		models, err := s.fetchVertexGeminiUpstreamModels(ctx, account)
+		return models, err
 	}
 
 	req, err := s.buildUpstreamModelsRequest(ctx, account)
@@ -140,6 +153,27 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 
 // fetchUpstreamModelsWithRequest 统一处理单次列表请求，复用代理、TLS、响应大小限制和模型解析。
 func (s *AccountTestService) fetchUpstreamModelsWithRequest(req *http.Request, account *Account) ([]string, error) {
+	body, err := s.readUpstreamModelsResponse(req, account)
+	if err != nil {
+		return nil, err
+	}
+	extractModels := extractUpstreamModelIDs
+	if account.IsGrok() {
+		extractModels = extractGrokUpstreamModelIDs
+	}
+	models, err := extractModels(body)
+	if err != nil {
+		return nil, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
+	}
+	if len(models) == 0 {
+		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+	}
+
+	return models, nil
+}
+
+// readUpstreamModelsResponse 保留第三方网关兼容判断并限制响应大小。
+func (s *AccountTestService) readUpstreamModelsResponse(req *http.Request, account *Account) ([]byte, error) {
 	proxyURL := upstreamModelsProxyURL(account)
 	resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
 	if err != nil {
@@ -173,26 +207,14 @@ func (s *AccountTestService) fetchUpstreamModelsWithRequest(req *http.Request, a
 			message += " (Cloudflare blocked the API request; check upstream API access rules)"
 		}
 		return nil, &UpstreamModelSyncError{
-			Kind: UpstreamModelSyncErrorUpstream, Message: message,
+			Kind: UpstreamModelSyncErrorUpstream, Message: message, StatusCode: resp.StatusCode,
 			Err: fmt.Errorf("upstream model list returned HTTP %d", resp.StatusCode),
 			allowGeminiListFallback: resp.StatusCode == http.StatusNotFound ||
 				resp.StatusCode == http.StatusMethodNotAllowed || cloudflareBlocked,
 		}
 	}
 
-	extractModels := extractUpstreamModelIDs
-	if account.IsGrok() {
-		extractModels = extractGrokUpstreamModelIDs
-	}
-	models, err := extractModels(body)
-	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
-	}
-	if len(models) == 0 {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
-	}
-
-	return models, nil
+	return body, nil
 }
 
 func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
@@ -595,6 +617,8 @@ func (s *AccountTestService) fetchAntigravityOAuthUpstreamModels(ctx context.Con
 }
 
 func (s *AccountTestService) doUpstreamModelsRequest(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	// 模型列表携带账号凭据；重定向不能将 Authorization 或 x-goog-api-key 转交其它地址。
+	req = req.WithContext(WithHTTPUpstreamRedirectsDisabled(req.Context()))
 	if s.tlsFPProfileService == nil {
 		return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, nil)
 	}
@@ -621,6 +645,26 @@ func buildV1ModelsURL(base string) string {
 
 func buildOpenAIModelsURL(base string) string {
 	return buildOpenAIEndpointURL(base, "/v1/models")
+}
+
+// buildVertexPublisherModelsURL 构造 Google 发布方模型列表地址。该接口只有 v1beta1 版本，pageSize 上限 300。
+func buildVertexPublisherModelsURL(location, pageToken string) (string, error) {
+	location = strings.TrimSpace(location)
+	if location == "" {
+		location = vertexDefaultLocation
+	}
+	if !vertexLocationPattern.MatchString(location) {
+		return "", fmt.Errorf("invalid vertex location: %s", location)
+	}
+	host := location + "-aiplatform.googleapis.com"
+	if location == "global" {
+		host = vertexGlobalHost
+	}
+	query := url.Values{"pageSize": []string{strconv.Itoa(vertexPublisherModelsPageSize)}}
+	if pageToken != "" {
+		query.Set("pageToken", pageToken)
+	}
+	return fmt.Sprintf("https://%s/v1beta1/publishers/google/models?%s", host, query.Encode()), nil
 }
 
 func buildGeminiModelsURL(base string) string {
@@ -779,4 +823,100 @@ func buildCodexModelsManifestURL(endpoint string, appendModelsPath bool, clientV
 	query.Set("client_version", clientVersion)
 	requestURL.RawQuery = query.Encode()
 	return requestURL, nil
+}
+
+const vertexGooglePublisherModelPrefix = "publishers/google/models/"
+
+const vertexPublisherModelsPageSize = 300
+
+const vertexPublisherModelsMaxPages = 20
+
+func (s *AccountTestService) fetchVertexGeminiUpstreamModels(ctx context.Context, account *Account) ([]string, error) {
+	if account.IsVertexAPIKey() {
+		return nil, newUpstreamModelSyncUnsupportedError("Vertex API key accounts do not support upstream model listing", nil)
+	}
+	if _, err := parseVertexServiceAccountKey(account); err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Vertex service account credentials", err)
+	}
+	location := account.VertexLocation("")
+	if _, err := buildVertexPublisherModelsURL(location, ""); err != nil {
+		return nil, newUpstreamModelSyncConfigError("Invalid Vertex location", err)
+	}
+	if s.geminiTokenProvider == nil {
+		return nil, newUpstreamModelSyncConfigError("Gemini token provider is not configured", nil)
+	}
+	accessToken, err := s.geminiTokenProvider.GetAccessToken(ctx, account)
+	if err != nil {
+		return nil, newUpstreamModelSyncUpstreamError("Failed to get Vertex access token", err)
+	}
+	accessToken = strings.TrimSpace(accessToken)
+	if accessToken == "" {
+		return nil, newUpstreamModelSyncConfigError("No Vertex access token is available", nil)
+	}
+
+	return listVertexGeminiPublisherModels(location, func(page int, listURL string) ([]byte, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+		if err != nil {
+			return nil, newUpstreamModelSyncConfigError("Invalid Vertex model list URL", err)
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+
+		body, err := s.readUpstreamModelsResponse(req, account)
+		if err != nil {
+			// 只有首页的 404/405 表示列表端点不可用；翻页途中的失败不触发配置模型回退。
+			var syncErr *UpstreamModelSyncError
+			if page > 0 && errors.As(err, &syncErr) {
+				syncErr.StatusCode = 0
+			}
+			return nil, err
+		}
+		return body, nil
+	})
+}
+
+func listVertexGeminiPublisherModels(location string, fetchPage func(page int, listURL string) ([]byte, error)) ([]string, error) {
+	models := make([]string, 0)
+	pageToken := ""
+	for page := 0; page < vertexPublisherModelsMaxPages; page++ {
+		listURL, err := buildVertexPublisherModelsURL(location, pageToken)
+		if err != nil {
+			return nil, newUpstreamModelSyncConfigError("Invalid Vertex location", err)
+		}
+		body, err := fetchPage(page, listURL)
+		if err != nil {
+			return nil, err
+		}
+		var response struct {
+			PublisherModels []struct {
+				Name string `json:"name"`
+			} `json:"publisherModels"`
+			NextPageToken string `json:"nextPageToken"`
+		}
+		if err := json.Unmarshal(body, &response); err != nil {
+			return nil, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
+		}
+		for _, entry := range response.PublisherModels {
+			name := strings.TrimSpace(entry.Name)
+			if !strings.HasPrefix(name, vertexGooglePublisherModelPrefix) {
+				continue
+			}
+			modelID := strings.TrimPrefix(name, vertexGooglePublisherModelPrefix)
+			if strings.HasPrefix(modelID, "gemini-") && len(modelID) > len("gemini-") {
+				models = append(models, modelID)
+			}
+		}
+
+		pageToken = strings.TrimSpace(response.NextPageToken)
+		if pageToken == "" {
+			if len(models) == 0 {
+				return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+			}
+			return dedupeAndSortModelIDs(models), nil
+		}
+	}
+	return nil, newUpstreamModelSyncUpstreamError(
+		"Upstream model list pagination did not finish",
+		fmt.Errorf("more than %d pages", vertexPublisherModelsMaxPages),
+	)
 }

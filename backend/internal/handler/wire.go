@@ -174,6 +174,7 @@ func ProvideHandlers(
 	paymentWebhookHandler *PaymentWebhookHandler,
 	mediaTaskHandler *MediaTaskHandler,
 	mediaTaskService *service.MediaTaskService,
+	geminiCachedContentService *service.GeminiCachedContentService,
 	asyncImageHandler *AsyncImageHandler,
 	videoHandler *VideoHandler,
 	batchImageHandler *BatchImageHandler,
@@ -185,6 +186,7 @@ func ProvideHandlers(
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
+	gatewayHandler.geminiCachedContentService = geminiCachedContentService
 	asyncImageHandler.SetMediaTaskObserver(mediaTaskService)
 	openaiGatewayHandler.SetMediaTaskObserver(mediaTaskService)
 	return &Handlers{

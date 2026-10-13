@@ -58,7 +58,8 @@ RequestLogger
 | `/v1/images/generations/async`、`/v1/images/edits/async`、`/v1/images/tasks/:task_id` 及裸别名 | TokenRouter API Key；查询限定原用户和 Key | 显式提交异步图片、轮询结果，HTTP 202 接受后由后台执行；默认关闭，见[异步图片](../domains/media_tasks.md#async_image_lifecycle) |
 | `/v1/video/generations`、`/v1/tasks/:id`、`/v1/videos`、`/v1/videos/:id`、`/v1/videos/:id/content` 及 Kling/Wan/MiniMax 原生视频路径 | TokenRouter API Key；Video 创建仅 Video 分组，任务按原用户/Key/端点归属查询 | 独立 Video 平台统一 URL 与原生参数保真；`/v1/videos` 与 Grok 按平台分流，Grok 原链路保留。内容 GET 只读取已完成且已结算的任务，见[独立 Video 上游](video_upstream.md#video_openai_content) |
 | `/api/v1/admin/backups/image-storage` 及 `/test` | 管理员；PUT 和 POST 测试另需 step-up | 异步图片存储 GET/PUT 配置与 POST 连通性测试，密钥脱敏/空值保留 |
-| `/v1beta/*` | TokenRouter API Key | Gemini 原生模型 URL、生成、流式生成和 token 统计 |
+| `/v1beta/*` | TokenRouter API Key | Gemini 原生模型 URL、生成、流式生成、token 统计及显式缓存资源 |
+| `/v1beta/cachedContents`、`/v1beta/cachedContents/:id` | 固定 Gemini 分组的 TokenRouter API Key | POST 创建、GET 分页列表，单资源 GET/PATCH/DELETE；绑定原用户、Key、分组和账号，复合及智能路由 Key 不支持，见[显式上下文缓存](gemini_upstream.md#gemini_explicit_cache) |
 | `/api/v3/contents/generations/tasks` 及 `/v3`、`/v1`、裸路径别名 | TokenRouter API Key + 视频账号能力与任务归属 | Ark 原生异步视频创建、查询、删除，响应不套面板 envelope，见 [Seedance 上游](seedance_upstream.md) |
 | `/api/v1/admin/plugins/*` | 管理员认证；修改与测试另需 step-up | 本地插件安装/运行与只读 `GET /:id/status`，见 [插件契约](local_plugins.md) |
 | `/antigravity/*` | TokenRouter API Key + 强制平台 | Antigravity 专用 Claude/Gemini 入口与管理型自省 |
@@ -127,7 +128,7 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 
 部分下载路由使用短期签名票据，以支持浏览器原生下载大文件；票据只授权一个预生成资源，不能等价为用户 JWT。模型列表、用量和既有批任务管理即使跳过消费余额检查，仍要执行 Key 身份和资源归属验证。
 
-上游声明倍率探测与 Key 账单自省已从路由表完全注销：`GET /v1/sub2api/billing`，`GET|PUT /api/v1/admin/accounts/upstream-billing-probe/settings`，`POST /api/v1/admin/accounts/upstream-billing-probe/batch`，以及 `PUT|POST /api/v1/admin/accounts/:id/upstream-billing-probe` 都返回普通 `404`。这些路径没有兼容 handler、重定向或弃用响应，也不再享有 API Key 非消费请求豁免。
+声明倍率探测仅恢复管理员功能：`GET|PUT /api/v1/admin/accounts/upstream-billing-probe-settings` 维护全局周期，`POST /api/v1/admin/accounts/:id/upstream-billing-probe` 主动探测，账号开关沿用创建/编辑接口。详见[上游声明倍率探测](upstream_billing_probe.md)。公开的 `GET /v1/sub2api/billing` 仍未注册，也没有 API Key 非消费请求豁免；旧的嵌套 `/upstream-billing-probe/settings`、批量和独立 PUT 开关路由不作为兼容入口恢复。
 
 账号批量删除使用 `POST /api/v1/admin/accounts/batch-delete`，请求体为 `account_ids`。服务端先去除非正数和重复 ID，再以最多 5 路并发执行删除；同批选择父账号及其影子账号时只删除根账号一次，并将级联影响映射回逐账号结果。响应返回稳定排序的 `success_ids`、`failed_ids` 和错误明细，单项失败不会取消其它账号。管理端“全选筛选结果”先以同一筛选快照分页读取轻量 ID，任何分页缺失或重复都保留原选择，不得提交部分集合。
 

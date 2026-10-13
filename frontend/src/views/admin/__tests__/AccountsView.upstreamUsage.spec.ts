@@ -9,7 +9,9 @@ const {
   listWithEtag,
   getBatchTodayStats,
   getById,
+  getUsage,
   queryUpstreamUsage,
+  probeUpstreamBilling,
   queryBatchUpstreamUsage,
   refreshCredentials,
   getAllProxies,
@@ -22,7 +24,9 @@ const {
   listWithEtag: vi.fn(),
   getBatchTodayStats: vi.fn(),
   getById: vi.fn(),
+  getUsage: vi.fn(),
   queryUpstreamUsage: vi.fn(),
+  probeUpstreamBilling: vi.fn(),
   queryBatchUpstreamUsage: vi.fn(),
   refreshCredentials: vi.fn(),
   getAllProxies: vi.fn(),
@@ -39,7 +43,10 @@ vi.mock('@/api/admin', () => ({
       listWithEtag,
       getBatchTodayStats,
       getById,
+      getUsage,
       queryUpstreamUsage,
+      probeUpstreamBilling,
+      getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({ enabled: true, interval_minutes: 30 }),
       queryBatchUpstreamUsage,
       refreshCredentials,
       delete: vi.fn(),
@@ -86,6 +93,7 @@ const DataTableStub = {
         <span data-test="account-name">{{ row.name }}</span>
         <slot name="cell-select" :row="row" />
         <slot name="cell-usage" :row="row" />
+        <slot name="cell-upstream_billing_rate" :row="row" />
       </div>
     </div>
   `
@@ -105,7 +113,7 @@ const AccountUsageCellStub = defineComponent({
 
 const AccountBulkActionsBarStub = {
   props: ['selectedIds', 'upstreamUsageLoading'],
-  emits: ['query-upstream-usage'],
+  emits: ['query-upstream-usage', 'query-usage'],
   template: '<button data-test="query-upstream-batch" :disabled="upstreamUsageLoading" @click="$emit(\'query-upstream-usage\')">batch</button>'
 }
 
@@ -166,6 +174,10 @@ const mountView = () => mount(AccountsView, {
       AccountTodayStatsCell: true,
       AccountGroupsCell: true,
       AccountUsageCell: AccountUsageCellStub,
+      UpstreamBillingRateCell: {
+        props: ['account', 'probing'], emits: ['probe'],
+        template: '<div><span data-test="declared-rate">{{ account.extra?.upstream_billing_probe?.data?.resolved_rate_multiplier }}</span><span data-test="account-rate">{{ account.rate_multiplier }}</span><button data-test="probe-rate" :disabled="probing" @click="$emit(\'probe\')">probe</button></div>'
+      },
       HelpTooltip: true,
       Icon: true
     }
@@ -182,6 +194,64 @@ describe('admin AccountsView upstream usage', () => {
     getById.mockRejectedValue(new Error('unexpected getById call'))
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
+  })
+
+  // Vertex 不提供本地模拟额度；批量主动查询只包含 Gemini OAuth。
+  it('excludes Vertex and API Key accounts from Gemini quota queries', async () => {
+    const items = [
+      { ...account(1, 'oauth'), platform: 'gemini' },
+      { ...account(2), platform: 'gemini', type: 'service_account' },
+      { ...account(3), platform: 'gemini' }
+    ]
+    listAccounts.mockResolvedValue({ items, total: 3, page: 1, page_size: 20, pages: 1 })
+    getUsage.mockResolvedValue({})
+    const wrapper = mountView()
+    await flushPromises()
+    for (const checkbox of wrapper.findAll('input[type="checkbox"]')) await checkbox.setValue(true)
+    wrapper.getComponent(AccountBulkActionsBarStub).vm.$emit('query-usage')
+    await flushPromises()
+    expect(getUsage).toHaveBeenCalledTimes(1)
+    expect(getUsage).toHaveBeenCalledWith(1, 'active', true)
+    wrapper.unmount()
+  })
+
+  // 手动声明探测可同步倍率，同时保留现有账号用量能力。
+  it('coalesces manual rate probes and merges the synced multiplier without clearing usage', async () => {
+    const original = account(1)
+    listAccounts.mockResolvedValue({ items: [original], total: 1, page: 1, page_size: 20, pages: 1 })
+    queryUpstreamUsage.mockResolvedValue(result(1))
+    let resolveProbe!: (value: unknown) => void
+    probeUpstreamBilling.mockImplementation(() => new Promise(resolve => { resolveProbe = resolve }))
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-test="query-upstream"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test="probe-rate"]').trigger('click')
+    await wrapper.get('[data-test="probe-rate"]').trigger('click')
+    expect(probeUpstreamBilling).toHaveBeenCalledTimes(1)
+    resolveProbe({ account_id: 1, snapshot: { status: 'ok', data: { resolved_rate_multiplier: 0.75 }, synced_rate_multiplier: 0.75 } })
+    await flushPromises()
+    expect(wrapper.get('[data-test="declared-rate"]').text()).toBe('0.75')
+    expect(wrapper.get('[data-test="account-rate"]').text()).toBe('0.75')
+    expect(wrapper.get('[data-test="upstream-remaining"]').text()).toBe('12.5')
+    wrapper.unmount()
+  })
+
+  it('ignores a delayed rate snapshot after the account is edited', async () => {
+    const original = account(1)
+    listAccounts.mockResolvedValue({ items: [original], total: 1, page: 1, page_size: 20, pages: 1 })
+    let resolveProbe!: (value: unknown) => void
+    probeUpstreamBilling.mockImplementation(() => new Promise(resolve => { resolveProbe = resolve }))
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-test="probe-rate"]').trigger('click')
+    wrapper.getComponent(AccountUsageCellStub).vm.$emit('account-updated', { ...original, updated_at: '2026-08-20T00:05:00Z', rate_multiplier: 2 })
+    await flushPromises()
+    resolveProbe({ account_id: 1, snapshot: { status: 'ok', synced_rate_multiplier: 0.75 } })
+    await flushPromises()
+    expect(wrapper.get('[data-test="account-rate"]').text()).toBe('2')
+    expect(wrapper.get('[data-test="declared-rate"]').text()).toBe('')
+    wrapper.unmount()
   })
 
   it('部分刷新成功显示警告并更新账号，仍清理旧上游用量缓存', async () => {

@@ -126,6 +126,15 @@ var (
 		CacheReadInputTokenCost: 0.2e-6, SupportsPromptCaching: true,
 		LiteLLMProvider: "anthropic", Mode: "chat",
 	}
+	// Haiku 5.5 的 100k 长上下文价格对整次 token 用量应用 5 倍。
+	claudeHaiku55FallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 1e-7, OutputCostPerToken: 5e-7,
+		CacheCreationInputTokenCost: 1.25e-7, CacheCreationInputTokenCostAbove1hr: 2e-7,
+		CacheReadInputTokenCost:        1e-8,
+		LongContextInputTokenThreshold: 100000,
+		LongContextInputCostMultiplier: 5, LongContextOutputCostMultiplier: 5,
+		LiteLLMProvider: "anthropic", Mode: "chat", SupportsPromptCaching: true,
+	}
 	openAIGPT56SolPricing = &LiteLLMModelPricing{
 		InputCostPerToken:                   5e-06,   // $5 per MTok
 		InputCostPerTokenPriority:           1e-05,   // $10 per MTok
@@ -226,10 +235,11 @@ type LiteLLMModelPricing struct {
 	LiteLLMProvider                     string  `json:"litellm_provider"`
 	Mode                                string  `json:"mode"`
 	SupportsPromptCaching               bool    `json:"supports_prompt_caching"`
-	OutputCostPerImage                  float64 `json:"output_cost_per_image"`             // 图片生成模型每张图片价格
-	OutputCostPerImageToken             float64 `json:"output_cost_per_image_token"`       // 图片输出 token 价格
-	InputCostPerImageToken              float64 `json:"input_cost_per_image_token"`        // 图片输入 token 价格（如 gpt-image-2 图片编辑）
-	CacheReadInputImageTokenCost        float64 `json:"cache_read_input_image_token_cost"` // 图片缓存输入价格。
+	OutputCostPerImage                  float64 `json:"output_cost_per_image"`                 // 图片生成模型每张图片价格
+	OutputCostPerImageToken             float64 `json:"output_cost_per_image_token"`           // 图片输出 token 价格
+	InputCostPerImageToken              float64 `json:"input_cost_per_image_token"`            // 图片输入 token 价格（如 gpt-image-2 图片编辑）
+	CacheReadInputImageTokenCost        float64 `json:"cache_read_input_image_token_cost"`     // 图片缓存输入价格。
+	CacheStorageCostPerTokenPerHour     float64 `json:"cache_storage_cost_per_token_per_hour"` // 显式缓存存储美元单价。
 
 	// 模型能力元数据：由模型广场下发给前端展示输入/输出模态，不参与计费。
 	SupportedModalities       []string `json:"supported_modalities"`
@@ -280,6 +290,7 @@ type LiteLLMRawEntry struct {
 	OutputCostPerImageToken             *float64 `json:"output_cost_per_image_token"`
 	InputCostPerImageToken              *float64 `json:"input_cost_per_image_token"`
 	CacheReadInputImageTokenCost        *float64 `json:"cache_read_input_image_token_cost"`
+	CacheStorageCostPerTokenPerHour     *float64 `json:"cache_storage_cost_per_token_per_hour"`
 	SupportedModalities                 []string `json:"supported_modalities"`
 	SupportedInputModalities            []string `json:"supported_input_modalities"`
 	SupportedOutputModalities           []string `json:"supported_output_modalities"`
@@ -771,6 +782,9 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 		if entry.InputCostPerImageToken != nil {
 			pricing.InputCostPerImageToken = *entry.InputCostPerImageToken
 		}
+		if entry.CacheStorageCostPerTokenPerHour != nil {
+			pricing.CacheStorageCostPerTokenPerHour = *entry.CacheStorageCostPerTokenPerHour
+		}
 		if entry.CacheReadInputImageTokenCost != nil {
 			pricing.CacheReadInputImageTokenCost = *entry.CacheReadInputImageTokenCost
 		}
@@ -1252,6 +1266,9 @@ func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing 
 
 	// 3. Claude 新型号使用专属静态兜底，避免误用旧 Opus 系列价格。
 	for _, candidate := range lookupCandidates {
+		if claude.IsHaiku55Model(candidate) {
+			return claudeHaiku55FallbackPricing
+		}
 		if claude.IsSonnet55Model(candidate) {
 			return claudeSonnet55FallbackPricing
 		}
@@ -1856,4 +1873,11 @@ func isNumeric(s string) bool {
 		}
 	}
 	return true
+}
+
+// getIdentifiedCacheStoragePricing 仅按明确模型身份匹配存储价，不能把其它模型的模糊家族价格当存储报价。
+func (s *PricingService) getIdentifiedCacheStoragePricing(model string) *LiteLLMModelPricing {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lookupModelCatalogEntryLocked(buildModelLookupCandidates(strings.ToLower(strings.TrimSpace(model))))
 }

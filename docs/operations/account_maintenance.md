@@ -32,6 +32,8 @@
 
 状态写入要携带凭据快照或版本条件。较早请求不能在新凭据生效后再次设置旧错误；恢复同样不能清除另一个请求刚确认的永久错误。
 
+管理员临时不可调度规则支持显式 `scope=account|model`，未配置时保留历史行为。模型级错误只隔离账号映射后的模型；401 的模型级规则不能吞掉明确的凭据撤销或 OAuth 认证错误。Count Tokens、Bedrock、兼容协议和重试耗尽入口都传递同一调度模型键，防止状态写入成功却无法在下次调度命中。Antigravity 的图片模型和 Gemini 文本共享限流分别隔离。
+
 ## 账号测试与自动恢复
 
 管理端即时测试和 `scheduled-test-plans` 使用平台测试服务调用真实凭据/模型，并保存测试结果。计划使用分钟级 cron 表达式；每个计划可配置自动恢复。成功测试可以清除符合条件的 error、rate limit、temporary unschedulable 和模型限流，但不能绕过管理员禁用、账号过期或类型不匹配。
@@ -62,7 +64,7 @@ OpenAI API Key 的 Responses 探测只维护 `extra.openai_responses_probe_statu
 
 账号创建、编辑、批量更新和导入会把旧 OpenAI 配置规范化为新字段；复制账号保留 `credentials.openai_workload_capabilities`、`openai_text_route_mode` 与 continuation 能力开关，丢弃已有探测状态并重新探测。调度投影必须同时包含工作负载集合、路由策略、探测状态和 continuation 能力开关，探测状态变化要触发投影失效。Ollama Cloud 等兼容 API Key 上游可以保存其管理会话和用量快照，但只有明确匹配的账号才进入探测，不能把探测协议推广到所有 `apikey`。Grok 计费与媒体资格、各平台额度探测也继续使用各自独立协议。
 
-通用的上游声明倍率探测已移除，不再有定时任务、手动操作、快照或公开账单自省接口。账号创建、编辑、批量更新、复制、CRS 同步和仓储写入都会丢弃历史 `upstream_billing_probe` 与 `upstream_billing_probe_enabled` 键；这项清理不得影响 Ollama Cloud 会话/用量、endpoint capability 或其它额度状态。
+API Key 账号可显式开启[上游声明倍率探测](../interfaces/upstream_billing_probe.md)，按全局周期刷新，也可手动探测。自动探测只更新展示快照；另行开启同步后，成功声明才可按受限范围更新账号基准倍率。账号创建/编辑、复制、代理更新和仓储写入必须保留有效开关并保护服务端快照，身份变更清除旧观测，旧探测通过条件写回被拒绝。该功能不恢复公开账单自省、不影响账号排序，也不得干扰 Ollama Cloud 会话/用量、endpoint capability 或其它额度状态。
 
 实时探测失败时保留最近成功快照并同时暴露当前错误，不把旧数据标为实时。任何配额耗尽或 capability 变化都要触发相关调度投影失效。
 
@@ -81,7 +83,7 @@ API Key 上游用量由独立的 `UpstreamUsageService` 提供，和 OAuth/Setup
 
 MiniMax Coding 使用固定 `minimax_coding` 适配器查询五小时与每周百分比窗口；MiniMax payg 返回不支持且不发送查询。详情见 [MiniMax 上游](../interfaces/minimax_upstream.md#minimax_usage_and_limits)。
 
-浏览器只缓存成功的归一化结果五分钟，缓存键隔离管理员身份、账号 `updated_at`、代理/Base URL 和配置；失败不缓存，账号凭据、代理或配置变化立即失效。审计仅记录管理员动作和脱敏元数据，不记录 API Key 或上游原始响应。该功能与已移除的 `upstream_billing_probe` 完全不同，不恢复旧的自动倍率探测。
+浏览器只缓存成功的归一化结果五分钟，缓存键隔离管理员身份、账号 `updated_at`、代理/Base URL 和配置；失败不缓存，账号凭据、代理或配置变化立即失效。审计仅记录管理员动作和脱敏元数据，不记录 API Key 或上游原始响应。用量查询与[声明倍率探测](../interfaces/upstream_billing_probe.md)是独立能力，前者不修改账号倍率，后者不提供钱包余额。
 
 CN 周期监控默认关闭；启用后只把统一快照写入 `extra.cn_usage_monitor_snapshot`，用身份 hash 和账号 `updated_at` CAS 防止旧探测覆盖新凭据。失败保留最近成功结果，余额低于阈值只写带同一身份 hash 的临时不可调度原因，恢复也只清理由该身份创建的状态。多实例同轮由 leader lock 串行化，自定义中继必须命中启用的 URL allowlist。详细字段、适配器和超时语义见[API Key 上游用量查询](../interfaces/upstream_usage.md)。
 

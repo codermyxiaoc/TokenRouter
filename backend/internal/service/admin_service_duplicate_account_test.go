@@ -150,8 +150,8 @@ func TestDuplicateAccountCopiesConfigurationAndResetsRuntimeState(t *testing.T) 
 		SessionWindowEnd:        &sessionWindowEnd,
 		SessionWindowStatus:     "active",
 	}
-	source.Extra[deprecatedUpstreamBillingProbeEnabledExtraKey] = true
-	source.Extra[deprecatedUpstreamBillingProbeExtraKey] = map[string]any{"status": "ok"}
+	source.Extra[UpstreamBillingProbeEnabledExtraKey] = true
+	source.Extra[UpstreamBillingProbeExtraKey] = map[string]any{"status": "ok"}
 	require.NoError(t, repo.Create(ctx, source))
 
 	duplicate, err := svc.DuplicateAccount(ctx, source.ID, "admin:1", "")
@@ -177,6 +177,7 @@ func TestDuplicateAccountCopiesConfigurationAndResetsRuntimeState(t *testing.T) 
 		"openai_responses_probe_status": "unknown",
 		"openai_responses_continuation_supported": true,
 		"openai_native_compaction_v2_mode":        OpenAICompactModeForceOn,
+		UpstreamBillingProbeEnabledExtraKey:       true,
 	}, duplicate.Extra)
 	require.NotNil(t, duplicate.ExpiresAt)
 	require.True(t, source.ExpiresAt.Equal(*duplicate.ExpiresAt))

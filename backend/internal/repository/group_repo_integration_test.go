@@ -5,13 +5,17 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	dbent "github.com/TokenFlux/TokenRouter/ent"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/pagination"
 	"github.com/TokenFlux/TokenRouter/internal/service"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -45,6 +49,54 @@ func (s *GroupRepoSuite) SetupTest() {
 
 func TestGroupRepoSuite(t *testing.T) {
 	suite.Run(t, new(GroupRepoSuite))
+}
+
+func TestModerationConfigWriteRejectsGroupDeletedAfterValidation(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := newGroupRepositoryWithSQL(client, integrationDB)
+	settings := &settingRepository{client: client}
+	group := &service.Group{Name: "moderation-concurrent-delete", Platform: service.PlatformAnthropic, RateMultiplier: 1, Status: service.StatusActive}
+	require.NoError(t, repo.Create(ctx, group))
+	t.Cleanup(func() { _, _ = integrationDB.ExecContext(ctx, "DELETE FROM groups WHERE id=$1", group.ID) })
+	key := service.SettingKeyContentModerationConfig
+	previous, previousErr := settings.GetValue(ctx, key)
+	t.Cleanup(func() {
+		if previousErr == nil {
+			_ = settings.Set(ctx, key, previous)
+		} else {
+			_ = settings.Delete(ctx, key)
+		}
+	})
+	require.NoError(t, settings.Set(ctx, key, `{"all_groups":false,"group_ids":[]}`))
+
+	// 删除事务持有分组锁时启动配置保存，提交删除后必须重新检查分组存活状态。
+	tx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	var id int64
+	require.NoError(t, tx.QueryRowContext(ctx, "SELECT id FROM groups WHERE id=$1 FOR UPDATE", group.ID).Scan(&id))
+	finished := make(chan error, 1)
+	go func() {
+		finished <- settings.SetContentModerationConfig(ctx, `{"all_groups":false,"group_ids":[`+fmt.Sprint(group.ID)+`]}`, []int64{group.ID})
+	}()
+	select {
+	case err := <-finished:
+		t.Fatalf("config write passed a locked group before deletion: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	_, err = tx.ExecContext(ctx, "UPDATE groups SET deleted_at=NOW() WHERE id=$1", group.ID)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	select {
+	case err := <-finished:
+		require.ErrorIs(t, err, service.ErrGroupNotFound)
+	case <-time.After(5 * time.Second):
+		t.Fatal("config write did not finish after deletion")
+	}
+	stored, err := settings.GetValue(ctx, key)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"all_groups":false,"group_ids":[]}`, stored)
 }
 
 // --- Create / GetByID / Update / Delete ---
@@ -245,7 +297,7 @@ func (s *GroupRepoSuite) TestDelete() {
 // --- List / ListWithFilters ---
 
 func (s *GroupRepoSuite) TestList() {
-	baseGroups, basePage, err := s.repo.List(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10})
+	_, basePage, err := s.repo.List(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10})
 	s.Require().NoError(err, "List base")
 
 	s.Require().NoError(s.repo.Create(s.ctx, &service.Group{
@@ -265,12 +317,13 @@ func (s *GroupRepoSuite) TestList() {
 
 	groups, page, err := s.repo.List(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10})
 	s.Require().NoError(err, "List")
-	s.Require().Len(groups, len(baseGroups)+2)
+	// 全套集成测试可已有超过一页的数据，单页条数仍受分页上限限制。
+	s.Require().Len(groups, min(int(basePage.Total)+2, 10))
 	s.Require().Equal(basePage.Total+2, page.Total)
 }
 
 func (s *GroupRepoSuite) TestListWithFilters_Platform() {
-	baseGroups, _, err := s.repo.ListWithFilters(
+	_, basePage, err := s.repo.ListWithFilters(
 		s.ctx,
 		pagination.PaginationParams{Page: 1, PageSize: 10},
 		service.PlatformOpenAI,
@@ -295,9 +348,10 @@ func (s *GroupRepoSuite) TestListWithFilters_Platform() {
 		Status:         service.StatusActive,
 	}))
 
-	groups, _, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, service.PlatformOpenAI, "", "", nil)
+	groups, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, service.PlatformOpenAI, "", "", nil)
 	s.Require().NoError(err)
-	s.Require().Len(groups, len(baseGroups)+1)
+	s.Require().Len(groups, min(int(basePage.Total)+1, 10))
+	s.Require().Equal(basePage.Total+1, page.Total)
 	// Verify all groups are OpenAI platform
 	for _, g := range groups {
 		s.Require().Equal(service.PlatformOpenAI, g.Platform)
@@ -988,4 +1042,91 @@ func (s *GroupRepoSuite) TestDelete_SoftDeletedGroup_lockForUpdate() {
 	_, err = s.repo.GetByID(s.ctx, group.ID)
 	s.Require().Error(err, "should fail to get soft-deleted group")
 	s.Require().ErrorIs(err, service.ErrGroupNotFound)
+}
+
+func (s *GroupRepoSuite) TestI18n_RoundTrip() {
+	group := &service.Group{
+		Name:           "i18n-roundtrip",
+		Platform:       service.PlatformAnthropic,
+		RateMultiplier: 1.0,
+		Status:         service.StatusActive,
+		I18n: service.GroupI18n{
+			"en": {Name: "Standard", Description: "Pro + Max pool"},
+		},
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, group))
+
+	got, err := s.repo.GetByID(s.ctx, group.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(group.I18n, got.I18n)
+
+	got.I18n = service.GroupI18n{"zh": {Description: "号池"}}
+	s.Require().NoError(s.repo.Update(s.ctx, got))
+	got, err = s.repo.GetByID(s.ctx, group.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(service.GroupI18n{"zh": {Description: "号池"}}, got.I18n)
+
+	// 未携带译文的写入落库为空对象，而不是 JSON null。
+	got.I18n = nil
+	s.Require().NoError(s.repo.Update(s.ctx, got))
+	var stored string
+	s.Require().NoError(scanSingleRow(s.ctx, s.tx, "SELECT i18n::text FROM groups WHERE id = $1", []any{group.ID}, &stored))
+	s.Require().Equal("{}", stored)
+
+	plain := &service.Group{
+		Name:           "i18n-default",
+		Platform:       service.PlatformAnthropic,
+		RateMultiplier: 1.0,
+		Status:         service.StatusActive,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, plain))
+	s.Require().NoError(scanSingleRow(s.ctx, s.tx, "SELECT i18n::text FROM groups WHERE id = $1", []any{plain.ID}, &stored))
+	s.Require().Equal("{}", stored)
+}
+
+// 删除只清理被删除分组，不改变其它范围或审核设置。
+func (s *GroupRepoSuite) TestDeleteCascadeRemovesOnlySelectedModerationGroup() {
+	deleted := &service.Group{Name: "moderation-deleted", Platform: service.PlatformAnthropic, RateMultiplier: 1, Status: service.StatusActive}
+	kept := &service.Group{Name: "moderation-kept", Platform: service.PlatformAnthropic, RateMultiplier: 1, Status: service.StatusActive}
+	s.Require().NoError(s.repo.Create(s.ctx, deleted))
+	s.Require().NoError(s.repo.Create(s.ctx, kept))
+	raw, err := json.Marshal(map[string]any{"group_ids": []int64{kept.ID, deleted.ID}, "all_groups": false, "mode": "observe"})
+	s.Require().NoError(err)
+	settings := NewSettingRepository(s.tx.Client())
+	s.Require().NoError(settings.Set(s.ctx, service.SettingKeyContentModerationConfig, string(raw)))
+	_, err = s.repo.DeleteCascade(s.ctx, deleted.ID)
+	s.Require().NoError(err)
+	stored, err := settings.GetValue(s.ctx, service.SettingKeyContentModerationConfig)
+	s.Require().NoError(err)
+	var got struct {
+		GroupIDs []int64 `json:"group_ids"`
+		Mode     string  `json:"mode"`
+	}
+	s.Require().NoError(json.Unmarshal([]byte(stored), &got))
+	s.Require().Equal([]int64{kept.ID}, got.GroupIDs)
+	s.Require().Equal("observe", got.Mode)
+}
+
+func (s *GroupRepoSuite) TestDeleteCascadeUnknownGroupPreservesModerationConfig() {
+	const original = `{"all_groups":false,"group_ids":[123,456],"mode":"observe"}`
+	settings := NewSettingRepository(s.tx.Client())
+	s.Require().NoError(settings.Set(s.ctx, service.SettingKeyContentModerationConfig, original))
+	_, err := s.repo.DeleteCascade(s.ctx, -1)
+	s.Require().ErrorIs(err, service.ErrGroupNotFound)
+	stored, err := settings.GetValue(s.ctx, service.SettingKeyContentModerationConfig)
+	s.Require().NoError(err)
+	s.Require().JSONEq(original, stored)
+}
+
+func (s *GroupRepoSuite) TestDeleteCascadePreservesMalformedModerationConfig() {
+	group := &service.Group{Name: "malformed-moderation", Platform: service.PlatformAnthropic, RateMultiplier: 1, Status: service.StatusActive}
+	s.Require().NoError(s.repo.Create(s.ctx, group))
+	const malformed = `{"group_ids":[oops]}`
+	settings := NewSettingRepository(s.tx.Client())
+	s.Require().NoError(settings.Set(s.ctx, service.SettingKeyContentModerationConfig, malformed))
+	_, err := s.repo.DeleteCascade(s.ctx, group.ID)
+	s.Require().NoError(err)
+	stored, err := settings.GetValue(s.ctx, service.SettingKeyContentModerationConfig)
+	s.Require().NoError(err)
+	s.Require().Equal(malformed, stored)
 }

@@ -156,13 +156,13 @@ func PrepareBedrockRequestBodyWithTokens(body []byte, modelID string, betaTokens
 	// 参考 litellm: _convert_output_format_to_inline_schema()
 	body = convertOutputFormatToInlineSchema(body)
 
-	// Sonnet 5.5 支持原生 effort，格式约束仍使用上面的 schema 内联兼容。
+	// Claude 5.5 支持原生 effort，格式约束仍使用上面的 schema 内联兼容。
 	effort := gjson.GetBytes(body, "output_config.effort")
 	body, err = sjson.DeleteBytes(body, "output_config")
 	if err != nil {
 		return nil, fmt.Errorf("remove output_config field: %w", err)
 	}
-	if claude.IsSonnet55Model(modelID) && effort.Exists() {
+	if (claude.IsSonnet55Model(modelID) || claude.IsHaiku55Model(modelID)) && effort.Exists() {
 		body, err = sjson.SetBytes(body, "output_config.effort", effort.Value())
 		if err != nil {
 			return nil, err

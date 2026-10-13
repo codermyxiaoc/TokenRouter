@@ -506,6 +506,8 @@ async function tryRecoverPendingOrder(order: PaymentOrder | null): Promise<Payme
 function startCountdown(seconds: number) {
   if (isProcessing.value) return
   remainingSeconds.value = Math.max(0, seconds)
+  // 浏览器后台定时器可能被节流，按绝对截止时间恢复倒计时。
+  const deadline = Date.now() + remainingSeconds.value * 1000
   if (remainingSeconds.value <= 0) {
     void pollStatus()
     return
@@ -513,7 +515,7 @@ function startCountdown(seconds: number) {
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
   countdownTimer = setInterval(() => {
     if (isProcessing.value) return
-    remainingSeconds.value--
+    remainingSeconds.value = Math.max(0, Math.floor((deadline - Date.now()) / 1000))
     if (remainingSeconds.value <= 0) {
       remainingSeconds.value = 0
       if (countdownTimer) clearInterval(countdownTimer)

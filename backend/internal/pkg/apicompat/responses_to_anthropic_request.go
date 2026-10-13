@@ -18,16 +18,19 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest, upstreamModel ...string)
 	if len(upstreamModel) > 0 && upstreamModel[0] != "" {
 		thinkingModel = upstreamModel[0]
 	}
-	if claude.IsSonnet55Model(thinkingModel) {
+	if claude.IsSonnet55Model(thinkingModel) || claude.IsHaiku55Model(thinkingModel) {
 		body, err := json.Marshal(req)
 		if err != nil {
+			return nil, err
+		}
+		if err := claude.ValidateHaiku55Request(body, thinkingModel); err != nil {
 			return nil, err
 		}
 		if err := claude.ValidateSonnet55Request(body, thinkingModel); err != nil {
 			return nil, err
 		}
 	}
-	system, messages, err := convertResponsesInputToAnthropic(req.Instructions, req.Input)
+	system, messages, err := convertResponsesInputToAnthropic(req.Instructions, req.Input, claude.IsClaude55SignedThinkingModel(thinkingModel))
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +76,7 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest, upstreamModel ...string)
 	}
 
 	// Sonnet 5.5 默认启用自适应思考；none 只关闭工具调用之外的思考。
-	if claude.IsSonnet55Model(thinkingModel) {
+	if claude.IsSonnet55Model(thinkingModel) || claude.IsHaiku55Model(thinkingModel) {
 		effort := "high"
 		if req.Reasoning != nil && strings.TrimSpace(req.Reasoning.Effort) != "" {
 			effort = strings.ToLower(strings.TrimSpace(req.Reasoning.Effort))
@@ -82,9 +85,12 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest, upstreamModel ...string)
 		switch effort {
 		case "none":
 			out.Thinking.Type, effort = "between_tools", "low"
+			if claude.IsHaiku55Model(thinkingModel) {
+				out.Thinking.Type = "disabled"
+			}
 		case "low", "medium", "high", "xhigh", "max":
 		default:
-			return nil, fmt.Errorf("reasoning effort %q is not supported by claude-sonnet-5-5", effort)
+			return nil, fmt.Errorf("reasoning effort %q is not supported by %s", effort, thinkingModel)
 		}
 		out.OutputConfig = &AnthropicOutputConfig{Effort: effort}
 		return out, nil
@@ -144,7 +150,7 @@ func mapResponsesEffortToAnthropic(effort string) string {
 
 // convertResponsesInputToAnthropic 从 Responses API 的 instructions 与 input 数组中
 // 提取系统提示和消息，并以原始 JSON 返回 Anthropic 多态 system 字段。
-func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMessage) (json.RawMessage, []AnthropicMessage, error) {
+func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMessage, preserveThinking ...bool) (json.RawMessage, []AnthropicMessage, error) {
 	var systemParts []string
 	if strings.TrimSpace(instructions) != "" {
 		systemParts = append(systemParts, strings.TrimSpace(instructions))
@@ -209,6 +215,18 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 			})
 
 		case item.Type == "reasoning":
+			// 只有签名思考型号才还原本站封装；其它来源的不透明 reasoning 继续丢弃。
+			if len(preserveThinking) > 0 && preserveThinking[0] {
+				block, err := decodeAnthropicThinking(item.EncryptedContent)
+				if err != nil {
+					return nil, nil, err
+				}
+				if block != nil {
+					raw, _ := json.Marshal([]AnthropicContentBlock{*block})
+					messages = append(messages, AnthropicMessage{Role: "assistant", Content: raw})
+				}
+			}
+
 			// Anthropic 无法摄入 OpenAI 的 reasoning：encrypted_content 是不透明的，
 			// 而 thinking 块的重放需要 Anthropic 自己签发的 signature，无法伪造。
 			// Codex 常见形态（只带 summary + encrypted_content）本来就会被丢弃，

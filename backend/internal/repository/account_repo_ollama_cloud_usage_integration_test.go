@@ -475,8 +475,8 @@ func TestProxyIdentityUpdateInvalidatesOllamaSnapshotAndRejectsInFlightCAS(t *te
 	require.ErrorIs(t, err, service.ErrOllamaCloudUsageIdentityChanged)
 }
 
-// 无变化的凭证持久化仍需清除废弃字段，但不得影响 Ollama 状态；真实凭据变化会使其失效。
-func TestUpdateCredentialsPreservesOllamaAndDiscardsDeprecatedExtra(t *testing.T) {
+// 无变化的凭证持久化保留倍率探测与 Ollama 状态；真实凭据变化会使观测失效。
+func TestUpdateCredentialsPreservesOllamaAndUpstreamBillingState(t *testing.T) {
 	ctx := context.Background()
 	tx := testEntTx(t)
 	repo := newAccountRepositoryWithSQL(tx.Client(), tx, nil)
@@ -485,9 +485,9 @@ func TestUpdateCredentialsPreservesOllamaAndDiscardsDeprecatedExtra(t *testing.T
 		Name: "openai-legacy-extra", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
 		Credentials: map[string]any{"api_key": "sk-legacy", "base_url": "https://relay.example.com/v1"},
 		Extra: map[string]any{
-			deprecatedUpstreamBillingProbeEnabledExtraKey: true,
-			deprecatedUpstreamBillingProbeExtraKey:        map[string]any{"status": "ok"},
-			"custom":                                      "value",
+			service.UpstreamBillingProbeEnabledExtraKey: true,
+			service.UpstreamBillingProbeExtraKey:        map[string]any{"status": "ok"},
+			"custom":                                    "value",
 		},
 	})
 	require.NoError(t, repo.UpdateCredentials(ctx, legacyAccount.ID, map[string]any{
@@ -495,8 +495,8 @@ func TestUpdateCredentialsPreservesOllamaAndDiscardsDeprecatedExtra(t *testing.T
 	}))
 	legacyLoaded, err := repo.GetByID(ctx, legacyAccount.ID)
 	require.NoError(t, err)
-	require.NotContains(t, legacyLoaded.Extra, deprecatedUpstreamBillingProbeExtraKey)
-	require.NotContains(t, legacyLoaded.Extra, deprecatedUpstreamBillingProbeEnabledExtraKey)
+	require.Contains(t, legacyLoaded.Extra, service.UpstreamBillingProbeExtraKey)
+	require.Equal(t, true, legacyLoaded.Extra[service.UpstreamBillingProbeEnabledExtraKey])
 	require.Equal(t, "value", legacyLoaded.Extra["custom"])
 
 	now := time.Now().UTC()

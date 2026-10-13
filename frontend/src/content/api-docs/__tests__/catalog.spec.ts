@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 import { apiDocCategories, apiDocEndpoints, apiDocPlatforms, apiDocVideoProtocols, filterApiDocEndpoints } from '..'
 import { apiDocBaseUrl, apiDocCurl, apiDocEnvironment, apiDocMarkdown } from '../format'
 
@@ -60,5 +63,52 @@ describe('公开网关文档契约', () => {
     expect(apiDocBaseUrl('https://user:secret@gateway.example.com', 'https://site.example.com')).toBe('https://site.example.com')
     expect(apiDocBaseUrl('javascript:alert(1)', 'https://site.example.com')).toBe('https://site.example.com')
     expect(apiDocEnvironment("https://gateway.example.com/a'b")).toContain("a'\"'\"'b")
+  })
+
+  it('Gemini 缓存管理文档与后端实际注册的方法和路径一致', () => {
+    // 跨边界核对真实路由，防止只新增文案却公开不存在的端点或别名。
+    const gatewayRoutes = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../backend/internal/server/routes/gateway.go'), 'utf8')
+    const routes = [...gatewayRoutes.matchAll(/gemini\.(POST|GET|PATCH|DELETE)\("(\/cachedContents[^"\n]*)"/g)]
+      .map(match => `${match[1]} /v1beta${match[2]!.replace(':cacheID', '{cacheID}')}`).sort()
+    const documented = apiDocEndpoints.filter(endpoint => endpoint.id.startsWith('gemini-cache-') && endpoint.id !== 'gemini-cache-generate')
+    expect(documented.map(endpoint => `${endpoint.method} ${endpoint.path}`).sort()).toEqual(routes)
+    expect(routes).toHaveLength(5)
+    for (const endpoint of documented) {
+      expect(endpoint.platforms).toEqual(['gemini'])
+      expect(endpoint.auth).toBe('google')
+      expect(endpoint.aliases ?? []).toEqual([])
+      const markdown = apiDocMarkdown(endpoint, 'https://gateway.example.com')
+      expect(markdown).toContain('不支持复合 Key、智能路由 Key')
+      expect(markdown).toContain('API Key 和分组隔离')
+    }
+  })
+
+  it('缓存生成示例使用创建响应中的同一模型和资源名，不泄露上游身份', () => {
+    const create = apiDocEndpoints.find(endpoint => endpoint.id === 'gemini-cache-create')!
+    const generate = apiDocEndpoints.find(endpoint => endpoint.id === 'gemini-cache-generate')!
+    const created = JSON.parse(create.responseExample)
+    const request = JSON.parse(generate.requestExample!)
+    expect(request.cachedContent).toBe(created.name)
+    expect(created.name).toMatch(/^cachedContents\/[a-z0-9]{40}$/)
+    expect(generate.requestPath).toBe(`/v1beta/${created.model}:generateContent`)
+    expect(created).not.toHaveProperty('account_id')
+    expect(created).not.toHaveProperty('upstream_name')
+    expect(apiDocMarkdown(generate, 'https://gateway.example.com')).toContain('仍按实际返回的输入、缓存读取及输出用量')
+    expect(filterApiDocEndpoints('cachedContents', 'gemini')).toHaveLength(5)
+    expect(filterApiDocEndpoints('cachedContent', 'video')).toEqual([])
+  })
+
+  it('续期使用 PATCH 与 updateMask，说明按新增时长收费且缩短和删除不退款', () => {
+    const patch = apiDocEndpoints.find(endpoint => endpoint.id === 'gemini-cache-update')!
+    const remove = apiDocEndpoints.find(endpoint => endpoint.id === 'gemini-cache-delete')!
+    expect(apiDocCurl(patch)).toContain('-X PATCH')
+    expect(apiDocCurl(patch)).toContain('?updateMask=ttl')
+    expect(JSON.parse(patch.requestExample!)).toEqual({ ttl: '7200s' })
+    expect(patch.notes!.join(' ')).toContain('新增时长')
+    expect(patch.notes!.join(' ')).toContain('缩短有效期不退还')
+    expect(patch.parameters.find(parameter => parameter.name === 'ttl')!.description).toContain('不是在原到期时间上追加')
+    expect(apiDocCurl(remove)).toContain('-X DELETE')
+    expect(apiDocCurl(remove)).not.toContain('--data-raw')
+    expect(remove.notes!.join(' ')).toContain('删除不退还')
   })
 })

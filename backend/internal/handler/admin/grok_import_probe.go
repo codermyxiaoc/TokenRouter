@@ -213,6 +213,7 @@ func ProvideAccountHandler(
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 	grokQuotaService *service.GrokQuotaService,
 	upstreamUsageService *service.UpstreamUsageService,
+	upstreamBillingProbe *service.UpstreamBillingProbeService,
 ) *AccountHandler {
 	handler := NewAccountHandler(
 		adminService,
@@ -233,6 +234,7 @@ func ProvideAccountHandler(
 	)
 	handler.grokImportProber = grokQuotaService
 	handler.SetUpstreamUsageService(upstreamUsageService)
+	handler.upstreamBillingProbe = upstreamBillingProbe
 	diagnostics := service.NewAdvancedSchedulerScoreDiagnosticService(adminService, concurrencyService, rateLimitService)
 	diagnostics.SetSchedulingServices(gatewayService, openAIGatewayService)
 	handler.SetAdvancedSchedulerScoreDiagnosticService(diagnostics)

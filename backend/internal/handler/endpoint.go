@@ -31,9 +31,10 @@ const (
 	EndpointVideosExtensions     = "/v1/videos/extensions"
 	EndpointVideos               = "/v1/videos"
 	// EndpointSystemOne 是 OpenCode Zen Jev 的同步结构化决策端点。
-	EndpointSystemOne     = "/v1/systemone"
-	EndpointSeedanceTasks = "/api/v3/contents/generations/tasks"
-	EndpointGeminiModels  = "/v1beta/models"
+	EndpointSystemOne            = "/v1/systemone"
+	EndpointSeedanceTasks        = "/api/v3/contents/generations/tasks"
+	EndpointGeminiModels         = "/v1beta/models"
+	EndpointGeminiCachedContents = "/v1beta/cachedContents"
 )
 
 // EndpointAntigravityGenerateContent 是 Antigravity 原生流式生成端点。
@@ -113,6 +114,8 @@ func NormalizeInboundEndpoint(path string) string {
 		return EndpointResponses
 	case strings.Contains(path, EndpointGeminiModels):
 		return EndpointGeminiModels
+	case strings.Contains(path, EndpointGeminiCachedContents):
+		return EndpointGeminiCachedContents
 	default:
 		return path
 	}
@@ -204,6 +207,9 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 		return EndpointMessages
 
 	case service.PlatformGemini:
+		if inbound == EndpointGeminiCachedContents {
+			return EndpointGeminiCachedContents
+		}
 		return EndpointGeminiModels
 
 	case service.PlatformAntigravity:

@@ -116,6 +116,10 @@
                         {{ t('admin.accounts.toolActions') }}
                       </div>
                     </div>
+                    <button class="account-tools-menu-item" @click="showUpstreamBillingSettings = true; showAccountToolsDropdown = false">
+                      <span class="account-tools-menu-icon bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300"><Icon name="refresh" size="sm" /></span>
+                      <span class="flex-1 text-left">{{ t('admin.accounts.upstreamBilling.settingsTitle') }}</span>
+                    </button>
                     <button class="account-tools-menu-item" @click="openErrorPassthrough">
                       <span class="account-tools-menu-icon bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300">
                         <Icon name="shield" size="sm" />
@@ -366,9 +370,19 @@
               </div>
             </div>
           </template>
+          <template #header-upstream_billing_rate="{ column }">
+            <div class="flex items-center gap-1">
+              <span>{{ column.label }}</span>
+              <HelpTooltip :content="t('admin.accounts.upstreamBilling.trustWarning')" width-class="w-80" />
+            </div>
+          </template>
+          <template #cell-upstream_billing_rate="{ row }">
+            <UpstreamBillingRateCell :account="row" :now="upstreamBillingNow" :probing="upstreamBillingProbing.has(row.id)" :global-probe-enabled="upstreamBillingGloballyEnabled" @probe="probeUpstreamBilling(row)" />
+          </template>
           <template #cell-rate_multiplier="{ row }">
             <span class="text-sm font-mono text-gray-700 dark:text-gray-300">
-              {{ (row.rate_multiplier ?? 1).toFixed(2) }}x
+              {{ formatMultiplier(row.rate_multiplier ?? 1) }}x
+              <Icon v-if="row.extra?.upstream_billing_rate_sync_enabled === true" name="sync" size="xs" class="ml-1 inline text-primary-500" :title="t('admin.accounts.upstreamBilling.syncedRateTooltip')" />
             </span>
           </template>
           <template #cell-priority="{ row }">
@@ -443,6 +457,7 @@
       </template>
       <template #pagination><Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" /></template>
     </TablePageLayout>
+    <UpstreamBillingSettingsModal :show="showUpstreamBillingSettings" @close="showUpstreamBillingSettings = false" @saved="upstreamBillingGloballyEnabled = $event.enabled" />
     <CreateAccountModal
       :show="showCreate"
       :initial-platform="createInitialPlatform"
@@ -491,6 +506,9 @@
 <script setup lang="ts">
 import { ref, reactive, computed, nextTick, onMounted, onUnmounted, toRaw, watch } from 'vue'
 import { useIntervalFn } from '@vueuse/core'
+import { formatMultiplier } from '@/utils/formatters'
+import UpstreamBillingRateCell from '@/components/account/UpstreamBillingRateCell.vue'
+import UpstreamBillingSettingsModal from '@/components/account/UpstreamBillingSettingsModal.vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -602,6 +620,44 @@ const selTypes = computed<AccountType[]>(() => {
   )
   return [...types]
 })
+// 展示时间随时钟更新；探测开关不依赖列表页面是否打开。
+const showUpstreamBillingSettings = ref(false)
+const upstreamBillingGloballyEnabled = ref<boolean | undefined>(undefined)
+const upstreamBillingNow = ref(Date.now())
+const upstreamBillingProbing = reactive(new Set<number>())
+useIntervalFn(() => { upstreamBillingNow.value = Date.now() }, 60_000)
+const probeUpstreamBilling = async (account: Account) => {
+  if (upstreamBillingProbing.has(account.id)) return
+  upstreamBillingProbing.add(account.id)
+  try {
+    const result = await adminAPI.accounts.probeUpstreamBilling(account.id)
+    if (result.account_id !== account.id) throw new Error('Account mismatch')
+    if (result.snapshot) {
+      // 合并到当前行，避免等待期间其他编辑结果被请求前快照覆盖。
+      const current = accounts.value.find(item => item.id === account.id)
+      if (current && current.updated_at === account.updated_at) patchAccountInList({
+        ...current,
+        extra: { ...current.extra, upstream_billing_probe: result.snapshot },
+        ...(result.snapshot.synced_rate_multiplier != null ? { rate_multiplier: result.snapshot.synced_rate_multiplier } : {})
+      })
+    }
+    upstreamBillingNow.value = Date.now()
+    if (result.error) appStore.showError(t('admin.accounts.upstreamBilling.probeFailed'))
+  } catch {
+    appStore.showError(t('admin.accounts.upstreamBilling.probeFailed'))
+  } finally {
+    upstreamBillingProbing.delete(account.id)
+  }
+}
+const loadUpstreamBillingSettings = async () => {
+  try {
+    const settings = await adminAPI.accounts.getUpstreamBillingProbeSettings()
+    upstreamBillingGloballyEnabled.value = settings.enabled
+  } catch {
+    // 读取设置失败不妨碍账号列表与手动探测。
+    upstreamBillingGloballyEnabled.value = undefined
+  }
+}
 const showCreate = ref(false)
 const createInitialPlatform = ref<AccountPlatform | undefined>(undefined)
 const showEdit = ref(false)
@@ -771,8 +827,8 @@ const accountSupportsBatchUsage = (account: Account) => {
     return account.type === 'oauth' || account.type === 'setup-token'
   }
   if (account.platform === 'gemini') {
-    const credentials = account.credentials as Record<string, unknown> | undefined
-    return !(account.type === 'apikey' && credentials?.provider_type === 'third_party')
+    // Vertex 无本地模拟额度，API Key 统一保留显式查询入口。
+    return account.type === 'oauth'
   }
   if (account.platform === 'antigravity') return account.type === 'oauth'
   if (account.platform === 'openai') return account.type === 'oauth'
@@ -2202,6 +2258,7 @@ const allColumns = computed(() => {
     { key: 'proxy', label: t('admin.accounts.columns.proxy'), sortable: false },
     { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
     { key: 'scheduler_score', label: t('admin.accounts.columns.schedulerScore'), sortable: false },
+    { key: 'upstream_billing_rate', label: t('admin.accounts.upstreamBilling.column'), sortable: false },
     { key: 'rate_multiplier', label: t('admin.accounts.columns.billingRateMultiplier'), sortable: true },
     { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
     { key: 'created_at', label: t('admin.accounts.columns.createdAt'), sortable: true },
@@ -2346,7 +2403,7 @@ const canQueryAccountUsage = (account: Account) => {
   return (
     (account.platform === 'anthropic' && (account.type === 'oauth' || account.type === 'setup-token')) ||
     (account.platform === 'openai' && account.type === 'oauth') ||
-    (account.platform === 'gemini' && account.type !== 'apikey') ||
+    (account.platform === 'gemini' && account.type === 'oauth') ||
     (account.platform === 'antigravity' && account.type === 'oauth') ||
     (account.platform === 'qoder' && account.type === 'cosy')
   )
@@ -2979,6 +3036,7 @@ const handleClickOutside = (event: MouseEvent) => {
 }
 
 onMounted(async () => {
+  void loadUpstreamBillingSettings()
   if (typeof window !== 'undefined') {
     desktopViewportMediaQuery = window.matchMedia(TABLE_DESKTOP_MEDIA_QUERY)
     isDesktopViewport.value = desktopViewportMediaQuery.matches

@@ -24,6 +24,37 @@ type sqlExecutor interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
+// lockLiveGroups 按 ID 排序锁定存活分组，与删除操作共享锁顺序。
+func lockLiveGroups(ctx context.Context, exec sqlExecutor, groupIDs []int64) error {
+	if len(groupIDs) == 0 {
+		return nil
+	}
+	unique := make(map[int64]struct{}, len(groupIDs))
+	for _, id := range groupIDs {
+		unique[id] = struct{}{}
+	}
+	rows, err := exec.QueryContext(ctx, `/* account_group_live_group_lock */
+		SELECT id FROM groups
+		WHERE id = ANY($1) AND deleted_at IS NULL
+		ORDER BY id
+		FOR SHARE`, pq.Array(groupIDs))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	locked := 0
+	for rows.Next() {
+		locked++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if locked != len(unique) {
+		return service.ErrGroupNotFound
+	}
+	return nil
+}
+
 type groupRepository struct {
 	client *dbent.Client
 	sql    sqlExecutor
@@ -162,6 +193,10 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 
 	// 设置支持的模型系列（始终设置，空数组表示不限制）
 	builder = builder.SetSupportedModelScopes(groupIn.SupportedModelScopes)
+
+	if groupIn.I18n != nil {
+		builder = builder.SetI18n(groupIn.I18n)
+	}
 
 	created, err := builder.Save(ctx)
 	if err != nil {
@@ -429,6 +464,12 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 
 	// 处理 SupportedModelScopes（始终设置，空数组表示不限制）
 	builder = builder.SetSupportedModelScopes(groupIn.SupportedModelScopes)
+
+	i18n := groupIn.I18n
+	if i18n == nil {
+		i18n = service.GroupI18n{}
+	}
+	builder = builder.SetI18n(i18n)
 
 	updated, err := builder.Save(ctx)
 	if err != nil {
@@ -935,6 +976,27 @@ func (r *groupRepository) DeleteCascade(ctx context.Context, id int64) ([]int64,
 	// 5. 软删除分组自身。
 	if _, err := txClient.Group.Delete().Where(group.IDEQ(id)).Exec(ctx); err != nil {
 		return nil, err
+	}
+	// 使用 JSONB 前先锁定并校验历史配置；格式损坏不得阻止删除或被静默覆盖。
+	var moderationValue string
+	err = scanSingleRow(ctx, exec, `SELECT value FROM settings WHERE key = $1 FOR UPDATE`,
+		[]any{service.SettingKeyContentModerationConfig}, &moderationValue)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	// 在同一事务内清理风控分组范围；设置行锁同时串行化多节点删除。
+	if err == nil && json.Valid([]byte(moderationValue)) {
+		if _, err := exec.ExecContext(ctx, `UPDATE settings
+		SET value = jsonb_set(value::jsonb, '{group_ids}',
+			(SELECT COALESCE(jsonb_agg(group_id ORDER BY ord), '[]'::jsonb)
+			 FROM jsonb_array_elements(value::jsonb->'group_ids') WITH ORDINALITY AS ids(group_id, ord)
+			 WHERE group_id <> to_jsonb($2::bigint)))::text,
+			updated_at = NOW()
+		WHERE key = $1 AND jsonb_typeof(value::jsonb->'group_ids') = 'array'
+			AND value::jsonb->'group_ids' @> jsonb_build_array($2::bigint)`,
+			service.SettingKeyContentModerationConfig, id); err != nil {
+			return nil, err
+		}
 	}
 
 	if tx != nil {

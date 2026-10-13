@@ -86,7 +86,10 @@ func TestVideoV27UpgradePreservesFinancialState(t *testing.T) {
 		if table == "user_subscriptions" || table == "user_platform_quotas" {
 			excluded = "{daily_reset_generation,weekly_reset_generation,monthly_reset_generation}"
 		} else if table == "channel_model_pricing" {
-			excluded = "{video_prices,video_image_input_pricing,video_fallback_price,video_token_prepay}"
+			excluded = "{video_prices,video_image_input_pricing,video_fallback_price,video_token_prepay,model_details}"
+		} else if table == "groups" {
+			// 新增展示字段另验空默认值，原有资金与模型价格仍逐字段保持一致。
+			excluded = "{i18n}"
 		}
 		expression := fmt.Sprintf("to_jsonb(t) - '%s'::text[]", excluded)
 		queries[table] = fmt.Sprintf("SELECT COALESCE(jsonb_agg(%s ORDER BY (%s)::text),'[]'::jsonb)::text FROM %s t", expression, expression, table)
@@ -119,4 +122,10 @@ func TestVideoV27UpgradePreservesFinancialState(t *testing.T) {
 	}
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM channel_model_pricing WHERE video_prices<>'[]'::jsonb OR video_image_input_pricing IS NOT NULL OR video_fallback_price IS NOT NULL OR video_token_prepay IS NOT NULL`).Scan(&invalidDefaults))
 	require.Zero(t, invalidDefaults)
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM channel_model_pricing WHERE model_details <> '{}'::jsonb`).Scan(&invalidDefaults))
+	require.Zero(t, invalidDefaults, "旧模型不能自动获得展示说明")
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM groups WHERE i18n <> '{}'::jsonb`).Scan(&invalidDefaults))
+	require.Zero(t, invalidDefaults, "旧分组不能自动获得译文")
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM gemini_cached_contents`).Scan(&tasks))
+	require.Zero(t, tasks, "升级不能替旧请求创建缓存资源或收费")
 }

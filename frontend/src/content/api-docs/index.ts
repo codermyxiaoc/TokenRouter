@@ -3,6 +3,7 @@ import type { ApiDocEndpoint, ApiDocVideoProtocol } from './types'
 import { textEndpoints } from './text'
 import { mediaEndpoints } from './media'
 import { videoEndpoints } from './video'
+import { geminiCacheEndpoints } from './gemini-cache'
 
 // 分类与正文分离，新增网关能力时无需修改页面渲染逻辑。
 export const apiDocCategories = [
@@ -28,7 +29,7 @@ export function videoProtocolLabel(id?: ApiDocVideoProtocol): string {
   return apiDocVideoProtocols.find(protocol => protocol.id === id)?.label ?? ''
 }
 
-export const apiDocEndpoints: ApiDocEndpoint[] = [...textEndpoints, ...mediaEndpoints, ...videoEndpoints]
+export const apiDocEndpoints: ApiDocEndpoint[] = [...textEndpoints, ...geminiCacheEndpoints, ...mediaEndpoints, ...videoEndpoints]
 export const apiDocPlatforms = CONCRETE_PLATFORM_OPTIONS.map(item => ({
   ...item,
   label: item.value === 'opencode_go' ? 'OpenCode Zen / GO' : item.label,

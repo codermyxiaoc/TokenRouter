@@ -186,11 +186,12 @@ describe('admin AccountsView usage windows hint', () => {
     expect(columns.some(column => column.key === 'ollama_cloud_usage')).toBe(false)
   })
 
-  it('does not expose the removed upstream billing rate column', async () => {
+  it('shows the upstream billing declaration without removing usage columns', async () => {
     const wrapper = mountView()
     await flushPromises()
 
     const columns = wrapper.getComponent(DataTableStub).props('columns') as Array<{ key: string; sortable: boolean }>
-    expect(columns.some(column => column.key === 'upstream_billing_rate')).toBe(false)
+    expect(columns.some(column => column.key === 'upstream_billing_rate')).toBe(true)
+    expect(columns.some(column => column.key === 'usage')).toBe(true)
   })
 })

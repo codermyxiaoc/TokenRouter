@@ -6,6 +6,7 @@ import GroupsView from '../GroupsView.vue'
 import Select from '@/components/common/Select.vue'
 import GroupClientProtocolSelector from '@/components/admin/group/GroupClientProtocolSelector.vue'
 import PricingEntryCard from '@/components/admin/channel/PricingEntryCard.vue'
+import GroupI18nField from '@/components/admin/group/GroupI18nField.vue'
 import type { AdminGroup, GroupPlatform, GroupAvailabilityProbeResult } from '@/types'
 
 const { groups, showError } = vi.hoisted(() => ({
@@ -99,6 +100,21 @@ afterEach(() => {
 })
 
 describe.each(['create', 'edit'] as const)('GroupsView %s tabs', mode => {
+  it('保存独立分组译文并保留默认名称', async () => {
+    const original = { en: { name: 'English group', description: 'Original description' } }
+    const wrapper = await open(mode, 'video', { i18n: original })
+    const nameField = wrapper.findAllComponents(GroupI18nField).find(field => field.props('field') === 'name')!
+    await nameField.get('[data-testid="group-i18n-menu"]').trigger('click')
+    await nameField.get('[data-locale="en"]').trigger('click')
+    await nameField.get('input').setValue('Updated English group')
+    await wrapper.get(`#${mode}-group-form`).trigger('submit')
+    await flushPromises()
+    const payload = mode === 'create' ? groups.create.mock.calls[0]?.[0] : groups.update.mock.calls[0]?.[1]
+    expect(payload.name).toBe(mode === 'create' ? 'New group' : 'Existing')
+    expect(payload.i18n.en.name).toBe('Updated English group')
+    expect(original.en.name).toBe('English group')
+  })
+
   it('TypeSafe 仅保存 SystemOne 平台，不显示或提交文本与 OAuth 配置', async () => {
     const wrapper = await open(mode, 'typesafe')
     expect(wrapper.findAll('[data-group-tab-button]').map(button => button.attributes('data-group-tab-button'))).toEqual(['general', 'pricing'])

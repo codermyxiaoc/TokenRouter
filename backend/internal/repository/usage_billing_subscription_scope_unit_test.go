@@ -43,7 +43,8 @@ func TestUsageBillingSubscriptionScopeAllocation(t *testing.T) {
 			})
 			if tc.active {
 				now := time.Now().UTC()
-				window := now.Add(-time.Hour)
+				// 本例验证未重置窗口的分摊；减一小时会在午夜附近意外进入前一天。
+				window := now
 				rows.AddRow(scopeID, int64(22), now.Add(-24*time.Hour), now.Add(24*time.Hour), window, window, window, 1.0, 1.0, 1.0, 0.8, 0.8, 0.8, int64(3), int64(2), int64(1), now, `{}`)
 			}
 			mock.ExpectQuery(`(?s)SELECT\s+id,\s+plan_id,.*FROM user_subscriptions.*AND \(\$4::bigint IS NULL OR id = \$4\).*FOR UPDATE`).

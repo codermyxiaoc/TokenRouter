@@ -37,6 +37,21 @@ async function render(path = '/docs') {
 describe('API 文档页面', () => {
   beforeEach(() => { vi.clearAllMocks(); state.authenticated = false })
 
+  it('沿用现有目录与正文渲染缓存指南，并复制相同的归属和费用说明', async () => {
+    const { wrapper, router } = await render('/docs/gemini-cache-create')
+    expect(wrapper.get('article').text()).toContain('Gemini 创建显式缓存')
+    expect(wrapper.get('article').text()).toContain('/v1beta/cachedContents')
+    expect(wrapper.get('article').text()).toContain('不支持复合 Key、智能路由 Key')
+    expect(wrapper.get('article').text()).toContain('Token × 小时')
+    await wrapper.findAll('button').find(button => button.text().includes('apiDocs.copyMarkdown'))!.trigger('click')
+    expect(copyToClipboard).toHaveBeenLastCalledWith(expect.stringContaining('API Key 和分组隔离'))
+    await router.push('/docs/gemini-cache-generate')
+    await flushPromises()
+    expect(wrapper.get('article').text()).toContain('cachedContent')
+    expect(wrapper.get('article').text()).toContain('固定使用持有该缓存的账号')
+    wrapper.unmount()
+  })
+
   it('访客可读默认指南，已登录用户复用应用布局', async () => {
     const { wrapper } = await render()
     expect(wrapper.find('article').text()).toContain('从一个端点开始接入')

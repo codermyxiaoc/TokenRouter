@@ -49,6 +49,10 @@ Responses 工具参数转换为 Anthropic `input_schema` 时，会把根节点�
 
 ## 模型与请求策略
 
+Haiku 5.5 纳入默认模型、思考参数、Responses 桥和定价路径，支持 `none/low/medium/high/xhigh/max`；只允许默认采样边界，拒绝 `top_k`、同时设置 `temperature/top_p` 以及旧式 `enabled/between_tools` 思考。显式关闭思考不能再使用 `xhigh/max`。默认价超过 100K 输入上下文时使用该模型自己的阶梯，渠道显式价格与免费配置继续优先。
+
+Haiku/Sonnet/Opus 5.5 在 Responses 往返中使用带格式标识的 Anthropic 思考信封保留原生签名或遮蔽数据，流式和非流式一致。仅识别本桥的合法结构，不把任意 OpenAI `encrypted_content` 当成 Claude 签名，不替换上游本身的签名验证；工具调用配对与历史顺序仍遵守原转换规则。
+
 模型依次经过 Key 重定向、渠道映射和账号映射；可请求列表是分组策略、渠道和当前账号能力的交集，不是默认模型常量的直接输出。Bedrock/Vertex 的供应商模型标识可与客户端 Anthropic 名称不同，计费模型也可以由渠道单独指定。
 
 原生 Anthropic 目录新增 `claude-opus-5-5`（Claude Opus 5.5），不替换 Opus 5 或其他旧模型，也不推断 Antigravity、OpenCode 或 Bedrock 地域路由可用性。该型号始终启用 adaptive thinking、默认 effort 为 `medium`；兼容入口为最终映射目标生成 thinking 时使用 adaptive，缺省 thinking 不能被当成关闭思考而删掉合法历史块。客户端显式 `thinking=disabled/enabled`、强制工具选择等不合法原生字段保留上游校验语义，不偷偷改成其他工具策略。旧思考签名与模型、对话绑定，跨模型历史不能凭模型目录扩展保证复用。官方迁移约束见 [Opus 5.5 迁移指南](https://platform.claude.com/docs/zh-CN/models/opus-5-5/migration-guide)，价格与缓存独立条目见[模型目录与市场](model_catalog_and_marketplace.md)。
@@ -101,7 +105,7 @@ Messages 和 CountTokens 的 OAuth 出站请求中，`x-anthropic-billing-header
 
 账号必须通过状态、分组、模型、endpoint、凭据、限流和并发筛选。粘性会话尽量复用同一账号；账号失效、模型限流或策略变化会丢弃旧绑定并重新选择。等待队列只等待可能恢复的并发/限流条件，不会把永久凭据错误变成无限等待。
 
-API Key/Bedrock 可配置本地账号配额和亲和策略。可用的上游用量/配额状态、账号优先级与近期错误可以参与资格判断或调度，但不替代用户余额、订阅和用户平台额度。Anthropic 不再采集上游站点声明倍率，也不按该值排序或评分；账户本地 `rate_multiplier` 仅保留为结算输入。Antigravity 账号只有显式启用 mixed scheduling 后才能加入 Anthropic 候选，并继续遵守 Anthropic 分组语义。
+API Key/Bedrock 可配置本地账号配额和亲和策略。可用的上游用量/配额状态、账号优先级与近期错误可以参与资格判断或调度，但不替代用户余额、订阅和用户平台额度。Anthropic API Key 可显式启用[上游声明倍率探测](upstream_billing_probe.md)和账号倍率同步，Bedrock 不适用；声明不参与排序或评分，账号 `rate_multiplier` 只作用于账号成本统计与账号额度。Antigravity 账号只有显式启用 mixed scheduling 后才能加入 Anthropic 候选，并继续遵守 Anthropic 分组语义。
 
 ## 错误与诊断
 

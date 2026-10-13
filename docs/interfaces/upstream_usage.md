@@ -92,4 +92,4 @@ API Key 账号（含 Kimi、Zhipu、DeepSeek、MiniMax、OpenCode 和 Video）�
 
 国产 Coding Plan 账号（包括 Kimi）在转发中返回带 `usage limit`、`quota will reset` 或 `error.type=access_terminated_error` 的 403 时，按可恢复的额度耗尽处理。有效监控快照提供未来重置点时复用现有窗口选择规则写入限流截止；没有有效重置点或写入限流失败时回退短期临时停调，不将这类业务限制累计为永久凭据错误。Kimi 精确并发限制文案继续走独立临时冷却；普通按量账号的 403 不适用额度识别。管理员显式配置的自定义错误码处理仍先执行，自动恢复分类不覆盖管理员策略；请求失败记录和既有切号/智能路由边界保持不变。
 
-旧的 `upstream_billing_probe` 是已移除的自动倍率探测能力，本功能不恢复它，也不写入旧快照或调度状态。
+`upstream_billing_probe` 由独立的[上游声明倍率探测](upstream_billing_probe.md)维护。用量查询不写倍率快照、不修改账号倍率或调度状态，也不根据余额接口结果推断上游倍率。

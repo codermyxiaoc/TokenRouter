@@ -622,6 +622,9 @@ type ForwardResult struct {
 	ImageSizeBreakdown map[string]int
 	SearchCount        int
 	AudioUsage         *AudioUsage
+	// CacheStorageTokenHours 显式上下文缓存的存储量（缓存 token 数 × 存储小时数），按计费模型的
+	// 存储单价折算为费用后叠加在 token 费用之上。
+	CacheStorageTokenHours float64
 }
 
 // GatewayFailureStage 标识请求失败的阶段。零值有意按推理阶段处理，
@@ -657,6 +660,8 @@ type GatewayFailureReason string
 // UpstreamFailoverError 表示可能触发账号切换的上游或凭据错误。
 // 新增元数据保持现有复合字面量源码兼容，并保留旧版切换账号行为。
 type UpstreamFailoverError struct {
+	// BoundUpstreamPassthrough 表示错误只影响持有缓存的上游账号。
+	BoundUpstreamPassthrough bool
 	StatusCode               int
 	ResponseBody             []byte      // 上游响应体，用于错误透传规则匹配
 	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息

@@ -172,6 +172,10 @@ func (r *usageBillingRepository) reserveImageBillingOnce(ctx context.Context, or
 	for _, allocation := range allocations {
 		cmd.HoldAmount += allocation.AmountUSD
 	}
+	// 显式缓存还需在付款用户锁内合并未结算预留，避免并发创建绕过密钥额度。
+	if err := checkGeminiCacheReservationAllowance(ctx, tx, &cmd, quote); err != nil {
+		return nil, err
+	}
 	balanceCommand := cmd
 	balanceCommand.HoldAmount = cmd.BalanceHoldAmount
 	if _, err := reserveUsageBillingBatchImageBalance(ctx, tx, &balanceCommand); err != nil {

@@ -41,6 +41,8 @@
 | Cline | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 | Command Code | 不支持 | 不支持 | 正式支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 
+Gemini 的 Vertex 入口继续保存为 `service_account` 类型，`credentials.auth_mode=apikey` 表示 Vertex API Key，未设置时沿用服务账号 JSON。Vertex API Key 不能使用服务账号模型发现；两种 Vertex 凭据及第三方 Gemini 地址均不应用 AI Studio 账号等级或本地模拟配额。Gemini 显式缓存支持官方 API Key 和 Vertex Service Account；第三方 API Key 上游须显式开启对应能力，OAuth 和 Vertex API Key 不支持。缓存保留固定分组、密钥归属和原账号绑定，具体限制见 [Gemini 上游](gemini_upstream.md#gemini_explicit_cache)。
+
 除独立 Video 平台外，API Key 账号可以在管理员列表配置并手动查询上游用量。普通兼容上游以及 OpenCode Zen、Zhipu payg、MiniMax payg 缺省使用 Sub2API 适配器，New API 和 Zivv 必须显式选择；实际站点须支持所选协议。Kimi、DeepSeek、Coding Plan 与 OpenCode GO 的原生查询仍按平台和模式固定适配器。手动查询协议错误只影响展示，不改变转发资格。API Key 行同时保留 TokenRouter 本地今日统计/本地配额和上游余额/周期限额两个来源；只有显式开启且具备原生协议资格的 CN/GO 周期监控可以写统一快照并形成身份绑定的临时停调，OpenCode Zen、Zhipu payg、MiniMax payg 不进入监控；Cline 与 Command Code 官方账号支持钱包隔离监控，详见[API Key 上游用量查询](upstream_usage.md)。
 
 Kimi、Zhipu 和 DeepSeek 只接受 `type=apikey`。`credentials.account_mode` 为 `payg` 或 `coding`，其中 DeepSeek 不支持 `coding`；`credentials.api_protocol` 支持 `chat_completions`、`anthropic` 和 `adaptive`，Kimi、DeepSeek 还支持 `responses`。历史账号缺少这两个字段时分别按 `payg` 和 `chat_completions` 读取。自定义 `base_url`、代理、TLS 指纹与受保护的 Header Override 沿用共同传输边界，平台身份不能从中继 URL 反推。
@@ -124,7 +126,7 @@ TypeSafe 与 OpenCode Zen 的结构化决策使用 `POST /v1/systemone` 或 `/sy
 
 路由存在不代表任意分组或账号类型都能承接。协议门禁在账号选择前按最终分组执行；通过后，处理器仍会校验平台、模型、transport、endpoint capability、媒体资格和其它分组策略。Gemini Responses 已有正式非流和 SSE 转换，保留 reasoning、工具调用、usage、结束原因与首次 Token 指标；首个客户端字节写出后不再 failover。
 
-公开协议不再包含 Key 账单自省或上游声明倍率入口。`GET /v1/sub2api/billing` 未注册并返回普通 `404`；账户本地 `rate_multiplier` 和渠道的上游计费模型来源仍属于结算配置，不代表从上游探测到的声明倍率。管理员 API Key 用量查询属于独立的手动展示接口，详见 [API Key 上游用量查询](upstream_usage.md)。
+公开协议不包含 Key 账单自省，`GET /v1/sub2api/billing` 未注册并返回普通 `404`。API Key 账号可显式开启管理员[上游声明倍率探测](upstream_billing_probe.md)，目标中继须实现该专有协议；不代表所有厂商官方账号都支持。账户本地 `rate_multiplier` 与渠道上游计费模型来源仍属于账号成本配置，只有另行开启同步才会用有效声明更新账号倍率。管理员钱包用量查询属于独立的展示接口，详见 [API Key 上游用量查询](upstream_usage.md)。
 
 ## 跨层约束
 

@@ -508,6 +508,7 @@
         </span>
         <!-- Help icon -->
         <span
+          v-if="showGeminiQuotaPolicy"
           class="group relative cursor-help"
         >
           <svg
@@ -598,7 +599,7 @@
           </p>
         </div>
         <!-- AI Studio Client OAuth: show unlimited flow (no usage tracking) -->
-        <div v-else class="text-xs text-gray-400">
+        <div v-else-if="!showGeminiTodayStats" class="text-xs text-gray-400">
           {{ t('admin.accounts.gemini.rateLimit.unlimited') }}
         </div>
       </div>
@@ -615,41 +616,9 @@
 
   <!-- Non-OAuth/Setup-Token accounts -->
   <div ref="rootRef" v-else>
-    <div v-if="isGeminiThirdPartyProvider" class="space-y-1">
-      <AccountUpstreamUsageCell
-        v-if="account.type === 'apikey'"
-        :account="account"
-        :result="upstreamUsage"
-        :error="upstreamUsageError"
-        :loading="upstreamUsageLoading"
-        :show-query-button="false"
-        :request="requestUpstreamUsage"
-      />
-      <div v-if="showGeminiTodayStats && todayStats" class="mb-0.5 flex items-center">
-        <div class="flex items-center gap-1.5 text-[9px] text-gray-500 dark:text-gray-400">
-          <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">{{ formatKeyRequests }} req</span>
-          <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">{{ formatKeyTokens }}</span>
-          <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800" :title="t('usage.accountBilled')">A {{ formatKeyCost }}</span>
-          <span
-            v-if="todayStats.user_cost != null"
-            class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800"
-            :title="t('usage.userBilled')"
-          >U {{ formatKeyUserCost }}</span>
-        </div>
-      </div>
-      <div v-else-if="showGeminiTodayStats && todayStatsLoading" class="mb-0.5 flex items-center gap-1">
-        <div class="h-3 w-10 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
-        <div class="h-3 w-8 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
-        <div class="h-3 w-12 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
-      </div>
-      <div
-        v-else-if="account.type !== 'apikey'"
-        class="text-xs text-gray-400"
-      >-</div>
-    </div>
     <!-- 非 API Key 的 Gemini 账号继续保留原有本地配额视图。 -->
     <AccountQuotaInfo
-      v-else-if="account.platform === 'gemini' && account.type !== 'apikey'"
+      v-if="account.platform === 'gemini' && account.type !== 'apikey'"
       :account="account"
     />
     <!-- API Key（含国产平台和 OpenCode）统一展示上游用量、本地统计及本地配额。 -->
@@ -664,7 +633,7 @@
         :request="requestUpstreamUsage"
       />
       <AccountQuotaInfo
-        v-if="account.platform === 'gemini' && account.type === 'apikey'"
+        v-if="account.platform === 'gemini' && account.type === 'apikey' && !isGeminiThirdPartyProvider"
         :account="account"
       />
       <OllamaCloudUsageCell
@@ -763,6 +732,7 @@ import type {
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
+import { isOfficialGeminiBaseUrl } from '@/utils/geminiExplicitCache'
 import { TABLE_DESKTOP_MEDIA_QUERY } from '@/constants/layout'
 import Icon from '@/components/icons/Icon.vue'
 import UsageProgressBar from './UsageProgressBar.vue'
@@ -845,8 +815,11 @@ let visibilityObserver: IntersectionObserver | null = null
 const isGeminiThirdPartyProvider = computed(() => {
   if (props.account.platform !== 'gemini' || props.account.type !== 'apikey') return false
   const credentials = props.account.credentials as GeminiCredentials | undefined
-  return credentials?.provider_type === 'third_party'
+  return credentials?.provider_type === 'third_party' || !isOfficialGeminiBaseUrl(credentials?.base_url)
 })
+
+// Vertex 不使用本地模拟额度，只展示真实今日统计。
+const isGeminiVertex = computed(() => props.account.platform === 'gemini' && props.account.type === 'service_account')
 
 const upstreamUsageDisabled = computed(() => {
   if (props.account.type !== 'apikey') return false
@@ -870,7 +843,7 @@ const shouldFetchUsage = computed(() => {
     return props.account.type === 'oauth' || props.account.type === 'setup-token'
   }
   if (props.account.platform === 'gemini') {
-    return props.account.type !== 'apikey' && !isGeminiThirdPartyProvider.value
+    return props.account.type !== 'apikey' && !isGeminiVertex.value && !isGeminiThirdPartyProvider.value
   }
   if (props.account.platform === 'antigravity') {
     return props.account.type === 'oauth'
@@ -1041,6 +1014,10 @@ const geminiOAuthType = computed(() => {
   return (creds?.oauth_type || '').trim() || null
 })
 
+const showGeminiQuotaPolicy = computed(() => {
+  return !isGeminiVertex.value
+})
+
 // Gemini 是否为 Code Assist OAuth
 const isGeminiCodeAssist = computed(() => {
   if (props.account.platform !== 'gemini') return false
@@ -1048,9 +1025,10 @@ const isGeminiCodeAssist = computed(() => {
   return creds?.oauth_type === 'code_assist' || (!creds?.oauth_type && !!creds?.project_id)
 })
 
-const geminiChannelShort = computed((): 'ai studio' | 'gcp' | 'google one' | 'client' | null => {
+const geminiChannelShort = computed((): 'ai studio' | 'vertex' | 'gcp' | 'google one' | 'client' | null => {
   if (props.account.platform !== 'gemini') return null
 
+  if (isGeminiVertex.value) return 'vertex'
   // API Key accounts are AI Studio.
   if (props.account.type === 'apikey') return 'ai studio'
 
@@ -1064,6 +1042,7 @@ const geminiChannelShort = computed((): 'ai studio' | 'gcp' | 'google one' | 'cl
 
 const geminiUserLevel = computed((): string | null => {
   if (props.account.platform !== 'gemini') return null
+  if (isGeminiVertex.value) return null
 
   const tier = (geminiTier.value || '').toString().trim()
   const tierLower = tier.toLowerCase()
@@ -1121,7 +1100,7 @@ const geminiTierClass = computed(() => {
   const channel = geminiChannelShort.value
   const level = geminiUserLevel.value
 
-  if (channel === 'client' || channel === 'ai studio') {
+  if (channel === 'client' || channel === 'ai studio' || channel === 'vertex') {
     return 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300'
   }
 

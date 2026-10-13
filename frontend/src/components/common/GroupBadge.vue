@@ -9,7 +9,7 @@
     <ProviderIcon v-if="brandName" :brand="brandName" size="14px" />
     <PlatformIcon v-else-if="platform" :platform="platform" size="sm" />
     <!-- Group name -->
-    <span class="truncate">{{ name }}</span>
+    <span :class="truncate ? 'truncate' : 'min-w-0 whitespace-normal [overflow-wrap:anywhere]'">{{ name }}</span>
     <!-- Right side label -->
     <span v-if="showLabel" :class="labelClass">
       <template v-if="hasCustomRate">
@@ -47,12 +47,15 @@ interface Props {
   peakStart?: string
   peakEnd?: string
   peakRateMultiplier?: number
+  /** 账号列表允许完整分组名称换行，其它位置保留截断。 */
+  truncate?: boolean
   showRate?: boolean
   daysRemaining?: number | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
   showRate: true,
+  truncate: true,
   daysRemaining: null,
   userRateMultiplier: null,
   peakRateEnabled: false

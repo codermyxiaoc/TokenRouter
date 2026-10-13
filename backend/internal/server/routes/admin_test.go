@@ -95,8 +95,8 @@ func TestAdminImageStorageRoutesRequireAdminAndStepUp(t *testing.T) {
 	}
 }
 
-// TestAdminUpstreamBillingProbeRoutesAreRemoved 锁定声明倍率探测管理接口全部返回普通 404。
-func TestAdminUpstreamBillingProbeRoutesAreRemoved(t *testing.T) {
+// TestAdminUpstreamBillingProbeRoutesAreScoped 只开放声明倍率单次探测与全局设置。
+func TestAdminUpstreamBillingProbeRoutesAreScoped(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	admin := router.Group("/api/v1/admin")
@@ -112,6 +112,11 @@ func TestAdminUpstreamBillingProbeRoutesAreRemoved(t *testing.T) {
 	for _, route := range router.Routes() {
 		registered[route.Method+" "+route.Path] = true
 	}
+	for _, route := range []string{
+		"GET /api/v1/admin/accounts/upstream-billing-probe-settings", "PUT /api/v1/admin/accounts/upstream-billing-probe-settings", "POST /api/v1/admin/accounts/:id/upstream-billing-probe",
+	} {
+		require.True(t, registered[route])
+	}
 	removed := []struct {
 		method      string
 		routePath   string
@@ -121,7 +126,6 @@ func TestAdminUpstreamBillingProbeRoutesAreRemoved(t *testing.T) {
 		{method: http.MethodPut, routePath: "/api/v1/admin/accounts/upstream-billing-probe/settings", requestPath: "/api/v1/admin/accounts/upstream-billing-probe/settings"},
 		{method: http.MethodPost, routePath: "/api/v1/admin/accounts/upstream-billing-probe/batch", requestPath: "/api/v1/admin/accounts/upstream-billing-probe/batch"},
 		{method: http.MethodPut, routePath: "/api/v1/admin/accounts/:id/upstream-billing-probe", requestPath: "/api/v1/admin/accounts/42/upstream-billing-probe"},
-		{method: http.MethodPost, routePath: "/api/v1/admin/accounts/:id/upstream-billing-probe", requestPath: "/api/v1/admin/accounts/42/upstream-billing-probe"},
 	}
 	for _, route := range removed {
 		require.False(t, registered[route.method+" "+route.routePath])

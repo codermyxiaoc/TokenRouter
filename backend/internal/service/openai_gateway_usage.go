@@ -494,7 +494,11 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	// 计算账号统计定价费用（Qoder 会先按原始请求 alias、再按渠道 route key / 最终 upstream 匹配自定义规则）
 	if apiKey.GroupID != nil {
-		applyAccountStatsCost(ctx, usageLog, s.channelService, s.billingService,
+		statsCtx := ctx
+		if openAISubscriptionLongContextExempt(billingAccount, result) {
+			statsCtx = context.WithValue(ctx, accountStatsLongContextContextKey{}, true)
+		}
+		applyAccountStatsCost(statsCtx, usageLog, s.channelService, s.billingService,
 			account.ID, *apiKey.GroupID, result.UpstreamModel, requestedModel, input.ChannelMappedModel,
 			tokens, cost.TotalCost,
 		)
@@ -1192,4 +1196,17 @@ func (s *OpenAIGatewayService) UpdateCodexUsageSnapshotFromHeaders(ctx context.C
 	if snapshot := ParseCodexRateLimitHeaders(headers); snapshot != nil {
 		s.updateCodexUsageSnapshot(ctx, accountID, snapshot)
 	}
+}
+
+// openAISubscriptionLongContextExempt 仅按实际凭据和发送模型识别上游成本豁免。
+// 本站用户价格仍服从分组与渠道公开价卡，不随账号调度浮动。
+func openAISubscriptionLongContextExempt(account *Account, result *OpenAIForwardResult) bool {
+	if account == nil || account.Platform != PlatformOpenAI || !account.UsesOpenAICodexProtocol() || result == nil {
+		return false
+	}
+	model := strings.TrimSpace(result.UpstreamModel)
+	if model == "" {
+		model = result.Model
+	}
+	return isOpenAIGPT61SolModel(model)
 }

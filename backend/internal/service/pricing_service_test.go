@@ -758,10 +758,10 @@ func TestBillingService_Gemini36FlashThinkingTierFallbacksAreBillable(t *testing
 		t.Run(model, func(t *testing.T) {
 			cost, err := svc.CalculateCost(model, tokens, 1)
 			require.NoError(t, err)
-			require.InDelta(t, 1.5, cost.InputCost, 1e-12)
-			require.InDelta(t, 7.5, cost.OutputCost, 1e-12)
-			require.InDelta(t, 0.15, cost.CacheReadCost, 1e-12)
-			require.InDelta(t, 9.15, cost.TotalCost, 1e-12)
+			require.InDelta(t, 0.75, cost.InputCost, 1e-12)
+			require.InDelta(t, 3.75, cost.OutputCost, 1e-12)
+			require.InDelta(t, 0.075, cost.CacheReadCost, 1e-12)
+			require.InDelta(t, 4.575, cost.TotalCost, 1e-12)
 		})
 	}
 }
@@ -784,7 +784,7 @@ func TestPricingService_Gemini37And38FlashTierPricing(t *testing.T) {
 	}
 }
 
-// 远程价格缺失时新增模型仍能计费，并保持已有 3.6 回退费率。
+// 远程价格缺失时新增模型仍能计费，并使用 3.6 当前促销费率。
 func TestBillingService_Gemini37And38FlashThinkingTierFallbacksAreBillable(t *testing.T) {
 	svc := NewBillingService(&config.Config{}, nil)
 	tokens := UsageTokens{InputTokens: 1_000_000, OutputTokens: 1_000_000, CacheReadTokens: 1_000_000}
@@ -802,7 +802,7 @@ func TestBillingService_Gemini37And38FlashThinkingTierFallbacksAreBillable(t *te
 	}
 	cost, err := svc.CalculateCost("gemini-3.6-flash-high", tokens, 1)
 	require.NoError(t, err)
-	require.InDelta(t, 9.15, cost.TotalCost, 1e-12)
+	require.InDelta(t, 4.575, cost.TotalCost, 1e-12)
 }
 
 func TestDefaultPricingIncludesGemini36FlashRates(t *testing.T) {
@@ -819,9 +819,9 @@ func TestDefaultPricingIncludesGemini36FlashRates(t *testing.T) {
 		t.Run(model, func(t *testing.T) {
 			pricing, err := billingSvc.GetModelPricing(model)
 			require.NoError(t, err)
-			require.InDelta(t, 1.5e-6, pricing.InputPricePerToken, 1e-12)
-			require.InDelta(t, 7.5e-6, pricing.OutputPricePerToken, 1e-12)
-			require.InDelta(t, 0.15e-6, pricing.CacheReadPricePerToken, 1e-12)
+			require.InDelta(t, 0.75e-6, pricing.InputPricePerToken, 1e-12)
+			require.InDelta(t, 3.75e-6, pricing.OutputPricePerToken, 1e-12)
+			require.InDelta(t, 0.075e-6, pricing.CacheReadPricePerToken, 1e-12)
 		})
 	}
 }

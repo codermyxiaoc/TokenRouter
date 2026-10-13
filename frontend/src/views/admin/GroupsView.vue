@@ -390,26 +390,10 @@
           <template #general>
             <h4 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.groups.tabs.identity') }}</h4>
             <div data-group-field="name">
-              <label class="input-label">{{ t("admin.groups.form.name") }}</label>
-              <input
-                v-model="createForm.name"
-                type="text"
-                required
-                class="input"
-                :placeholder="t('admin.groups.enterGroupName')"
-                data-tour="group-form-name"
-              />
+              <GroupI18nField v-model="createForm.name" v-model:i18n="createForm.i18n" :label="t('admin.groups.form.name')" field="name" required data-tour="group-form-name" :placeholder="t('admin.groups.enterGroupName')" />
             </div>
             <div>
-              <label class="input-label">{{
-                t("admin.groups.form.description")
-              }}</label>
-              <textarea
-                v-model="createForm.description"
-                rows="3"
-                class="input"
-                :placeholder="t('admin.groups.optionalDescription')"
-              ></textarea>
+              <GroupI18nField v-model="createForm.description" v-model:i18n="createForm.i18n" :label="t('admin.groups.form.description')" field="description" multiline rows="3" :placeholder="t('admin.groups.optionalDescription')" />
             </div>
             <div>
               <label class="input-label">{{
@@ -2070,24 +2054,10 @@
           <template #general>
             <h4 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.groups.tabs.identity') }}</h4>
             <div data-group-field="name">
-              <label class="input-label">{{ t("admin.groups.form.name") }}</label>
-              <input
-                v-model="editForm.name"
-                type="text"
-                required
-                class="input"
-                data-tour="edit-group-form-name"
-              />
+              <GroupI18nField v-model="editForm.name" v-model:i18n="editForm.i18n" :label="t('admin.groups.form.name')" field="name" required data-tour="edit-group-form-name" :placeholder="t('admin.groups.enterGroupName')" />
             </div>
             <div>
-              <label class="input-label">{{
-                t("admin.groups.form.description")
-              }}</label>
-              <textarea
-                v-model="editForm.description"
-                rows="3"
-                class="input"
-              ></textarea>
+              <GroupI18nField v-model="editForm.description" v-model:i18n="editForm.i18n" :label="t('admin.groups.form.description')" field="description" multiline rows="3" :placeholder="t('admin.groups.optionalDescription')" />
             </div>
             <div>
               <label class="input-label">{{
@@ -3943,6 +3913,7 @@ import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
 import { useBalanceDisplay } from "@/composables/useBalanceDisplay";
 import type {
+  GroupI18n,
   AdminGroup,
   GroupAvailabilityProbeConfig,
   GroupAvailabilityProbeProtocol,
@@ -3965,6 +3936,7 @@ import Toggle from "@/components/common/Toggle.vue";
 import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import ProviderIcon from "@/components/common/ProviderIcon.vue";
 import Icon from "@/components/icons/Icon.vue";
+import GroupI18nField from "@/components/admin/group/GroupI18nField.vue";
 import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
 import GroupActionMenu from "@/components/admin/group/GroupActionMenu.vue";
 import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
@@ -4674,6 +4646,7 @@ const editAvailabilityProbeModelOptions = computed(() =>
 const createForm = reactive({
   name: "",
   description: "",
+  i18n: {} as GroupI18n,
   display_brand: "",
   platform: "anthropic" as GroupPlatform,
   scheduler_type: "basic" as GroupSchedulerType,
@@ -5161,6 +5134,7 @@ const convertApiFormatToRoutingRules = async (
 const editForm = reactive({
   name: "",
   description: "",
+  i18n: {} as GroupI18n,
   display_brand: "",
   platform: "anthropic" as GroupPlatform,
   scheduler_type: "basic" as GroupSchedulerType,
@@ -5637,6 +5611,7 @@ const closeCreateModal = () => {
     accountSearchRunner.clearKey(getCreateRuleSearchKey(rule));
   });
   clearAllAccountSearchState();
+  createForm.i18n = {};
   createForm.name = "";
   createForm.description = "";
   createForm.display_brand = "";
@@ -5884,6 +5859,8 @@ const handleCreateGroup = async () => {
 const handleEdit = async (group: AdminGroup) => {
   resetAvailabilityProbeTest();
   editingGroup.value = group;
+  // 深复制译文，取消编辑不能改变列表中的原始配置。
+  editForm.i18n = Object.fromEntries(Object.entries(group.i18n ?? {}).map(([locale, text]) => [locale, { ...text }]));
   editForm.name = group.name;
   editForm.description = group.description || "";
   editForm.display_brand = group.display_brand || "";

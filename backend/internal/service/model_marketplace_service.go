@@ -29,6 +29,7 @@ const (
 )
 
 type ModelMarketplaceGroup struct {
+	I18n                       GroupI18n // 原始译文留到响应时按请求语言选择。
 	ID                         int64
 	Name                       string
 	Description                string
@@ -128,6 +129,7 @@ func (s *ModelMarketplaceService) ListPublic(ctx context.Context) ([]ModelMarket
 			ID:                         group.ID,
 			Name:                       group.Name,
 			Description:                group.Description,
+			I18n:                       group.I18n,
 			Platform:                   group.Platform,
 			DisplayBrand:               marketplaceGroupDisplayBrand(group),
 			SortOrder:                  group.SortOrder,

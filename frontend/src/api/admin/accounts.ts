@@ -7,6 +7,8 @@ import type { OpenAIReferralRefreshResult, OpenAIReferralSendResult } from '@/ty
 import { apiClient } from '../client'
 import type {
   Account,
+  UpstreamBillingProbeResult,
+  UpstreamBillingProbeSettings,
   CreateAccountRequest,
   UpdateAccountRequest,
   PaginatedResponse,
@@ -1231,7 +1233,26 @@ export async function refreshOllamaCloudUsage(id: number): Promise<OllamaCloudUs
   return data
 }
 
+// 倍率探测使用管理员接口，与上游用量查询相互独立。
+export async function probeUpstreamBilling(id: number): Promise<UpstreamBillingProbeResult> {
+  const { data } = await apiClient.post<UpstreamBillingProbeResult>(`/admin/accounts/${id}/upstream-billing-probe`, undefined, { timeout: 30_000 })
+  return data
+}
+
+export async function getUpstreamBillingProbeSettings(): Promise<UpstreamBillingProbeSettings> {
+  const { data } = await apiClient.get<UpstreamBillingProbeSettings>('/admin/accounts/upstream-billing-probe-settings')
+  return data
+}
+
+export async function updateUpstreamBillingProbeSettings(settings: UpstreamBillingProbeSettings): Promise<UpstreamBillingProbeSettings> {
+  const { data } = await apiClient.put<UpstreamBillingProbeSettings>('/admin/accounts/upstream-billing-probe-settings', settings)
+  return data
+}
+
 export const accountsAPI = {
+  probeUpstreamBilling,
+  getUpstreamBillingProbeSettings,
+  updateUpstreamBillingProbeSettings,
   list,
   listWithEtag,
   getById,

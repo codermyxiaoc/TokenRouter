@@ -90,9 +90,9 @@ func TestLockAndMergeAccountManagedExtraProtectsOllamaFields(t *testing.T) {
 			t.Cleanup(func() { _ = client.Close() })
 
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
-				WithArgs(int64(29), service.PlatformAnthropic, service.AccountTypeAPIKey, `{"api_key":"key","base_url":"https://ollama.com"}`, nil).
-				WillReturnRows(sqlmock.NewRows([]string{"ollama_group_unchanged", "ollama_proxy_unchanged", "ollama_session", "ollama_auto", "ollama_snapshot"}).
-					AddRow(tt.groupIdentityMatches, tt.proxyIdentityMatches, []byte(`"local-ciphertext"`), []byte(`true`), []byte(`{"status":"ok"}`)))
+				WithArgs(int64(29), service.PlatformAnthropic, service.AccountTypeAPIKey, `{"api_key":"key","base_url":"https://ollama.com"}`, nil, sqlmock.AnyArg()).
+				WillReturnRows(sqlmock.NewRows([]string{"ollama_group_unchanged", "ollama_proxy_unchanged", "ollama_session", "ollama_auto", "ollama_snapshot", "probe_identity", "probe_enabled", "sync_enabled", "probe_snapshot", "rate"}).
+					AddRow(tt.groupIdentityMatches, tt.proxyIdentityMatches, []byte(`"local-ciphertext"`), []byte(`true`), []byte(`{"status":"ok"}`), true, nil, nil, nil, 1.0))
 
 			account := &service.Account{
 				ID: 29, Platform: service.PlatformAnthropic, Type: service.AccountTypeAPIKey,
@@ -101,12 +101,12 @@ func TestLockAndMergeAccountManagedExtraProtectsOllamaFields(t *testing.T) {
 					service.OllamaCloudUsageSessionExtraKey:     "forged-ciphertext",
 					service.OllamaCloudUsageAutoRefreshExtraKey: false,
 					service.OllamaCloudUsageSnapshotExtraKey:    map[string]any{"status": "forged"},
-					deprecatedUpstreamBillingProbeExtraKey:      map[string]any{"status": "stale"},
+					service.UpstreamBillingProbeExtraKey:        map[string]any{"status": "stale"},
 				},
 			}
 			got, err := lockAndMergeAccountManagedExtra(context.Background(), client, account)
 			require.NoError(t, err)
-			require.NotContains(t, got, deprecatedUpstreamBillingProbeExtraKey)
+			require.NotContains(t, got, service.UpstreamBillingProbeExtraKey)
 			if tt.wantSession {
 				require.Equal(t, "local-ciphertext", got[service.OllamaCloudUsageSessionExtraKey])
 				require.Equal(t, true, got[service.OllamaCloudUsageAutoRefreshExtraKey])
@@ -132,7 +132,7 @@ func TestUpdateExtraDiscardsDeprecatedAccountExtraKeys(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	mock.ExpectBegin()
-	mock.ExpectExec(`(?s)UPDATE accounts SET extra = .* - 'upstream_billing_probe' - 'upstream_billing_probe_enabled' - 'openai_long_context_billing_enabled'.*`).
+	mock.ExpectExec(`(?s)UPDATE accounts SET extra = .* - 'openai_long_context_billing_enabled'.*`).
 		WithArgs(`{"custom":"value"}`, int64(27)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox")).
@@ -142,9 +142,7 @@ func TestUpdateExtraDiscardsDeprecatedAccountExtraKeys(t *testing.T) {
 	repo := newAccountRepositoryWithSQL(client, db, nil)
 
 	err = repo.UpdateExtra(context.Background(), 27, map[string]any{
-		deprecatedUpstreamBillingProbeExtraKey:        map[string]any{"status": "forged"},
-		deprecatedUpstreamBillingProbeEnabledExtraKey: true,
-		deprecatedOpenAILongContextBillingExtraKey:    []bool{true},
+		deprecatedOpenAILongContextBillingExtraKey: []bool{true},
 		"custom": "value",
 	})
 
@@ -209,7 +207,7 @@ func TestUpdateCredentialsRollsBackWhenOutboxFails(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	mock.ExpectBegin()
-	mock.ExpectExec(`(?s)UPDATE accounts.*credentials IS DISTINCT FROM \$1::jsonb.*- 'upstream_billing_probe'.*- 'ollama_cloud_usage_snapshot'`).
+	mock.ExpectExec(`(?s)UPDATE accounts.*credentials IS DISTINCT FROM \$1::jsonb.*- 'ollama_cloud_usage_snapshot'.*'upstream_billing_probe'`).
 		WithArgs(`{"api_key":"sk-new"}`, int64(27)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox")).WillReturnError(errors.New("outbox failed"))

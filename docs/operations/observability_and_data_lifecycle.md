@@ -42,7 +42,7 @@
 
 网关入口只接受字符受限的 `X-Client-Request-ID` 作为父级关联值；缺失或不安全时，响应回退使用服务生成的内部 ID，服务不会把生成的关联 ID加入上游请求。内部 ID 通过 `X-Sub2API-Request-ID` 响应头标识，调用方 ID 与内部 ID 均会进入访问日志，但只有内部 ID 能作为结算幂等来源。流式网关的 `http.access` 记录还会尽力写入 `request_content_length`、`account_slot_acquired_ms`、`upstream_get_conn_ms`、`upstream_got_conn_ms`、`upstream_wrote_request_ms`、`upstream_first_response_byte_ms`、`upstream_first_sse_data_ms`、`first_visible_output_ms` 和 `first_downstream_flush_ms`；`upstream_attempt_count`、各阶段计数、连接复用和写入错误字段用于识别连接池等待、重试与传输异常。阶段字段只包含时间、计数和连接复用状态，不包含请求体或凭据。
 
-凭据、Authorization、Cookie、refresh token、支付密钥、对象存储 secret、完整上游 body 和用户提示不能直接写入日志。上游错误只透传允许的安全字段；系统日志 sink 在落库前再次整理字段并限制长度。新增日志字段时要同时检查：结构化 logger、Ops sink 的字段白名单/脱敏、管理端 DTO、导出和测试夹具。
+凭据、Authorization、Cookie、refresh token、支付密钥、对象存储 secret、完整上游 body 和用户提示不能直接写入日志。Gemini 的传统 `AIza` 与新 `AQ.Ab` API Key 都属于脱敏凭据，错误详情和日志不得回显完整值。上游错误只透传允许的安全字段；系统日志 sink 在落库前再次整理字段并限制长度。新增日志字段时要同时检查：结构化 logger、Ops sink 的字段白名单/脱敏、管理端 DTO、导出和测试夹具。
 
 多实例中每条系统日志带 host，便于区分进程来源。关联 ID 不是授权凭据；管理端详情、实时流和 WebSocket 仍必须经过管理员鉴权与相应 step-up 门禁。
 

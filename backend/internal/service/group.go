@@ -41,6 +41,7 @@ func NormalizeGroupSchedulerType(value string) (GroupSchedulerType, error) {
 }
 
 type Group struct {
+	I18n        GroupI18n // 分组名称与描述的界面译文，缺失时沿用原文。
 	ID          int64
 	Name        string
 	Description string

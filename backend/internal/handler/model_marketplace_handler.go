@@ -4,6 +4,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/handler/dto"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/response"
 	"github.com/TokenFlux/TokenRouter/internal/service"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,7 +30,8 @@ func (h *ModelMarketplaceHandler) ListPublic(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.ModelMarketplaceGroupsFromService(groups))
+	varyMarketplaceLanguage(c)
+	response.Success(c, dto.ModelMarketplaceGroupsFromService(groups, c.GetHeader("Accept-Language")))
 }
 
 // StatsPublic 返回首页公开统计，只暴露总 Token 和注册用户数。
@@ -42,4 +44,16 @@ func (h *ModelMarketplaceHandler) StatsPublic(c *gin.Context) {
 	}
 
 	response.Success(c, dto.ModelMarketplaceStatsFromService(stats))
+}
+
+// varyMarketplaceLanguage 保留 CORS 等中间件已有的 Vary，防止不同语言共享缓存。
+func varyMarketplaceLanguage(c *gin.Context) {
+	for _, line := range c.Writer.Header().Values("Vary") {
+		for _, token := range strings.Split(line, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "Accept-Language") || strings.TrimSpace(token) == "*" {
+				return
+			}
+		}
+	}
+	c.Writer.Header().Add("Vary", "Accept-Language")
 }

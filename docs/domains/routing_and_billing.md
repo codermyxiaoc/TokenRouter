@@ -65,6 +65,8 @@ OpenAI 分组还可设置 `max_reasoning_effort` 与 `max_reasoning_effort_over_
 
 Anthropic 分组也支持同一套模型范围映射、上限与超限动作，合法档位为 `low < medium < high < xhigh < max`，不接受 OpenAI 专用的 `none/minimal` 配置。Messages、Responses、Chat 三个入口都在协议转换和账号调度前执行策略；强制路由到其他平台时不套用 Anthropic 策略。兼容桥保留 `xhigh` 与 `max` 的区别，防止转换过程静默触发不同费率。
 
+新增临时不可调度规则的 `scope=account|model` 可以显式选择整账号或当前模型；历史空值保留既有规则：已知模型的非 401 错误通常按模型隔离，401 或未知模型走账号范围。明确模型级的 401 也可只冷却模型，但凭据撤销、OAuth 认证失效不能据此缩小为模型错误。错误处理与下一次调度必须使用相同的账号映射模型键，包括 Count Tokens、Bedrock 和重试耗尽路径。Antigravity Gemini 图片模型不再继承文本模型的共享冷却。
+
 ## 可用性与缓存
 
 认证、分组、渠道和账号热路径使用缓存或调度快照降低数据库压力，但数据库配置和实时调度状态仍是权威来源。以下变更必须主动失效对应缓存或发布新快照：Key 状态/限额/映射变化，团队关系变化，分组平台/能力/倍率变化，渠道成员/映射/价格变化，以及账号状态、分组关系、凭据、代理、并发或资格变化。
@@ -88,7 +90,13 @@ Kimi、Zhipu、DeepSeek 账号的计费候选不能把客户端 `claude`、`opus
 
 长上下文是模型或渠道的公开价格策略，不是账号能力。渠道存在有效 token 区间时，按总输入量命中显式区间，并禁止再叠加模型内置长上下文倍率；渠道区间是管理员明确配置的价格合同，不受分组长上下文开关影响。没有显式渠道区间时，分组 `long_context_pricing_enabled` 决定是否使用模型定价中的阈值和输入/输出倍率；新建和存量分组默认开启，显式关闭只去掉内置阶梯。分组 token 价卡只覆盖基础单价，其表单不把自定义区间当成长上下文阶梯。总输入量包含输入、缓存创建和缓存读取；各模型按自身边界语义判断是否进入长上下文档，进入后整次会话的输入侧与输出侧分别应用对应倍率。模型目录中的 `input/output_cost_per_token_above_*k_tokens` 会在加载时折算为阈值与倍率；条目显式提供任一 `long_context_*` 字段（包括 `0`）时以显式值为准。可选的 `pricing.override_file` 按字段浅合并覆盖目录和回退数据，`null` 删除字段，优先级高于两者；仅含完整价格字段的新模型才会被并入，拼写错误或只有局部补丁的未知模型会告警并丢弃。模型广场公开的上下文区间价格必须与相同分组倍率下的 `ActualCost` 一致，调度到任何普通账号或 Spark 影子账号都不能改变结果。账号 `extra` 中已废弃的 OpenAI 开关不参与判断；`long_context_billing_applied` 只在该规则实际增加费用时记录为真。
 
+GPT-6.1 Sol 的 OAuth 订阅上游成本不再附加长上下文费用，只作用于账号统计与账号额度；用户实际费用、余额、订阅和 Key 配额继续使用公开分组/渠道价卡，不能因调度到 API Key 或 OAuth 账号而改变。手动账号统计价、显式零价及渠道应用开关仍有原有优先级。
+
+Gemini 显式缓存创建的输入费和 Token-hour 存储费使用独立持久资金合同；续期仅计算新增存储时间，不形成第二次模型调用价。它复用本站锁内多订阅、余额及团队分配，完整生命周期与不确定结果处理见[显式上下文缓存](../interfaces/gemini_upstream.md#gemini_explicit_cache)。
+
 账号成本基数优先使用 Usage Log 的 `account_stats_cost`，仅在该字段为 `nil` 时回退 `total_cost`；显式 `0` 表示账号成本为零。账号统计和账号 `quota_used` 都把这个基数乘以账号 `rate_multiplier`，从而保持同一成本口径。用户余额、订阅和 API Key 配额始终使用 `ActualCost`，不受账号成本覆盖影响。账号成本回退到模型文件定价时，必须使用 Usage Log 最终记录的服务层级，并与模型长上下文倍率组合计算；自定义账号统计价格以及已经由 `ApplyPricingToAccountStats` 取得的用户计费结果都是最终成本基数，不得再次叠加服务层级倍率。
+
+API Key 账号可显式开启[上游声明倍率同步](../interfaces/upstream_billing_probe.md#upstream_billing_rate_sync)，成功探测后以受限的基准声明更新 `rate_multiplier`，不包含上游高峰因子。单独开启探测不改倍率，失败或非法声明也不覆盖原值。同步仍遵守上述账号成本边界，不变更用户价格、调度排序或历史使用记录。
 
 DeepSeek 默认价中的 Flash 输入/输出/缓存读取分别为每百万 token 0.15/0.60/0.003 USD，V4 Pro 保留 0.66/1.98/0.022 USD，再按同一 PricingAt 应用既有峰谷规则。2026-09-15 核对[官方定价说明](https://api-docs.deepseek.com/quick_start/pricing/)后，未采用上游 v0.2.5 已过时的 9 月 14 日 Pro 自动按 Flash 计费规则；后续结算和历史事实分开，不重算既有账单。分组和渠道显式价（含零价）不经过官方默认三价覆盖。现有目录解析尚未区分 `pricing.override_file` 中 DeepSeek 三价的字段来源，不能用该文件代替分组/渠道合同价来保证绕过 DeepSeek 官方默认价策略。
 

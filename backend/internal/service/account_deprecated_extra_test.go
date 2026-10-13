@@ -50,15 +50,15 @@ func (r *deprecatedAccountExtraRepoStub) BulkUpdate(_ context.Context, _ []int64
 
 func TestDiscardDeprecatedAccountExtra(t *testing.T) {
 	extra := map[string]any{
-		deprecatedOpenAILongContextBillingExtraKey:    "malformed",
-		deprecatedUpstreamBillingProbeExtraKey:        map[string]any{"status": "ok"},
-		deprecatedUpstreamBillingProbeEnabledExtraKey: true,
-		"preserved": "value",
+		deprecatedOpenAILongContextBillingExtraKey: "malformed",
+		UpstreamBillingProbeExtraKey:               map[string]any{"status": "ok"},
+		UpstreamBillingProbeEnabledExtraKey:        true,
+		"preserved":                                "value",
 	}
 
 	DiscardDeprecatedAccountExtra(extra)
 
-	require.Equal(t, map[string]any{"preserved": "value"}, extra)
+	require.Equal(t, map[string]any{"preserved": "value", UpstreamBillingProbeEnabledExtraKey: true}, extra)
 }
 
 func TestAdminServiceCreateAccountDiscardsDeprecatedLongContextBillingExtra(t *testing.T) {

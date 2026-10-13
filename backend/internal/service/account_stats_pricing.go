@@ -57,11 +57,20 @@ func resolveAccountStatsCostWithMapped(
 	if len(reasoningEfforts) > 0 {
 		reasoningEffort = reasoningEfforts[0]
 	}
-	if channelService == nil || upstreamModel == "" {
+	if upstreamModel == "" {
+		return nil
+	}
+	if channelService == nil {
+		if billingService != nil && accountStatsModelLongContextExempt(ctx) {
+			return tryModelFilePricingWithLongContextPolicy(billingService, upstreamModel, tokens, serviceTier, false, reasoningEffort)
+		}
 		return nil
 	}
 	channel, err := channelService.GetChannelForGroup(ctx, groupID)
 	if err != nil || channel == nil {
+		if err == nil && billingService != nil && accountStatsModelLongContextExempt(ctx) {
+			return tryModelFilePricingWithLongContextPolicy(billingService, upstreamModel, tokens, serviceTier, false, reasoningEffort)
+		}
 		return nil
 	}
 
@@ -93,13 +102,13 @@ func resolveAccountStatsCostWithMapped(
 				if qoderAliasRequiresManualPricingAny(model) {
 					continue
 				}
-				if cost := tryModelFilePricing(billingService, model, tokens, serviceTier, reasoningEffort); cost != nil {
+				if cost := tryModelFilePricingWithLongContextPolicy(billingService, model, tokens, serviceTier, !accountStatsModelLongContextExempt(ctx), reasoningEffort); cost != nil {
 					return cost
 				}
 			}
 			return nil
 		}
-		return tryModelFilePricing(billingService, upstreamModel, tokens, serviceTier, reasoningEffort)
+		return tryModelFilePricingWithLongContextPolicy(billingService, upstreamModel, tokens, serviceTier, !accountStatsModelLongContextExempt(ctx), reasoningEffort)
 	}
 
 	return nil
@@ -168,9 +177,23 @@ func uniqueNonEmptyAccountStatsModels(models []string) []string {
 // 每加一个定价特性都要手工镜像一次。channelPricing 为 nil，保持优先级 3 的
 // 语义：只取模型定价文件，不引入渠道自定义定价。
 func tryModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, reasoningEfforts ...string) *float64 {
+	return tryModelFilePricingWithLongContextPolicy(billingService, model, tokens, serviceTier, true, reasoningEfforts...)
+}
+
+// tryModelFilePricingWithLongContextPolicy 仅调整上游模型成本，不覆盖自定义统计价与用户公开价格。
+func tryModelFilePricingWithLongContextPolicy(billingService *BillingService, model string, tokens UsageTokens, serviceTier string, longContext bool, reasoningEfforts ...string) *float64 {
 	reasoningEffort := ""
 	if len(reasoningEfforts) > 0 {
 		reasoningEffort = reasoningEfforts[0]
+	}
+	if !longContext {
+		pricing, err := billingService.GetModelPricing(model)
+		if err != nil {
+			return nil
+		}
+		cost := billingService.computeTokenBreakdown(pricing, tokens, 1, normalizeBillingServiceTier(serviceTier), false)
+		applyCostBreakdownMultiplier(cost, maxReasoningEffortBillingMultiplier(model, reasoningEffort, nil))
+		return &cost.TotalCost
 	}
 	breakdown, err := billingService.CalculateCostUnified(CostInput{
 		Model: model, Tokens: tokens, RateMultiplier: 1,
@@ -417,4 +440,15 @@ func applyAccountStatsCost(
 		ctx, cs, bs, accountID, groupID, model, requestedModel, channelMappedModel, tokens, requestCount, totalCost, serviceTier,
 		reasoningEffort,
 	)
+}
+
+// accountStatsLongContextContextKey 仅在上游账号统计路径传递订阅凭据豁免，不影响用户报价。
+type accountStatsLongContextContextKey struct{}
+
+func accountStatsModelLongContextExempt(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	disabled, _ := ctx.Value(accountStatsLongContextContextKey{}).(bool)
+	return disabled
 }

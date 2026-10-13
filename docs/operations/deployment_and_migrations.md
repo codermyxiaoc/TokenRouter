@@ -10,6 +10,7 @@
 - [迁移执行](#migration_execution)：修改 runner 或迁移格式时读取。
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
+- [Sub2API 0.2.16 兼容迁移](#upstream_v216_migrations)：同步分组译文和 Gemini 显式缓存时读取。
 - [v3.9 每日活动资格与并发资金修复](#v3_9_upgrade)：升级可选充值来源、独立开关、退款资格与领取幂等修复时读取。
 - [v3.8 视频账号测试与每日活动](#v3_8_upgrade)：升级每日活动账本与管理员视频测试时读取。
 - [v3.7 Gemini 模型同步](#v3_7_upgrade)：升级第三方模型列表兼容与同步错误提示时读取。
@@ -50,7 +51,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.9`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.10`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -65,11 +66,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.9`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.10`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.9 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.10 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -150,9 +151,18 @@ v2.8 独立 Video 新增迁移 289–293：
 - 从空数据库完整应用，以及在已有 schema 上重复执行；
 - `schema_migrations` 文件名与预期一致，未修改既有文件 checksum。
 
+<a id="upstream_v216_migrations"></a>
+## Sub2API 0.2.16 兼容迁移
+
+本次在 fork 的迁移 301 后递增，不复用上游迁移编号：302 为分组增加默认空对象的 `i18n` 字段；303 创建 `gemini_cached_contents` 归属绑定表；304 保存渠道计费来源；305 增加缓存有效期修改租约及待恢复索引。既有账号、分组、图片和视频数据保持原结构与含义，存量无译文分组继续显示原名称。
+
+Gemini 缓存费用复用本站持久资金合同，使用 `gemini_cache` 报价类型和独立请求 ID 前缀区分图片任务。缓存修改租约恢复处理上游有效期；结果不明或本地结算失败的合同保留为待核对，不能仅因超时自动退款。上线后如出现此类记录，应按合同关联的用户、Key、请求 ID、上游缓存状态及扣款账本核对后处理，见[显式上下文缓存](../interfaces/gemini_upstream.md#gemini_explicit_cache)。
+
+升级前备份数据库；若需回退旧程序，先停止新增缓存操作并处理在途修改和待核对合同。旧程序不会管理新缓存资源，不能依赖回退自动撤销上游缓存或释放其费用。保留新增字段和表，避免删除已经结算的记录。
+
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.9`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `301_daily_activity_credit_events.sql`。
+当前发布版本为 `v0.1.278-ct-v3.10`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `305_gemini_cached_contents_mutation_lease.sql`。
 
 <a id="v3_9_upgrade"></a>
 ### v3.9 每日活动资格与并发资金修复
@@ -426,7 +436,9 @@ WS 池和 Responses 内存优化本身不新增数据库迁移。OAuth/API Key �
 
 本变更按一次性升级发布，不支持新旧后端或前后端混合运行。认证快照版本随字段增加而升级，部署前遗留的 Redis 快照会因版本不匹配失效并从已回填数据库重建。完成升级后至少抽样验证 OpenAI 旧开关 true/false、任意平台空集合以及 Gemini Responses 的非流和 SSE 请求。
 
-### 上游声明倍率探测下线
+### 历史上游声明倍率探测下线
+
+本节记录迁移 236 对旧功能的下线边界。当前重新提供独立的管理员倍率探测和显式账号倍率同步，详见[上游声明倍率探测](../interfaces/upstream_billing_probe.md)；公开账单自省及调度倍率权重仍未恢复。历史迁移不能修改或重跑，新能力必须在全部旧实例退出后再启用，避免旧程序清理新配置。以下“新版本”指当时执行 236 的版本。
 
 迁移 `236_remove_upstream_billing_probe.sql` 幂等删除账号 JSONB 中的 `upstream_billing_probe`、`upstream_billing_probe_enabled`，并删除设置 `upstream_billing_probe_settings`、`openai_low_upstream_rate_priority_enabled`、`openai_oauth_scheduling_rate_multiplier`、`openai_advanced_scheduler_weight_upstream_cost`。迁移不改动其它账号 extra 或设置。旧配置项 `gateway.openai_ws.scheduler_score_weights.upstream_cost` 已失去行为，升级前应从配置文件、Secret 和环境模板中移除。
 

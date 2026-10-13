@@ -63,21 +63,17 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 }
 
 const (
-	// 废弃账号扩展键仅用于写入边界清理，仓储不得再赋予它们业务语义。
-	deprecatedUpstreamBillingProbeExtraKey        = "upstream_billing_probe"
-	deprecatedUpstreamBillingProbeEnabledExtraKey = "upstream_billing_probe_enabled"
-	deprecatedOpenAILongContextBillingExtraKey    = "openai_long_context_billing_enabled"
+	// 倍率探测恢复后只清理已经废弃的长上下文开关。
+	deprecatedOpenAILongContextBillingExtraKey = "openai_long_context_billing_enabled"
 )
 
 func discardDeprecatedAccountExtra(extra map[string]any) {
-	delete(extra, deprecatedUpstreamBillingProbeExtraKey)
-	delete(extra, deprecatedUpstreamBillingProbeEnabledExtraKey)
 	delete(extra, deprecatedOpenAILongContextBillingExtraKey)
 }
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
-	"codex_credits_snapshot": {},
-	"codex_referral_snapshot": {},
+	"codex_credits_snapshot":               {},
+	"codex_referral_snapshot":              {},
 	"codex_usage_updated_at":               {},
 	"grok_billing_snapshot":                {},
 	"qoder_quota_snapshot":                 {},
@@ -593,6 +589,10 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 	if err != nil {
 		return nil, err
 	}
+	accountExtra, err := json.Marshal(normalizeJSONMap(account.Extra))
+	if err != nil {
+		return nil, err
+	}
 	var proxyID any
 	if account.ProxyID != nil {
 		proxyID = *account.ProxyID
@@ -612,11 +612,20 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 			proxy_id IS NOT DISTINCT FROM $5,
 			extra -> 'ollama_cloud_usage_session',
 			extra -> 'ollama_cloud_usage_auto_refresh',
-			extra -> 'ollama_cloud_usage_snapshot'
+			extra -> 'ollama_cloud_usage_snapshot',
+			platform = $2 AND type = $3 AND credentials = $4::jsonb
+				AND proxy_id IS NOT DISTINCT FROM $5
+				AND extra -> 'enable_tls_fingerprint' IS NOT DISTINCT FROM $6::jsonb -> 'enable_tls_fingerprint'
+				AND extra -> 'tls_fingerprint_profile_id' IS NOT DISTINCT FROM $6::jsonb -> 'tls_fingerprint_profile_id'
+				AND extra -> 'tls_fingerprint_router_id' IS NOT DISTINCT FROM $6::jsonb -> 'tls_fingerprint_router_id',
+			extra -> 'upstream_billing_probe_enabled',
+			extra -> 'upstream_billing_rate_sync_enabled',
+			extra -> 'upstream_billing_probe',
+			rate_multiplier
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
-	`, account.ID, account.Platform, account.Type, string(credentials), proxyID)
+	`, account.ID, account.Platform, account.Type, string(credentials), proxyID, string(accountExtra))
 	if err != nil {
 		return nil, err
 	}
@@ -634,6 +643,11 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 		currentOllamaSession         []byte
 		currentOllamaAutoRefresh     []byte
 		currentOllamaSnapshot        []byte
+		probeIdentityUnchanged       bool
+		currentProbeEnabled          []byte
+		currentRateSyncEnabled       []byte
+		currentProbeSnapshot         []byte
+		currentRate                  float64
 	)
 	if err := rows.Scan(
 		&ollamaGroupIdentityUnchanged,
@@ -641,6 +655,11 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 		&currentOllamaSession,
 		&currentOllamaAutoRefresh,
 		&currentOllamaSnapshot,
+		&probeIdentityUnchanged,
+		&currentProbeEnabled,
+		&currentRateSyncEnabled,
+		&currentProbeSnapshot,
+		&currentRate,
 	); err != nil {
 		return nil, err
 	}
@@ -650,6 +669,10 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
 	discardDeprecatedAccountExtra(extra)
+	if err := mergeLockedUpstreamBillingSettings(ctx, account, extra, probeIdentityUnchanged,
+		currentProbeEnabled, currentRateSyncEnabled, currentProbeSnapshot, currentRate); err != nil {
+		return nil, err
+	}
 	for _, key := range []string{
 		service.OllamaCloudUsageSessionExtraKey,
 		service.OllamaCloudUsageAutoRefreshExtraKey,
@@ -717,7 +740,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 		UPDATE accounts
 		SET
 			credentials = $1::jsonb,
-			extra = CASE
+			extra = (CASE
 				-- 凭证整体未变化时不清理 Ollama 状态；废弃账号扩展键始终从写入结果剔除。
 				WHEN platform IN ('openai', 'anthropic')
 					AND type = 'apikey'
@@ -730,8 +753,6 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 						)
 					)
 				THEN (COALESCE(extra, '{}'::jsonb)
-						- 'upstream_billing_probe'
-						- 'upstream_billing_probe_enabled'
 						- 'openai_long_context_billing_enabled')
 					- 'ollama_cloud_usage_session'
 					- 'ollama_cloud_usage_auto_refresh'
@@ -741,16 +762,12 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 						AND type = 'apikey'
 						AND credentials IS DISTINCT FROM $1::jsonb
 					THEN (COALESCE(extra, '{}'::jsonb)
-							- 'upstream_billing_probe'
-							- 'upstream_billing_probe_enabled'
 							- 'openai_long_context_billing_enabled')
 						- 'cn_usage_monitor_snapshot'
 					ELSE COALESCE(extra, '{}'::jsonb)
-						- 'upstream_billing_probe'
-						- 'upstream_billing_probe_enabled'
 						- 'openai_long_context_billing_enabled'
 				END
-			END,
+			END) - CASE WHEN credentials IS DISTINCT FROM $1::jsonb THEN ARRAY['upstream_billing_probe'] ELSE ARRAY[]::text[] END,
 			updated_at = NOW()
 		WHERE id = $2 AND deleted_at IS NULL
 	`, string(payload), id)
@@ -2483,6 +2500,7 @@ func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now ti
 }
 
 func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
+	normalizeUpstreamBillingExtraPatch(updates)
 	discardDeprecatedAccountExtra(updates)
 	updates = stripCodexFingerprintSeedFromExtraUpdate(updates)
 	if len(updates) == 0 {
@@ -2512,7 +2530,10 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 			client = tx.Client()
 		}
 	}
-	extraExpression := "(COALESCE(extra, '{}'::jsonb) - 'upstream_billing_probe' - 'upstream_billing_probe_enabled' - 'openai_long_context_billing_enabled') || $1::jsonb"
+	extraExpression := "(COALESCE(extra, '{}'::jsonb) - 'openai_long_context_billing_enabled') || $1::jsonb"
+	if upstreamBillingSnapshotClearRequested(updates) || cnUsageMonitorIdentityExtraPatch(updates) {
+		extraExpression = "(" + extraExpression + ") - 'upstream_billing_probe'"
+	}
 	if cnUsageMonitorIdentityExtraPatch(updates) {
 		extraExpression = "(" + extraExpression + ") - '" + service.CNUsageMonitorSnapshotExtraKey + "'"
 	}
@@ -2711,6 +2732,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	if len(ids) == 0 {
 		return 0, nil
 	}
+	normalizeUpstreamBillingExtraPatch(updates.Extra)
 	discardDeprecatedAccountExtra(updates.Extra)
 	updates.Extra = stripCodexFingerprintSeedFromExtraUpdate(updates.Extra)
 
@@ -2796,7 +2818,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 
 	cnUsageIdentityChanged := len(updates.Credentials) > 0 || updates.ProxyID != nil || cnUsageMonitorIdentityExtraPatch(updates.Extra)
 	if len(updates.Extra) > 0 || len(ollamaGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" || cnUsageIdentityChanged || updates.EnsureCodexFingerprintSeed {
-		extraExpression := "COALESCE(extra, '{}'::jsonb) - 'upstream_billing_probe' - 'upstream_billing_probe_enabled' - 'openai_long_context_billing_enabled'"
+		extraExpression := "COALESCE(extra, '{}'::jsonb) - 'openai_long_context_billing_enabled'"
 		if len(updates.Extra) > 0 {
 			payload, err := json.Marshal(updates.Extra)
 			if err != nil {
@@ -2835,6 +2857,9 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			extraExpression = "CASE WHEN platform IN ('kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go') AND type = 'apikey'" +
 				" THEN (" + extraExpression + ") - '" + service.CNUsageMonitorSnapshotExtraKey + "' ELSE " + extraExpression + " END"
 		}
+		if len(updates.Credentials) > 0 || updates.ProxyID != nil || cnUsageMonitorIdentityExtraPatch(updates.Extra) || upstreamBillingSnapshotClearRequested(updates.Extra) {
+			extraExpression = "(" + extraExpression + ") - 'upstream_billing_probe'"
+		}
 		if updates.EnsureCodexFingerprintSeed {
 			extraExpression = ensureCodexFingerprintSeedSQL(extraExpression)
 		}
@@ -2870,6 +2895,9 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		}
 	}
 
+	if err := guardBulkUpstreamBillingSettings(ctx, exec, ids, updates); err != nil {
+		return 0, err
+	}
 	result, err := exec.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, err

@@ -37,6 +37,8 @@ func TestNormalizeInboundEndpoint(t *testing.T) {
 		{"/v1/videos/extensions", EndpointVideosExtensions},
 		{"/v1/videos/req_123", EndpointVideos},
 		{"/v1beta/models", EndpointGeminiModels},
+		{"/v1beta/cachedContents", EndpointGeminiCachedContents},
+		{"/v1beta/cachedContents/abc", EndpointGeminiCachedContents},
 
 		// 带平台前缀的根 Responses 路径。
 		{"/antigravity/v1/messages", EndpointMessages},
@@ -96,6 +98,7 @@ func TestDeriveUpstreamEndpoint(t *testing.T) {
 
 		// Gemini.
 		{"gemini models", EndpointGeminiModels, "/v1beta/models/gemini:gen", service.PlatformGemini, EndpointGeminiModels},
+		{"gemini cache", EndpointGeminiCachedContents, "/v1beta/cachedContents/abc", service.PlatformGemini, EndpointGeminiCachedContents},
 
 		// OpenAI 根 Responses 端点。
 		{"openai responses root", EndpointResponses, "/v1/responses", service.PlatformOpenAI, EndpointResponses},

@@ -28,6 +28,7 @@ type SubscriptionPlan struct {
 
 // SubscriptionPlanGroup 是订阅套餐分组的展示元数据及有效倍率摘要。
 type SubscriptionPlanGroup struct {
+	I18n           GroupI18n // 展示译文不参与套餐倍率计算。
 	ID             int64
 	Name           string
 	Platform       string

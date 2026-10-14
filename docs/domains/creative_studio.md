@@ -107,7 +107,9 @@ succeeded -> result_lost
 
 worker 从 Redis 预留任务后先读取用户最新并发配置，并通过现有用户并发槽位执行一次非阻塞准入；随后由平台对应的现有账号调度器选择账号并预占账号槽位。两类槽位任一暂时不可用时，任务保持 `queued`，不增加执行次数、不改变计费预占，按约 1 秒短延迟重排以释放 worker。只有用户和账号都准入后才幂等推进 `running`，provider 返回结果后在结算前持久化真实执行账号；执行前检查任务是否已处于 `cancelled`。历史竞态任务若 provider 已成功，仍按实际成功输出捕获费用并记录用量，但终态保持 `cancelled`，绝不回写为 `succeeded`。
 
-执行错误的重试边界：网络层错误、429 与 5xx 视为可重试，按 `max_execute_attempts`（默认 3，含首次）递增尝试并重排；其余 4xx 不可重试直接进入 `release_pending`。provider 成功后先保存 Redis 输出元数据并进入 `provider_succeeded`，后续只重试 settle/capture/usage log，不重新调用 provider；结算失败保持 `settlement_pending`，绝不 ACK 非终态任务。
+执行错误的重试边界：网络层错误、429 与 5xx 视为可重试，按 `max_execute_attempts`（默认 3，含首次）递增尝试并重排；其余 4xx 不可重试直接进入 `release_pending`。上游调用前，worker 在现有 `provisioning_phase` 中持久化 `provider_inflight` 执行栅栏；只有执行器明确返回可重试错误后才能写入 `provider_retry` 授权再次执行。创建补偿 outbox 仅能更新 `queued` 的创建阶段，不能覆盖执行栅栏。
+
+provider 返回成功后，真实输出的索引、状态、MIME、长度、过期时间与 `provider_succeeded`、结算 outbox 同事务写入 PostgreSQL，再把图片字节保存到 Redis；数据库仍不存图片或提示词。后续只重试结果核对和结算，不重新调用 provider。若图片缓存明确丢失，按已确认的成功输出数量结算，并原子进入 `result_lost`，不展示假成功；Redis 暂时不可用时保持结算等待。若成功事实尚未落库就发生进程退出或数据库故障，且无法从已保存的完整输出元数据恢复，则保留 `running` 与原预占，错误码为 `PROVIDER_RESULT_UNCONFIRMED`，约每 15 分钟低频核对并等待管理员处理，不推断失败、不释放款、不重发生成。结算失败保持 `settlement_pending`，绝不 ACK 非终态任务。
 
 ## 幂等
 
@@ -136,11 +138,16 @@ creative_release:{run_id}   失败/内部取消/未执行丢失时释放
 creative_settle:{run_id}    写 usage_logs 的结算记录 ID
 ```
 
+迁移 `309_creative_quota_platform.sql` 增加不可变的 `quota_platform` 任务快照，新任务由服务端保存已验证分组的平台，后续预占、捕获与释放命令都沿用该值。重启恢复或分组平台调整不会改变已受理任务的额度归属；历史任务默认空值，不推测回填，由结算仓储按原 `group_id` 兼容解析。
+
 - 创建任务时先估价并冻结（auto 模式先预留订阅额度、只冻结未覆盖部分的钱包余额）；免费分组（估价为 0）跳过资金动作。
-- 成功时按实际成功输出数捕获，并写一条 `usage_logs`：`BillingMode` 为 `"image"`，`ImageCount` 为成功输出数，`request_id` 为 `creative_settle:{run_id}`，入站端点记录 `/v1/creative/runs`，上游端点记录 `creative:{operation}`。
+- 资金分配后需要冻结余额时，同一事务按原平台检查当前有效日／周／月限额；纯订阅和免费任务豁免。耗尽返回平台专用 429 和重置时间，全部资金预占、任务资金快照与去重回滚。检查不预占平台额度，完成捕获不因后来额度耗尽而拒绝，捕获平台用量与实际钱包八位小数扣款保持一致。
+- 成功时按实际成功输出数捕获，并可靠写入一条 `usage_logs`：`BillingMode` 为 `"image"`，`ImageCount` 为成功输出数，`request_id` 为 `creative_settle:{run_id}`，入站端点记录 `/v1/creative/runs`，上游端点记录 `creative:{operation}`。日志与 `usage_recorded_at` 投递标记保存后才能进入完成终态；日志失败保留结算等待，重试捕获按原请求 ID 幂等去重，从首次预占合同恢复余额/订阅分摊，不读取后来的套餐和价格。
 - 失败与内部取消状态通过幂等路径释放全部未使用预占；指纹冲突按已释放处理，避免毒消息循环。
 - provider 已成功但结果丢失（`result_lost` 且已捕获）时保持计费；payload 过期导致 provider 未执行的 `result_lost` 释放预占。
 - 任务执行期间进入 `cancelled` 但 provider 已成功：费用按实际成功输出捕获、用量照写，终态保持 `cancelled`。
+
+结算与退款 outbox 在取得与执行 worker 相同的任务锁后直接调用幂等结算或释放；结算须资金与日志都成功，退款须释放成功并推进终态，才能确认 outbox 完成。因此 Redis 队列条目丢失也不会丢失尚未处理的结算或退款意图；锁竞争、数据库故障仍保留持久重试。账号执行仍由原 worker 负责，outbox 不重新生成图片，迟到的退款事件也不释放已成功结算任务。后台另以主键分页、每轮最多 50 条核对启动前 24 小时以来的已结算终态记录：必须存在 `creative_capture:` 捕获账本，保留真实成本、完整输出元数据和首次预占快照，且还原金额与保存金额一致，才补写日志。该补偿不会再次调用资金捕获/释放；证据不足只报告待核对。投递标记持久保留，正常清理过的日志不会反复补回。
 
 生产准确价格由分组图片定价配置解析，本文不定义价格数值。
 
@@ -155,7 +162,7 @@ creative_settle:{run_id}    写 usage_logs 的结算记录 ID
 | `creative:mask:{run_id}` | mask 字节 | TTL 或 `DeleteRunTransient` |
 | `creative:output:{run_id}:{index}` | 单张生成图字节 | TTL、ack 即删或 `DeleteRunTransient` |
 
-输出保存时同时把 `transient_expires_at` 写入输出元数据，客户端据此知道取回截止时间；ack 立即删除对应输出键。worker 只有在输出字节成功写入 transient store 后才会把任务标记为 `provider_succeeded` 并创建 settle outbox，capture 与终态提交完成后才进入 `succeeded`；Redis 写入失败会保持可重试状态，避免出现成功状态却没有可取图片的任务。
+输出元数据中的 `transient_expires_at` 告知客户端取回截止时间；ack 立即删除对应输出键。worker 先原子保存上游成功事实、输出元数据和 settle outbox，再保存 Redis 输出字节。后台结算和执行 worker 共用任务锁，避免图片尚在写入时提前判断丢失；确认输出可取并完成捕获和日志投递后才进入 `succeeded`。Redis 短暂故障保持结算等待，明确丢失则保持真实计费并进入 `result_lost`。
 
 队列协调（`creative:queue:*`）与批量图片同构：ready 列表、delayed 有序集合、active 有序集合、单任务 inflight 键（默认 TTL 7 天）、单任务锁键（默认 TTL 300 秒）；入队与预留用 Lua 脚本原子执行。每次领取生成 lease token，心跳、锁续期、重排、ACK 和 stale recovery 都校验 token；失去租约的 worker 取消执行 context，不得写任务、输出、计费或队列状态。`creative_run_outbox` reconciler 负责 provisioning/settle/release 恢复，transient reconciler 负责终态 Redis 清理。`creative.queue_enabled` 默认开启，应用启动时运行 `creative_worker_count` 个任务 worker（默认 128）、一个 delayed mover、一个 stale active recovery 和两个 reconciler；worker 数量通过管理端功能设置热更新，详见[接口](../interfaces/http_api.md)。
 

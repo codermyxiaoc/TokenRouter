@@ -81,6 +81,19 @@ end
 return 0
 `)
 
+// 恢复只补缺失的队列成员；已有执行租约、延迟和就绪成员都保持原调度时间。
+var batchImageEnsureQueuedScript = redis.NewScript(`
+if redis.call("EXISTS", KEYS[5]) == 1
+  or redis.call("ZSCORE", KEYS[3], ARGV[1])
+  or redis.call("ZSCORE", KEYS[4], ARGV[1])
+  or redis.call("LPOS", KEYS[2], ARGV[1]) then
+  return 0
+end
+redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2])
+redis.call("LPUSH", KEYS[2], ARGV[1])
+return 1
+`)
+
 type batchImageQueue struct {
 	rdb            *redis.Client
 	readyKey       string
@@ -167,6 +180,23 @@ func (q *batchImageQueue) Enqueue(ctx context.Context, batchID string) error {
 
 	applied, err := batchImageEnqueueScript.Run(ctx, q.rdb,
 		[]string{q.inflightKey(batchID), q.readyKey},
+		batchID, q.inflightTTL.Milliseconds(),
+	).Int()
+	if err != nil {
+		return err
+	}
+	if applied == 0 {
+		return service.ErrBatchImageAlreadyQueued
+	}
+	return nil
+}
+
+func (q *batchImageQueue) EnsureQueued(ctx context.Context, batchID string) error {
+	if !service.IsValidBatchImageID(batchID) {
+		return service.ErrInvalidBatchImageQueuePayload
+	}
+	applied, err := batchImageEnsureQueuedScript.Run(ctx, q.rdb,
+		[]string{q.inflightKey(batchID), q.readyKey, q.activeKey, q.delayedKey, q.lockPrefix + batchID},
 		batchID, q.inflightTTL.Milliseconds(),
 	).Int()
 	if err != nil {

@@ -77,10 +77,11 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		idempotencyCleanupSvc,
 		service.NewGeminiCachedContentService(nil, nil, cfg), // 缓存恢复器未启动时也可安全关闭。
 		&service.BatchImageCleanupService{},
-		nil,                              // batchImageWorker
-		nil,                              // creativeWorker
-		service.NewImageTaskService(nil), // 异步图片租约与补偿循环
-		&service.VideoTaskService{},      // 独立视频恢复器允许幂等关闭
+		nil,                                     // batchImageWorker
+		nil,                                     // creativeWorker
+		service.NewImageTaskService(nil),        // 异步图片租约与补偿循环
+		&service.VideoTaskService{},             // 独立视频恢复器允许幂等关闭
+		service.NewLegacyVideoRuntime(nil, nil), // 旧视频恢复器未启动时也必须可安全关闭。
 		pricingSvc,
 		emailQueueSvc,
 		billingCacheSvc,

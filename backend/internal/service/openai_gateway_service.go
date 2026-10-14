@@ -457,6 +457,7 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
+	legacyVideoTasks      LegacyVideoTaskRepository
 	pluginManager         *PluginManager
 	accountRepo           AccountRepository
 	usageLogRepo          UsageLogRepository

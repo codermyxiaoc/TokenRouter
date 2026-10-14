@@ -180,6 +180,19 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 
 	now := time.Now()
 	outputExpiresAt := now.Add(s.outputRetentionAfterTerminal())
+	// 捕获已由幂等账本保护；使用记录可靠入库后再宣告完成，写入失败只重试副作用。
+	if err := s.recordUsageLog(ctx, job, actualCost, result.RequestID, now, billingResult); err != nil {
+		return nil, err
+	}
+	if recovery, ok := s.Repo.(BatchImageUsageRecoveryRepository); ok {
+		recorded, err := recovery.MarkBatchImageUsageRecorded(ctx, job.BatchID)
+		if err != nil {
+			return nil, err
+		}
+		if !recorded {
+			return nil, errors.New("batch image usage record is not persisted")
+		}
+	}
 	if err := s.Repo.MarkBatchImageJobSettled(ctx, MarkBatchImageJobSettledParams{
 		BatchID:         job.BatchID,
 		ActualCost:      actualCost,
@@ -197,8 +210,6 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 	}); err != nil {
 		return nil, err
 	}
-	s.recordUsageLog(ctx, job, actualCost, result.RequestID, now, billingResult)
-
 	return result, nil
 }
 
@@ -269,14 +280,17 @@ func (s *BatchImageSettlementService) failExhaustedSettlement(ctx context.Contex
 	return ErrBatchImageSettlementBillingFailed
 }
 
-func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *BatchImageJob, actualCost float64, requestID string, createdAt time.Time, billingResult *BatchImageBalanceHoldResult) {
+func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *BatchImageJob, actualCost float64, requestID string, createdAt time.Time, billingResult *BatchImageBalanceHoldResult) error {
 	if s == nil || s.UsageLogRepo == nil || job == nil || job.APIKeyID == nil || job.AccountID == nil {
-		return
+		return nil
 	}
 	billingMode := string(BillingModeImage)
 	accountRateMultiplier := job.AccountRateMultiplier
 	inboundEndpoint := "/v1/images/batches"
 	upstreamEndpoint := "vertex:batchPredictionJobs"
+	if job.Provider == BatchImageProviderGeminiAPI {
+		upstreamEndpoint = "gemini:batches"
+	}
 	imageSize := "1K"
 	billingType := BillingTypeBalance
 	subscriptionAmount := 0.0
@@ -306,6 +320,7 @@ func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *B
 		TeamID:                job.TeamID,
 		APIKeyID:              *job.APIKeyID,
 		AccountID:             *job.AccountID,
+		GroupID:               job.GroupID,
 		RequestID:             strings.TrimSpace(requestID),
 		Model:                 internalModel,
 		RequestedModel:        requestedModel,
@@ -330,7 +345,8 @@ func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *B
 		SessionID:             job.SessionID,
 		CreatedAt:             createdAt,
 	}
-	writeUsageLogBestEffort(ctx, s.UsageLogRepo, usageLog, "service.batch_image_settlement")
+	_, err := s.UsageLogRepo.Create(ctx, usageLog)
+	return err
 }
 
 func (s *BatchImageSettlementService) invalidateAuthCache(ctx context.Context, userID int64) {

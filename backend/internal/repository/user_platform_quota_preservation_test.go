@@ -34,7 +34,8 @@ func TestPlatformQuotaSparseConfigurationPreservesPendingUsage(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, missing)
 
-	// 模拟 flusher 已读到快照，但管理员先清空限额；旧行必须继续承接最后一次快照。
+	// 已提交的数据库用量在清空限额后保留，陈旧快照不得回写覆盖。
+	require.NoError(t, repo.IncrementUsageWithReset(ctx, userID, "opencode_go", 6, now))
 	require.NoError(t, repo.UpsertForUser(ctx, userID, []UserPlatformQuotaRecord{{Platform: "openai"}}))
 	snapshots := []UserPlatformQuotaSnapshot{
 		{UserID: userID, Platform: "opencode_go", DailyUsageUSD: 2, WeeklyUsageUSD: 4, MonthlyUsageUSD: 6, DailyWindowStart: now, WeeklyWindowStart: now, MonthlyWindowStart: now},

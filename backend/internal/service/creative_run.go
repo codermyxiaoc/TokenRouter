@@ -29,6 +29,9 @@ const (
 	CreativeProvisioningPhaseEnqueued       = "enqueued"
 	CreativeProvisioningPhaseFailed         = "failed"
 	CreativeProvisioningPhaseComplete       = "complete"
+	// 执行栅栏在调用上游之前落库；未确认结果的任务只能核对，禁止自动重复生成。
+	CreativeProvisioningPhaseProviderInflight = "provider_inflight"
+	CreativeProvisioningPhaseProviderRetry    = "provider_retry"
 )
 
 // 创作台任务状态。
@@ -141,8 +144,10 @@ type CreativeRun struct {
 	RunID  string
 	UserID int64
 	// WorkspaceID 为空表示迁移前旧任务，用户侧工作区查询会将其隐藏。
-	WorkspaceID          *string
-	GroupID              int64
+	WorkspaceID *string
+	GroupID     int64
+	// QuotaPlatform 冻结创建时平台，分组后续变更不改变已受理任务的额度归属。
+	QuotaPlatform        string
 	APIKeyID             int64
 	AccountID            *int64
 	Model                string
@@ -210,10 +215,12 @@ type CreativeRunOutput struct {
 
 // CreateCreativeRunParams 创建创作台任务及其输出行。
 type CreateCreativeRunParams struct {
-	RunID                      string
-	UserID                     int64
-	WorkspaceID                string
-	GroupID                    int64
+	RunID       string
+	UserID      int64
+	WorkspaceID string
+	GroupID     int64
+	// QuotaPlatform 只由已验证的分组填写，不能接收客户端平台覆盖。
+	QuotaPlatform              string
 	APIKeyID                   int64
 	Model                      string
 	RequestedModel             string
@@ -316,6 +323,8 @@ type CreativeRunRepository interface {
 	SetCreativeRunAccountID(ctx context.Context, runID string, accountID int64, now time.Time) error
 	// MarkCreativeRunSucceeded 记录实际成本并进入终态，仅在 running 时生效。
 	MarkCreativeRunSucceeded(ctx context.Context, runID string, actualCost float64, now time.Time) error
+	// MarkCreativeRunResultLostAfterSettlement 原子保存已确认费用与结果丢失终态，避免短暂暴露假成功。
+	MarkCreativeRunResultLostAfterSettlement(ctx context.Context, runID string, actualCost float64, now time.Time) error
 	// UpdateCreativeRunOutput 幂等更新输出行；已 acked 的行不允许被覆盖。
 	UpdateCreativeRunOutput(ctx context.Context, runID string, outputIndex int, status, mimeType string, byteSize int64, transientExpiresAt *time.Time, errorCode, errorMessage string) error
 	GetCreativeRunOutput(ctx context.Context, runID string, outputIndex int) (*CreativeRunOutput, error)
@@ -334,6 +343,10 @@ type CreativeRunRepository interface {
 	SetCreativeRunProvisioningPhase(ctx context.Context, runID, phase string) error
 	// MarkCreativeRunProviderSucceeded 记录 provider 已成功且输出已写入临时存储。
 	MarkCreativeRunProviderSucceeded(ctx context.Context, runID string, accountID int64, now time.Time) error
+	// RecordCreativeRunProviderResult 原子记录真实输出元数据与成功事实，不保存任何图片字节。
+	RecordCreativeRunProviderResult(ctx context.Context, runID string, accountID int64, outputs []CreativeRunOutput, now time.Time) error
+	// MarkCreativeRunExecutionUnconfirmed 保留处理中和预占，显式标识需要人工核对的未知执行结果。
+	MarkCreativeRunExecutionUnconfirmed(ctx context.Context, runID string, next time.Time) error
 	// SetCreativeRunReconcileError 记录最近一次后台补偿错误。
 	SetCreativeRunReconcileError(ctx context.Context, runID, message string, next time.Time) error
 }

@@ -12,10 +12,10 @@ import (
 var ErrUserPlatformQuotaNotFound = errors.New("user platform quota not found")
 
 // ErrUserPlatformQuotaFKViolation 保留旧快照适配器的外键错误契约。
-// 当前仓储快照只 UPDATE 既有行，缺失用户不再触发插入外键错误。
+// 当前仓储已停用快照写回，不再通过此路径修改平台额度。
 var ErrUserPlatformQuotaFKViolation = errors.New("user platform quota snapshot FK violation")
 
-// UserPlatformQuotaSnapshot 是 service 层 flusher 向 DB 写入快照时使用的传输结构。
+// UserPlatformQuotaSnapshot 保留旧快照传输格式；数据库权威模式不再写回快照。
 // 字段语义与 repository.UserPlatformQuotaSnapshot 完全对应，由 adapter 负责转换。
 type UserPlatformQuotaSnapshot struct {
 	UserID             int64
@@ -61,6 +61,6 @@ type UserPlatformQuotaRepository interface {
 	// ResetExpiredWindow 重置指定窗口（"daily"|"weekly"|"monthly"）的用量与起始时间。
 	// 未命中活跃记录时返回（service-side wrapper of repository.ErrUserPlatformQuotaNotFound）。
 	ResetExpiredWindow(ctx context.Context, userID int64, platform string, window string, newStart time.Time) error
-	// BatchSnapshotUsage 绝对值更新既有活跃行，缺失或软删除行不创建；兼容保留既有错误 sentinel。
+	// BatchSnapshotUsage 为兼容空操作，禁止旧缓存覆盖数据库权威计数。
 	BatchSnapshotUsage(ctx context.Context, snapshots []UserPlatformQuotaSnapshot, now time.Time) error
 }

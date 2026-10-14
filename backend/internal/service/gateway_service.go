@@ -105,19 +105,9 @@ var (
 	modelsListCacheMissTotal  atomic.Int64
 	modelsListCacheStoreTotal atomic.Int64
 
-	// 已废弃：flusher_enabled=true 后不再增长（仅 flag=false 降级直写路径使用）；新主路径见 FlusherMetrics。2026-09 后可移除。
-	// userPlatformQuotaDBIncrErrorTotal 统计 finalizePostUsageBilling 异步 goroutine
-	// 中 IncrementUsageWithReset 失败次数。Redis 已成功累加 + DB 写失败意味着
-	// Redis cache TTL 过期或被清后该笔 cost 会丢失（与实际消费偏差）。
-	// oncall 通过 GatewayUserPlatformQuotaIncrStats() 暴露给 ops 面板做阈值告警。
-	userPlatformQuotaDBIncrErrorTotal atomic.Int64
-	// 已废弃：flusher_enabled=true 后不再增长（仅 flag=false 降级直写路径使用）；新主路径见 FlusherMetrics。2026-09 后可移除。
-	// userPlatformQuotaDBIncrLegacyErrorTotal 统计 legacy postUsageBilling
-	// （applyUsageBilling 在 repo==nil 时 fallback）路径下的失败次数；
-	// 与 DB Incr 失败分开计数，便于区分"主路径暂时故障"vs"基础设施长期未配齐"。
-	userPlatformQuotaDBIncrLegacyErrorTotal atomic.Int64
-	// userPlatformQuotaSentinelSetCacheErrorTotal 统计 checkUserPlatformQuotaEligibility
-	// 在 DB 无行时回填 sentinel cache entry 写 Redis 失败的次数（phase A）。
+	// 保留旧监控字段兼容性：平台计数现已进入资金事务，不再运行异步增量或 sentinel 回填。
+	userPlatformQuotaDBIncrErrorTotal           atomic.Int64
+	userPlatformQuotaDBIncrLegacyErrorTotal     atomic.Int64
 	userPlatformQuotaSentinelSetCacheErrorTotal atomic.Int64
 )
 
@@ -141,11 +131,7 @@ func GatewayModelsListCacheStats() (cacheHit, cacheMiss, store int64) {
 	return modelsListCacheHitTotal.Load(), modelsListCacheMissTotal.Load(), modelsListCacheStoreTotal.Load()
 }
 
-// GatewayUserPlatformQuotaIncrStats 返回 (mainPathErr, legacyPathErr, sentinelSetErr)。
-// mainPathErr：finalizePostUsageBilling 异步 goroutine 写 DB 失败累计次数；
-// legacyPathErr：postUsageBilling fallback 路径写 DB 失败累计次数；
-// sentinelSetErr：DB 无行时回填 sentinel cache entry 写 Redis 失败累计次数。
-// ops 监控面板可以按"持续上升斜率"做告警阈值。
+// GatewayUserPlatformQuotaIncrStats 保留旧监控接口，事务化后不再产生这些异步路径事件。
 func GatewayUserPlatformQuotaIncrStats() (mainPathErr, legacyPathErr, sentinelSetErr int64) {
 	return userPlatformQuotaDBIncrErrorTotal.Load(),
 		userPlatformQuotaDBIncrLegacyErrorTotal.Load(),
@@ -1613,7 +1599,6 @@ func cloneBillingAllocations(allocations []domain.BillingAllocation) []domain.Bi
 	return cloned
 }
 
-// @project-doc docs/domains/platform_quotas.md#platform_quota_settlement_and_flush
 func finalizeUsageBilling(p *usageBillingParams, deps *billingDeps, result *UsageBillingApplyResult) {
 	if p == nil || p.Cost == nil || deps == nil {
 		return
@@ -1645,44 +1630,8 @@ func finalizeUsageBilling(p *usageBillingParams, deps *billingDeps, result *Usag
 
 	deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
 
-	// Platform quota 累加：按实际余额扣费金额生效；纯订阅扣费豁免；仅对有 limit 的用户写。
-	// Redis 同步写 + DB 异步持久化（flag=false 降级）或 flusher 异步刷（flag=true）：
-	//   - HasUserPlatformQuotaLimit 守卫：无 limit 的用户跳过，避免无效写入和 Redis 容量浪费
-	//   - Redis 同步：确保下次预检查立即看到最新 usage，把 TOCTOU 超支窗口
-	//     限制在并发 in-flight 请求数量内（旧实现的异步入队会让超支无限累积直到 worker 处理）
-	//   - DB 异步（flusher_enabled=false）：在独立 goroutine 中走 detached context，失败用 ALERT 日志触发 oncall 对账
-	//   - flusher_enabled=true：不直写 DB，由 flusher 异步批量刷（markDirty 已在 IncrementUserPlatformQuotaUsage 内部完成）
-	balanceCost := p.Cost.ActualCost
-	if result != nil {
-		balanceCost = result.BalanceAmountUSD
-	}
-	if IsAllowedQuotaPlatform(p.Platform) && balanceCost > 0 && p.User != nil && deps.userPlatformQuotaRepo != nil && deps.billingCacheService != nil {
-		limitCtx, limitCancel := context.WithTimeout(context.Background(), cacheWriteTimeout)
-		hasLimit := deps.billingCacheService.HasUserPlatformQuotaLimit(limitCtx, p.User.ID, p.Platform)
-		limitCancel()
-		if hasLimit {
-			deps.billingCacheService.IncrementUserPlatformQuotaUsage(p.User.ID, p.Platform, balanceCost)
-			if deps.cfg == nil || !deps.cfg.Database.UserPlatformQuotaFlusherEnabled {
-				dbCtx, dbCancel := detachUpstreamContext(context.Background())
-				userID, platform, cost := p.User.ID, p.Platform, balanceCost
-				go func() {
-					defer func() {
-						if r := recover(); r != nil {
-							logger.LegacyPrintf("service.gateway", "ALERT: panic in user platform quota incr goroutine user=%d platform=%s: %v", userID, platform, r)
-						}
-					}()
-					defer dbCancel()
-					if err := deps.userPlatformQuotaRepo.IncrementUsageWithReset(dbCtx, userID, platform, cost, time.Now().UTC()); err != nil {
-						// 失败计数器：暴露给 GatewayUserPlatformQuotaIncrStats()，由 ops 面板做斜率告警。
-						userPlatformQuotaDBIncrErrorTotal.Add(1)
-						// ALERT 级别：DB 持久化失败意味着 Redis cache 失效后该笔 cost 永久丢失，
-						// 用户配额视图与实际消费会偏差，oncall 需要据此对账或人工补录。
-						logger.LegacyPrintf("service.gateway", "ALERT: incr user platform quota DB failed user=%d platform=%s cost=%f: %v", userID, platform, cost, err)
-					}
-				}()
-			}
-		}
-	}
+	// 平台额度已与资金、请求去重在同一数据库事务提交。
+	// 此处不再增量写 Redis 或异步补数据库，避免崩溃漏记和重放双计。
 
 	// 通知检查异步执行，所需参数已全部捕获，不依赖请求 context 或上游连接。
 	go notifyBalanceLow(p, deps, result)

@@ -112,7 +112,8 @@ func (r *videoTaskRepository) Create(ctx context.Context, t *service.VideoTaskRe
 		}
 	}
 	var count int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM video_tasks WHERE account_id=$1 AND status NOT IN ('completed','failed','cancelled')`, t.AccountID).Scan(&count); err != nil {
+	// 上游已明确过期的任务不再生成；账务待核对不能继续占用账号在途容量。
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM video_tasks WHERE account_id=$1 AND status NOT IN ('completed','failed','cancelled','expired')`, t.AccountID).Scan(&count); err != nil {
 		return nil, false, err
 	}
 	if count >= limit {

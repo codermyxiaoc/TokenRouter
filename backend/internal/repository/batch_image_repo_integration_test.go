@@ -66,6 +66,50 @@ func TestBatchImageRepository_CreateJobAndDuplicates(t *testing.T) {
 	require.True(t, errors.Is(err, service.ErrBatchImageJobExists))
 }
 
+func TestBatchImageRepository_QueueRecoveryOnlyAcceptedNonterminalJobs(t *testing.T) {
+	ctx := context.Background()
+	tx := testTx(t)
+	repo, userID := newBatchImageRepositoryWithSQL(t, tx)
+	var afterID int64
+	require.NoError(t, tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(id),0) FROM batch_image_jobs`).Scan(&afterID))
+	var wanted []*service.BatchImageJob
+	for _, status := range []string{"created", "uploading", "submitted", "running", "indexing", "settling", "completed", "failed", "cancelled"} {
+		job, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
+			BatchID: batchImageTestID(t, status), UserID: userID, BillingUserID: userID,
+			Provider: service.BatchImageProviderGeminiAPI, Model: "test-image", ItemCount: 1,
+		})
+		require.NoError(t, err)
+		_, err = tx.ExecContext(ctx, `UPDATE batch_image_jobs SET status=$2,provider_job_name=$3 WHERE id=$1`, job.ID, status, "provider/"+status)
+		require.NoError(t, err)
+		if status == "submitted" || status == "running" || status == "indexing" || status == "settling" {
+			wanted = append(wanted, job)
+		}
+	}
+	missing, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
+		BatchID: batchImageTestID(t, "missing-provider"), UserID: userID, BillingUserID: userID,
+		Provider: service.BatchImageProviderGeminiAPI, Model: "test-image", Status: "submitted", ItemCount: 1,
+	})
+	require.NoError(t, err)
+	var recovered []string
+	for {
+		jobs, err := repo.ListBatchImageJobsForQueueRecovery(ctx, afterID, 2)
+		require.NoError(t, err)
+		for _, job := range jobs {
+			require.NotEqual(t, missing.BatchID, job.BatchID)
+			recovered = append(recovered, job.BatchID)
+			afterID = job.ID
+		}
+		if len(jobs) < 2 {
+			break
+		}
+	}
+	wantedIDs := make([]string, 0, len(wanted))
+	for _, job := range wanted {
+		wantedIDs = append(wantedIDs, job.BatchID)
+	}
+	require.Equal(t, wantedIDs, recovered)
+}
+
 func TestBatchImageRepository_InvalidProvider(t *testing.T) {
 	tx := testTx(t)
 	repo, userID := newBatchImageRepositoryWithSQL(t, tx)

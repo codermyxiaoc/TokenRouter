@@ -83,6 +83,20 @@ func (_c *CreativeRunCreate) SetGroupID(v int64) *CreativeRunCreate {
 	return _c
 }
 
+// SetQuotaPlatform sets the "quota_platform" field.
+func (_c *CreativeRunCreate) SetQuotaPlatform(v string) *CreativeRunCreate {
+	_c.mutation.SetQuotaPlatform(v)
+	return _c
+}
+
+// SetNillableQuotaPlatform sets the "quota_platform" field if the given value is not nil.
+func (_c *CreativeRunCreate) SetNillableQuotaPlatform(v *string) *CreativeRunCreate {
+	if v != nil {
+		_c.SetQuotaPlatform(*v)
+	}
+	return _c
+}
+
 // SetAPIKeyID sets the "api_key_id" field.
 func (_c *CreativeRunCreate) SetAPIKeyID(v int64) *CreativeRunCreate {
 	_c.mutation.SetAPIKeyID(v)
@@ -596,6 +610,10 @@ func (_c *CreativeRunCreate) defaults() {
 		v := creativerun.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
 	}
+	if _, ok := _c.mutation.QuotaPlatform(); !ok {
+		v := creativerun.DefaultQuotaPlatform
+		_c.mutation.SetQuotaPlatform(v)
+	}
 	if _, ok := _c.mutation.RequestedModel(); !ok {
 		v := creativerun.DefaultRequestedModel
 		_c.mutation.SetRequestedModel(v)
@@ -704,6 +722,14 @@ func (_c *CreativeRunCreate) check() error {
 	}
 	if _, ok := _c.mutation.GroupID(); !ok {
 		return &ValidationError{Name: "group_id", err: errors.New(`ent: missing required field "CreativeRun.group_id"`)}
+	}
+	if _, ok := _c.mutation.QuotaPlatform(); !ok {
+		return &ValidationError{Name: "quota_platform", err: errors.New(`ent: missing required field "CreativeRun.quota_platform"`)}
+	}
+	if v, ok := _c.mutation.QuotaPlatform(); ok {
+		if err := creativerun.QuotaPlatformValidator(v); err != nil {
+			return &ValidationError{Name: "quota_platform", err: fmt.Errorf(`ent: validator failed for field "CreativeRun.quota_platform": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.APIKeyID(); !ok {
 		return &ValidationError{Name: "api_key_id", err: errors.New(`ent: missing required field "CreativeRun.api_key_id"`)}
@@ -895,6 +921,10 @@ func (_c *CreativeRunCreate) createSpec() (*CreativeRun, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.GroupID(); ok {
 		_spec.SetField(creativerun.FieldGroupID, field.TypeInt64, value)
 		_node.GroupID = value
+	}
+	if value, ok := _c.mutation.QuotaPlatform(); ok {
+		_spec.SetField(creativerun.FieldQuotaPlatform, field.TypeString, value)
+		_node.QuotaPlatform = value
 	}
 	if value, ok := _c.mutation.APIKeyID(); ok {
 		_spec.SetField(creativerun.FieldAPIKeyID, field.TypeInt64, value)
@@ -1778,6 +1808,9 @@ func (u *CreativeRunUpsertOne) UpdateNewValues() *CreativeRunUpsertOne {
 		}
 		if _, exists := u.create.mutation.RunID(); exists {
 			s.SetIgnore(creativerun.FieldRunID)
+		}
+		if _, exists := u.create.mutation.QuotaPlatform(); exists {
+			s.SetIgnore(creativerun.FieldQuotaPlatform)
 		}
 	}))
 	return u
@@ -2768,6 +2801,9 @@ func (u *CreativeRunUpsertBulk) UpdateNewValues() *CreativeRunUpsertBulk {
 			}
 			if _, exists := b.mutation.RunID(); exists {
 				s.SetIgnore(creativerun.FieldRunID)
+			}
+			if _, exists := b.mutation.QuotaPlatform(); exists {
+				s.SetIgnore(creativerun.FieldQuotaPlatform)
 			}
 		}
 	}))

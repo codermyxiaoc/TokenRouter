@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -350,6 +351,16 @@ func (s *OpenAIGatewayService) ResolveGrokMediaVideoRequestGroup(
 	requestID string,
 	userID, apiKeyID int64,
 ) (int64, error) {
+	if s.HasLegacyVideoRecovery() {
+		task, err := s.legacyVideoTask(ctx, requestID, userID, apiKeyID)
+		if err == nil && task != nil {
+			return task.GroupID, nil
+		}
+		if err != nil && !errors.Is(err, ErrLegacyVideoTaskNotFound) {
+			return 0, err
+		}
+	}
+
 	if s == nil || s.cache == nil {
 		return 0, fmt.Errorf("grok video request binding cache is unavailable")
 	}
@@ -366,6 +377,19 @@ func (s *OpenAIGatewayService) ResolveGrokMediaVideoRequestAccount(
 	requestID string,
 	userID, apiKeyID int64,
 ) (int64, error) {
+	if s.HasLegacyVideoRecovery() {
+		task, err := s.legacyVideoTask(ctx, requestID, userID, apiKeyID)
+		if err == nil && task != nil {
+			if groupID == nil || *groupID != task.GroupID {
+				return 0, ErrLegacyVideoTaskConflict
+			}
+			return task.AccountID, nil
+		}
+		if err != nil && !errors.Is(err, ErrLegacyVideoTaskNotFound) {
+			return 0, err
+		}
+	}
+
 	if s == nil || s.cache == nil {
 		return 0, fmt.Errorf("grok video request binding cache is unavailable")
 	}
@@ -418,7 +442,7 @@ func (s *OpenAIGatewayService) SelectMediaVideoRequestAccount(
 // GrokVideoPendingBilling 是创建任务时保存的快照，用于状态轮询首次发现已完成视频地址时计费。
 // 状态响应可能省略模型或时长，此时先回退到该快照，再回退到默认值。
 type GrokVideoPendingBilling struct {
-	// SeedanceBilling 仅用于方舟异步任务，避免轮询时 Key 配置变化改变创建时资金来源。
+	// SeedanceBilling 兼容已有字段名，新 Grok/方舟任务共同保存创建时资金与分组快照。
 	SeedanceBilling      *SeedanceBillingSnapshot `json:"seedance_billing,omitempty"`
 	Model                string                   `json:"model"`
 	BillingModel         string                   `json:"billing_model,omitempty"`
@@ -530,6 +554,18 @@ func (s *OpenAIGatewayService) LoadGrokVideoPendingBilling(
 	requestID string,
 	userID, apiKeyID int64,
 ) (*GrokVideoPendingBilling, error) {
+	if s.HasLegacyVideoRecovery() {
+		task, err := s.legacyVideoTask(ctx, requestID, userID, apiKeyID)
+		if err == nil && task != nil {
+			if task.Pending != nil {
+				return task.Pending, nil
+			}
+		}
+		if err != nil && !errors.Is(err, ErrLegacyVideoTaskNotFound) {
+			return nil, err
+		}
+	}
+
 	if s == nil || s.cache == nil {
 		return nil, fmt.Errorf("grok video pending billing cache is unavailable")
 	}
@@ -559,6 +595,11 @@ func (s *OpenAIGatewayService) ClaimGrokVideoBilling(
 	requestID string,
 	userID, apiKeyID int64,
 ) (bool, error) {
+	// 持久恢复启用后，客户端只查询状态；统一由数据库租约 worker 结算。
+	if s.HasLegacyVideoRecovery() {
+		return false, nil
+	}
+
 	if s == nil || s.cache == nil {
 		return false, fmt.Errorf("grok video billing claim cache is unavailable")
 	}
@@ -623,7 +664,9 @@ func IsGrokVideoStatusBillable(statusBody []byte) bool {
 	if !isOfficialGrokVideoStatusDone(statusBody) {
 		return false
 	}
-	return strings.TrimSpace(gjson.GetBytes(statusBody, "video.url").String()) != ""
+	// 结构错误的对象、数组或数字不能转换成字符串后冒充生成成果并计费。
+	videoURL := gjson.GetBytes(statusBody, "video.url")
+	return videoURL.Type == gjson.String && strings.TrimSpace(videoURL.Str) != ""
 }
 
 func isOfficialGrokVideoStatusDone(statusBody []byte) bool {
@@ -763,7 +806,7 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	if endpoint.RequiresRequestBody() {
 		bodyReader = bytes.NewReader(body)
 	}
-	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+	upstreamCtx, releaseUpstreamCtx := legacyVideoUpstreamContext(ctx, endpoint)
 	defer releaseUpstreamCtx()
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, endpoint.httpMethod(), targetURL, bodyReader)
 	if err != nil {
@@ -795,12 +838,26 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
-		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+		transportErr := s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+		if isGrokAsyncVideoCreateEndpoint(endpoint) {
+			// 未收到 HTTP 响应不能证明上游未受理，禁止因超时或断连再次创建付费任务。
+			var failoverErr *UpstreamFailoverError
+			if errors.As(transportErr, &failoverErr) {
+				failoverErr.NextAccountAction = NextAccountStop
+				failoverErr.RetryableOnSameAccount = false
+			}
+		}
+		return nil, transportErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	requestIDHeader := firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id"))
 	requestModel := requestInfo.Model
+	if isGrokAsyncVideoCreateEndpoint(endpoint) && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// 创建重定向的受理结果不明，不透传 Location 让客户端再次提交。
+		setOpsUpstreamError(c, resp.StatusCode, "Grok video create redirect was not followed; submission outcome is unknown", "")
+		return nil, fmt.Errorf("grok video create redirect: submission outcome is unknown")
+	}
 	if resp.StatusCode >= 400 {
 		// 错误策略必须使用实际发往上游的映射后模型，确保模型级暂停与调度键一致。
 		return s.handleGrokMediaErrorResponse(ctx, resp, c, account, requestIDHeader, upstreamModel)
@@ -829,7 +886,11 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 			grokMediaContentProxyURL(c, requestID),
 		)
 	}
-	writeGrokMediaResponse(c, resp, respBody, s.responseHeaderFilter)
+	if isGrokAsyncVideoCreateEndpoint(endpoint) && c.GetBool(seedanceDeferredResponseKey) {
+		c.Set(seedanceDeferredResponseKey, &seedanceDeferredResponse{status: resp.StatusCode, header: resp.Header.Clone(), body: respBody})
+	} else {
+		writeGrokMediaResponse(c, resp, respBody, s.responseHeaderFilter)
+	}
 	usage := grokMediaUsageFromResponse(endpoint, requestInfo, respBody)
 	resultModel := requestModel
 	resultBillingModel := billingModel
@@ -1041,7 +1102,7 @@ func videoTaskObservation(endpoint GrokMediaEndpoint, body []byte, httpStatus in
 			return nil
 		}
 		observation.Status = "processing"
-		if strings.TrimSpace(gjson.GetBytes(body, "video.url").String()) != "" {
+		if IsGrokVideoStatusBillable(body) {
 			observation.Status = "completed"
 		}
 	case "failed":

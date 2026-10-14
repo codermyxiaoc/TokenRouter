@@ -10,6 +10,7 @@
 - [迁移执行](#migration_execution)：修改 runner 或迁移格式时读取。
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
+- [平台额度事务化升级](#transactional_platform_quotas)：切换额度统计权威来源、旧实例及缓存处理时读取。
 - [v3.11 自动结算订阅顺序](#v3_11_upgrade)：升级额度重置与到期优先级时读取。
 - [Sub2API 0.2.16 兼容迁移](#upstream_v216_migrations)：同步分组译文和 Gemini 显式缓存时读取。
 - [v3.9 每日活动资格与并发资金修复](#v3_9_upgrade)：升级可选充值来源、独立开关、退款资格与领取幂等修复时读取。
@@ -52,7 +53,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.11`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.12`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -67,11 +68,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.11`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.12`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.11 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.12 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -163,7 +164,18 @@ Gemini 缓存费用复用本站持久资金合同，使用 `gemini_cache` 报价
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.11`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `305_gemini_cached_contents_mutation_lease.sql`。
+当前发布版本为 `v0.1.278-ct-v3.12`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `309_creative_quota_platform.sql`。从 v3.11 升级包含迁移 306–309，新增旧视频持久恢复、异步图片结算依据、创作任务使用记录投递与平台快照；均不重算历史账单。升级前排空在途请求并停止全部旧应用及工作进程，保存数据库、配置与原平台缓存状态，先启动一个新实例完成迁移，再启动其余新实例。回退前处理新账本内的待结算、待释放及使用记录投递，并核对平台额度与缓存基线，不能直接让旧程序继续管理新任务。
+
+<a id="transactional_platform_quotas"></a>
+### 平台额度事务化升级
+
+平台额度改为与资金结算及请求去重同一 PostgreSQL 事务提交；普通网关、固定价异步图片、Gemini 缓存费用、批量图片和创作任务均覆盖。独立 Video 保持已有预留/捕获/释放事务与重置代次。新实例的平台准入直接查询数据库，旧 Redis 用量、dirty set 及 flusher 的周期和退出刷写都不再具有回写权；原 flusher 配置仍可读取，但不能重新启用这条旧统计路径。
+
+迁移 `309_creative_quota_platform.sql` 仅为创作任务新增平台快照，旧行保持空值兼容，不改用户余额、既有用量或重置代次。新任务创建时冻结平台，重启恢复和以后修改分组不会重新归属；其它异步任务沿用原报价/预占 JSON 保存平台。
+
+升级必须停止旧版写入进程并完成所有实例切换，不能与仍运行 Redis 增量及绝对快照刷写的旧版本混用。切换前核对并保存原数据库和平台缓存状态；不能在新交易开始后直接用旧缓存覆盖、累加或取最大值，因为旧快照没有逐请求计费证据及完整手动重置代次。升级前已经扣款的历史请求不自动猜测补记；历史差异须用当时账本、窗口及重置记录单独核对。回退到旧统计实现前也须先核对基线并处理旧缓存，不能只替换程序后继续使用遗留脏快照。
+
+修复后的交易在提交前退出会整体回滚；提交后退出已经同时保存资金、平台统计和去重依据，重试及冷归档去重重放不再累计。管理员重置后重放旧请求也不能恢复已清零用量。窗口仍是站点时区的日/周和滚动 30 天；平台准入保留既有数据库异常 fail-open 及在途请求规则，不承诺硬性预留并发预算。
 
 <a id="v3_11_upgrade"></a>
 ### v3.11 自动结算订阅顺序
@@ -362,7 +374,7 @@ WS 池和 Responses 内存优化本身不新增数据库迁移。OAuth/API Key �
 
 迁移 `248_allow_cn_user_platform_quotas.sql` 由上游迁移 224 按本 fork 当时最大编号 247 递增而来；仓库不保留上游原文件名。它只替换 `user_platform_quotas.platform` 的 CHECK 约束，把 `kimi`、`zhipu`、`deepseek` 加入原有六个平台，并与应用层九平台 allowlist 对齐。
 
-该迁移不回填已有用户的 CN 额度行。已有用户缺失行时继续按领域既有语义视为无限额，管理员显式保存九平台配置后才创建对应记录；新注册用户会在单次批量写入中创建全部九个平台的默认快照。升级后至少验证迁移可重复执行、新用户九行均写入、已有额度记录不变，以及 Kimi/Zhipu/DeepSeek 的日周月限额更新、预检查和结算归属。
+该迁移不回填已有用户的 CN 额度行。已有用户缺失行时继续按领域既有语义视为无限额。当前版本采用稀疏配置：新用户只为至少一个限额非空的平台建立默认额度行；管理员取消限制保留既有用量，不因统计重建无限额行。升级后至少验证迁移可重复执行、非空默认限额正确写入、已有额度记录不变，以及 Kimi/Zhipu/DeepSeek 的日周月限额更新、预检查和结算归属；当前完整平台范围以[用户平台额度](../domains/platform_quotas.md)为准。
 
 ### Grok 媒体、搜索与 Voice 定价迁移
 

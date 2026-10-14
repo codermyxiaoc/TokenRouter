@@ -87,6 +87,10 @@
 
 `ProvideVideoTaskService` 启动独立 Video 持久恢复器，每五秒限量领取到期租约，只轮询原任务和补结算，不重发生成 POST。关闭时先取消循环并等待当前有界执行退出，再关闭数据库；多实例依赖任务租约及账务行锁。细节见[独立视频平台任务](../domains/video_tasks.md)。
 
+`ProvideLegacyVideoRuntime` 启动 Grok/Seedance 旧协议的视频持久恢复，每五秒领取数据库租约，限定本机四个并行任务。`provideCleanup` 在关闭数据库前取消查询并等待有界状态收尾，启动和停止均幂等；上游任务生成不在恢复器中重放，账务回执与扣款同事务保存。
+
+`ProvideImageTaskService` 在启动维护循环前装配 `RecoverAsyncImageBilling`。该回调仅恢复已有成功证据的预占捕获与使用记录，并失效原付款人及操作成员的鉴权缓存；与图片任务共用启动、取消和等待退出的生命周期。
+
 ## 数据所有权
 
 | 存储 | 所有权与使用方式 | 失败或丢失影响 |

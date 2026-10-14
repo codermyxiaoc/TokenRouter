@@ -162,6 +162,19 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 
 	contentType := c.GetHeader("Content-Type")
 	requestInfo := service.ParseGrokMediaRequest(contentType, body)
+	if endpoint == service.SeedanceEndpointDelete && h.gatewayService.HasLegacyVideoRecovery() {
+		// 删除只发送一次，成功响应须等原任务删除事实写入后再提交。
+		service.DeferSeedanceResponse(c)
+	}
+	if isGrokVideoCreateEndpoint(endpoint) && h.gatewayService.HasLegacyVideoRecovery() {
+		if err := h.gatewayService.CheckLegacyVideoStorage(c.Request.Context()); err != nil {
+			h.errorResponse(c, http.StatusServiceUnavailable, "task_storage_unavailable", "Task storage is temporarily unavailable")
+			return
+		}
+		// 成功响应先缓存，持久化原任务归属与资金快照后再返回客户端。
+		service.DeferSeedanceResponse(c)
+	}
+
 	if endpoint == service.SeedanceEndpointCreate {
 		requestInfo, err = service.ParseSeedanceRequest(body)
 		if err != nil {
@@ -559,66 +572,91 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			return
 		}
 
+		if isGrokVideoCreateEndpoint(endpoint) && h.gatewayService.HasLegacyVideoRecovery() && (result == nil || strings.TrimSpace(result.ResponseID) == "") {
+			h.errorResponse(c, http.StatusBadGateway, "task_id_missing", "Upstream did not return a task ID; submission outcome is unknown. Do not automatically resubmit.")
+			return
+		}
+		if endpoint == service.SeedanceEndpointDelete && h.gatewayService.HasLegacyVideoRecovery() {
+			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(requestCtx), 10*time.Second)
+			source, taskID := service.LegacyVideoTaskIdentity(requestID)
+			groupID := int64(0)
+			if apiKey.GroupID != nil {
+				groupID = *apiKey.GroupID
+			}
+			task := &service.LegacyVideoTask{Source: source, TaskID: taskID, UserID: apiKey.UserID,
+				BillingUserID: subject.UserID, APIKeyID: apiKey.ID, GroupID: groupID, AccountID: account.ID}
+			storageErr := h.gatewayService.RecordLegacyVideoDeletion(persistCtx, task)
+			if storageErr != nil {
+				storageErr = h.gatewayService.RecordLegacyVideoDeletion(persistCtx, task)
+			}
+			cancel()
+			if storageErr != nil {
+				reqLog.Error("video.deletion_persistence_failed", zap.String("task_id", taskID), zap.Error(storageErr))
+				c.JSON(http.StatusServiceUnavailable, gin.H{"id": taskID, "error": gin.H{
+					"code": "TaskStorageUnavailable", "message": "Upstream task already deleted; do not resubmit. Contact the administrator with this task ID.",
+				}})
+				return
+			}
+			h.gatewayService.CommitSeedanceResponse(c)
+		}
 		h.gatewayService.ReportOpenAIAccountScheduleResult(account, grokMediaScheduleModel(account, routingModel, result), true, nil)
-		h.observeVideoTask(c, endpoint, requestID, apiKey, subject.UserID, account, result, videoCreateStartedAt, requestModel)
+		if !isGrokVideoCreateEndpoint(endpoint) {
+			h.observeVideoTask(c, endpoint, requestID, apiKey, subject.UserID, account, result, videoCreateStartedAt, requestModel)
+		}
 		if isGrokVideoCreateEndpoint(endpoint) && strings.TrimSpace(result.ResponseID) != "" {
-			persistCtx := requestCtx
-			if endpoint.IsSeedance() {
-				// 上游已创建付费任务；即使客户端此时断连，也必须保存归属和计费快照。
-				var cancel context.CancelFunc
-				persistCtx, cancel = context.WithTimeout(context.WithoutCancel(requestCtx), 5*time.Second)
-				defer cancel()
-			}
-			bindingErr := h.gatewayService.BindGrokMediaVideoRequestAccount(
-				persistCtx, apiKey.GroupID, result.ResponseID, subject.UserID, apiKey.ID, account.ID,
-			)
-			if bindingErr != nil && endpoint.IsSeedance() {
-				bindingErr = h.gatewayService.BindGrokMediaVideoRequestAccount(persistCtx, apiKey.GroupID, result.ResponseID, subject.UserID, apiKey.ID, account.ID)
-			}
-			if bindingErr != nil {
-				reqLog.Warn("grok_media.bind_video_request_account_failed",
-					zap.Int64("account_id", account.ID),
-					zap.String("request_id", result.ResponseID),
-					zap.Error(bindingErr),
-				)
-			}
-			// 视频创建阶段暂不扣费，保存模型、时长和分辨率供完成查询定价。
+			// 上游已创建付费任务，客户端断连不能中止本地保存。
+			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(requestCtx), 10*time.Second)
+			defer cancel()
 			pending := service.GrokVideoPendingBilling{
-				Model:                requestModel,
-				BillingModel:         firstNonEmptyString(result.BillingModel, requestModel),
-				UpstreamModel:        result.UpstreamModel,
-				VideoResolution:      result.VideoResolution,
+				Model: requestModel, BillingModel: firstNonEmptyString(result.BillingModel, requestModel),
+				UpstreamModel: result.UpstreamModel, VideoResolution: result.VideoResolution,
 				VideoDurationSeconds: result.VideoDurationSeconds,
-				OriginalModel:        clientRequestedModel(c, requestModel),
-				// 用创建受理到首次发现完成的墙钟时间记录端到端耗时。
-				CreatedAt: videoCreateStartedAt,
+				OriginalModel:        clientRequestedModel(c, requestModel), CreatedAt: videoCreateStartedAt,
 			}
-			if endpoint.IsSeedance() {
+			if endpoint.IsSeedance() || h.gatewayService.HasLegacyVideoRecovery() {
 				pending.SeedanceBilling = newSeedanceBillingSnapshot(apiKey, subscription, channelMapping)
 				pending.SeedanceBilling.OriginalModel = pending.OriginalModel
+				pending.SeedanceBilling.TeamID = apiKey.TeamID
+				pending.SeedanceBilling.InboundEndpoint = GetInboundEndpoint(c)
+				pending.SeedanceBilling.UpstreamEndpoint = GetUpstreamEndpoint(c, account.Platform)
+				pending.SeedanceBilling.QuotaPlatform = service.QuotaPlatform(requestCtx, apiKey)
 			}
-			pendingErr := h.gatewayService.StoreGrokVideoPendingBilling(persistCtx, result.ResponseID, subject.UserID, apiKey.ID, pending)
-			if pendingErr != nil {
-				reqLog.Warn("grok_media.store_video_pending_billing_failed_retrying",
-					zap.Int64("account_id", account.ID),
-					zap.String("request_id", result.ResponseID),
-					zap.Error(pendingErr),
-				)
-				pendingErr = h.gatewayService.StoreGrokVideoPendingBilling(persistCtx, result.ResponseID, subject.UserID, apiKey.ID, pending)
-				if pendingErr != nil {
-					// 响应可能已经提交；后续完成查询在缺少定价快照时按保守策略处理。
-					reqLog.Error("grok_media.store_video_pending_billing_failed",
-						zap.Int64("account_id", account.ID),
-						zap.String("request_id", result.ResponseID),
-						zap.Error(pendingErr),
-					)
+			var storageErr error
+			if h.gatewayService.HasLegacyVideoRecovery() {
+				source, taskID := service.LegacyVideoTaskIdentity(result.ResponseID)
+				createdAt, _ := time.Parse(time.RFC3339Nano, videoCreateStartedAt)
+				groupID := int64(0)
+				if apiKey.GroupID != nil {
+					groupID = *apiKey.GroupID
+				}
+				task := &service.LegacyVideoTask{Source: source, TaskID: taskID, UserID: apiKey.UserID,
+					BillingUserID: subject.UserID, APIKeyID: apiKey.ID, GroupID: groupID, AccountID: account.ID,
+					Pending: &pending, Model: pending.OriginalModel, Status: "queued", BillingStatus: "pending",
+					CreatedAt: createdAt, NextPollAt: time.Now().Add(5 * time.Second)}
+				storageErr = h.gatewayService.TrackLegacyVideoTask(persistCtx, task)
+				if storageErr != nil {
+					storageErr = h.gatewayService.TrackLegacyVideoTask(persistCtx, task)
 				}
 			}
-			if endpoint.IsSeedance() {
-				if bindingErr != nil || pendingErr != nil {
-					// 上游已创建任务，明确回传 ID 供恢复；不能声称成功保存，更不能自动重创。
+			bindingErr := h.gatewayService.BindGrokMediaVideoRequestAccount(persistCtx, apiKey.GroupID, result.ResponseID, subject.UserID, apiKey.ID, account.ID)
+			pendingErr := h.gatewayService.StoreGrokVideoPendingBilling(persistCtx, result.ResponseID, subject.UserID, apiKey.ID, pending)
+			if !h.gatewayService.HasLegacyVideoRecovery() {
+				if bindingErr != nil {
+					bindingErr = h.gatewayService.BindGrokMediaVideoRequestAccount(persistCtx, apiKey.GroupID, result.ResponseID, subject.UserID, apiKey.ID, account.ID)
+				}
+				if pendingErr != nil {
+					pendingErr = h.gatewayService.StoreGrokVideoPendingBilling(persistCtx, result.ResponseID, subject.UserID, apiKey.ID, pending)
+				}
+				storageErr = errors.Join(bindingErr, pendingErr)
+			}
+			// 先保存完整恢复快照再展示，避免历史回填抢先导入缺少账务依据的新任务。
+			h.observeVideoTask(c, endpoint, requestID, apiKey, subject.UserID, account, result, videoCreateStartedAt, requestModel)
+			if endpoint.IsSeedance() || h.gatewayService.HasLegacyVideoRecovery() {
+				if storageErr != nil {
+					// 已受理的任务必须保留 ID，不能误导客户端自动重发付费生成。
+					reqLog.Error("video.task_persistence_failed", zap.String("task_id", result.ResponseID), zap.Error(storageErr))
 					c.JSON(http.StatusServiceUnavailable, gin.H{"id": strings.TrimPrefix(result.ResponseID, "seedance:"), "error": gin.H{
-						"code": "TaskStorageUnavailable", "message": "Upstream task already created; do not resubmit. Task metadata could not be saved; contact the administrator with this task ID.",
+						"code": "TaskStorageUnavailable", "message": "Upstream task already created; do not resubmit. Contact the administrator with this task ID.",
 					}})
 					return
 				}

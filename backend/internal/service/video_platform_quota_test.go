@@ -34,6 +34,5 @@ func TestVideoQuotaFlusherCannotOverwriteDatabaseLedger(t *testing.T) {
 	writer := &mockQuotaSnapshotWriter{}
 	flusher := newTestFlusher(cache, writer)
 	flusher.flushOneBatch(context.Background())
-	require.Len(t, writer.receivedSnaps, 1)
-	require.Equal(t, PlatformOpenAI, writer.receivedSnaps[0].Platform)
+	require.Empty(t, writer.receivedSnaps)
 }

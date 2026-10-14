@@ -20,6 +20,10 @@ var ErrUsageBillingSubscriptionScopeInvalid = errors.New("usage billing subscrip
 
 // UsageBillingCommand describes one billable request that must be applied at most once.
 type UsageBillingCommand struct {
+	// QuotaPlatform 冻结本次额度归属；不改变已有资金指纹，避免升级后重放原命令失效。
+	QuotaPlatform string `json:",omitempty"`
+	// LegacyVideoTaskID 将旧视频扣款回执与扣费事务关联，不参与通用幂等指纹。
+	LegacyVideoTaskID  int64 `json:"legacy_video_task_id,omitempty"`
 	RequestID          string
 	APIKeyID           int64
 	RequestFingerprint string
@@ -232,6 +236,8 @@ type UsageBillingApplyResult struct {
 
 // BatchImageBalanceHoldCommand describes an idempotent balance hold operation.
 type BatchImageBalanceHoldCommand struct {
+	// QuotaPlatform 随原预占快照持久化，最终只累计真实余额消费，不累计冻结额。
+	QuotaPlatform      string `json:",omitempty"`
 	RequestID          string
 	APIKeyID           int64
 	RequestFingerprint string

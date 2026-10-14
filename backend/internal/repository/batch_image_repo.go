@@ -636,6 +636,54 @@ func (r *batchImageRepository) ListStaleUnsubmittedBatchImageJobs(ctx context.Co
 	return scanBatchImageJobs(rows)
 }
 
+// ListBatchImageJobsForQueueRecovery 按稳定主键分页恢复已受理任务，避免慢任务反复占满首批扫描。
+func (r *batchImageRepository) ListBatchImageJobsForQueueRecovery(ctx context.Context, afterID int64, limit int) ([]*service.BatchImageJob, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	rows, err := r.sql.QueryContext(ctx, batchImageJobSelectSQL+`
+ WHERE id > $1 AND status IN ('submitted', 'running', 'indexing', 'settling')
+   AND NULLIF(BTRIM(provider_job_name), '') IS NOT NULL
+ ORDER BY id ASC LIMIT $2`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanBatchImageJobs(rows)
+}
+
+// ListBatchImageJobsForUsageRecovery 只补最近升级窗口内有真实捕获凭证的已结算任务。
+func (r *batchImageRepository) ListBatchImageJobsForUsageRecovery(ctx context.Context, afterID int64, since time.Time, limit int) ([]*service.BatchImageJob, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	rows, err := r.sql.QueryContext(ctx, batchImageJobSelectSQL+`
+ WHERE id > $1 AND status IN ('completed', 'output_deleted') AND settled_at >= $2 AND actual_cost IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM batch_image_events e WHERE e.job_id = batch_image_jobs.batch_id AND e.event_hash = 'usage-recorded-v1')
+   AND (EXISTS (SELECT 1 FROM usage_billing_dedup d WHERE d.api_key_id = batch_image_jobs.api_key_id AND d.request_id = 'batch_image_capture:' || batch_image_jobs.batch_id)
+        OR EXISTS (SELECT 1 FROM usage_billing_dedup_archive d WHERE d.api_key_id = batch_image_jobs.api_key_id AND d.request_id = 'batch_image_capture:' || batch_image_jobs.batch_id))
+ ORDER BY id ASC LIMIT $3`, afterID, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanBatchImageJobs(rows)
+}
+
+// MarkBatchImageUsageRecorded 仅在使用记录已落库时标记完成，避免日志保留清理后重复恢复。
+func (r *batchImageRepository) MarkBatchImageUsageRecorded(ctx context.Context, batchID string) (bool, error) {
+	var recorded bool
+	err := r.sql.QueryRowContext(ctx, `WITH saved AS (
+ INSERT INTO batch_image_events (job_id, event_type, event_hash, payload)
+ SELECT j.batch_id, 'usage_recorded', 'usage-recorded-v1', jsonb_build_object('request_id', 'batch_image_capture:' || j.batch_id)
+ FROM batch_image_jobs j WHERE j.batch_id=$1 AND EXISTS (
+   SELECT 1 FROM usage_logs u WHERE u.api_key_id=j.api_key_id AND u.request_id='batch_image_capture:' || j.batch_id)
+ ON CONFLICT (job_id,event_hash) WHERE event_hash IS NOT NULL AND event_hash <> '' DO NOTHING RETURNING 1
+) SELECT EXISTS(SELECT 1 FROM saved) OR EXISTS(
+ SELECT 1 FROM batch_image_events WHERE job_id=$1 AND event_hash='usage-recorded-v1')`, batchID).Scan(&recorded)
+	return recorded, err
+}
+
 func (r *batchImageRepository) MarkBatchImageInputDeleted(ctx context.Context, batchID string, deletedAt time.Time) error {
 	res, err := r.sql.ExecContext(ctx, `
 UPDATE batch_image_jobs

@@ -176,6 +176,7 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *usageBill
 	}
 
 	cmd := &UsageBillingCommand{
+		QuotaPlatform:      firstNonEmpty(p.Platform, PlatformFromAPIKey(p.APIKey)),
 		RequestID:          requestID,
 		APIKeyID:           p.APIKey.ID,
 		APIKeyBillingMode:  APIKeyEffectiveBillingMode(p.APIKey),
@@ -184,6 +185,10 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *usageBill
 		AccountID:          p.Account.ID,
 		AccountType:        p.Account.Type,
 		RequestPayloadHash: strings.TrimSpace(p.RequestPayloadHash),
+	}
+	if p.ImageReservation != nil && p.ImageReservation.Hold.QuotaPlatform != "" {
+		// 异步任务使用受理时的平台，不受后续分组配置或恢复进程上下文影响。
+		cmd.QuotaPlatform = p.ImageReservation.Hold.QuotaPlatform
 	}
 	if p.APIKey.PreferredSubscriptionID != nil {
 		preferredSubscriptionID := *p.APIKey.PreferredSubscriptionID

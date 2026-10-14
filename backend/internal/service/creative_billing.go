@@ -65,6 +65,7 @@ func buildCreativeHoldCommand(run *CreativeRun, requestID string, actualBaseAmou
 		UserID:                          run.UserID,
 		ActorUserID:                     run.UserID,
 		GroupID:                         &groupID,
+		QuotaPlatform:                   run.QuotaPlatform,
 		BatchID:                         run.RunID,
 		APIKeyBillingMode:               APIKeyBillingModeAuto,
 		HoldAmount:                      holdAmount,
@@ -112,7 +113,8 @@ func reserveCreativeBalanceHold(ctx context.Context, repo UsageBillingRepository
 		}
 		if errors.Is(err, ErrAPIKeyQuotaExhausted) || errors.Is(err, ErrAPIKeyRateLimit5hExceeded) || errors.Is(err, ErrAPIKeyRateLimit1dExceeded) ||
 			errors.Is(err, ErrAPIKeyRateLimit7dExceeded) || errors.Is(err, ErrTeamMemberDailyExceeded) || errors.Is(err, ErrTeamMemberWeeklyExceeded) ||
-			errors.Is(err, ErrTeamMemberMonthlyExceeded) {
+			errors.Is(err, ErrTeamMemberMonthlyExceeded) || errors.Is(err, ErrUserPlatformDailyQuotaExhausted) ||
+			errors.Is(err, ErrUserPlatformWeeklyQuotaExhausted) || errors.Is(err, ErrUserPlatformMonthlyQuotaExhausted) {
 			return err
 		}
 		return ErrCreativeBillingHoldFailed.WithCause(err)

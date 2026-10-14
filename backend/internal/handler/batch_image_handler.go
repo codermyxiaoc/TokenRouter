@@ -328,11 +328,13 @@ func batchImageError(c *gin.Context, err error) {
 		code = "BATCH_IMAGE_NOT_FOUND"
 		message = "batch image job not found"
 	}
-	c.JSON(status, gin.H{
-		"error": gin.H{
-			"type":    "invalid_request_error",
-			"code":    code,
-			"message": message,
-		},
-	})
+	details := gin.H{"type": "invalid_request_error", "code": code, "message": message}
+	if errors.Is(err, service.ErrUserPlatformDailyQuotaExhausted) || errors.Is(err, service.ErrUserPlatformWeeklyQuotaExhausted) || errors.Is(err, service.ErrUserPlatformMonthlyQuotaExhausted) {
+		// 平台限额需保留具体重置窗口，客户端才能按同一口径退避重试。
+		if appErr := infraerrors.FromError(err); appErr != nil && len(appErr.Metadata) > 0 {
+			details["metadata"] = appErr.Metadata
+		}
+		c.Header("Retry-After", strconv.Itoa(extractQuotaResetSeconds(err)))
+	}
+	c.JSON(status, gin.H{"error": details})
 }

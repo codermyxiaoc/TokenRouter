@@ -75,6 +75,10 @@ func buildBatchImageHoldCommand(job *BatchImageJob, requestID string, actualAmou
 		ReservedAt:                  job.CreatedAt,
 		RequestPayloadHash:          strings.TrimSpace(payloadHash),
 	}
+	// 两种批量提供商都属于 Gemini；使用原任务协议，不读取后来变化的 Key/分组。
+	if IsSupportedBatchImageProvider(job.Provider) {
+		command.QuotaPlatform = PlatformGemini
+	}
 	if job.PricingSnapshotVersion >= 2 {
 		scale := math.Max(job.AccountRateMultiplier, 0) * math.Max(job.HoldMultiplier, 0)
 		settlementScale := 0.0
@@ -116,7 +120,8 @@ func reserveBatchImageBalanceHold(ctx context.Context, repo UsageBillingReposito
 			return err
 		}
 		if errors.Is(err, ErrAPIKeyQuotaExhausted) || errors.Is(err, ErrAPIKeyRateLimit5hExceeded) || errors.Is(err, ErrAPIKeyRateLimit1dExceeded) || errors.Is(err, ErrAPIKeyRateLimit7dExceeded) ||
-			errors.Is(err, ErrTeamMemberDailyExceeded) || errors.Is(err, ErrTeamMemberWeeklyExceeded) || errors.Is(err, ErrTeamMemberMonthlyExceeded) {
+			errors.Is(err, ErrTeamMemberDailyExceeded) || errors.Is(err, ErrTeamMemberWeeklyExceeded) || errors.Is(err, ErrTeamMemberMonthlyExceeded) ||
+			errors.Is(err, ErrUserPlatformDailyQuotaExhausted) || errors.Is(err, ErrUserPlatformWeeklyQuotaExhausted) || errors.Is(err, ErrUserPlatformMonthlyQuotaExhausted) {
 			return err
 		}
 		return ErrBatchImageBillingHoldFailed.WithCause(err)

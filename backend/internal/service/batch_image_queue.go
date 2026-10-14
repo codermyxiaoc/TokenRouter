@@ -35,6 +35,11 @@ type BatchImageQueue interface {
 	TryAcquireJobLock(ctx context.Context, batchID string, ttl time.Duration) (BatchImageJobLock, bool, error)
 }
 
+// BatchImageQueueRecovery 修复持久任务的队列成员丢失，不能仅凭遗留 inflight 键判定已入队。
+type BatchImageQueueRecovery interface {
+	EnsureQueued(ctx context.Context, batchID string) error
+}
+
 type BatchImageService struct {
 	repo  BatchImageRepository
 	queue BatchImageQueue

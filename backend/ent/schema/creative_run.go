@@ -40,6 +40,8 @@ func (CreativeRun) Fields() []ent.Field {
 		// workspace_id 为空表示迁移前旧任务，用户侧工作区查询会将其隐藏。
 		field.String("workspace_id").Optional().Nillable().MaxLen(64),
 		field.Int64("group_id"),
+		// quota_platform 冻结创建时的额度平台；历史空值由结算仓储按原分组兼容解析。
+		field.String("quota_platform").MaxLen(32).Default("").Immutable(),
 		// api_key_id 指向创作台隐藏执行 Key（managed_by = 'creative_studio'）。
 		field.Int64("api_key_id"),
 		// account_id 由 worker 执行阶段回填。

@@ -29,6 +29,11 @@ func SeedanceTaskKey(id string) string { return "seedance:" + strings.TrimSpace(
 
 // SeedanceBillingSnapshot 冻结任务创建时的结算选择和渠道模型链，不存储上游凭据。
 type SeedanceBillingSnapshot struct {
+	// 任务执行期间 Key 可修改，计费归属和端点沿用创建快照。
+	TeamID                  *int64               `json:"team_id,omitempty"`
+	InboundEndpoint         string               `json:"inbound_endpoint,omitempty"`
+	UpstreamEndpoint        string               `json:"upstream_endpoint,omitempty"`
+	QuotaPlatform           string               `json:"quota_platform,omitempty"`
 	OriginalModel           string               `json:"original_model,omitempty"`
 	BillingMode             string               `json:"billing_mode"`
 	PreferredSubscriptionID *int64               `json:"preferred_subscription_id,omitempty"`
@@ -45,7 +50,7 @@ type seedanceDeferredResponse struct {
 	body   []byte
 }
 
-// DeferSeedanceResponse 让创建流程在提交成功响应前保存任务归属和结算快照。
+// DeferSeedanceResponse 让创建或删除流程在提交成功响应前保存归属、快照或删除事实。
 func DeferSeedanceResponse(c *gin.Context) { c.Set(seedanceDeferredResponseKey, true) }
 
 // CommitSeedanceResponse 仅写回已缓存的方舟原生响应，不重建任务或修改 JSON。
@@ -58,6 +63,9 @@ func (s *OpenAIGatewayService) CommitSeedanceResponse(c *gin.Context) {
 
 // CheckSeedanceTaskStorage 在创建付费任务前确认任务缓存可访问，避免已知故障下继续创建。
 func (s *OpenAIGatewayService) CheckSeedanceTaskStorage(ctx context.Context) error {
+	if s.HasLegacyVideoRecovery() {
+		return s.CheckLegacyVideoStorage(ctx)
+	}
 	if s == nil || s.cache == nil {
 		return fmt.Errorf("seedance task storage unavailable")
 	}
@@ -148,7 +156,9 @@ func (s *OpenAIGatewayService) ForwardSeedance(ctx context.Context, c *gin.Conte
 		return nil, fmt.Errorf("seedance account missing api_key")
 	}
 	started := time.Now()
-	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
+	upstreamCtx, cancelUpstream := legacyVideoUpstreamContext(ctx, endpoint)
+	defer cancelUpstream()
+	req, err := http.NewRequestWithContext(upstreamCtx, method, target, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +211,7 @@ func (s *OpenAIGatewayService) ForwardSeedance(ctx context.Context, c *gin.Conte
 			result.Usage.OutputTokens = max(0, int(gjson.GetBytes(responseBody, "usage.completion_tokens").Int()))
 		}
 	}
-	if endpoint == SeedanceEndpointCreate && c.GetBool(seedanceDeferredResponseKey) {
+	if (endpoint == SeedanceEndpointCreate || endpoint == SeedanceEndpointDelete) && c.GetBool(seedanceDeferredResponseKey) {
 		c.Set(seedanceDeferredResponseKey, &seedanceDeferredResponse{status: resp.StatusCode, header: resp.Header.Clone(), body: responseBody})
 		return result, nil
 	}

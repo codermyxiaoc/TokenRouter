@@ -65,6 +65,23 @@ func (r *usageBillingRepository) applyOnce(ctx context.Context, cmd *service.Usa
 		return nil, err
 	}
 	if !applied {
+		if cmd.LegacyVideoTaskID > 0 {
+			// 已扣费但使用记录尚未保存时，重放真实分配，不用当前价卡或预估倍率重算。
+			var raw []byte
+			err := tx.QueryRowContext(ctx, `SELECT billing_result FROM legacy_video_tasks WHERE id=$1 AND api_key_id=$2 AND billing_user_id=$3 AND account_id=$4 AND request_id=$5 AND user_id=$6 AND group_id=$7`, cmd.LegacyVideoTaskID, cmd.APIKeyID, cmd.UserID, cmd.AccountID, cmd.RequestID, cmd.ActorUserID, cmd.GroupID).Scan(&raw)
+			if err != nil {
+				return nil, err
+			}
+			if len(raw) == 0 {
+				return nil, errors.New("视频已扣费但原扣费回执缺失，需人工核对")
+			}
+			var receipt service.UsageBillingApplyResult
+			if err := json.Unmarshal(raw, &receipt); err != nil {
+				return nil, err
+			}
+			receipt.Applied = false
+			return &receipt, nil
+		}
 		return &service.UsageBillingApplyResult{Applied: false}, nil
 	}
 	if err := lockUsageBillingUser(ctx, tx, cmd.UserID); err != nil {
@@ -75,10 +92,31 @@ func (r *usageBillingRepository) applyOnce(ctx context.Context, cmd *service.Usa
 	if err := r.applyUsageBillingEffects(ctx, tx, cmd, result); err != nil {
 		return nil, err
 	}
+	if err := applyUsageBillingPlatformQuota(ctx, tx, cmd, result.BalanceAmountUSD); err != nil {
+		return nil, err
+	}
 	if err := recordDailyActivitySpending(ctx, tx, cmd.UserID, cmd.APIKeyID, cmd.RequestID, result.SubscriptionAmountUSD, result.BalanceAmountUSD); err != nil {
 		return nil, err
 	}
 
+	if cmd.LegacyVideoTaskID > 0 {
+		// 资金与回执必须同事务提交，进程崩溃后仍可准确补写使用记录。
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, err
+		}
+		updated, err := tx.ExecContext(ctx, `UPDATE legacy_video_tasks SET billing_result=$1 WHERE id=$2 AND api_key_id=$3 AND billing_user_id=$4 AND account_id=$5 AND request_id=$6 AND user_id=$7 AND group_id=$8 AND billing_result IS NULL`, string(raw), cmd.LegacyVideoTaskID, cmd.APIKeyID, cmd.UserID, cmd.AccountID, cmd.RequestID, cmd.ActorUserID, cmd.GroupID)
+		if err != nil {
+			return nil, err
+		}
+		n, err := updated.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if n != 1 {
+			return nil, errors.New("视频持久扣费归属或回执冲突")
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -392,6 +430,13 @@ func (r *usageBillingRepository) applyBatchImageBalanceHoldOnce(
 		result = &service.BatchImageBalanceHoldResult{}
 	}
 	result.Applied = true
+	if operation == batchImageAllowanceReserve && !cmd.VideoEntity {
+		// 订阅分配之后才能确认是否使用余额；平台拒绝必须回滚本次订阅、余额和去重。
+		quotaCommand := &service.UsageBillingCommand{UserID: cmd.UserID, GroupID: cmd.GroupID, QuotaPlatform: cmd.QuotaPlatform}
+		if err := checkUsageBillingPlatformQuotaReserve(ctx, tx, quotaCommand, normalizeBatchImageBalanceAmount(result.BalanceAmountUSD)); err != nil {
+			return nil, err
+		}
+	}
 	if !deferredCapture && !prepayCapture {
 		if err := applyBatchImageAllowance(ctx, tx, cmd, operation); err != nil {
 			return nil, err
@@ -404,6 +449,14 @@ func (r *usageBillingRepository) applyBatchImageBalanceHoldOnce(
 	}
 	// 只累计最终捕获的真实资金，预占、释放和视频预扣退差都不产生重复消费资格。
 	if operation == batchImageAllowanceCapture {
+		if !cmd.VideoEntity {
+			// 批量图片和创作台也必须随资金捕获原子累计，不能依赖日志或恢复器二次补计。
+			quotaCommand := &service.UsageBillingCommand{UserID: cmd.UserID, GroupID: cmd.GroupID, QuotaPlatform: cmd.QuotaPlatform}
+			// 钱包按八位小数量化实扣，平台统计沿用同一金额而不改变既有报价和日志口径。
+			if err := applyUsageBillingPlatformQuota(ctx, tx, quotaCommand, normalizeBatchImageBalanceAmount(result.BalanceAmountUSD)); err != nil {
+				return nil, err
+			}
+		}
 		if err := recordDailyActivitySpending(ctx, tx, cmd.UserID, cmd.APIKeyID, cmd.RequestID, result.SubscriptionAmountUSD, result.BalanceAmountUSD); err != nil {
 			return nil, err
 		}
@@ -799,7 +852,7 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 }
 
 // applyUsageBillingAllowanceEffects 复用已确认资金分配，预占捕获时不再分配或扣减用户资金。
-func applyUsageBillingAllowanceEffects(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, result *service.UsageBillingApplyResult) error {
+func applyUsageBillingAllowanceEffects(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, result *service.UsageBillingApplyResult, allowDeletedImageAccount ...bool) error {
 	billableAmount := result.SubscriptionAmountUSD + result.BalanceAmountUSD
 	if cmd.TeamID != nil && cmd.ActorUserID > 0 && cmd.ActorUserID != cmd.UserID {
 		if err := incrementUsageBillingTeamMember(ctx, tx, *cmd.TeamID, cmd.ActorUserID, billableAmount, time.Now()); err != nil {
@@ -835,7 +888,19 @@ func applyUsageBillingAllowanceEffects(ctx context.Context, tx *sql.Tx, cmd *ser
 
 	if cmd.AccountQuotaCost > 0 && (strings.EqualFold(cmd.AccountType, service.AccountTypeAPIKey) || strings.EqualFold(cmd.AccountType, service.AccountTypeBedrock)) {
 		quotaState, err := incrementUsageBillingAccountQuota(ctx, tx, cmd.AccountID, cmd.AccountQuotaCost)
-		if err != nil {
+		if errors.Is(err, service.ErrAccountNotFound) && len(allowDeletedImageAccount) > 0 && allowDeletedImageAccount[0] {
+			// 只有已验证原资金预占的图片捕获允许忽略软删除账号的统计；不存在的账号仍拒绝。
+			// 不改变付款、归属或命令指纹，也不向普通同步扣费开放此例外。
+			var deleted bool
+			if lookupErr := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM accounts WHERE id=$1 AND deleted_at IS NOT NULL)`, cmd.AccountID).Scan(&deleted); lookupErr != nil {
+				return lookupErr
+			}
+			if deleted {
+				err = nil
+			}
+		}
+		// 旧异步任务已有持久归属与冻结报价，原账号软删除只停止额度计数，不能免除已受理费用。
+		if err != nil && !(cmd.LegacyVideoTaskID > 0 && errors.Is(err, service.ErrAccountNotFound)) {
 			return err
 		}
 		result.QuotaState = quotaState

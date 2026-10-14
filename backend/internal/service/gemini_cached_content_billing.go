@@ -75,7 +75,8 @@ func (s *GatewayService) PrepareGeminiCacheBilling(ctx context.Context, input *R
 		actorID = key.ActorUser.ID
 	}
 	hold := BatchImageBalanceHoldCommand{
-		RequestID: result.RequestID, BatchID: result.RequestID, APIKeyID: key.ID, UserID: key.User.ID, ActorUserID: actorID,
+		QuotaPlatform: firstNonEmpty(input.QuotaPlatform, QuotaPlatform(ctx, key)),
+		RequestID:     result.RequestID, BatchID: result.RequestID, APIKeyID: key.ID, UserID: key.User.ID, ActorUserID: actorID,
 		GroupID: key.GroupID, TeamID: key.TeamID, APIKeyBillingMode: APIKeyEffectiveBillingMode(key), PreferredSubscriptionID: key.PreferredSubscriptionID,
 		BaseAmountUSD: base, RequestPayloadHash: input.RequestPayloadHash,
 		SubscriptionRateMultiplier: rates.SubscriptionRateMultiplier, SubscriptionRateMultiplierScale: rates.SubscriptionRateMultiplierScale,

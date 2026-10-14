@@ -160,3 +160,35 @@ func TestVideoTaskRepositoryClaimReadyAndExpiredSave(t *testing.T) {
 	require.NoError(t, f.tasks.Save(ctx, fresh, true))
 	require.ErrorIs(t, f.tasks.Save(ctx, fresh, false), service.ErrVideoTaskConflict)
 }
+
+// 过期释放的是生成容量，不能同时丢弃账务待核对状态或把受理不明当作结束。
+func TestVideoTaskRepositoryExpiredDoesNotOccupyCapacity(t *testing.T) {
+	f := newVideoBillingFixture(t)
+	ctx := context.Background()
+	expired := createVideoRepositoryRecord(t, f, f.keyID, f.accountID, service.VideoEndpointSeedance, "expired-provider-task")
+	expired.Status, expired.BillingStatus = "expired", "reconciliation"
+	require.NoError(t, f.tasks.Save(ctx, expired, true))
+	now := time.Now().UTC()
+	next := &service.VideoTaskRecord{
+		ID: "vid_" + uuid.NewString(), UserID: f.userID, APIKeyID: f.keyID, GroupID: f.groupID, AccountID: f.accountID,
+		PayloadHash: uuid.NewString(), Status: "prepared", BillingStatus: "pending", CreatedAt: now, NextPollAt: now,
+		LeaseToken: uuid.NewString(), LeaseUntil: now.Add(time.Minute),
+		Target: service.VideoUpstreamTarget{Version: 1, Endpoint: service.VideoEndpointSeedance, AccountID: f.accountID},
+	}
+	_, created, err := f.tasks.Create(ctx, next, 1)
+	require.NoError(t, err)
+	require.True(t, created)
+	fresh, err := f.tasks.Get(ctx, expired.ID)
+	require.NoError(t, err)
+	require.Equal(t, "reconciliation", fresh.BillingStatus)
+	require.False(t, fresh.EffectsDone)
+	for _, status := range []string{"queued", "processing", "submission_unknown"} {
+		next.Status = status
+		require.NoError(t, f.tasks.Save(ctx, next, false))
+		blocked := *next
+		blocked.ID = "vid_" + uuid.NewString()
+		_, created, err = f.tasks.Create(ctx, &blocked, 1)
+		require.ErrorIs(t, err, service.ErrVideoTaskBusy)
+		require.False(t, created)
+	}
+}

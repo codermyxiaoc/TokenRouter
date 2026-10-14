@@ -84,6 +84,11 @@ func GroupID(v int64) predicate.CreativeRun {
 	return predicate.CreativeRun(sql.FieldEQ(FieldGroupID, v))
 }
 
+// QuotaPlatform applies equality check predicate on the "quota_platform" field. It's identical to QuotaPlatformEQ.
+func QuotaPlatform(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldEQ(FieldQuotaPlatform, v))
+}
+
 // APIKeyID applies equality check predicate on the "api_key_id" field. It's identical to APIKeyIDEQ.
 func APIKeyID(v int64) predicate.CreativeRun {
 	return predicate.CreativeRun(sql.FieldEQ(FieldAPIKeyID, v))
@@ -562,6 +567,71 @@ func GroupIDLT(v int64) predicate.CreativeRun {
 // GroupIDLTE applies the LTE predicate on the "group_id" field.
 func GroupIDLTE(v int64) predicate.CreativeRun {
 	return predicate.CreativeRun(sql.FieldLTE(FieldGroupID, v))
+}
+
+// QuotaPlatformEQ applies the EQ predicate on the "quota_platform" field.
+func QuotaPlatformEQ(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldEQ(FieldQuotaPlatform, v))
+}
+
+// QuotaPlatformNEQ applies the NEQ predicate on the "quota_platform" field.
+func QuotaPlatformNEQ(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldNEQ(FieldQuotaPlatform, v))
+}
+
+// QuotaPlatformIn applies the In predicate on the "quota_platform" field.
+func QuotaPlatformIn(vs ...string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldIn(FieldQuotaPlatform, vs...))
+}
+
+// QuotaPlatformNotIn applies the NotIn predicate on the "quota_platform" field.
+func QuotaPlatformNotIn(vs ...string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldNotIn(FieldQuotaPlatform, vs...))
+}
+
+// QuotaPlatformGT applies the GT predicate on the "quota_platform" field.
+func QuotaPlatformGT(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldGT(FieldQuotaPlatform, v))
+}
+
+// QuotaPlatformGTE applies the GTE predicate on the "quota_platform" field.
+func QuotaPlatformGTE(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldGTE(FieldQuotaPlatform, v))
+}
+
+// QuotaPlatformLT applies the LT predicate on the "quota_platform" field.
+func QuotaPlatformLT(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldLT(FieldQuotaPlatform, v))
+}
+
+// QuotaPlatformLTE applies the LTE predicate on the "quota_platform" field.
+func QuotaPlatformLTE(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldLTE(FieldQuotaPlatform, v))
+}
+
+// QuotaPlatformContains applies the Contains predicate on the "quota_platform" field.
+func QuotaPlatformContains(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldContains(FieldQuotaPlatform, v))
+}
+
+// QuotaPlatformHasPrefix applies the HasPrefix predicate on the "quota_platform" field.
+func QuotaPlatformHasPrefix(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldHasPrefix(FieldQuotaPlatform, v))
+}
+
+// QuotaPlatformHasSuffix applies the HasSuffix predicate on the "quota_platform" field.
+func QuotaPlatformHasSuffix(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldHasSuffix(FieldQuotaPlatform, v))
+}
+
+// QuotaPlatformEqualFold applies the EqualFold predicate on the "quota_platform" field.
+func QuotaPlatformEqualFold(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldEqualFold(FieldQuotaPlatform, v))
+}
+
+// QuotaPlatformContainsFold applies the ContainsFold predicate on the "quota_platform" field.
+func QuotaPlatformContainsFold(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldContainsFold(FieldQuotaPlatform, v))
 }
 
 // APIKeyIDEQ applies the EQ predicate on the "api_key_id" field.

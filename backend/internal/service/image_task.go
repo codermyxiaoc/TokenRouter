@@ -98,6 +98,15 @@ type ImageTaskService struct {
 	executionTimeout time.Duration
 	runtime          *imageTaskRuntime
 	imageBilling     ImageBillingReservationRepository
+	// billingRecovery 仅重试已有安全证据的账务动作，不能调用生成。
+	billingRecovery func(context.Context) error
+}
+
+// SetBillingRecovery 在启动维护循环前装配已确认图片的结算补偿。
+func (s *ImageTaskService) SetBillingRecovery(recover func(context.Context) error) {
+	if s != nil {
+		s.billingRecovery = recover
+	}
 }
 
 func NewImageTaskService(store ImageTaskStore) *ImageTaskService {

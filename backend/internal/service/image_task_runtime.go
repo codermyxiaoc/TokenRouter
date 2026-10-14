@@ -64,6 +64,13 @@ func (s *ImageTaskService) Start() {
 				}
 				stop()
 			}
+			if s.billingRecovery != nil && r.ctx.Err() == nil {
+				billingCtx, stop := context.WithTimeout(r.ctx, 10*time.Second)
+				if err := s.billingRecovery(billingCtx); err != nil && r.ctx.Err() == nil {
+					logger.L().Warn("image_task.billing_capture_recovery_failed", zap.Error(err))
+				}
+				stop()
+			}
 			select {
 			case <-r.ctx.Done():
 				return

@@ -190,7 +190,7 @@ func TestCreativeWorkerAccountConcurrencyPending(t *testing.T) {
 	require.Equal(t, CreativeRunStatusQueued, f.repo.runs["crun_worker_account_pending"].Status)
 }
 
-// TestCreativeWorkerRetriesTransientOutputFailure 校验输出暂存失败时沿用结算重试路径。
+// 输出保存失败后再次领取只按已记录的成功结果结算，绝不重新发起付费生成。
 func TestCreativeWorkerRetriesTransientOutputFailure(t *testing.T) {
 	f := newCreativeWorkerFixture()
 	runID := "crun_workeroutputretry1"
@@ -205,10 +205,60 @@ func TestCreativeWorkerRetriesTransientOutputFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.Terminal)
 	require.Greater(t, result.RequeueAfter, time.Duration(0))
-	require.Equal(t, 1, f.repo.runs[runID].AttemptCount)
-	require.Equal(t, CreativeRunStatusRunning, f.repo.runs[runID].Status)
-	require.Equal(t, CreativeRunOutputStatusPending, f.repo.outputs[runID][0].Status)
+	require.Equal(t, 0, f.repo.runs[runID].AttemptCount)
+	require.Equal(t, 1, f.repo.runs[runID].SettlementAttemptCount)
+	require.Equal(t, CreativeRunStatusProviderSucceeded, f.repo.runs[runID].Status)
+	require.Equal(t, CreativeRunOutputStatusSucceeded, f.repo.outputs[runID][0].Status)
 	require.Equal(t, 0, f.billing.captureN)
+
+	result, err = f.worker.process(context.Background(), runID)
+	require.NoError(t, err)
+	require.True(t, result.Terminal)
+	require.Equal(t, 1, f.exec.calls)
+	require.Equal(t, 1, f.billing.captureN)
+	require.Equal(t, 0, f.billing.releaseN)
+	require.Equal(t, CreativeRunStatusResultLost, f.repo.runs[runID].Status)
+}
+
+// 成功结果未写入数据库时保留冻结资金并进入人工核对，重复领取也不能再次调用上游。
+func TestCreativeWorkerProviderPersistenceFailureDoesNotReplay(t *testing.T) {
+	f := newCreativeWorkerFixture()
+	runID := "crun_providerdbfail"
+	seedCreativeRun(f, runID, true)
+	f.repo.recordProviderErr = errors.New("database unavailable")
+	f.exec.result = &CreativeExecuteResult{Outputs: []CreativeOutput{{Index: 0, Bytes: []byte("img"), Mime: "image/png"}}, AccountID: 55}
+	first, err := f.worker.process(context.Background(), runID)
+	require.NoError(t, err)
+	require.False(t, first.Terminal)
+	require.Equal(t, 1, f.exec.calls)
+	// 模拟数据库恢复及 worker 重启；仅运行状态和执行栅栏持久存在，内存图片已丢失。
+	f.repo.recordProviderErr = nil
+	for range 3 {
+		next, err := f.worker.process(context.Background(), runID)
+		require.NoError(t, err)
+		require.False(t, next.Terminal)
+		require.Greater(t, next.RequeueAfter, 14*time.Minute)
+	}
+	require.Equal(t, 1, f.exec.calls)
+	require.Equal(t, CreativeRunStatusRunning, f.repo.runs[runID].Status)
+	require.Equal(t, "PROVIDER_RESULT_UNCONFIRMED", *f.repo.runs[runID].ErrorCode)
+	require.Equal(t, 0, f.billing.captureN)
+	require.Equal(t, 0, f.billing.releaseN)
+}
+
+// 创建 outbox 延迟到执行期间才处理时，不能擦除栅栏或释放尚未核对的预占。
+func TestCreativeProvisionRecoveryPreservesExecutionFence(t *testing.T) {
+	f := newCreativeWorkerFixture()
+	runID := "crun_outboxfence"
+	seedCreativeRun(f, runID, true)
+	run := f.repo.runs[runID]
+	run.Status = CreativeRunStatusRunning
+	run.ProvisioningPhase = CreativeProvisioningPhaseProviderInflight
+	f.service.Queue = f.queue
+	require.NoError(t, f.service.reconcileCreativeProvision(context.Background(), run))
+	require.Equal(t, CreativeProvisioningPhaseProviderInflight, run.ProvisioningPhase)
+	require.Equal(t, CreativeRunStatusRunning, run.Status)
+	require.Equal(t, 0, f.billing.releaseN)
 }
 
 func TestCreativeWorkerRetryableError(t *testing.T) {

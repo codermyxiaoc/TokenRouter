@@ -26,6 +26,8 @@ const (
 	FieldWorkspaceID = "workspace_id"
 	// FieldGroupID holds the string denoting the group_id field in the database.
 	FieldGroupID = "group_id"
+	// FieldQuotaPlatform holds the string denoting the quota_platform field in the database.
+	FieldQuotaPlatform = "quota_platform"
 	// FieldAPIKeyID holds the string denoting the api_key_id field in the database.
 	FieldAPIKeyID = "api_key_id"
 	// FieldAccountID holds the string denoting the account_id field in the database.
@@ -113,6 +115,7 @@ var Columns = []string{
 	FieldUserID,
 	FieldWorkspaceID,
 	FieldGroupID,
+	FieldQuotaPlatform,
 	FieldAPIKeyID,
 	FieldAccountID,
 	FieldModel,
@@ -173,6 +176,10 @@ var (
 	RunIDValidator func(string) error
 	// WorkspaceIDValidator is a validator for the "workspace_id" field. It is called by the builders before save.
 	WorkspaceIDValidator func(string) error
+	// DefaultQuotaPlatform holds the default value on creation for the "quota_platform" field.
+	DefaultQuotaPlatform string
+	// QuotaPlatformValidator is a validator for the "quota_platform" field. It is called by the builders before save.
+	QuotaPlatformValidator func(string) error
 	// ModelValidator is a validator for the "model" field. It is called by the builders before save.
 	ModelValidator func(string) error
 	// DefaultRequestedModel holds the default value on creation for the "requested_model" field.
@@ -277,6 +284,11 @@ func ByWorkspaceID(opts ...sql.OrderTermOption) OrderOption {
 // ByGroupID orders the results by the group_id field.
 func ByGroupID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldGroupID, opts...).ToFunc()
+}
+
+// ByQuotaPlatform orders the results by the quota_platform field.
+func ByQuotaPlatform(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldQuotaPlatform, opts...).ToFunc()
 }
 
 // ByAPIKeyID orders the results by the api_key_id field.

@@ -14,6 +14,7 @@ import (
 	_ "image/png"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -57,6 +58,10 @@ type CreativePublicService struct {
 	AuthCache         APIKeyAuthCacheInvalidator
 	Settings          CreativeSettingReader
 	Config            *config.Config
+	// 日志补偿使用固定回溯窗口与主键游标，避免坏记录饿死后续任务。
+	usageRecoveryMu    sync.Mutex
+	usageRecoveryAfter int64
+	usageRecoverySince time.Time
 }
 
 // CreativeSettingReader 是创作台运行时开关的读取接口，由 SettingService 实现。
@@ -865,6 +870,7 @@ func (s *CreativePublicService) CreateRun(ctx context.Context, scope CreativeRun
 		UserID:                     userID,
 		WorkspaceID:                scope.WorkspaceID,
 		GroupID:                    validated.group.ID,
+		QuotaPlatform:              validated.group.Platform,
 		APIKeyID:                   managedKey.ID,
 		Model:                      validated.model,
 		RequestedModel:             params.Model,
@@ -1759,8 +1765,8 @@ type CreativeOutputResult struct {
 	ErrorMessage string
 }
 
-// SucceedRun 记录 provider 成功结果：保存临时输出并进入 provider_succeeded，
-// 后续结算由 SettleRun 完成，避免数据库/计费失败时重复调用 provider。
+// SucceedRun 先原子记录 provider 成功与计费证据，再保存临时图片。
+// 图片保存失败不会擦除成功事实，后续只结算并标明结果丢失，绝不重新生成。
 func (s *CreativePublicService) SucceedRun(ctx context.Context, runID string, accountID int64, results []CreativeOutputResult) (*CreativeRunPublic, error) {
 	if s == nil || s.Repo == nil {
 		return nil, errors.New("creative service is not configured")
@@ -1783,16 +1789,39 @@ func (s *CreativePublicService) SucceedRun(ctx context.Context, runID string, ac
 	transientTTL := s.transientTTL()
 	now := time.Now()
 	expiresAt := now.Add(transientTTL)
+	metadata := make([]CreativeRunOutput, run.RequestedOutputCount)
+	seen := make(map[int]bool, len(results))
+	for index := range metadata {
+		metadata[index] = CreativeRunOutput{RunID: runID, OutputIndex: index, Status: CreativeRunOutputStatusFailed,
+			ErrorCode: creativeStringPtr("OUTPUT_MISSING"), ErrorMessage: creativeStringPtr("provider did not return this output")}
+	}
+	for i := range results {
+		result := &results[i]
+		if result.Index < 0 || result.Index >= len(metadata) || seen[result.Index] {
+			return nil, ErrCreativeInvalidParams
+		}
+		seen[result.Index] = true
+		if result.Success {
+			if len(result.Bytes) == 0 {
+				return nil, fmt.Errorf("%w: creative output %d is empty", ErrCreativeTransientFailed, result.Index)
+			}
+			size := int64(len(result.Bytes))
+			metadata[result.Index] = CreativeRunOutput{RunID: runID, OutputIndex: result.Index, Status: CreativeRunOutputStatusSucceeded,
+				MimeType: &result.Mime, ByteSize: &size, TransientExpiresAt: &expiresAt}
+		} else {
+			metadata[result.Index] = CreativeRunOutput{RunID: runID, OutputIndex: result.Index, Status: CreativeRunOutputStatusFailed,
+				ErrorCode: creativeStringPtr(result.ErrorCode), ErrorMessage: creativeStringPtr(sanitizeCreativeMessage(result.ErrorMessage))}
+		}
+	}
+	// 该事务失败时执行栅栏仍在，worker 进入待核对，而不是把成功调用重新排为生成请求。
+	if err := s.Repo.RecordCreativeRunProviderResult(ctx, runID, accountID, metadata, now); err != nil {
+		return nil, err
+	}
 	for i := range results {
 		result := &results[i]
 		if result.Success {
-			// 成功状态必须建立在输出已写入 transient store 的前提上，
-			// 否则客户端会收到 succeeded 却永远无法取回图片的假成功。
 			if s.TransientStore == nil {
 				return nil, fmt.Errorf("%w: transient store is not configured", ErrCreativeTransientFailed)
-			}
-			if len(result.Bytes) == 0 {
-				return nil, fmt.Errorf("%w: creative output %d is empty", ErrCreativeTransientFailed, result.Index)
 			}
 			if err := s.TransientStore.SaveOutput(ctx, runID, result.Index, result.Bytes, transientTTL); err != nil {
 				logger.L().Warn("creative.save_output_failed",
@@ -1803,22 +1832,6 @@ func (s *CreativePublicService) SucceedRun(ctx context.Context, runID string, ac
 				return nil, fmt.Errorf("%w: save output %d: %v", ErrCreativeTransientFailed, result.Index, err)
 			}
 		}
-	}
-	// 所有成功输出都已写入 transient 后再更新数据库状态，避免输出部分成功。
-	for i := range results {
-		result := &results[i]
-		if result.Success {
-			if err := s.Repo.UpdateCreativeRunOutput(ctx, runID, result.Index, CreativeRunOutputStatusSucceeded, result.Mime, int64(len(result.Bytes)), &expiresAt, "", ""); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		if err := s.Repo.UpdateCreativeRunOutput(ctx, runID, result.Index, CreativeRunOutputStatusFailed, "", 0, nil, result.ErrorCode, sanitizeCreativeMessage(result.ErrorMessage)); err != nil {
-			return nil, err
-		}
-	}
-	if err := s.Repo.MarkCreativeRunProviderSucceeded(ctx, runID, accountID, now); err != nil {
-		return nil, err
 	}
 	if err := s.ensureCreativeOutbox(ctx, runID, CreativeRunOutboxSettle); err != nil {
 		return nil, err
@@ -1866,10 +1879,32 @@ func (s *CreativePublicService) SettleRun(ctx context.Context, runID string) err
 	if err != nil {
 		return err
 	}
+	if len(outputs) != run.RequestedOutputCount || len(outputs) == 0 {
+		return errors.New("creative provider output count is incomplete; settlement requires reconciliation")
+	}
 	successCount := 0
+	resultLost := false
 	for _, output := range outputs {
-		if output != nil && output.Status == CreativeRunOutputStatusSucceeded {
+		if output == nil || output.Status == CreativeRunOutputStatusPending {
+			return errors.New("creative provider result metadata is incomplete; settlement requires reconciliation")
+		}
+		if output != nil && (output.Status == CreativeRunOutputStatusSucceeded || output.Status == CreativeRunOutputStatusAcked) {
 			successCount++
+			if output.Status == CreativeRunOutputStatusAcked {
+				continue
+			}
+			if s.TransientStore == nil {
+				resultLost = true
+				continue
+			}
+			data, loadErr := s.TransientStore.LoadOutput(ctx, runID, output.OutputIndex)
+			if errors.Is(loadErr, ErrCreativeTransientUnavailable) {
+				// Redis 短时不可用不能被当作图片已经丢失，保留结算重试。
+				return loadErr
+			}
+			if loadErr != nil || len(data) == 0 {
+				resultLost = true
+			}
 		}
 	}
 	billingResult, err := captureCreativeBalanceHold(ctx, s.BillingRepo, run, successCount)
@@ -1887,13 +1922,32 @@ func (s *CreativePublicService) SettleRun(ctx context.Context, runID string) err
 	if run.ActualCost != nil {
 		actualCost = *run.ActualCost
 	}
-	if err := s.Repo.MarkCreativeRunSucceeded(ctx, runID, actualCost, time.Now()); err != nil {
+	now := time.Now()
+	// 资金捕获已经幂等提交，但展示日志也必须可靠落库后才能发布终态。
+	// 写入失败时保留结算等待，由持久 outbox 重试，不释放资金或重新生成。
+	if err := s.recordCreativeUsageLog(ctx, run, actualCost, successCount, billingResult, now); err != nil {
+		return err
+	}
+	if marker, ok := s.Repo.(CreativeUsageRecoveryRepository); ok && successCount > 0 {
+		recorded, err := marker.MarkCreativeUsageRecorded(ctx, runID)
+		if err != nil {
+			return err
+		}
+		if !recorded {
+			return errors.New("creative usage was not persisted")
+		}
+	}
+	var terminalErr error
+	if resultLost {
+		terminalErr = s.Repo.MarkCreativeRunResultLostAfterSettlement(ctx, runID, actualCost, now)
+	} else {
+		terminalErr = s.Repo.MarkCreativeRunSucceeded(ctx, runID, actualCost, now)
+	}
+	if err := terminalErr; err != nil {
 		if !errors.Is(err, ErrCreativeInvalidTransition) {
 			return err
 		}
 	}
-	// cancelled 竞态仍需写 usage log，但保持 cancelled 终态。
-	s.recordCreativeUsageLog(ctx, run, actualCost, successCount, billingResult, time.Now())
 	return nil
 }
 
@@ -2037,9 +2091,9 @@ func (s *CreativePublicService) MarkResultLost(ctx context.Context, runID string
 }
 
 // recordCreativeUsageLog 按成功输出数写图片用量日志（request_id = creative_settle:{runID}）。
-func (s *CreativePublicService) recordCreativeUsageLog(ctx context.Context, run *CreativeRun, actualCost float64, successCount int, billingResult *BatchImageBalanceHoldResult, createdAt time.Time) {
+func (s *CreativePublicService) recordCreativeUsageLog(ctx context.Context, run *CreativeRun, actualCost float64, successCount int, billingResult *BatchImageBalanceHoldResult, createdAt time.Time) error {
 	if s == nil || s.UsageLogRepo == nil || run == nil || run.AccountID == nil || successCount <= 0 {
-		return
+		return nil
 	}
 	billingMode := string(BillingModeImage)
 	imageSize := run.ImageSize
@@ -2090,7 +2144,8 @@ func (s *CreativePublicService) recordCreativeUsageLog(ctx context.Context, run 
 		ImageSize:             &imageSize,
 		CreatedAt:             createdAt,
 	}
-	writeUsageLogBestEffort(ctx, s.UsageLogRepo, usageLog, "service.creative_settlement")
+	_, err := s.UsageLogRepo.Create(ctx, usageLog)
+	return err
 }
 
 // ---------------------------------------------------------------------------

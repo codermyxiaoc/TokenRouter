@@ -61,13 +61,28 @@ func (s *CreativePublicService) reconcileCreativeOutboxEvent(ctx context.Context
 	case CreativeRunOutboxProvision:
 		return s.reconcileCreativeProvision(ctx, run)
 	case CreativeRunOutboxSettle, CreativeRunOutboxRelease:
-		if IsTerminalCreativeRunStatus(run.Status) {
-			return nil
-		}
-		if err := s.Queue.Enqueue(ctx, run.RunID); err != nil && !errors.Is(err, ErrCreativeAlreadyQueued) {
+		// 结算或退款意图只有在对应资金动作完成后才确认，不依赖 Redis 队列留存。
+		// 与执行 worker 共用锁，避免输出元数据提交后、图片缓存写入前误判结果丢失。
+		lock, acquired, err := s.Queue.TryAcquireJobLock(ctx, run.RunID, creativeOutboxLease)
+		if err != nil {
 			return err
 		}
-		return nil
+		if !acquired || lock == nil {
+			return errors.New("creative settlement is already being processed")
+		}
+		defer func() {
+			// 请求取消后仍短暂尝试释放锁，避免无谓等待整段租约。
+			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = lock.Release(releaseCtx)
+		}()
+		// 单次数据库操作必须在锁过期前结束，超时交回持久 outbox 重试。
+		settlementCtx, cancel := context.WithTimeout(ctx, creativeOutboxLease/2)
+		defer cancel()
+		if event.Operation == CreativeRunOutboxRelease {
+			return s.ReleaseRun(settlementCtx, run.RunID)
+		}
+		return s.SettleRun(settlementCtx, run.RunID)
 	default:
 		return fmt.Errorf("unknown creative outbox operation %q", event.Operation)
 	}
@@ -75,6 +90,16 @@ func (s *CreativePublicService) reconcileCreativeOutboxEvent(ctx context.Context
 
 func (s *CreativePublicService) reconcileCreativeProvision(ctx context.Context, run *CreativeRun) error {
 	if run == nil {
+		return nil
+	}
+	// 已进入执行阶段说明创建已完成；旧 provision 事件不得擦除执行栅栏或误释放资金。
+	if run.Status != CreativeRunStatusQueued {
+		if IsTerminalCreativeRunStatus(run.Status) {
+			return nil
+		}
+		if err := s.Queue.Enqueue(ctx, run.RunID); err != nil && !errors.Is(err, ErrCreativeAlreadyQueued) {
+			return err
+		}
 		return nil
 	}
 	if run.ProvisioningPhase == CreativeProvisioningPhaseEnqueued || run.ProvisioningPhase == CreativeProvisioningPhaseComplete {
@@ -111,6 +136,11 @@ func (s *CreativePublicService) RunCreativeOutboxReconciler(ctx context.Context)
 			return
 		}
 		_, _ = s.ReconcileCreativeOutboxOnce(ctx)
+		recoveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		if _, err := s.ReconcileCreativeUsageOnce(recoveryCtx); err != nil {
+			logger.L().Warn("creative.usage_recovery_failed", zap.Error(err))
+		}
+		cancel()
 		select {
 		case <-ctx.Done():
 			return

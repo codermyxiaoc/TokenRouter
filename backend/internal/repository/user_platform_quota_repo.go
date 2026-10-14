@@ -36,11 +36,10 @@ func (r UserPlatformQuotaRecord) HasAnyLimit() bool {
 // ErrUserPlatformQuotaNotFound 用于 ResetExpiredWindow 等需要"必须命中已有记录"的方法。
 var ErrUserPlatformQuotaNotFound = fmt.Errorf("user platform quota record not found")
 
-// ErrUserPlatformQuotaFKViolation 保留旧适配器的错误契约；只更新快照不再触发缺失用户的外键插入错误。
+// ErrUserPlatformQuotaFKViolation 保留旧适配器的错误契约；快照写回已停用。
 var ErrUserPlatformQuotaFKViolation = errors.New("user platform quota snapshot FK violation")
 
-// UserPlatformQuotaSnapshot 是 BatchSnapshotUsage 的输入结构体，
-// 表示 Redis 当前窗口快照（用于绝对值覆盖写入 DB）。
+// UserPlatformQuotaSnapshot 保留旧 Redis 快照传输格式；不能用于覆盖数据库账本。
 type UserPlatformQuotaSnapshot struct {
 	UserID             int64
 	Platform           string
@@ -66,8 +65,7 @@ type UserPlatformQuotaRepository interface {
 	ResetExpiredWindow(ctx context.Context, userID int64, platform string, window string, newStart time.Time) error
 	// UpsertForUser 全量替换限额、保留既有用量（详见 service.UserPlatformQuotaRepository.UpsertForUser）。
 	UpsertForUser(ctx context.Context, userID int64, records []UserPlatformQuotaRecord) error
-	// BatchSnapshotUsage 只更新既有活跃行，缺失或软删除行跳过，不重新建行。
-	// 历史无限额行仍可承接待刷快照；要求 snapshots 内 (user,platform) 不重复。
+	// BatchSnapshotUsage 是兼容空操作，禁止历史 Redis 快照覆盖数据库权威计数。
 	BatchSnapshotUsage(ctx context.Context, snapshots []UserPlatformQuotaSnapshot, now time.Time) error
 }
 
@@ -307,7 +305,7 @@ func monthlyMaybeReset(prevUsage float64, prevStart *time.Time, cost float64, no
 }
 
 // UpsertForUser 全量替换限额配置，但保留既有行的用量与窗口。
-// 清空或省略平台仅取消限制，避免丢失历史统计和 Redis 尚未落库的快照；
+// 清空或省略平台仅取消限制，保留已由资金事务提交的历史统计；
 // 三档全空且没有既有行的平台不建行，显式零限额仍建行。
 func (r *userPlatformQuotaRepository) UpsertForUser(ctx context.Context, userID int64, records []UserPlatformQuotaRecord) error {
 	return r.withTx(ctx, func(txCtx context.Context, txClient *dbent.Client) error {
@@ -334,7 +332,7 @@ func (r *userPlatformQuotaRepository) UpsertForUser(ctx context.Context, userID 
 	})
 }
 
-// clearMissingPlatformLimits 只清空未提交平台的限额，保留既有用量与待刷快照的目标行。
+// clearMissingPlatformLimits 只清空未提交平台的限额，保留既有用量与额度行。
 func clearMissingPlatformLimits(ctx context.Context, client *dbent.Client, userID int64, keepPlatforms []string, now time.Time) error {
 	var (
 		query string
@@ -407,70 +405,9 @@ func insertLimitsRow(ctx context.Context, client *dbent.Client, userID int64, re
 	return nil
 }
 
-// batchRows 是 BatchSnapshotUsage 每批最大行数（9 参/行 × 6000 ≈ 54000 参,低于 Postgres 65535 上限）。
-const batchRows = 6000
-
-// BatchSnapshotUsage 用一条多行 UPDATE ... FROM (VALUES ...) 把整批 usage 以绝对值覆盖写入既有活跃行（非累加）。
-// 每批最多 batchRows 行；$1=now 共用；每行 8 个 per-row 参（user_id, platform, 3×usage, 3×window_start）。
-// 只命中 deleted_at IS NULL 的既有行：行不存在或已软删的 (user, platform) 直接跳过，不建行。
-//
-// 注意:snapshots 超过 batchRows 会分多条 SQL 执行且【非单事务】——若某子批失败,
-// 先前子批已写入无法回滚。调用方(flusher)应保证单次 batchSize ≤ batchRows
-// (默认 flush_batch_size=1000 < 6000,安全)。
-// 另注:启用 flusher 后,本绝对值覆盖与 admin 直写 DB(ResetExpiredWindow/UpsertForUser)存在覆盖竞态,
-// 详见 service/user_platform_quota_flusher.go 中 flushOneBatch 的"已知竞态"注释。
+// BatchSnapshotUsage 保留旧接口兼容，但禁止 Redis 绝对快照覆盖资金事务内的平台用量。
+// 旧脏集不含请求账本或管理员重置代次，不能用于推断补记或恢复。
 func (r *userPlatformQuotaRepository) BatchSnapshotUsage(ctx context.Context, snapshots []UserPlatformQuotaSnapshot, now time.Time) error {
-	if len(snapshots) == 0 {
-		return nil
-	}
-
-	client := clientFromContext(ctx, r.client)
-
-	for start := 0; start < len(snapshots); start += batchRows {
-		end := start + batchRows
-		if end > len(snapshots) {
-			end = len(snapshots)
-		}
-		batch := snapshots[start:end]
-
-		var sb strings.Builder
-		_, _ = sb.WriteString(
-			"UPDATE user_platform_quotas AS q SET" +
-				"  daily_usage_usd      = v.daily_usage_usd," +
-				"  weekly_usage_usd     = v.weekly_usage_usd," +
-				"  monthly_usage_usd    = v.monthly_usage_usd," +
-				"  daily_window_start   = v.daily_window_start," +
-				"  weekly_window_start  = v.weekly_window_start," +
-				"  monthly_window_start = v.monthly_window_start," +
-				"  updated_at           = $1" +
-				" FROM (VALUES ")
-
-		// $1 = now（共用）；每行 8 个 per-row 参，从 $2 起连续编号。
-		// VALUES 里的占位符显式转型，避免 Postgres 对多行 VALUES 推断不出参数类型。
-		args := []any{now}
-		for i, s := range batch {
-			if i > 0 {
-				_, _ = sb.WriteString(",")
-			}
-			b := len(args) // 当前 per-row 第一个参数的 0-based 索引，实际占位符 = b+1
-			fmt.Fprintf(&sb, "($%d::bigint,$%d::varchar,$%d::numeric,$%d::numeric,$%d::numeric,$%d::timestamptz,$%d::timestamptz,$%d::timestamptz)",
-				b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8)
-			args = append(args,
-				s.UserID, s.Platform,
-				s.DailyUsageUSD, s.WeeklyUsageUSD, s.MonthlyUsageUSD,
-				s.DailyWindowStart, s.WeeklyWindowStart, s.MonthlyWindowStart,
-			)
-		}
-
-		_, _ = sb.WriteString(
-			") AS v(user_id, platform, daily_usage_usd, weekly_usage_usd, monthly_usage_usd," +
-				" daily_window_start, weekly_window_start, monthly_window_start)" +
-				" WHERE q.user_id = v.user_id AND q.platform = v.platform AND q.deleted_at IS NULL")
-
-		if _, err := client.ExecContext(ctx, sb.String(), args...); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

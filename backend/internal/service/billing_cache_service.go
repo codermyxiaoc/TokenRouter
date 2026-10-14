@@ -19,10 +19,6 @@ import (
 // 错误定义
 // 注：ErrInsufficientBalance在redeem_service.go中定义
 // 注：ErrDailyLimitExceeded/ErrWeeklyLimitExceeded/ErrMonthlyLimitExceeded在subscription_service.go中定义
-// errBillingCacheUnavailable 内部哨兵：用于 quota 校验路径在 cache==nil 时
-// 与"Redis 故障"走同一条 fail-open + DB 一次性检查的分支。
-var errBillingCacheUnavailable = fmt.Errorf("billing cache unavailable")
-
 var (
 	ErrSubscriptionInvalid       = infraerrors.Forbidden("SUBSCRIPTION_INVALID", "subscription is invalid or expired")
 	ErrBillingServiceUnavailable = infraerrors.ServiceUnavailable("BILLING_SERVICE_ERROR", "Billing service temporarily unavailable. Please retry later.")
@@ -555,33 +551,9 @@ func (s *BillingCacheService) QueueUpdateAPIKeyRateLimitUsage(apiKeyID int64, co
 	}
 }
 
-// IncrementUserPlatformQuotaUsage 同步累加 user × platform usage 到 Redis 缓存。
-//
-// 设计：同步写入而非异步入队。同步写确保下次 preflight 立即看到最新 usage，
-// 把 TOCTOU 超支窗口限制在并发 in-flight 请求数量内（而非随时间无限累积）。
-// 写延迟通常 < 1ms（本地 Redis），换取 quota 视图实时性的取舍合理。
-//
-// Redis 写失败用 ALERT 级 log；DB 持久化由 caller 单独 goroutine 兜底（gateway_service.go）。
+// IncrementUserPlatformQuotaUsage 保留旧调用兼容；平台用量仅由资金事务写入 PostgreSQL。
+// 无请求去重键的缓存增量无法安全重试，禁止旧任务或调用方再次累加平台统计。
 func (s *BillingCacheService) IncrementUserPlatformQuotaUsage(userID int64, platform string, cost float64) {
-	// Video 由持久化任务捕获事务直接累计，禁止再次累加或写入绝对值刷写队列。
-	if platform == PlatformVideo {
-		return
-	}
-	if s.cache == nil {
-		return
-	}
-	if platform == "" || cost <= 0 {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), cacheWriteTimeout)
-	defer cancel()
-	ttl := time.Duration(s.cfg.Billing.UserPlatformQuotaCacheTTLSeconds) * time.Second
-	markDirty := s.cfg.Database.UserPlatformQuotaFlusherEnabled
-	if err := s.cache.IncrUserPlatformQuotaUsageCache(ctx, userID, platform, cost, ttl, markDirty); err != nil {
-		logger.LegacyPrintf("service.billing_cache",
-			"ALERT: incr user platform quota cache failed user=%d platform=%s cost=%f: %v",
-			userID, platform, cost, err)
-	}
 }
 
 // ============================================
@@ -980,182 +952,37 @@ func circuitStateString(state billingCircuitBreakerState) string {
 	}
 }
 
-// checkUserPlatformQuotaEligibility 在 standard 模式下检查 user × platform 日/周/月 quota。
-// 返回 nil = 允许；返回 ErrUserPlatform{Daily/Weekly/Monthly}QuotaExhausted = 拒绝（带 window_resets_at metadata）。
-// checkUserPlatformQuotaEligibility 检查用户在指定平台的 USD 配额。
-//
-// 流程（Redis-first / DB-fallback）：
-//  1. 先读 Redis cache；若命中且 SchemaVersion==1，直接用 entry 中的 limits 和 window_start 做校验，
-//     免除 DB 查询。
-//  2. cache MISS 或旧版 entry（SchemaVersion==0）→ 查 DB 回填完整 entry（含 limits/window_start）。
-//  3. Redis 故障（err != nil）→ fail-open，查 DB 做一次性检查，不回填。
-func (s *BillingCacheService) checkUserPlatformQuotaEligibility(
-	ctx context.Context,
-	userID int64,
-	platform string,
-) error {
+// checkUserPlatformQuotaEligibility 以 PostgreSQL 为平台额度唯一依据。
+// 仅合并同时在途的数据库查询，不缓存结果；Redis 的旧值、脏集和失效失败均不参与准入。
+// 保留既有数据库故障和调用取消时的 fail-open 语义，订阅豁免由调用方判断。
+func (s *BillingCacheService) checkUserPlatformQuotaEligibility(ctx context.Context, userID int64, platform string) error {
 	if platform == "" || s.userPlatformQuotaRepo == nil {
 		return nil
 	}
-
-	// cache 未配置（如简化部署 / 单测路径）→ 直接走 DB 查询，避免 nil panic。
-	// 其他 check* 方法（balance/subscription/rate-limit）也有类似守卫。
-	var (
-		entry    *UserPlatformQuotaCacheEntry
-		ok       bool
-		cacheErr error
-	)
-	if platform == PlatformVideo {
-		// Video 额度与任务账本同事务提交；跳过 Redis 读写，避免旧镜像覆盖真实扣费。
-		cacheErr = errBillingCacheUnavailable
-	} else if s.cache != nil {
-		entry, ok, cacheErr = s.cache.GetUserPlatformQuotaCache(ctx, userID, platform)
-	} else {
-		// 标记为"cache 故障"分支：跳过 HIT 路径、不回填、走 DB 一次性检查
-		cacheErr = errBillingCacheUnavailable
-	}
-
-	// --- cache HIT with current schema → 直接用 entry，不查 DB ---
-	if cacheErr == nil && ok && entry != nil && entry.SchemaVersion == UserPlatformQuotaCacheSchemaV1 {
-		now := time.Now()
-		dailyUsage := entry.DailyUsageUSD
-		weeklyUsage := entry.WeeklyUsageUSD
-		monthlyUsage := entry.MonthlyUsageUSD
-		// 若窗口已更新（DB 已重置但 cache 尚未失效）,将对应 usage 清零再做比较,
-		// 同时记录新窗口起点用于后续刷新 cache entry。
-		// 本次请求用本地清零值继续判断;DB 层 IncrementUsageWithReset 已有窗口自愈能力,
-		// 持久化数据始终正确。
-		windowExpired := false
-		newDailyStart := entry.DailyWindowStart
-		newWeeklyStart := entry.WeeklyWindowStart
-		newMonthlyStart := entry.MonthlyWindowStart
-		if quotaWindowExpired(entry.DailyWindowStart, timezone.StartOfDay(now)) {
-			dailyUsage = 0
-			windowExpired = true
-			dayStart := timezone.StartOfDay(now)
-			newDailyStart = &dayStart
-		}
-		if quotaWindowExpired(entry.WeeklyWindowStart, timezone.StartOfWeek(now)) {
-			weeklyUsage = 0
-			windowExpired = true
-			weekStart := timezone.StartOfWeek(now)
-			newWeeklyStart = &weekStart
-		}
-		if monthlyQuotaWindowExpired(entry.MonthlyWindowStart, now) {
-			monthlyUsage = 0
-			windowExpired = true
-			monthStart := now
-			newMonthlyStart = &monthStart
-		}
-		// 检测到任意窗口过期：用 reset 后的 entry 覆盖 Redis（而非 Delete）。
-		// 旧实现 Delete 后,期间到达的 IncrUserPlatformQuotaUsage 调用让 Lua 看到
-		// EXISTS=0 直接 return 0,并发请求的 cost 永久丢失,直到下次 cache MISS 回填。
-		// 改为 SetCache 原子覆盖:key 不断链,Lua INCR 可在新窗口 entry 上正确累加。
-		// 超时 50ms:覆盖正常路径与可接受抖动;Redis 异常时 hot path 不阻塞超过此值。
-		// 用 context.Background()+短超时,避免请求 ctx 取消导致刷新丢失。
-		// 显式 setCancel()(而非 defer):缩短 context 生命周期,避免 defer 延迟到函数返回。
-		// isSentinel 判定「该 entry 无任何 limit」,涵盖两类,跨窗口命中时都跳过 refresh:
-		//   1) A3 回填的 sentinel(DB 无行,短 TTL):refresh 会把短 TTL 误升级为 86400s,有害;
-		//   2) DB 有行但三 limit 全未配置的用户(TTL 86400s):refresh 纯属无意义(TTL 升级本身无害)。
-		// 两类的 enforcement(下方 limit!=nil 比较)都因 limit 全 nil 永远放行,跳过 refresh 均正确。
-		isSentinel := entry.DailyLimitUSD == nil && entry.WeeklyLimitUSD == nil && entry.MonthlyLimitUSD == nil
-		if windowExpired && s.cache != nil && !isSentinel {
-			refreshed := &UserPlatformQuotaCacheEntry{
-				DailyUsageUSD:      dailyUsage,
-				WeeklyUsageUSD:     weeklyUsage,
-				MonthlyUsageUSD:    monthlyUsage,
-				SchemaVersion:      UserPlatformQuotaCacheSchemaV1,
-				DailyLimitUSD:      entry.DailyLimitUSD,
-				WeeklyLimitUSD:     entry.WeeklyLimitUSD,
-				MonthlyLimitUSD:    entry.MonthlyLimitUSD,
-				DailyWindowStart:   newDailyStart,
-				WeeklyWindowStart:  newWeeklyStart,
-				MonthlyWindowStart: newMonthlyStart,
-			}
-			ttl := time.Duration(s.cfg.Billing.UserPlatformQuotaCacheTTLSeconds) * time.Second
-			setCtx, setCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-			if setErr := s.cache.SetUserPlatformQuotaCache(setCtx, userID, platform, refreshed, ttl); setErr != nil {
-				logger.LegacyPrintf("service.billing_cache",
-					"Warning: refresh expired user platform quota cache failed user=%d platform=%s: %v",
-					userID, platform, setErr)
-			}
-			setCancel()
-		}
-		if entry.DailyLimitUSD != nil && dailyUsage >= *entry.DailyLimitUSD {
-			return withWindowResetsMetadata(ErrUserPlatformDailyQuotaExhausted, nextDailyReset(now))
-		}
-		if entry.WeeklyLimitUSD != nil && weeklyUsage >= *entry.WeeklyLimitUSD {
-			return withWindowResetsMetadata(ErrUserPlatformWeeklyQuotaExhausted, nextWeeklyReset(now))
-		}
-		if entry.MonthlyLimitUSD != nil && monthlyUsage >= *entry.MonthlyLimitUSD {
-			return withWindowResetsMetadata(ErrUserPlatformMonthlyQuotaExhausted, nextMonthlyResetFrom(entry.MonthlyWindowStart, now))
-		}
-		return nil
-	}
-
-	// --- cache MISS、旧版 entry 或 Redis 故障 → 查 DB（singleflight 合并并发回源）---
-	// 使用 DoChan 而非 Do：avoid sharing the first caller's ctx among all dedupe followers.
-	// 若第一个 caller 的 ctx 被取消（客户端断连），后续 caller 不受影响，仍由各自 ctx 控制超时。
 	sfKey := strconv.FormatInt(userID, 10) + ":" + platform
 	ch := s.quotaLoadSF.DoChan(sfKey, func() (any, error) {
-		// 子查询用 detached context + 短超时，独立于任何 caller 的请求 ctx，
-		// 防止"第一个 caller ctx 取消"使所有 follower 一起 fail。
+		// 查询不依赖首个调用者的取消，其他并发调用者仍可取得有效结果。
 		bgCtx, bgCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer bgCancel()
 		return s.userPlatformQuotaRepo.GetByUserPlatform(bgCtx, userID, platform)
 	})
-	var (
-		v     any
-		dbErr error
-	)
+	var rec *UserPlatformQuotaRecord
 	select {
 	case res := <-ch:
-		v, dbErr = res.Val, res.Err
+		if res.Err != nil {
+			logger.LegacyPrintf("service.billing_cache", "Warning: load user platform quota failed user=%d platform=%s: %v (fail-open)", userID, platform, res.Err)
+			return nil
+		}
+		rec, _ = res.Val.(*UserPlatformQuotaRecord)
 	case <-ctx.Done():
-		// 当前 caller 的 ctx 被取消：fail-open，不阻断 (此请求已无意义)。
 		logger.LegacyPrintf("service.billing_cache", "Warning: user platform quota check ctx cancelled user=%d platform=%s: %v (fail-open)", userID, platform, ctx.Err())
 		return nil
 	}
-	if dbErr != nil {
-		logger.LegacyPrintf("service.billing_cache", "Warning: load user platform quota failed user=%d platform=%s: %v (fail-open)", userID, platform, dbErr)
-		return nil
-	}
-	rec, _ := v.(*UserPlatformQuotaRecord)
 	if rec == nil {
-		// 仅在 cache 可用且本次 GET 未出错时回填 sentinel:Redis GET 故障(cacheErr!=nil)
-		// 时不回填,与下方 line ~1201 "Redis 故障时 fail-open:不回填" 保持一致,
-		// 避免在 Redis 异常期做一次注定失败的 SET。
-		if s.cache != nil && cacheErr == nil {
-			now := time.Now()
-			startOfDay := timezone.StartOfDay(now)
-			startOfWeek := timezone.StartOfWeek(now)
-			sentinel := &UserPlatformQuotaCacheEntry{
-				SchemaVersion:      UserPlatformQuotaCacheSchemaV1,
-				DailyWindowStart:   &startOfDay,
-				WeeklyWindowStart:  &startOfWeek,
-				MonthlyWindowStart: &now,
-				// limits 全 nil, usage 全 0(零值)
-			}
-			sentinelTTL := time.Duration(s.cfg.Billing.UserPlatformQuotaSentinelTTLSeconds) * time.Second
-			if sentinelTTL <= 0 {
-				// 防御:TTL<=0 时 Redis EXPIRE 会立即删除整个 key(见 billing_cache.go 的 pipe.Expire),
-				// sentinel 不持久化 → 每请求击穿 DB。配置缺失/误配为 0 时 fallback 到 1h。
-				sentinelTTL = time.Hour
-			}
-			setCtx, setCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-			if setErr := s.cache.SetUserPlatformQuotaCache(setCtx, userID, platform, sentinel, sentinelTTL); setErr != nil {
-				userPlatformQuotaSentinelSetCacheErrorTotal.Add(1)
-				logger.LegacyPrintf("service.billing_cache", "Warning: set sentinel quota cache failed user=%d platform=%s: %v", userID, platform, setErr)
-			}
-			setCancel()
-		}
 		return nil
 	}
-
 	now := time.Now()
-	dailyUsage := rec.DailyUsageUSD
-	weeklyUsage := rec.WeeklyUsageUSD
-	monthlyUsage := rec.MonthlyUsageUSD
+	dailyUsage, weeklyUsage, monthlyUsage := rec.DailyUsageUSD, rec.WeeklyUsageUSD, rec.MonthlyUsageUSD
 	if quotaWindowExpired(rec.DailyWindowStart, timezone.StartOfDay(now)) {
 		dailyUsage = 0
 	}
@@ -1165,46 +992,6 @@ func (s *BillingCacheService) checkUserPlatformQuotaEligibility(
 	if monthlyQuotaWindowExpired(rec.MonthlyWindowStart, now) {
 		monthlyUsage = 0
 	}
-
-	// Redis 故障时 fail-open：不回填，直接用 DB 数据做一次性检查
-	if cacheErr != nil {
-		if rec.DailyLimitUSD != nil && dailyUsage >= *rec.DailyLimitUSD {
-			return withWindowResetsMetadata(ErrUserPlatformDailyQuotaExhausted, nextDailyReset(now))
-		}
-		if rec.WeeklyLimitUSD != nil && weeklyUsage >= *rec.WeeklyLimitUSD {
-			return withWindowResetsMetadata(ErrUserPlatformWeeklyQuotaExhausted, nextWeeklyReset(now))
-		}
-		if rec.MonthlyLimitUSD != nil && monthlyUsage >= *rec.MonthlyLimitUSD {
-			return withWindowResetsMetadata(ErrUserPlatformMonthlyQuotaExhausted, nextMonthlyResetFrom(rec.MonthlyWindowStart, now))
-		}
-		return nil
-	}
-
-	// cache MISS 或旧版 entry → 回填完整 entry（含 limits 和 window_start）
-	newEntry := &UserPlatformQuotaCacheEntry{
-		DailyUsageUSD:      dailyUsage,
-		WeeklyUsageUSD:     weeklyUsage,
-		MonthlyUsageUSD:    monthlyUsage,
-		SchemaVersion:      UserPlatformQuotaCacheSchemaV1,
-		DailyLimitUSD:      rec.DailyLimitUSD,
-		WeeklyLimitUSD:     rec.WeeklyLimitUSD,
-		MonthlyLimitUSD:    rec.MonthlyLimitUSD,
-		DailyWindowStart:   rec.DailyWindowStart,
-		WeeklyWindowStart:  rec.WeeklyWindowStart,
-		MonthlyWindowStart: rec.MonthlyWindowStart,
-	}
-	if s.cache != nil {
-		ttl := time.Duration(s.cfg.Billing.UserPlatformQuotaCacheTTLSeconds) * time.Second
-		// 与 HIT 过期回填路径（上文 SetCache 调用）保持一致：用 context.Background()+50ms,
-		// 避免请求 ctx 提前取消（客户端断连/上游超时）导致 cache 回填失败,
-		// 让下一次 preflight 仍然 MISS 并击穿到 DB（高并发下增大 DB 压力）。
-		setCtx, setCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		if setErr := s.cache.SetUserPlatformQuotaCache(setCtx, userID, platform, newEntry, ttl); setErr != nil {
-			logger.LegacyPrintf("service.billing_cache", "Warning: set user platform quota cache failed user=%d platform=%s: %v", userID, platform, setErr)
-		}
-		setCancel()
-	}
-
 	if rec.DailyLimitUSD != nil && dailyUsage >= *rec.DailyLimitUSD {
 		return withWindowResetsMetadata(ErrUserPlatformDailyQuotaExhausted, nextDailyReset(now))
 	}
@@ -1269,19 +1056,18 @@ func monthlyQuotaWindowExpired(start *time.Time, now time.Time) bool {
 	return now.Sub(*start) >= 30*24*time.Hour
 }
 
-// HasUserPlatformQuotaLimit 判断该 user×platform 是否设了任一非 nil limit。
-// 写入点守卫:无 limit 直接跳过 Redis 写 + 脏集标记,消除无谓写入。
-// fail-safe:任何不确定(simple 模式除外)都返回 true 维持写入。
+// HasUserPlatformQuotaLimit 查询数据库当前限额，不再信任旧 Redis 无限额占位。
+// 此兼容查询不负责资金事务内的统计资格判断；不确定时保留原有 true 语义。
 func (s *BillingCacheService) HasUserPlatformQuotaLimit(ctx context.Context, userID int64, platform string) bool {
-	if s.cfg.RunMode == config.RunModeSimple {
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		return false
 	}
-	if s.cache == nil {
+	if s.userPlatformQuotaRepo == nil {
 		return true
 	}
-	entry, ok, err := s.cache.GetUserPlatformQuotaCache(ctx, userID, platform)
-	if err != nil || !ok || entry == nil {
+	rec, err := s.userPlatformQuotaRepo.GetByUserPlatform(ctx, userID, platform)
+	if err != nil {
 		return true
 	}
-	return entry.DailyLimitUSD != nil || entry.WeeklyLimitUSD != nil || entry.MonthlyLimitUSD != nil
+	return rec != nil && (rec.DailyLimitUSD != nil || rec.WeeklyLimitUSD != nil || rec.MonthlyLimitUSD != nil)
 }

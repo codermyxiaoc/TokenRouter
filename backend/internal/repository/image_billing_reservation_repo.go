@@ -96,6 +96,8 @@ func normalizeImageBillingReserve(input *service.ImageBillingReserveCommand) (se
 	fingerprintCommand := cmd
 	fingerprintCommand.ReservedAt = time.Time{}
 	fingerprintCommand.RequestFingerprint = ""
+	// 平台归属是新增统计元数据，不能改变升级前已经冻结的金额合同指纹。
+	fingerprintCommand.QuotaPlatform = ""
 	encoded, err := json.Marshal(struct {
 		Hold  service.BatchImageBalanceHoldCommand
 		Quote json.RawMessage
@@ -269,6 +271,10 @@ func (r *usageBillingRepository) captureImageBillingOnce(ctx context.Context, id
 		return nil, err
 	}
 	cmd := *input
+	if stored.Hold.QuotaPlatform != "" {
+		// 预占已验证原归属，完成或恢复时的调用方不能把消费迁到后来修改的平台。
+		cmd.QuotaPlatform = stored.Hold.QuotaPlatform
+	}
 	cmd.BaseAmountUSD, cmd.BillableAmountUSD = actualBaseAmount, plan.ActualAmountUSD
 	cmd.APIKeyBillingMode, cmd.PreferredSubscriptionID = stored.Hold.APIKeyBillingMode, stored.Hold.PreferredSubscriptionID
 	cmd.SubscriptionRateMultiplier, cmd.SubscriptionRateMultiplierScale = stored.Hold.SubscriptionRateMultiplier, stored.Hold.SubscriptionRateMultiplierScale
@@ -330,7 +336,11 @@ func (r *usageBillingRepository) captureImageBillingOnce(ctx context.Context, id
 	if balance != nil {
 		result.NewBalance = balance.NewBalance
 	}
-	if err := applyUsageBillingAllowanceEffects(ctx, tx, &cmd, result); err != nil {
+	// 原预占与真实成果已验证，账号随后软删除仅停止账号统计，不能卡住已受理任务的捕获。
+	if err := applyUsageBillingAllowanceEffects(ctx, tx, &cmd, result, true); err != nil {
+		return nil, err
+	}
+	if err := applyUsageBillingPlatformQuota(ctx, tx, &cmd, result.BalanceAmountUSD); err != nil {
 		return nil, err
 	}
 	encoded, err := json.Marshal(result)

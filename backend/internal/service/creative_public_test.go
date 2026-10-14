@@ -21,13 +21,14 @@ import (
 // ---------------------------------------------------------------------------
 
 type creativeFakeRunRepo struct {
-	runs         map[string]*CreativeRun
-	byIdem       map[string]*CreativeRun
-	outputs      map[string][]*CreativeRunOutput
-	createErr    error
-	createParams []CreateCreativeRunParams
-	transition   []string
-	setAccountN  int
+	runs              map[string]*CreativeRun
+	byIdem            map[string]*CreativeRun
+	outputs           map[string][]*CreativeRunOutput
+	createErr         error
+	createParams      []CreateCreativeRunParams
+	transition        []string
+	setAccountN       int
+	recordProviderErr error
 }
 
 const testCreativeWorkspaceID = "11111111-1111-4111-8111-111111111111"
@@ -55,6 +56,7 @@ func (r *creativeFakeRunRepo) CreateCreativeRun(ctx context.Context, params Crea
 		UserID:                     params.UserID,
 		WorkspaceID:                &workspaceID,
 		GroupID:                    params.GroupID,
+		QuotaPlatform:              params.QuotaPlatform,
 		APIKeyID:                   params.APIKeyID,
 		Model:                      params.Model,
 		RequestedModel:             params.RequestedModel,
@@ -194,6 +196,15 @@ func (r *creativeFakeRunRepo) MarkCreativeRunSucceeded(ctx context.Context, runI
 	return nil
 }
 
+func (r *creativeFakeRunRepo) MarkCreativeRunResultLostAfterSettlement(ctx context.Context, runID string, actualCost float64, now time.Time) error {
+	if err := r.MarkCreativeRunSucceeded(ctx, runID, actualCost, now); err != nil {
+		return err
+	}
+	r.runs[runID].Status = CreativeRunStatusResultLost
+	r.runs[runID].ErrorCode = creativeStringPtr("RESULT_EXPIRED")
+	return nil
+}
+
 func (r *creativeFakeRunRepo) UpdateCreativeRunOutput(ctx context.Context, runID string, outputIndex int, status, mimeType string, byteSize int64, transientExpiresAt *time.Time, errorCode, errorMessage string) error {
 	outputs, ok := r.outputs[runID]
 	if !ok {
@@ -280,7 +291,48 @@ func (r *creativeFakeRunRepo) SetCreativeRunProvisioningPhase(ctx context.Contex
 	if !ok {
 		return ErrCreativeRunNotFound
 	}
+	if phase == CreativeProvisioningPhaseProviderInflight || phase == CreativeProvisioningPhaseProviderRetry {
+		if run.Status != CreativeRunStatusRunning {
+			return ErrCreativeInvalidTransition
+		}
+		if phase == CreativeProvisioningPhaseProviderInflight && run.ProvisioningPhase == phase {
+			return ErrCreativeInvalidTransition
+		}
+	} else if run.Status != CreativeRunStatusQueued {
+		return nil
+	}
 	run.ProvisioningPhase = phase
+	return nil
+}
+
+// 测试替身同样一次提交全部计费证据，便于验证数据库不可用时不会出现半条成功记录。
+func (r *creativeFakeRunRepo) RecordCreativeRunProviderResult(ctx context.Context, runID string, accountID int64, outputs []CreativeRunOutput, now time.Time) error {
+	if r.recordProviderErr != nil {
+		return r.recordProviderErr
+	}
+	run, err := r.GetCreativeRunByRunID(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if run.ProviderResultRecordedAt != nil {
+		return nil
+	}
+	for _, output := range outputs {
+		copy := output
+		r.outputs[runID][output.OutputIndex] = &copy
+	}
+	return r.MarkCreativeRunProviderSucceeded(ctx, runID, accountID, now)
+}
+
+func (r *creativeFakeRunRepo) MarkCreativeRunExecutionUnconfirmed(ctx context.Context, runID string, next time.Time) error {
+	run, err := r.GetCreativeRunByRunID(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if run.Status == CreativeRunStatusRunning && run.ProviderResultRecordedAt == nil && run.ProvisioningPhase == CreativeProvisioningPhaseProviderInflight {
+		run.ErrorCode = creativeStringPtr("PROVIDER_RESULT_UNCONFIRMED")
+		run.NextReconcileAt = &next
+	}
 	return nil
 }
 

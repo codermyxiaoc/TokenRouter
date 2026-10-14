@@ -715,6 +715,7 @@ var (
 		{Name: "user_id", Type: field.TypeInt64},
 		{Name: "workspace_id", Type: field.TypeString, Nullable: true, Size: 64},
 		{Name: "group_id", Type: field.TypeInt64},
+		{Name: "quota_platform", Type: field.TypeString, Size: 32, Default: ""},
 		{Name: "api_key_id", Type: field.TypeInt64},
 		{Name: "account_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "model", Type: field.TypeString, Size: 128},
@@ -777,7 +778,7 @@ var (
 			{
 				Name:    "creativerun_status",
 				Unique:  false,
-				Columns: []*schema.Column{CreativeRunsColumns[19]},
+				Columns: []*schema.Column{CreativeRunsColumns[20]},
 				Annotation: &entsql.IndexAnnotation{
 					Where: "status IN ('queued', 'running')",
 				},
@@ -785,7 +786,7 @@ var (
 			{
 				Name:    "creativerun_user_id_workspace_id_idempotency_key",
 				Unique:  true,
-				Columns: []*schema.Column{CreativeRunsColumns[4], CreativeRunsColumns[5], CreativeRunsColumns[18]},
+				Columns: []*schema.Column{CreativeRunsColumns[4], CreativeRunsColumns[5], CreativeRunsColumns[19]},
 				Annotation: &entsql.IndexAnnotation{
 					Where: "workspace_id IS NOT NULL AND idempotency_key IS NOT NULL AND idempotency_key <> ''",
 				},

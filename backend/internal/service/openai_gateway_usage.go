@@ -20,6 +20,10 @@ import (
 
 // OpenAIRecordUsageInput input for recording usage
 type OpenAIRecordUsageInput struct {
+	// 旧视频恢复先持久化报价，再执行账务；其它请求不启用此分支。
+	PrepareLegacyVideoQuote bool                     `json:"-"`
+	LegacyVideoTaskID       int64                    `json:"-"`
+	LegacyVideoQuote        *LegacyVideoBillingQuote `json:"-"`
 	// SubscriptionScopeID 只接受异步任务创建快照中的订阅 ID，禁止重新选择后来购买的套餐。
 	SubscriptionScopeID *int64 `json:"-"`
 	// 异步图片沿用受理时的报价和资金预占，防止完成时配置变化或再次扣款。
@@ -171,6 +175,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if input == nil {
 		return errors.New("openai usage input is nil")
 	}
+	if input.LegacyVideoQuote != nil && !input.PrepareLegacyVideoQuote {
+		return s.settleLegacyVideoQuote(ctx, input)
+	}
 	result := input.Result
 	if result == nil {
 		return errors.New("openai usage result is nil")
@@ -292,7 +299,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		)
 	}
 	if err != nil {
-		if !isUsagePricingUnavailableError(err) {
+		if input.PrepareLegacyVideoQuote || !isUsagePricingUnavailableError(err) {
 			return err
 		}
 		logger.L().With(
@@ -505,7 +512,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	simpleModeKeyRateLimitOnly := simpleModeKeyRateLimitBillingEnabled(s.cfg, apiKey)
-	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple && !simpleModeKeyRateLimitOnly {
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple && !simpleModeKeyRateLimitOnly && !input.PrepareLegacyVideoQuote {
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 		logger.LegacyPrintf("service.openai_gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
 		s.deferredService.ScheduleLastUsedUpdate(account.ID)
@@ -528,6 +535,16 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		mediaMode = BillingModeImage
 	}
 	allocationRates := resolveUsageBillingAllocationRates(apiKey, cost.BillingMode, mediaMode, subscriptionMultiplier, balanceMultiplier, peakScale)
+	if input.PrepareLegacyVideoQuote && input.SubscriptionScopeID != nil && subscription != nil {
+		if *input.SubscriptionScopeID <= 0 || subscription.ID != *input.SubscriptionScopeID {
+			return ErrUsageBillingSubscriptionScopeInvalid
+		}
+		// 旧视频只允许原订阅参与结算：baseMultiplier 已按创建快照中的套餐倍率解析。
+		// 复用资金倍率解析器，Token 高峰只乘一次，媒体独立倍率仍覆盖套餐倍率。
+		allocationRates = resolveUsageBillingAllocationRates(apiKey, cost.BillingMode, mediaMode, baseMultiplier, balanceMultiplier, peakScale)
+		// 报价一经落盘，数据库不能再用后来修改的套餐倍率覆盖它；普通多订阅分摊不走此分支。
+		allocationRates.DisablePlanGroupRateMultiplier = true
+	}
 	if input.ImageReservation != nil {
 		hold := input.ImageReservation.Hold
 		allocationRates = usageBillingAllocationRates{
@@ -538,29 +555,48 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		}
 	}
 
-	billingErr := func() error {
-		_, err := applyUsageBilling(ctx, requestID, usageLog, &usageBillingParams{
-			SimpleModeKeyRateLimitOnly:      simpleModeKeyRateLimitOnly,
-			Cost:                            cost,
-			User:                            user,
-			APIKey:                          apiKey,
-			Account:                         account,
-			Subscription:                    subscription,
-			SubscriptionScopeID:             input.SubscriptionScopeID,
-			ImageReservation:                input.ImageReservation,
-			RequestPayloadHash:              resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
-			AccountRateMultiplier:           accountRateMultiplier,
-			SubscriptionRateMultiplier:      allocationRates.SubscriptionRateMultiplier,
-			SubscriptionRateMultiplierScale: allocationRates.SubscriptionRateMultiplierScale,
-			BalanceRateMultiplier:           allocationRates.BalanceRateMultiplier,
-			RateMultipliersResolved:         true,
-			DisablePlanGroupRateMultiplier:  allocationRates.DisablePlanGroupRateMultiplier,
-			APIKeyService:                   input.APIKeyService,
-			Platform:                        quotaPlatform,
-			BillingBaseAmountUSD:            billingBaseAmountUSD,
-		}, s.billingDeps(), s.usageBillingRepo)
-		return err
-	}()
+	params := &usageBillingParams{
+		SimpleModeKeyRateLimitOnly:      simpleModeKeyRateLimitOnly,
+		Cost:                            cost,
+		User:                            user,
+		APIKey:                          apiKey,
+		Account:                         account,
+		Subscription:                    subscription,
+		SubscriptionScopeID:             input.SubscriptionScopeID,
+		ImageReservation:                input.ImageReservation,
+		RequestPayloadHash:              resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
+		AccountRateMultiplier:           accountRateMultiplier,
+		SubscriptionRateMultiplier:      allocationRates.SubscriptionRateMultiplier,
+		SubscriptionRateMultiplierScale: allocationRates.SubscriptionRateMultiplierScale,
+		BalanceRateMultiplier:           allocationRates.BalanceRateMultiplier,
+		RateMultipliersResolved:         true,
+		DisablePlanGroupRateMultiplier:  allocationRates.DisablePlanGroupRateMultiplier,
+		APIKeyService:                   input.APIKeyService,
+		Platform:                        quotaPlatform,
+		BillingBaseAmountUSD:            billingBaseAmountUSD,
+	}
+	if input.PrepareLegacyVideoQuote {
+		// 报价只保存安全账务值，执行命令也冻结，避免 Key 额度配置变化改变幂等指纹。
+		usageLog.User, usageLog.APIKey, usageLog.Account, usageLog.Group, usageLog.Subscription = nil, nil, nil, nil, nil
+		command := buildUsageBillingCommand(requestID, usageLog, params)
+		command.LegacyVideoTaskID = input.LegacyVideoTaskID
+		input.LegacyVideoQuote = &LegacyVideoBillingQuote{Cost: cost, Log: usageLog, Rates: allocationRates,
+			Command: command, SubscriptionScopeID: input.SubscriptionScopeID,
+			AccountRate: accountRateMultiplier, BaseAmount: billingBaseAmountUSD,
+			SimpleMode:                 s.cfg != nil && s.cfg.RunMode == config.RunModeSimple && !simpleModeKeyRateLimitOnly,
+			SimpleModeKeyRateLimitOnly: simpleModeKeyRateLimitOnly}
+		return nil
+	}
+	if input.ImageReservation != nil {
+		// 捕获前先保存不可变的成功证据；失败时只恢复同一命令，不重新选价、选组或生成。
+		if recovery, ok := s.usageBillingRepo.(ImageBillingSettlementRepository); ok {
+			evidence := &ImageBillingSettlementEvidence{Version: 1, Command: *buildUsageBillingCommand(requestID, usageLog, params), Usage: *usageLog}
+			if err := recovery.SaveImageBillingSettlementEvidence(ctx, evidence); err != nil {
+				return err
+			}
+		}
+	}
+	_, billingErr := applyUsageBilling(ctx, requestID, usageLog, params, s.billingDeps(), s.usageBillingRepo)
 
 	if billingErr != nil {
 		// 结算事务失败时仍保留已计算的用量与成本明细；ActualCost 置零明确表示本次未成功结算。

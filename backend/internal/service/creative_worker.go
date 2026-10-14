@@ -61,6 +61,8 @@ const (
 	defaultCreativeWorkerErrorBackoff        = time.Second
 	defaultCreativeWorkerReserveBlockTimeout = 5 * time.Second
 	defaultCreativeConcurrencyRequeueDelay   = time.Second
+	// 未确认的上游执行不能自动重放，降低巡检频率并保留资金等待人工核对。
+	defaultCreativeUnconfirmedRequeueDelay = 15 * time.Minute
 )
 
 // CreativeWorkerOptions 是创作台 worker 的运行参数（全部可由配置覆盖）。
@@ -364,6 +366,9 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 	} else if recovered {
 		return CreativeProcessResult{Terminal: true}, nil
 	}
+	if run.ProvisioningPhase == CreativeProvisioningPhaseProviderInflight {
+		return w.deferUnconfirmedExecution(ctx, run)
+	}
 
 	payload, err := w.loadPayload(ctx, runID)
 	if err != nil {
@@ -461,16 +466,26 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 		return CreativeProcessResult{Terminal: true}, nil
 	}
 
+	// 栅栏必须先于上游请求持久化；即使随后进程退出或成功结果落库失败，也不能再发一次生成。
+	if err := w.repo.SetCreativeRunProvisioningPhase(ctx, runID, CreativeProvisioningPhaseProviderInflight); err != nil {
+		return CreativeProcessResult{}, err
+	}
 	result, err := w.executor.Execute(ctx, *current, *payload, execution)
 	releaseSlots()
-	if err != nil {
-		return w.handleExecuteError(ctx, runID, err)
-	}
 	if leaseState, _ := ctx.Value(creativeLeaseStateKey{}).(*creativeLeaseState); leaseState != nil && leaseState.lost.Load() {
 		return CreativeProcessResult{}, ErrCreativeLeaseLost
 	}
-	if result == nil {
-		return w.handleExecuteError(ctx, runID, errors.New("creative executor returned no result"))
+	if err != nil {
+		if w.executor.IsRetryable(err) {
+			// 只有执行器明确返回既有可重试错误时，才授权下一次上游执行。
+			if resetErr := w.repo.SetCreativeRunProvisioningPhase(ctx, runID, CreativeProvisioningPhaseProviderRetry); resetErr != nil {
+				return CreativeProcessResult{}, resetErr
+			}
+		}
+		return w.handleExecuteError(ctx, runID, err)
+	}
+	if result == nil || len(result.Outputs) == 0 {
+		return w.deferUnconfirmedExecution(ctx, current)
 	}
 	results := make([]CreativeOutputResult, 0, len(result.Outputs))
 	for _, output := range result.Outputs {
@@ -482,21 +497,30 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 		})
 	}
 	if _, err := w.service.SucceedRun(ctx, runID, result.AccountID, results); err != nil {
-		// provider 已成功但结果记录失败：短暂重排当前任务，不能把错误当作成功 ACK。
-		attempts, incErr := w.repo.IncrementCreativeRunAttempt(ctx, runID)
+		// provider 已成功：只统计持久化/结算重试，执行栅栏防止再次调用上游。
+		_, incErr := w.repo.IncrementCreativeRunSettlementAttempt(ctx, runID)
 		if incErr != nil {
 			return CreativeProcessResult{}, incErr
 		}
-		if attempts < w.opts.MaxAttempts {
-			return CreativeProcessResult{RequeueAfter: w.opts.ErrorRetryDelay}, nil
-		}
-		return CreativeProcessResult{}, err
+		_ = w.repo.SetCreativeRunReconcileError(ctx, runID, sanitizeCreativeMessage(err.Error()), time.Now().Add(w.opts.ErrorRetryDelay))
+		return CreativeProcessResult{RequeueAfter: w.opts.ErrorRetryDelay}, nil
 	}
 	// 优先在当前 lease 内完成结算；失败时 run 已是 provider_succeeded，后续只会重试结算。
 	if err := w.service.SettleRun(ctx, runID); err != nil {
 		return CreativeProcessResult{}, err
 	}
 	return CreativeProcessResult{Terminal: true}, nil
+}
+
+// deferUnconfirmedExecution 不推断上游失败或成功，也不释放资金；等待已有结果恢复或人工核对。
+func (w *CreativeRunWorker) deferUnconfirmedExecution(ctx context.Context, run *CreativeRun) (CreativeProcessResult, error) {
+	if run.NextReconcileAt != nil && run.NextReconcileAt.After(time.Now()) && run.ErrorCode != nil && *run.ErrorCode == "PROVIDER_RESULT_UNCONFIRMED" {
+		return CreativeProcessResult{RequeueAfter: time.Until(*run.NextReconcileAt)}, nil
+	}
+	if err := w.repo.MarkCreativeRunExecutionUnconfirmed(ctx, run.RunID, time.Now().Add(defaultCreativeUnconfirmedRequeueDelay)); err != nil {
+		return CreativeProcessResult{}, err
+	}
+	return CreativeProcessResult{RequeueAfter: defaultCreativeUnconfirmedRequeueDelay}, nil
 }
 
 // loadPayload 从临时存储加载任务载荷与输入字节；缺失即视为结果丢失。

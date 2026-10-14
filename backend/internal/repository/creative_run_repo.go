@@ -40,6 +40,7 @@ func (r *creativeRunRepository) CreateCreativeRun(ctx context.Context, params se
 		SetRunID(params.RunID).
 		SetUserID(params.UserID).
 		SetGroupID(params.GroupID).
+		SetQuotaPlatform(params.QuotaPlatform).
 		SetAPIKeyID(params.APIKeyID).
 		SetModel(params.Model).
 		SetRequestedModel(params.RequestedModel).
@@ -312,7 +313,20 @@ func (r *creativeRunRepository) SetCreativeRunAccountID(ctx context.Context, run
 
 // MarkCreativeRunSucceeded 记录实际成本并进入 succeeded，仅在 running 时生效。
 func (r *creativeRunRepository) MarkCreativeRunSucceeded(ctx context.Context, runID string, actualCost float64, now time.Time) error {
-	affected, err := r.client.CreativeRun.Update().
+	return r.markCreativeRunSettled(ctx, runID, actualCost, now, false)
+}
+
+// MarkCreativeRunResultLostAfterSettlement 在同一次写入中保留已结算金额并进入丢失终态。
+func (r *creativeRunRepository) MarkCreativeRunResultLostAfterSettlement(ctx context.Context, runID string, actualCost float64, now time.Time) error {
+	return r.markCreativeRunSettled(ctx, runID, actualCost, now, true)
+}
+
+func (r *creativeRunRepository) markCreativeRunSettled(ctx context.Context, runID string, actualCost float64, now time.Time, resultLost bool) error {
+	status := service.CreativeRunStatusSucceeded
+	if resultLost {
+		status = service.CreativeRunStatusResultLost
+	}
+	builder := r.client.CreativeRun.Update().
 		Where(
 			creativerun.RunIDEQ(runID),
 			creativerun.StatusIn(
@@ -321,12 +335,15 @@ func (r *creativeRunRepository) MarkCreativeRunSucceeded(ctx context.Context, ru
 				service.CreativeRunStatusSettlementPending,
 			),
 		).
-		SetStatus(service.CreativeRunStatusSucceeded).
+		SetStatus(status).
 		SetActualCost(actualCost).
 		SetCompletedAt(now).
 		SetUpdatedAt(now).
-		AddVersion(1).
-		Save(ctx)
+		AddVersion(1)
+	if resultLost {
+		builder.SetErrorCode("RESULT_EXPIRED").SetErrorMessage("上游已生成成功，但临时输出未保存或已丢失")
+	}
+	affected, err := builder.Save(ctx)
 	if err != nil {
 		return err
 	}
@@ -337,7 +354,13 @@ func (r *creativeRunRepository) MarkCreativeRunSucceeded(ctx context.Context, ru
 		if getErr != nil {
 			return translatePersistenceError(getErr, service.ErrCreativeRunNotFound, nil)
 		}
-		if current.Status == service.CreativeRunStatusSucceeded || current.Status == service.CreativeRunStatusCancelled {
+		if current.Status == service.CreativeRunStatusCancelled {
+			// 执行中取消仍保留已成功上游的真实结算金额，状态不可回写为成功。
+			_, err = r.client.CreativeRun.Update().Where(creativerun.IDEQ(current.ID), creativerun.StatusEQ(service.CreativeRunStatusCancelled)).
+				SetActualCost(actualCost).SetCompletedAt(now).SetUpdatedAt(now).Save(ctx)
+			return err
+		}
+		if current.Status == status {
 			return nil
 		}
 		return service.ErrCreativeInvalidTransition
@@ -588,18 +611,119 @@ func (r *creativeRunRepository) SetCreativeRunProvisioningPhase(ctx context.Cont
 	if strings.TrimSpace(phase) == "" {
 		return service.ErrCreativeInvalidParams
 	}
-	affected, err := r.client.CreativeRun.Update().
-		Where(creativerun.RunIDEQ(runID)).
+	builder := r.client.CreativeRun.Update().Where(creativerun.RunIDEQ(runID))
+	switch phase {
+	case service.CreativeProvisioningPhaseProviderInflight:
+		builder.Where(creativerun.StatusEQ(service.CreativeRunStatusRunning), creativerun.ProvisioningPhaseNEQ(phase))
+	case service.CreativeProvisioningPhaseProviderRetry:
+		builder.Where(creativerun.StatusEQ(service.CreativeRunStatusRunning), creativerun.ProvisioningPhaseEQ(service.CreativeProvisioningPhaseProviderInflight))
+	default:
+		// 创建补偿与 worker 可能并发：创建阶段只能推进 queued，不能覆盖已经持久化的执行栅栏。
+		builder.Where(creativerun.StatusEQ(service.CreativeRunStatusQueued))
+	}
+	affected, err := builder.
 		SetProvisioningPhase(phase).
 		SetUpdatedAt(time.Now()).
+		AddVersion(1).
 		Save(ctx)
 	if err != nil {
 		return err
 	}
 	if affected == 0 {
-		return service.ErrCreativeRunNotFound
+		current, getErr := r.GetCreativeRunByRunID(ctx, runID)
+		if getErr != nil {
+			return getErr
+		}
+		if phase != service.CreativeProvisioningPhaseProviderInflight && phase != service.CreativeProvisioningPhaseProviderRetry && current.Status != service.CreativeRunStatusQueued {
+			return nil
+		}
+		return service.ErrCreativeInvalidTransition
 	}
 	return nil
+}
+
+// RecordCreativeRunProviderResult 把计费证据、成功事实和结算动作同事务提交，避免图片缓存失败后重复生成。
+// outputs 只包含 MIME、长度、索引和状态，绝不将媒体本体存入 PostgreSQL。
+func (r *creativeRunRepository) RecordCreativeRunProviderResult(ctx context.Context, runID string, accountID int64, outputs []service.CreativeRunOutput, now time.Time) error {
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	current, err := tx.CreativeRun.Query().Where(creativerun.RunIDEQ(runID)).Only(ctx)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrCreativeRunNotFound, nil)
+	}
+	if current.ProviderResultRecordedAt != nil {
+		return nil
+	}
+	if current.Status != service.CreativeRunStatusRunning && current.Status != service.CreativeRunStatusCancelled {
+		return service.ErrCreativeInvalidTransition
+	}
+	if len(outputs) != current.RequestedOutputCount {
+		return service.ErrCreativeInvalidParams
+	}
+	seen := make(map[int]bool, len(outputs))
+	txRepo := &creativeRunRepository{client: tx.Client()}
+	for _, output := range outputs {
+		if output.OutputIndex < 0 || output.OutputIndex >= current.RequestedOutputCount || seen[output.OutputIndex] {
+			return service.ErrCreativeInvalidParams
+		}
+		seen[output.OutputIndex] = true
+		if output.Status != service.CreativeRunOutputStatusSucceeded && output.Status != service.CreativeRunOutputStatusFailed {
+			return service.ErrCreativeInvalidParams
+		}
+		mime, code, message := "", "", ""
+		size := int64(0)
+		if output.MimeType != nil {
+			mime = *output.MimeType
+		}
+		if output.ByteSize != nil {
+			size = *output.ByteSize
+		}
+		if output.ErrorCode != nil {
+			code = *output.ErrorCode
+		}
+		if output.ErrorMessage != nil {
+			message = *output.ErrorMessage
+		}
+		if err := txRepo.UpdateCreativeRunOutput(ctx, runID, output.OutputIndex, output.Status, mime, size, output.TransientExpiresAt, code, message); err != nil {
+			return err
+		}
+	}
+	builder := tx.CreativeRun.Update().Where(creativerun.RunIDEQ(runID), creativerun.VersionEQ(current.Version)).
+		SetProviderResultRecordedAt(now).SetUpdatedAt(now).AddVersion(1).
+		ClearErrorCode().ClearErrorMessage().ClearNextReconcileAt().ClearLastReconcileError()
+	if accountID > 0 {
+		builder.SetAccountID(accountID)
+	}
+	if current.Status == service.CreativeRunStatusRunning {
+		builder.SetStatus(service.CreativeRunStatusProviderSucceeded)
+	}
+	affected, err := builder.Save(ctx)
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrCreativeInvalidTransition
+	}
+	if err := tx.CreativeRunOutbox.Create().SetRunID(runID).
+		SetOperation(string(service.CreativeRunOutboxSettle)).SetStatus(string(service.CreativeRunOutboxPending)).
+		OnConflictColumns("run_id", "operation").DoNothing().Exec(ctx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// MarkCreativeRunExecutionUnconfirmed 保留冻结资金和处理中状态，明确标识人工核对，不猜测上游结果。
+func (r *creativeRunRepository) MarkCreativeRunExecutionUnconfirmed(ctx context.Context, runID string, next time.Time) error {
+	_, err := r.client.CreativeRun.Update().Where(creativerun.RunIDEQ(runID),
+		creativerun.StatusEQ(service.CreativeRunStatusRunning), creativerun.ProviderResultRecordedAtIsNil(),
+		creativerun.ProvisioningPhaseEQ(service.CreativeProvisioningPhaseProviderInflight)).
+		SetErrorCode("PROVIDER_RESULT_UNCONFIRMED").
+		SetErrorMessage("上游执行结果尚未确认，已停止自动重发，请联系管理员核对；预占资金保持不变").
+		SetNextReconcileAt(next).SetUpdatedAt(time.Now()).AddVersion(1).Save(ctx)
+	return err
 }
 
 // SetCreativeRunAllowanceReserved 持久化预占事实，释放成功后复位。
@@ -656,6 +780,7 @@ func creativeRunEntityToService(entity *dbent.CreativeRun) *service.CreativeRun 
 		UserID:                      entity.UserID,
 		WorkspaceID:                 entity.WorkspaceID,
 		GroupID:                     entity.GroupID,
+		QuotaPlatform:               entity.QuotaPlatform,
 		APIKeyID:                    entity.APIKeyID,
 		AccountID:                   entity.AccountID,
 		Model:                       entity.Model,

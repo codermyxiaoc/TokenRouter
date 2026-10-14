@@ -3,13 +3,18 @@ package service
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
+	"go.uber.org/zap"
 )
 
 type BatchImageWorkerRuntime struct {
 	worker          *BatchImageWorker
 	billingRecovery *BatchImageBillingRecoveryService
+	queueRecovery   *BatchImageQueueRecoveryService
+	usageRecovery   *BatchImageUsageRecoveryService
 	cfg             *config.Config
 
 	mu     sync.Mutex
@@ -56,6 +61,12 @@ func ProvideBatchImageWorkerRuntime(
 		Queue:      queue,
 		StaleAfter: NewBatchImageWorkerOptionsFromConfig(cfg).StaleActiveAfter,
 		Limit:      NewBatchImageWorkerOptionsFromConfig(cfg).RecoverLimit,
+	}
+	if recoveryRepo, ok := repo.(BatchImageQueueRecoveryRepository); ok {
+		runtime.queueRecovery = &BatchImageQueueRecoveryService{Repo: recoveryRepo, Queue: queue, Limit: NewBatchImageWorkerOptionsFromConfig(cfg).RecoverLimit}
+	}
+	if recoveryRepo, ok := repo.(BatchImageUsageRecoveryRepository); ok {
+		runtime.usageRecovery = &BatchImageUsageRecoveryService{Repo: recoveryRepo, Settlement: processor.SettlementService, Limit: NewBatchImageWorkerOptionsFromConfig(cfg).RecoverLimit}
 	}
 	runtime.Start()
 	return runtime
@@ -110,6 +121,21 @@ func (r *BatchImageWorkerRuntime) runBillingRecovery(ctx context.Context) {
 			return
 		}
 		_, _ = r.billingRecovery.ReleaseStaleUnsubmittedOnce(ctx)
+		if r.queueRecovery != nil {
+			// 恢复查询有独立预算，不允许基础设施故障卡住整个维护循环。
+			recoveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if _, err := r.queueRecovery.RecoverOnce(recoveryCtx); err != nil && ctx.Err() == nil {
+				logger.L().Warn("batch_image.queue_recovery_failed", zap.Error(err))
+			}
+			cancel()
+		}
+		if r.usageRecovery != nil {
+			usageCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if _, err := r.usageRecovery.RecoverOnce(usageCtx); err != nil && ctx.Err() == nil {
+				logger.L().Warn("batch_image.usage_recovery_failed", zap.Error(err))
+			}
+			cancel()
+		}
 		sleepOrDone(ctx, interval)
 	}
 }

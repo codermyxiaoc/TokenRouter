@@ -45,6 +45,7 @@ func (r *smokeFakeRunRepo) CreateCreativeRun(ctx context.Context, params service
 		UserID:               params.UserID,
 		WorkspaceID:          &workspaceID,
 		GroupID:              params.GroupID,
+		QuotaPlatform:        params.QuotaPlatform,
 		APIKeyID:             params.APIKeyID,
 		Model:                params.Model,
 		Operation:            params.Operation,
@@ -247,6 +248,31 @@ func (r *smokeFakeRunRepo) MarkCreativeRunProviderSucceeded(ctx context.Context,
 	if run.Status == service.CreativeRunStatusRunning {
 		run.Status = service.CreativeRunStatusProviderSucceeded
 	}
+	return nil
+}
+
+// 冒烟替身在输出保存前记录成功元数据，保持与生产事务相同的防重放顺序。
+func (r *smokeFakeRunRepo) RecordCreativeRunProviderResult(ctx context.Context, runID string, accountID int64, outputs []service.CreativeRunOutput, now time.Time) error {
+	for _, output := range outputs {
+		copy := output
+		r.outputs[runID][output.OutputIndex] = &copy
+	}
+	return r.MarkCreativeRunProviderSucceeded(ctx, runID, accountID, now)
+}
+
+func (r *smokeFakeRunRepo) MarkCreativeRunExecutionUnconfirmed(ctx context.Context, runID string, next time.Time) error {
+	run := r.runs[runID]
+	code := "PROVIDER_RESULT_UNCONFIRMED"
+	run.ErrorCode = &code
+	run.NextReconcileAt = &next
+	return nil
+}
+
+func (r *smokeFakeRunRepo) MarkCreativeRunResultLostAfterSettlement(ctx context.Context, runID string, actualCost float64, now time.Time) error {
+	if err := r.MarkCreativeRunSucceeded(ctx, runID, actualCost, now); err != nil {
+		return err
+	}
+	r.runs[runID].Status = service.CreativeRunStatusResultLost
 	return nil
 }
 

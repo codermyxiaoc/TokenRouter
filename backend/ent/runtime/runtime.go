@@ -768,122 +768,128 @@ func init() {
 	creativerunDescWorkspaceID := creativerunFields[2].Descriptor()
 	// creativerun.WorkspaceIDValidator is a validator for the "workspace_id" field. It is called by the builders before save.
 	creativerun.WorkspaceIDValidator = creativerunDescWorkspaceID.Validators[0].(func(string) error)
+	// creativerunDescQuotaPlatform is the schema descriptor for quota_platform field.
+	creativerunDescQuotaPlatform := creativerunFields[4].Descriptor()
+	// creativerun.DefaultQuotaPlatform holds the default value on creation for the quota_platform field.
+	creativerun.DefaultQuotaPlatform = creativerunDescQuotaPlatform.Default.(string)
+	// creativerun.QuotaPlatformValidator is a validator for the "quota_platform" field. It is called by the builders before save.
+	creativerun.QuotaPlatformValidator = creativerunDescQuotaPlatform.Validators[0].(func(string) error)
 	// creativerunDescModel is the schema descriptor for model field.
-	creativerunDescModel := creativerunFields[6].Descriptor()
+	creativerunDescModel := creativerunFields[7].Descriptor()
 	// creativerun.ModelValidator is a validator for the "model" field. It is called by the builders before save.
 	creativerun.ModelValidator = creativerunDescModel.Validators[0].(func(string) error)
 	// creativerunDescRequestedModel is the schema descriptor for requested_model field.
-	creativerunDescRequestedModel := creativerunFields[7].Descriptor()
+	creativerunDescRequestedModel := creativerunFields[8].Descriptor()
 	// creativerun.DefaultRequestedModel holds the default value on creation for the requested_model field.
 	creativerun.DefaultRequestedModel = creativerunDescRequestedModel.Default.(string)
 	// creativerun.RequestedModelValidator is a validator for the "requested_model" field. It is called by the builders before save.
 	creativerun.RequestedModelValidator = creativerunDescRequestedModel.Validators[0].(func(string) error)
 	// creativerunDescOperation is the schema descriptor for operation field.
-	creativerunDescOperation := creativerunFields[8].Descriptor()
+	creativerunDescOperation := creativerunFields[9].Descriptor()
 	// creativerun.OperationValidator is a validator for the "operation" field. It is called by the builders before save.
 	creativerun.OperationValidator = creativerunDescOperation.Validators[0].(func(string) error)
 	// creativerunDescRequestedOutputCount is the schema descriptor for requested_output_count field.
-	creativerunDescRequestedOutputCount := creativerunFields[9].Descriptor()
+	creativerunDescRequestedOutputCount := creativerunFields[10].Descriptor()
 	// creativerun.DefaultRequestedOutputCount holds the default value on creation for the requested_output_count field.
 	creativerun.DefaultRequestedOutputCount = creativerunDescRequestedOutputCount.Default.(int)
 	// creativerunDescImageSize is the schema descriptor for image_size field.
-	creativerunDescImageSize := creativerunFields[10].Descriptor()
+	creativerunDescImageSize := creativerunFields[11].Descriptor()
 	// creativerun.DefaultImageSize holds the default value on creation for the image_size field.
 	creativerun.DefaultImageSize = creativerunDescImageSize.Default.(string)
 	// creativerun.ImageSizeValidator is a validator for the "image_size" field. It is called by the builders before save.
 	creativerun.ImageSizeValidator = creativerunDescImageSize.Validators[0].(func(string) error)
 	// creativerunDescAspectRatio is the schema descriptor for aspect_ratio field.
-	creativerunDescAspectRatio := creativerunFields[11].Descriptor()
+	creativerunDescAspectRatio := creativerunFields[12].Descriptor()
 	// creativerun.DefaultAspectRatio holds the default value on creation for the aspect_ratio field.
 	creativerun.DefaultAspectRatio = creativerunDescAspectRatio.Default.(string)
 	// creativerun.AspectRatioValidator is a validator for the "aspect_ratio" field. It is called by the builders before save.
 	creativerun.AspectRatioValidator = creativerunDescAspectRatio.Validators[0].(func(string) error)
 	// creativerunDescResponseMimeType is the schema descriptor for response_mime_type field.
-	creativerunDescResponseMimeType := creativerunFields[12].Descriptor()
+	creativerunDescResponseMimeType := creativerunFields[13].Descriptor()
 	// creativerun.DefaultResponseMimeType holds the default value on creation for the response_mime_type field.
 	creativerun.DefaultResponseMimeType = creativerunDescResponseMimeType.Default.(string)
 	// creativerun.ResponseMimeTypeValidator is a validator for the "response_mime_type" field. It is called by the builders before save.
 	creativerun.ResponseMimeTypeValidator = creativerunDescResponseMimeType.Validators[0].(func(string) error)
 	// creativerunDescPromptHash is the schema descriptor for prompt_hash field.
-	creativerunDescPromptHash := creativerunFields[13].Descriptor()
+	creativerunDescPromptHash := creativerunFields[14].Descriptor()
 	// creativerun.PromptHashValidator is a validator for the "prompt_hash" field. It is called by the builders before save.
 	creativerun.PromptHashValidator = creativerunDescPromptHash.Validators[0].(func(string) error)
 	// creativerunDescRequestFingerprint is the schema descriptor for request_fingerprint field.
-	creativerunDescRequestFingerprint := creativerunFields[14].Descriptor()
+	creativerunDescRequestFingerprint := creativerunFields[15].Descriptor()
 	// creativerun.RequestFingerprintValidator is a validator for the "request_fingerprint" field. It is called by the builders before save.
 	creativerun.RequestFingerprintValidator = creativerunDescRequestFingerprint.Validators[0].(func(string) error)
 	// creativerunDescIdempotencyKey is the schema descriptor for idempotency_key field.
-	creativerunDescIdempotencyKey := creativerunFields[15].Descriptor()
+	creativerunDescIdempotencyKey := creativerunFields[16].Descriptor()
 	// creativerun.IdempotencyKeyValidator is a validator for the "idempotency_key" field. It is called by the builders before save.
 	creativerun.IdempotencyKeyValidator = creativerunDescIdempotencyKey.Validators[0].(func(string) error)
 	// creativerunDescStatus is the schema descriptor for status field.
-	creativerunDescStatus := creativerunFields[16].Descriptor()
+	creativerunDescStatus := creativerunFields[17].Descriptor()
 	// creativerun.DefaultStatus holds the default value on creation for the status field.
 	creativerun.DefaultStatus = creativerunDescStatus.Default.(string)
 	// creativerun.StatusValidator is a validator for the "status" field. It is called by the builders before save.
 	creativerun.StatusValidator = creativerunDescStatus.Validators[0].(func(string) error)
 	// creativerunDescEstimatedCost is the schema descriptor for estimated_cost field.
-	creativerunDescEstimatedCost := creativerunFields[17].Descriptor()
+	creativerunDescEstimatedCost := creativerunFields[18].Descriptor()
 	// creativerun.DefaultEstimatedCost holds the default value on creation for the estimated_cost field.
 	creativerun.DefaultEstimatedCost = creativerunDescEstimatedCost.Default.(float64)
 	// creativerunDescBalanceHoldAmount is the schema descriptor for balance_hold_amount field.
-	creativerunDescBalanceHoldAmount := creativerunFields[20].Descriptor()
+	creativerunDescBalanceHoldAmount := creativerunFields[21].Descriptor()
 	// creativerun.DefaultBalanceHoldAmount holds the default value on creation for the balance_hold_amount field.
 	creativerun.DefaultBalanceHoldAmount = creativerunDescBalanceHoldAmount.Default.(float64)
 	// creativerunDescSubscriptionHoldAllocations is the schema descriptor for subscription_hold_allocations field.
-	creativerunDescSubscriptionHoldAllocations := creativerunFields[21].Descriptor()
+	creativerunDescSubscriptionHoldAllocations := creativerunFields[22].Descriptor()
 	// creativerun.DefaultSubscriptionHoldAllocations holds the default value on creation for the subscription_hold_allocations field.
 	creativerun.DefaultSubscriptionHoldAllocations = creativerunDescSubscriptionHoldAllocations.Default.(func() []domain.BillingAllocation)
 	// creativerunDescBaseUnitPrice is the schema descriptor for base_unit_price field.
-	creativerunDescBaseUnitPrice := creativerunFields[22].Descriptor()
+	creativerunDescBaseUnitPrice := creativerunFields[23].Descriptor()
 	// creativerun.DefaultBaseUnitPrice holds the default value on creation for the base_unit_price field.
 	creativerun.DefaultBaseUnitPrice = creativerunDescBaseUnitPrice.Default.(float64)
 	// creativerunDescSubscriptionRateMultiplier is the schema descriptor for subscription_rate_multiplier field.
-	creativerunDescSubscriptionRateMultiplier := creativerunFields[23].Descriptor()
+	creativerunDescSubscriptionRateMultiplier := creativerunFields[24].Descriptor()
 	// creativerun.DefaultSubscriptionRateMultiplier holds the default value on creation for the subscription_rate_multiplier field.
 	creativerun.DefaultSubscriptionRateMultiplier = creativerunDescSubscriptionRateMultiplier.Default.(float64)
 	// creativerunDescBalanceRateMultiplier is the schema descriptor for balance_rate_multiplier field.
-	creativerunDescBalanceRateMultiplier := creativerunFields[24].Descriptor()
+	creativerunDescBalanceRateMultiplier := creativerunFields[25].Descriptor()
 	// creativerun.DefaultBalanceRateMultiplier holds the default value on creation for the balance_rate_multiplier field.
 	creativerun.DefaultBalanceRateMultiplier = creativerunDescBalanceRateMultiplier.Default.(float64)
 	// creativerunDescPlanGroupRateMultiplierEnabled is the schema descriptor for plan_group_rate_multiplier_enabled field.
-	creativerunDescPlanGroupRateMultiplierEnabled := creativerunFields[25].Descriptor()
+	creativerunDescPlanGroupRateMultiplierEnabled := creativerunFields[26].Descriptor()
 	// creativerun.DefaultPlanGroupRateMultiplierEnabled holds the default value on creation for the plan_group_rate_multiplier_enabled field.
 	creativerun.DefaultPlanGroupRateMultiplierEnabled = creativerunDescPlanGroupRateMultiplierEnabled.Default.(bool)
 	// creativerunDescErrorCode is the schema descriptor for error_code field.
-	creativerunDescErrorCode := creativerunFields[26].Descriptor()
+	creativerunDescErrorCode := creativerunFields[27].Descriptor()
 	// creativerun.ErrorCodeValidator is a validator for the "error_code" field. It is called by the builders before save.
 	creativerun.ErrorCodeValidator = creativerunDescErrorCode.Validators[0].(func(string) error)
 	// creativerunDescReleaseTargetStatus is the schema descriptor for release_target_status field.
-	creativerunDescReleaseTargetStatus := creativerunFields[28].Descriptor()
+	creativerunDescReleaseTargetStatus := creativerunFields[29].Descriptor()
 	// creativerun.DefaultReleaseTargetStatus holds the default value on creation for the release_target_status field.
 	creativerun.DefaultReleaseTargetStatus = creativerunDescReleaseTargetStatus.Default.(string)
 	// creativerun.ReleaseTargetStatusValidator is a validator for the "release_target_status" field. It is called by the builders before save.
 	creativerun.ReleaseTargetStatusValidator = creativerunDescReleaseTargetStatus.Validators[0].(func(string) error)
 	// creativerunDescAttemptCount is the schema descriptor for attempt_count field.
-	creativerunDescAttemptCount := creativerunFields[29].Descriptor()
+	creativerunDescAttemptCount := creativerunFields[30].Descriptor()
 	// creativerun.DefaultAttemptCount holds the default value on creation for the attempt_count field.
 	creativerun.DefaultAttemptCount = creativerunDescAttemptCount.Default.(int)
 	// creativerunDescAllowanceReserved is the schema descriptor for allowance_reserved field.
-	creativerunDescAllowanceReserved := creativerunFields[30].Descriptor()
+	creativerunDescAllowanceReserved := creativerunFields[31].Descriptor()
 	// creativerun.DefaultAllowanceReserved holds the default value on creation for the allowance_reserved field.
 	creativerun.DefaultAllowanceReserved = creativerunDescAllowanceReserved.Default.(bool)
 	// creativerunDescProvisioningPhase is the schema descriptor for provisioning_phase field.
-	creativerunDescProvisioningPhase := creativerunFields[31].Descriptor()
+	creativerunDescProvisioningPhase := creativerunFields[32].Descriptor()
 	// creativerun.DefaultProvisioningPhase holds the default value on creation for the provisioning_phase field.
 	creativerun.DefaultProvisioningPhase = creativerunDescProvisioningPhase.Default.(string)
 	// creativerun.ProvisioningPhaseValidator is a validator for the "provisioning_phase" field. It is called by the builders before save.
 	creativerun.ProvisioningPhaseValidator = creativerunDescProvisioningPhase.Validators[0].(func(string) error)
 	// creativerunDescSettlementAttemptCount is the schema descriptor for settlement_attempt_count field.
-	creativerunDescSettlementAttemptCount := creativerunFields[33].Descriptor()
+	creativerunDescSettlementAttemptCount := creativerunFields[34].Descriptor()
 	// creativerun.DefaultSettlementAttemptCount holds the default value on creation for the settlement_attempt_count field.
 	creativerun.DefaultSettlementAttemptCount = creativerunDescSettlementAttemptCount.Default.(int)
 	// creativerunDescReleaseAttemptCount is the schema descriptor for release_attempt_count field.
-	creativerunDescReleaseAttemptCount := creativerunFields[34].Descriptor()
+	creativerunDescReleaseAttemptCount := creativerunFields[35].Descriptor()
 	// creativerun.DefaultReleaseAttemptCount holds the default value on creation for the release_attempt_count field.
 	creativerun.DefaultReleaseAttemptCount = creativerunDescReleaseAttemptCount.Default.(int)
 	// creativerunDescVersion is the schema descriptor for version field.
-	creativerunDescVersion := creativerunFields[37].Descriptor()
+	creativerunDescVersion := creativerunFields[38].Descriptor()
 	// creativerun.DefaultVersion holds the default value on creation for the version field.
 	creativerun.DefaultVersion = creativerunDescVersion.Default.(int64)
 	creativerunoutboxFields := schema.CreativeRunOutbox{}.Fields()

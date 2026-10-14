@@ -17004,6 +17004,7 @@ type CreativeRunMutation struct {
 	workspace_id                        *string
 	group_id                            *int64
 	addgroup_id                         *int64
+	quota_platform                      *string
 	api_key_id                          *int64
 	addapi_key_id                       *int64
 	account_id                          *int64
@@ -17427,6 +17428,42 @@ func (m *CreativeRunMutation) AddedGroupID() (r int64, exists bool) {
 func (m *CreativeRunMutation) ResetGroupID() {
 	m.group_id = nil
 	m.addgroup_id = nil
+}
+
+// SetQuotaPlatform sets the "quota_platform" field.
+func (m *CreativeRunMutation) SetQuotaPlatform(s string) {
+	m.quota_platform = &s
+}
+
+// QuotaPlatform returns the value of the "quota_platform" field in the mutation.
+func (m *CreativeRunMutation) QuotaPlatform() (r string, exists bool) {
+	v := m.quota_platform
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQuotaPlatform returns the old "quota_platform" field's value of the CreativeRun entity.
+// If the CreativeRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CreativeRunMutation) OldQuotaPlatform(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQuotaPlatform is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQuotaPlatform requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQuotaPlatform: %w", err)
+	}
+	return oldValue.QuotaPlatform, nil
+}
+
+// ResetQuotaPlatform resets all changes to the "quota_platform" field.
+func (m *CreativeRunMutation) ResetQuotaPlatform() {
+	m.quota_platform = nil
 }
 
 // SetAPIKeyID sets the "api_key_id" field.
@@ -19249,7 +19286,7 @@ func (m *CreativeRunMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *CreativeRunMutation) Fields() []string {
-	fields := make([]string, 0, 43)
+	fields := make([]string, 0, 44)
 	if m.created_at != nil {
 		fields = append(fields, creativerun.FieldCreatedAt)
 	}
@@ -19267,6 +19304,9 @@ func (m *CreativeRunMutation) Fields() []string {
 	}
 	if m.group_id != nil {
 		fields = append(fields, creativerun.FieldGroupID)
+	}
+	if m.quota_platform != nil {
+		fields = append(fields, creativerun.FieldQuotaPlatform)
 	}
 	if m.api_key_id != nil {
 		fields = append(fields, creativerun.FieldAPIKeyID)
@@ -19399,6 +19439,8 @@ func (m *CreativeRunMutation) Field(name string) (ent.Value, bool) {
 		return m.WorkspaceID()
 	case creativerun.FieldGroupID:
 		return m.GroupID()
+	case creativerun.FieldQuotaPlatform:
+		return m.QuotaPlatform()
 	case creativerun.FieldAPIKeyID:
 		return m.APIKeyID()
 	case creativerun.FieldAccountID:
@@ -19494,6 +19536,8 @@ func (m *CreativeRunMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldWorkspaceID(ctx)
 	case creativerun.FieldGroupID:
 		return m.OldGroupID(ctx)
+	case creativerun.FieldQuotaPlatform:
+		return m.OldQuotaPlatform(ctx)
 	case creativerun.FieldAPIKeyID:
 		return m.OldAPIKeyID(ctx)
 	case creativerun.FieldAccountID:
@@ -19618,6 +19662,13 @@ func (m *CreativeRunMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetGroupID(v)
+		return nil
+	case creativerun.FieldQuotaPlatform:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQuotaPlatform(v)
 		return nil
 	case creativerun.FieldAPIKeyID:
 		v, ok := value.(int64)
@@ -20220,6 +20271,9 @@ func (m *CreativeRunMutation) ResetField(name string) error {
 		return nil
 	case creativerun.FieldGroupID:
 		m.ResetGroupID()
+		return nil
+	case creativerun.FieldQuotaPlatform:
+		m.ResetQuotaPlatform()
 		return nil
 	case creativerun.FieldAPIKeyID:
 		m.ResetAPIKeyID()

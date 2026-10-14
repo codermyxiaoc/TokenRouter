@@ -881,6 +881,8 @@ var ProviderSet = wire.NewSet(
 	ProvideImageTaskService,
 	ProvideMediaTaskServiceWithVideoContent,
 	ProvideVideoTaskService,
+	NewLegacyVideoRecovery,
+	ProvideLegacyVideoRuntime,
 	NewBatchImagePublicService,
 	NewBatchImageDownloadService,
 	ProvideBatchImageCleanupService,
@@ -1052,9 +1054,13 @@ func ProvideImageStorageSettingService(repo SettingRepository, encryptor SecretE
 }
 
 // ProvideImageTaskService 保持热更新开关和已接收任务的查询能力。
-func ProvideImageTaskService(store ImageTaskStore, settings *ImageStorageSettingService, billing UsageBillingRepository) *ImageTaskService {
+func ProvideImageTaskService(store ImageTaskStore, settings *ImageStorageSettingService, billing UsageBillingRepository, gateway *OpenAIGatewayService, keys *APIKeyService) *ImageTaskService {
 	svc := NewImageTaskServiceWithResolver(store, settings.Resolver(), 0, 0)
 	svc.imageBilling, _ = billing.(ImageBillingReservationRepository)
+	// 与任务维护共用生命周期，只恢复已确认成果的账务和使用记录。
+	svc.SetBillingRecovery(func(ctx context.Context) error {
+		return gateway.RecoverAsyncImageBilling(ctx, keys.InvalidateAuthCacheByUserID)
+	})
 	svc.Start()
 	return svc
 }
@@ -1083,4 +1089,11 @@ func ProvideDailyActivityService(repo DailyActivityRepository, keys *APIKeyServi
 		}
 	}
 	return svc
+}
+
+// ProvideLegacyVideoRuntime 在应用装配时启动旧协议视频的持久恢复服务。
+func ProvideLegacyVideoRuntime(repo LegacyVideoTaskRepository, recovery *LegacyVideoRecovery) *LegacyVideoRuntime {
+	runtime := NewLegacyVideoRuntime(repo, recovery)
+	runtime.Start()
+	return runtime
 }

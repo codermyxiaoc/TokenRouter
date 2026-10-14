@@ -276,8 +276,15 @@ func TestCreativeSucceedRunRequiresTransientOutput(t *testing.T) {
 			}})
 
 			require.ErrorIs(t, err, ErrCreativeTransientFailed)
-			require.Equal(t, CreativeRunStatusRunning, repo.runs[runID].Status)
-			require.Equal(t, CreativeRunOutputStatusPending, repo.outputs[runID][0].Status)
+			if test.name == "empty output" {
+				// 未返回有效图片无法确认真实成功数量，不能形成计费证据。
+				require.Equal(t, CreativeRunStatusRunning, repo.runs[runID].Status)
+				require.Equal(t, CreativeRunOutputStatusPending, repo.outputs[runID][0].Status)
+			} else {
+				// 图片缓存故障不擦除上游已确认成功的证据，但当前请求绝不返回 succeeded。
+				require.Equal(t, CreativeRunStatusProviderSucceeded, repo.runs[runID].Status)
+				require.Equal(t, CreativeRunOutputStatusSucceeded, repo.outputs[runID][0].Status)
+			}
 			require.Equal(t, 0, svc.BillingRepo.(*creativeFakeBillingRepo).captureN)
 		})
 	}

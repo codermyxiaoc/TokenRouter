@@ -535,12 +535,11 @@ func TestOpenAIGatewayServiceRecordUsage_UsesQuotaPlatformForPlatformQuota(t *te
 
 	require.NoError(t, err)
 	// ForcePlatform 由 handler 预先拍进 QuotaPlatform，后扣不能再回退到 API key 的 openai 分组。
-	require.Equal(t, []openAIRecordUsageQuotaCacheGetCall{
-		{userID: 2100, platform: PlatformAntigravity},
-	}, quotaCache.getCalls)
-	require.Equal(t, []openAIRecordUsageQuotaCacheIncrCall{
-		{userID: 2100, platform: PlatformAntigravity, cost: 0.25},
-	}, quotaCache.incrCalls)
+	require.NotNil(t, billingRepo.lastCmd)
+	require.Equal(t, PlatformAntigravity, billingRepo.lastCmd.QuotaPlatform)
+	// 平台累计已进入资金事务，成功后的缓存回调不得再次读旧快照或增量统计。
+	require.Empty(t, quotaCache.getCalls)
+	require.Empty(t, quotaCache.incrCalls)
 }
 
 func TestOpenAIGatewayServiceRecordUsage_UsesUserSpecificGroupRate(t *testing.T) {

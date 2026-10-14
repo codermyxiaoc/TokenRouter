@@ -369,108 +369,35 @@ func TestUserPlatformQuotaRepository_ResetExpiredWindow_NotFoundReturnsSentinel(
 		"expected ErrUserPlatformQuotaNotFound, got %v", err)
 }
 
-// TestBatchSnapshotUsage_OverwriteExistingMultiKey 验证 BatchSnapshotUsage 的绝对值覆盖语义：
-//  1. 首批更新 2 条既有配置（不同 user），验证 daily 等于首批值；
-//  2. 对同一 key 传不同值，验证 daily 等于新值（绝对覆盖，非累加）。
-func TestBatchSnapshotUsage_OverwriteExistingMultiKey(t *testing.T) {
+// 旧 Redis 快照既不能回滚已提交计数，也不能撤销管理员重置或新计数。
+func TestBatchSnapshotUsage_CannotOverwriteDatabaseAuthority(t *testing.T) {
 	ctx := context.Background()
-	// BatchSnapshotUsage 不开事务（直接写），使用独立 client 保证跨调用可见性。
 	client := testEntClient(t)
-
-	userID1 := mustCreateUserForQuota(t, client)
-	userID2 := mustCreateUserForQuota(t, client)
-
+	userID := mustCreateUserForQuota(t, client)
 	repo := NewUserPlatformQuotaRepository(client)
-
 	limit := 100.0
-	require.NoError(t, repo.BulkInsertInitial(ctx, []UserPlatformQuotaRecord{
-		{UserID: userID1, Platform: "anthropic", DailyLimitUSD: &limit},
-		{UserID: userID2, Platform: "openai", DailyLimitUSD: &limit},
-	}))
-
-	now := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
-	dailyStart := time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
-	weeklyStart := time.Date(2026, 5, 25, 0, 0, 0, 0, time.UTC) // 当周一
-	monthlyStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
-
-	// ── 第一批：更新 2 行 ──────────────────────────────────────────────────────
-	firstBatch := []UserPlatformQuotaSnapshot{
-		{
-			UserID:             userID1,
-			Platform:           "anthropic",
-			DailyUsageUSD:      1.0,
-			WeeklyUsageUSD:     3.0,
-			MonthlyUsageUSD:    5.0,
-			DailyWindowStart:   dailyStart,
-			WeeklyWindowStart:  weeklyStart,
-			MonthlyWindowStart: monthlyStart,
-		},
-		{
-			UserID:             userID2,
-			Platform:           "openai",
-			DailyUsageUSD:      2.0,
-			WeeklyUsageUSD:     4.0,
-			MonthlyUsageUSD:    6.0,
-			DailyWindowStart:   dailyStart,
-			WeeklyWindowStart:  weeklyStart,
-			MonthlyWindowStart: monthlyStart,
-		},
+	require.NoError(t, repo.BulkInsertInitial(ctx, []UserPlatformQuotaRecord{{UserID: userID, Platform: "openai", DailyLimitUSD: &limit}}))
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	require.NoError(t, repo.IncrementUsageWithReset(ctx, userID, "openai", 3, now))
+	original, err := repo.GetByUserPlatform(ctx, userID, "openai")
+	require.NoError(t, err)
+	for _, stale := range []float64{0, 1, 999} {
+		snapshot := []UserPlatformQuotaSnapshot{{UserID: userID, Platform: "openai", DailyUsageUSD: stale, WeeklyUsageUSD: stale, MonthlyUsageUSD: stale, DailyWindowStart: now.AddDate(0, 0, -1), WeeklyWindowStart: now, MonthlyWindowStart: now}}
+		require.NoError(t, repo.BatchSnapshotUsage(ctx, snapshot, now))
+		actual, err := repo.GetByUserPlatform(ctx, userID, "openai")
+		require.NoError(t, err)
+		require.Equal(t, original, actual)
 	}
-	require.NoError(t, repo.BatchSnapshotUsage(ctx, firstBatch, now), "first batch upsert")
-
-	// 验证首批 daily 值
-	rec1, err := repo.GetByUserPlatform(ctx, userID1, "anthropic")
+	require.NoError(t, repo.ResetExpiredWindow(ctx, userID, "openai", "daily", now))
+	require.NoError(t, repo.IncrementUsageWithReset(ctx, userID, "openai", 2, now))
+	original, err = repo.GetByUserPlatform(ctx, userID, "openai")
 	require.NoError(t, err)
-	require.NotNil(t, rec1, "user1/anthropic should exist after first batch")
-	require.InDelta(t, 1.0, rec1.DailyUsageUSD, 1e-9, "user1 daily after first batch")
-	require.InDelta(t, 3.0, rec1.WeeklyUsageUSD, 1e-9, "user1 weekly after first batch")
-	require.InDelta(t, 5.0, rec1.MonthlyUsageUSD, 1e-9, "user1 monthly after first batch")
-
-	rec2, err := repo.GetByUserPlatform(ctx, userID2, "openai")
+	require.NoError(t, repo.BatchSnapshotUsage(ctx, []UserPlatformQuotaSnapshot{{UserID: userID, Platform: "openai", DailyUsageUSD: 999}}, now))
+	actual, err := repo.GetByUserPlatform(ctx, userID, "openai")
 	require.NoError(t, err)
-	require.NotNil(t, rec2, "user2/openai should exist after first batch")
-	require.InDelta(t, 2.0, rec2.DailyUsageUSD, 1e-9, "user2 daily after first batch")
-
-	// ── 第二批：对同一 key 传不同值，验证绝对覆盖（非累加）──────────────────
-	now2 := now.Add(5 * time.Minute)
-	secondBatch := []UserPlatformQuotaSnapshot{
-		{
-			UserID:             userID1,
-			Platform:           "anthropic",
-			DailyUsageUSD:      9.9,  // 新值，不是 1.0+9.9=10.9
-			WeeklyUsageUSD:     19.9, // 新值，不是 3.0+19.9=22.9
-			MonthlyUsageUSD:    29.9, // 新值
-			DailyWindowStart:   dailyStart,
-			WeeklyWindowStart:  weeklyStart,
-			MonthlyWindowStart: monthlyStart,
-		},
-		{
-			UserID:             userID2,
-			Platform:           "openai",
-			DailyUsageUSD:      8.8,
-			WeeklyUsageUSD:     18.8,
-			MonthlyUsageUSD:    28.8,
-			DailyWindowStart:   dailyStart,
-			WeeklyWindowStart:  weeklyStart,
-			MonthlyWindowStart: monthlyStart,
-		},
-	}
-	require.NoError(t, repo.BatchSnapshotUsage(ctx, secondBatch, now2), "second batch upsert")
-
-	// 验证第二批覆盖：daily 应为新值，不是累加
-	rec1After, err := repo.GetByUserPlatform(ctx, userID1, "anthropic")
-	require.NoError(t, err)
-	require.NotNil(t, rec1After)
-	require.InDelta(t, 9.9, rec1After.DailyUsageUSD, 1e-9, "user1 daily must be overwritten to 9.9 (not accumulated)")
-	require.InDelta(t, 19.9, rec1After.WeeklyUsageUSD, 1e-9, "user1 weekly must be overwritten to 19.9")
-	require.InDelta(t, 29.9, rec1After.MonthlyUsageUSD, 1e-9, "user1 monthly must be overwritten to 29.9")
-
-	rec2After, err := repo.GetByUserPlatform(ctx, userID2, "openai")
-	require.NoError(t, err)
-	require.NotNil(t, rec2After)
-	require.InDelta(t, 8.8, rec2After.DailyUsageUSD, 1e-9, "user2 daily must be overwritten to 8.8 (not accumulated)")
-	require.InDelta(t, 18.8, rec2After.WeeklyUsageUSD, 1e-9, "user2 weekly must be overwritten to 18.8")
-	require.InDelta(t, 28.8, rec2After.MonthlyUsageUSD, 1e-9, "user2 monthly must be overwritten to 28.8")
+	require.Equal(t, original, actual)
+	require.Equal(t, 2.0, actual.DailyUsageUSD)
+	require.Equal(t, 5.0, actual.MonthlyUsageUSD)
 }
 
 // 迁移 277 扩展新平台时保留已有平台约束，不能使注册配额整批写入失败。

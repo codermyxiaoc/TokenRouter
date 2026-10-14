@@ -325,7 +325,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	geminiCachedContentRepository := repository.NewGeminiCachedContentRepository(db)
 	geminiCachedContentService := service.ProvideGeminiCachedContentService(geminiCachedContentRepository, geminiMessagesCompatService, configConfig)
 	imageTaskStore := repository.NewDurableImageTaskStore(db, redisClient)
-	imageTaskService := service.ProvideImageTaskService(imageTaskStore, imageStorageSettingService, usageBillingRepository)
+	imageTaskService := service.ProvideImageTaskService(imageTaskStore, imageStorageSettingService, usageBillingRepository, openAIGatewayService, apiKeyService)
 	asyncImageHandler := handler.NewAsyncImageHandler(imageTaskService, openAIGatewayHandler)
 	videoTaskRepository := repository.NewVideoTaskRepository(db)
 	videoTaskService := service.ProvideVideoTaskService(videoTaskRepository, videoUpstreamService, modelPricingResolver, usageBillingRepository, usageLogRepository, accountRepository, userGroupRateRepository, apiKeyService, billingCacheService, mediaTaskService, configConfig)
@@ -373,11 +373,14 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	batchImageWorkerRuntime := service.ProvideBatchImageWorkerRuntime(batchImageRepository, accountRepository, batchImageQueue, usageBillingRepository, usageLogRepository, batchImageModelPricingResolver, apiKeyAuthCacheInvalidator, configConfig)
 	creativeExecutor := service.NewCreativeExecutor(configConfig, creativeAccountRepository, creativeGroupRepository, openAIGatewayService, gatewayService, geminiTokenProvider, settingService)
 	creativeWorkerRuntime := service.ProvideCreativeWorkerRuntime(creativeRunRepository, creativeTransientStore, creativeRunQueue, creativeExecutor, creativePublicService, concurrencyService, settingService, configConfig)
+	legacyVideoTaskRepository := repository.NewLegacyVideoTaskRepository(db)
+	legacyVideoRecovery := service.NewLegacyVideoRecovery(legacyVideoTaskRepository, openAIGatewayService, apiKeyRepository, apiKeyService, mediaTaskService)
+	legacyVideoRuntime := service.ProvideLegacyVideoRuntime(legacyVideoTaskRepository, legacyVideoRecovery)
 	scheduledTestRunnerService := service.ProvideScheduledTestRunnerService(scheduledTestPlanRepository, scheduledTestService, accountTestService, rateLimitService, configConfig)
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, leaderLockCache, db)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
 	cnProviderBalanceCheckService := service.ProvideCNProviderBalanceCheckService(accountRepository, upstreamUsageService, configConfig, leaderLockCache, db)
-	v3 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, claudeCodeVersionSyncService, proxyExpiryService, subscriptionExpiryService, announcementExpiryService, usageCleanupService, idempotencyCleanupService, geminiCachedContentService, batchImageCleanupService, batchImageWorkerRuntime, creativeWorkerRuntime, imageTaskService, videoTaskService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, qoderOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, groupAvailabilityProbeRunnerService, backupService, paymentOrderExpiryService, userPlatformQuotaUsageFlusher, tlsFingerprintCollectorService, tlsFingerprintProfileService, tlsFingerprintRouterService, ollamaCloudUsageService, auditLogService, cnProviderBalanceCheckService, upstreamBillingProbeService, ticketRuntime, intelligenceService, pluginManager)
+	v3 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, claudeCodeVersionSyncService, proxyExpiryService, subscriptionExpiryService, announcementExpiryService, usageCleanupService, idempotencyCleanupService, geminiCachedContentService, batchImageCleanupService, batchImageWorkerRuntime, creativeWorkerRuntime, imageTaskService, videoTaskService, legacyVideoRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, qoderOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, groupAvailabilityProbeRunnerService, backupService, paymentOrderExpiryService, userPlatformQuotaUsageFlusher, tlsFingerprintCollectorService, tlsFingerprintProfileService, tlsFingerprintRouterService, ollamaCloudUsageService, auditLogService, cnProviderBalanceCheckService, upstreamBillingProbeService, ticketRuntime, intelligenceService, pluginManager)
 	application := &Application{
 		Server:        httpServer,
 		PluginManager: pluginManager,
@@ -438,6 +441,7 @@ func provideCleanup(
 	creativeWorker *service.CreativeWorkerRuntime,
 	imageTasks *service.ImageTaskService,
 	videoTasks *service.VideoTaskService,
+	legacyVideoTasks *service.LegacyVideoRuntime,
 	pricing *service.PricingService,
 	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
@@ -476,6 +480,7 @@ func provideCleanup(
 		}
 
 		parallelSteps := []cleanupStep{
+			{"LegacyVideoRuntime", func() error { legacyVideoTasks.Stop(); return nil }},
 			{"VideoTaskService", func() error {
 				if videoTasks != nil {
 					videoTasks.Stop()

@@ -31,6 +31,8 @@ type CreativeRun struct {
 	WorkspaceID *string `json:"workspace_id,omitempty"`
 	// GroupID holds the value of the "group_id" field.
 	GroupID int64 `json:"group_id,omitempty"`
+	// QuotaPlatform holds the value of the "quota_platform" field.
+	QuotaPlatform string `json:"quota_platform,omitempty"`
 	// APIKeyID holds the value of the "api_key_id" field.
 	APIKeyID int64 `json:"api_key_id,omitempty"`
 	// AccountID holds the value of the "account_id" field.
@@ -121,7 +123,7 @@ func (*CreativeRun) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case creativerun.FieldID, creativerun.FieldUserID, creativerun.FieldGroupID, creativerun.FieldAPIKeyID, creativerun.FieldAccountID, creativerun.FieldRequestedOutputCount, creativerun.FieldAttemptCount, creativerun.FieldSettlementAttemptCount, creativerun.FieldReleaseAttemptCount, creativerun.FieldVersion:
 			values[i] = new(sql.NullInt64)
-		case creativerun.FieldRunID, creativerun.FieldWorkspaceID, creativerun.FieldModel, creativerun.FieldRequestedModel, creativerun.FieldOperation, creativerun.FieldImageSize, creativerun.FieldAspectRatio, creativerun.FieldResponseMimeType, creativerun.FieldPromptHash, creativerun.FieldRequestFingerprint, creativerun.FieldIdempotencyKey, creativerun.FieldStatus, creativerun.FieldErrorCode, creativerun.FieldErrorMessage, creativerun.FieldReleaseTargetStatus, creativerun.FieldProvisioningPhase, creativerun.FieldLastReconcileError:
+		case creativerun.FieldRunID, creativerun.FieldWorkspaceID, creativerun.FieldQuotaPlatform, creativerun.FieldModel, creativerun.FieldRequestedModel, creativerun.FieldOperation, creativerun.FieldImageSize, creativerun.FieldAspectRatio, creativerun.FieldResponseMimeType, creativerun.FieldPromptHash, creativerun.FieldRequestFingerprint, creativerun.FieldIdempotencyKey, creativerun.FieldStatus, creativerun.FieldErrorCode, creativerun.FieldErrorMessage, creativerun.FieldReleaseTargetStatus, creativerun.FieldProvisioningPhase, creativerun.FieldLastReconcileError:
 			values[i] = new(sql.NullString)
 		case creativerun.FieldCreatedAt, creativerun.FieldUpdatedAt, creativerun.FieldProviderResultRecordedAt, creativerun.FieldNextReconcileAt, creativerun.FieldStartedAt, creativerun.FieldCompletedAt, creativerun.FieldCancelledAt:
 			values[i] = new(sql.NullTime)
@@ -182,6 +184,12 @@ func (_m *CreativeRun) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field group_id", values[i])
 			} else if value.Valid {
 				_m.GroupID = value.Int64
+			}
+		case creativerun.FieldQuotaPlatform:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field quota_platform", values[i])
+			} else if value.Valid {
+				_m.QuotaPlatform = value.String
 			}
 		case creativerun.FieldAPIKeyID:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -474,6 +482,9 @@ func (_m *CreativeRun) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("group_id=")
 	builder.WriteString(fmt.Sprintf("%v", _m.GroupID))
+	builder.WriteString(", ")
+	builder.WriteString("quota_platform=")
+	builder.WriteString(_m.QuotaPlatform)
 	builder.WriteString(", ")
 	builder.WriteString("api_key_id=")
 	builder.WriteString(fmt.Sprintf("%v", _m.APIKeyID))

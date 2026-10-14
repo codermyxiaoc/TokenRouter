@@ -126,7 +126,8 @@ func (s *OpenAIGatewayService) PrepareAsyncImageBilling(ctx context.Context, key
 		actorID = key.ActorUser.ID
 	}
 	hold := BatchImageBalanceHoldCommand{
-		RequestID: resolveUsageBillingRequestID(ctx, ""), APIKeyID: key.ID, UserID: key.User.ID, ActorUserID: actorID,
+		QuotaPlatform: QuotaPlatform(ctx, key),
+		RequestID:     resolveUsageBillingRequestID(ctx, ""), APIKeyID: key.ID, UserID: key.User.ID, ActorUserID: actorID,
 		GroupID: key.GroupID, TeamID: key.TeamID, APIKeyBillingMode: APIKeyEffectiveBillingMode(key), PreferredSubscriptionID: key.PreferredSubscriptionID,
 		RequestPayloadHash: resolveUsageBillingPayloadFingerprint(ctx, ""), BaseAmountUSD: quotedCost.TotalCost,
 		SubscriptionRateMultiplier: rates.SubscriptionRateMultiplier, SubscriptionRateMultiplierScale: rates.SubscriptionRateMultiplierScale,

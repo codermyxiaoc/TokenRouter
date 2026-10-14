@@ -144,6 +144,13 @@ func (r *parallelCreativeRunRepo) GetCreativeRunByRunID(ctx context.Context, run
 	return r.creativeFakeRunRepo.GetCreativeRunByRunID(ctx, runID)
 }
 
+// 状态转换会向所有任务共享的记录切片追加，必须与其它仓储操作使用同一把锁。
+func (r *parallelCreativeRunRepo) TransitionCreativeRunStatus(ctx context.Context, runID, toStatus string, opts CreativeRunTransitionOptions) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.creativeFakeRunRepo.TransitionCreativeRunStatus(ctx, runID, toStatus, opts)
+}
+
 func (r *parallelCreativeRunRepo) MarkCreativeRunRunning(ctx context.Context, runID string, accountID int64, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -184,6 +191,13 @@ func (s *parallelCreativeTransient) SaveOutput(ctx context.Context, runID string
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.creativeFakeTransient.SaveOutput(ctx, runID, index, data, ttl)
+}
+
+// 结算新增的成果读取也须保护共享 map；锁不跨越真实 worker 或 provider 调用。
+func (s *parallelCreativeTransient) LoadOutput(ctx context.Context, runID string, index int) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.creativeFakeTransient.LoadOutput(ctx, runID, index)
 }
 
 // parallelCreativeBilling 保护并行结算更新的 fake 计数器。

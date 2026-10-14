@@ -5,6 +5,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,57 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBatchImageQueue_EnsureQueuedRepairsMissingMemberWithStaleInflight(t *testing.T) {
+	ctx := context.Background()
+	queue, _ := newBatchImageQueueTest(t)
+	const id = "imgbatch_recover_missing"
+	require.NoError(t, queue.rdb.Set(ctx, queue.inflightKey(id), id, time.Hour).Err())
+	// 多实例同时扫描同一持久任务只能补入一个队列成员。
+	var wg sync.WaitGroup
+	errs := make([]error, 10)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) { defer wg.Done(); errs[i] = queue.EnsureQueued(ctx, id) }(i)
+	}
+	wg.Wait()
+	applied := 0
+	for _, err := range errs {
+		if err == nil {
+			applied++
+		} else {
+			require.ErrorIs(t, err, service.ErrBatchImageAlreadyQueued)
+		}
+	}
+	require.Equal(t, 1, applied)
+	require.Equal(t, []string{id}, queue.rdb.LRange(ctx, queue.readyKey, 0, -1).Val())
+}
+
+func TestBatchImageQueue_EnsureQueuedPreservesActiveDelayedAndLease(t *testing.T) {
+	for _, state := range []string{"active", "delayed", "lease"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			queue, _ := newBatchImageQueueTest(t)
+			const id = "imgbatch_do_not_duplicate"
+			switch state {
+			case "active":
+				require.NoError(t, queue.rdb.ZAdd(ctx, queue.activeKey, redis.Z{Score: 123, Member: id}).Err())
+			case "delayed":
+				require.NoError(t, queue.rdb.ZAdd(ctx, queue.delayedKey, redis.Z{Score: 456, Member: id}).Err())
+			case "lease":
+				require.NoError(t, queue.rdb.Set(ctx, queue.lockKey(id), "live-worker", time.Minute).Err())
+			}
+			require.ErrorIs(t, queue.EnsureQueued(ctx, id), service.ErrBatchImageAlreadyQueued)
+			require.Zero(t, queue.rdb.LLen(ctx, queue.readyKey).Val())
+			if state == "active" {
+				require.Equal(t, float64(123), queue.rdb.ZScore(ctx, queue.activeKey, id).Val())
+			}
+			if state == "delayed" {
+				require.Equal(t, float64(456), queue.rdb.ZScore(ctx, queue.delayedKey, id).Val())
+			}
+		})
+	}
+}
 
 func TestBatchImageQueue_DuplicateEnqueueReturnsAlreadyQueued(t *testing.T) {
 	ctx := context.Background()

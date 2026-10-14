@@ -892,11 +892,10 @@ func (s *SubscriptionService) GetUsableSubscription(ctx context.Context, userID 
 			return nil, false, err
 		}
 	}
+	// 预检与锁内扣费共用重置优先级，不能仅按订阅有效期挑选套餐。
+	now := time.Now()
 	sort.SliceStable(subs, func(i, j int) bool {
-		if subs[i].ExpiresAt.Equal(subs[j].ExpiresAt) {
-			return subs[i].StartsAt.Before(subs[j].StartsAt)
-		}
-		return subs[i].ExpiresAt.Before(subs[j].ExpiresAt)
+		return SubscriptionBillingLess(&subs[i], &subs[j], now)
 	})
 	for i := range subs {
 		sub := &subs[i]

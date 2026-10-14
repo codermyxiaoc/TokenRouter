@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -190,6 +191,7 @@ func (r *usageBillingRepository) resolveUsableSubscriptionForGroup(ctx context.C
 	}
 	defer func() { _ = rows.Close() }()
 
+	subscriptions := make([]usageBillingSubscriptionRow, 0)
 	for rows.Next() {
 		var row usageBillingSubscriptionRow
 		if err := rows.Scan(
@@ -216,8 +218,14 @@ func (r *usageBillingRepository) resolveUsableSubscriptionForGroup(ctx context.C
 			return nil, err
 		}
 
-		// 订阅倍率解析必须与最终扣费使用相同的窗口状态，不能按数据库中的旧累计值提前过滤。
-		row = normalizeUsageBillingSubscriptionRow(row, now)
+		subscriptions = append(subscriptions, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 倍率预览与真实分配共用刷新顺序，不能直接返回按订阅到期排序的第一条。
+	normalizeAndSortUsageBillingSubscriptions(subscriptions, now)
+	for _, row := range subscriptions {
 		available := usageBillingSubscriptionAvailable(
 			1,
 			windowRemaining(row.DailyLimitUSD, row.DailyUsageUSD),
@@ -227,9 +235,6 @@ func (r *usageBillingRepository) resolveUsableSubscriptionForGroup(ctx context.C
 		if available > 0 {
 			return usageBillingSubscriptionRowToService(userID, row), nil
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	return nil, service.ErrSubscriptionNotFound
 }
@@ -1104,6 +1109,8 @@ func allocateUsageBillingSubscriptions(ctx context.Context, tx *sql.Tx, cmd *ser
 	}
 
 	now := time.Now()
+	// 数据库仍按固定顺序锁定候选；取得全部行锁后再按有效额度重置点分配。
+	normalizeAndSortUsageBillingSubscriptions(subscriptions, now)
 	remaining := amountUSD
 	subscriptionAmount := 0.0
 	allocations := make([]domain.BillingAllocation, 0, len(subscriptions))
@@ -1112,8 +1119,6 @@ func allocateUsageBillingSubscriptions(ctx context.Context, tx *sql.Tx, cmd *ser
 		if remaining <= 0 {
 			break
 		}
-
-		row = normalizeUsageBillingSubscriptionRow(row, now)
 
 		rateMultiplier := 1.0
 		if usageBillingUsesBaseAmount(cmd) {
@@ -1245,6 +1250,19 @@ func normalizeUsageBillingSubscriptionRow(row usageBillingSubscriptionRow, now t
 	row.WeeklyUsageUSD = counter.WeeklyUsageUSD
 	row.MonthlyUsageUSD = counter.MonthlyUsageUSD
 	return row
+}
+
+// normalizeAndSortUsageBillingSubscriptions 保持额度预检、倍率解析和事务扣费的候选顺序一致。
+// 快照只在当前请求内计算，未消费的订阅不会因排序产生额度或重置次数写入。
+func normalizeAndSortUsageBillingSubscriptions(rows []usageBillingSubscriptionRow, now time.Time) {
+	priorities := make(map[int64]*service.UserSubscription, len(rows))
+	for i := range rows {
+		rows[i] = normalizeUsageBillingSubscriptionRow(rows[i], now)
+		priorities[rows[i].ID] = usageBillingSubscriptionRowToService(0, rows[i])
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		return service.SubscriptionBillingLess(priorities[rows[i].ID], priorities[rows[j].ID], now)
+	})
 }
 
 func windowRemaining(limit sql.NullFloat64, used float64) *float64 {

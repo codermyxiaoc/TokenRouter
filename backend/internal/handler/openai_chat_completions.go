@@ -156,6 +156,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
+	slotRetry := &accountSlotReschedule{excluded: failedAccountIDs, switches: &switchCount, maximum: maxAccountSwitches}
 
 	for {
 		if failoverClientGone(c) {
@@ -178,6 +179,12 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("openai_chat_completions.account_select_aborted_client_disconnected", zap.Error(err))
+				return
+			}
+			if lastFailoverErr == nil && slotRetry.writeExhausted(func(status int, errType, code, message string) {
+				markOpsRoutingCapacityLimited(c)
+				h.handleStreamingAwareErrorWithCode(c, status, errType, code, message, streamStarted, false)
+			}) {
 				return
 			}
 			reqLog.Warn("openai_chat_completions.account_select_failed",
@@ -218,8 +225,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog, slotRetry)
 		if !acquired {
+			if slotRetry.retry {
+				continue
+			}
 			return
 		}
 

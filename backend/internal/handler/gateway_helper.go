@@ -430,6 +430,20 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 
 // AcquireAccountSlotWithWaitTimeout acquires an account slot with a custom timeout (keeps SSE ping).
 func (h *ConcurrencyHelper) AcquireAccountSlotWithWaitTimeout(c *gin.Context, accountID int64, maxConcurrency int, timeout time.Duration, isStream bool, streamStarted *bool) (func(), error) {
+	// 重调度共用的等待预算耗尽后，只检查一次空闲槽，不能带已过期的子上下文申请。
+	if timeout <= 0 {
+		if err := c.Request.Context().Err(); err != nil {
+			return nil, err
+		}
+		release, acquired, err := h.TryAcquireAccountSlot(c.Request.Context(), accountID, maxConcurrency)
+		if err != nil {
+			return nil, err
+		}
+		if acquired {
+			return release, nil
+		}
+		return nil, &ConcurrencyError{SlotType: "account", IsTimeout: true}
+	}
 	return h.waitForSlotWithPingTimeout(c, "account", accountID, maxConcurrency, timeout, isStream, streamStarted, true)
 }
 

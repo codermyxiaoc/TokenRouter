@@ -313,6 +313,13 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	if maxAccountSwitches <= 0 {
 		maxAccountSwitches = 3
 	}
+	// 方舟原生入口允许内部换号，但最终失败仍保留最后一个上游的状态与正文。
+	finishMediaFailover := func(failure *service.UpstreamFailoverError, started bool) {
+		if endpoint == service.SeedanceEndpointCreate && !started && h.gatewayService.CommitSeedanceFailoverResponse(c, failure) {
+			return
+		}
+		h.handleFailoverExhausted(c, failure, started)
+	}
 	routingStart := time.Now()
 	requiredCapability := grokMediaRequiredCapability(endpoint)
 	// 调度器可能已占用并发槽，所有后续拒绝、换号和取消路径都必须接管释放。
@@ -374,7 +381,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				return
 			}
 			if lastFailoverErr != nil {
-				h.handleFailoverExhausted(c, lastFailoverErr, false)
+				finishMediaFailover(lastFailoverErr, false)
 			} else {
 				h.errorResponse(c, http.StatusBadGateway, "api_error", "Upstream request failed")
 			}
@@ -510,15 +517,15 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 					h.gatewayService.ReportOpenAIAccountScheduleResult(account, grokMediaScheduleModel(account, routingModel, nil), false, nil)
 				}
 				if c.Writer.Size() != writerSizeBeforeForward {
-					h.handleFailoverExhausted(c, failoverErr, true)
+					finishMediaFailover(failoverErr, true)
 					return
 				}
 				if !failoverErr.ShouldRetryNextAccount() {
-					h.handleFailoverExhausted(c, failoverErr, false)
+					finishMediaFailover(failoverErr, false)
 					return
 				}
 				if endpoint.IsVideoLookupRequest() {
-					h.handleFailoverExhausted(c, failoverErr, false)
+					finishMediaFailover(failoverErr, false)
 					return
 				}
 				if failoverErr.RetryableOnSameAccount {
@@ -545,12 +552,12 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				failedAccountIDs[account.ID] = struct{}{}
 				lastFailoverErr = failoverErr
 				if switchCount >= maxAccountSwitches {
-					h.handleFailoverExhausted(c, failoverErr, false)
+					finishMediaFailover(failoverErr, false)
 					return
 				}
 				switchCount++
 				if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
-					h.handleFailoverExhausted(c, failoverErr, false)
+					finishMediaFailover(failoverErr, false)
 					return
 				}
 				reqLog.Warn("grok_media.upstream_failover_switching",

@@ -1017,7 +1017,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		}
 		msg400 := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		googleConfigError := resp.StatusCode == http.StatusBadRequest && isGoogleProjectConfigError(msg400)
-		defaultFailover := googleConfigError || s.shouldFailoverGeminiUpstreamError(resp.StatusCode)
+		defaultFailover := googleConfigError || isUpstreamModelNotFoundError(resp.StatusCode, respBody) || s.shouldFailoverGeminiUpstreamError(resp.StatusCode)
 		if decision.ShouldFailover(account, resp.StatusCode, defaultFailover) {
 			upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 			upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
@@ -1038,6 +1038,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				Kind:               "failover",
 				Message:            upstreamMsg,
 				Detail:             upstreamDetail,
+				Reason:             upstreamModelNotFoundEventReason(resp.StatusCode, respBody),
 			})
 			if googleConfigError {
 				log.Printf("[Gemini] status=400 google_config_error failover=true upstream_message=%q account=%d", upstreamMsg, account.ID)
@@ -1059,6 +1060,9 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		c.Header("x-request-id", requestID)
 	}
 
+	if err := s.prepareGeminiResponseFailover(ctx, c, account, resp, mappedModel, requestID, useUpstreamStream, geminiReq); err != nil {
+		return nil, err
+	}
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 	if req.Stream {
@@ -1482,7 +1486,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		}
 		msg400 := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		googleConfigError := resp.StatusCode == http.StatusBadRequest && isGoogleProjectConfigError(msg400)
-		defaultFailover := googleConfigError || s.shouldFailoverGeminiUpstreamError(resp.StatusCode)
+		defaultFailover := googleConfigError || isUpstreamModelNotFoundError(resp.StatusCode, respBody) || s.shouldFailoverGeminiUpstreamError(resp.StatusCode)
 		if decision.ShouldFailover(account, resp.StatusCode, defaultFailover) {
 			evBody := unwrapIfNeeded(isOAuth, respBody)
 			upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(evBody))
@@ -1504,6 +1508,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				Kind:               "failover",
 				Message:            upstreamMsg,
 				Detail:             upstreamDetail,
+				Reason:             upstreamModelNotFoundEventReason(resp.StatusCode, respBody),
 			})
 			if googleConfigError {
 				log.Printf("[Gemini] status=400 google_config_error failover=true upstream_message=%q account=%d", upstreamMsg, account.ID)
@@ -1518,6 +1523,11 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		return nil, s.writeGeminiNativeUpstreamError(c, account, resp, respBody, requestID, isOAuth)
 	}
 
+	if action != "countTokens" {
+		if err := s.prepareGeminiResponseFailover(ctx, c, account, resp, mappedModel, requestID, useUpstreamStream, body); err != nil {
+			return nil, err
+		}
+	}
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 
@@ -1598,6 +1608,9 @@ func (s *GeminiMessagesCompatService) checkErrorPolicyInLoop(
 		Header:     resp.Header.Clone(),
 		Body:       io.NopCloser(bytes.NewReader(body)),
 	}
+	if isGeminiClientInvalidRequestError(resp.StatusCode, body) {
+		return false, rebuilt
+	}
 	policy := s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, body, mappedModel)
 	if policy == ErrorPolicyTempUnscheduled {
 		// CheckErrorPolicy 已写入临时不可调度状态，给最终错误处理留下内部标记，
@@ -1661,7 +1674,8 @@ func (s *GeminiMessagesCompatService) shouldFailoverGeminiUpstreamError(statusCo
 // skippedErrorPolicyFailoverError 处理 ErrorPolicySkipped：跳过账号状态写入不等于跳过换号。
 // 可切换的状态码返回 UpstreamFailoverError；池模式仅对配置的状态允许同账号重试。
 func (s *GeminiMessagesCompatService) skippedErrorPolicyFailoverError(c *gin.Context, account *Account, statusCode int, respBody []byte, upstreamRequestID string) *UpstreamFailoverError {
-	if !s.shouldFailoverGeminiUpstreamError(statusCode) {
+	modelMissing := isUpstreamModelNotFoundError(statusCode, respBody)
+	if !modelMissing && !s.shouldFailoverGeminiUpstreamError(statusCode) {
 		return nil
 	}
 	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
@@ -1673,12 +1687,13 @@ func (s *GeminiMessagesCompatService) skippedErrorPolicyFailoverError(c *gin.Con
 		UpstreamRequestID:  upstreamRequestID,
 		Kind:               "failover",
 		Message:            upstreamMsg,
+		Reason:             upstreamModelNotFoundEventReason(statusCode, respBody),
 		Detail:             s.upstreamErrorDetail(respBody),
 	})
 	return &UpstreamFailoverError{
 		StatusCode:             statusCode,
 		ResponseBody:           respBody,
-		RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode),
+		RetryableOnSameAccount: !modelMissing && account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode),
 	}
 }
 
@@ -1720,6 +1735,9 @@ func (s *GeminiMessagesCompatService) writeGeminiCustomCodeSkippedError(c *gin.C
 
 // writeGeminiNativeUpstreamError 按原始状态码和响应体透传不可切换的 Gemini 错误。
 func (s *GeminiMessagesCompatService) writeGeminiNativeUpstreamError(c *gin.Context, account *Account, resp *http.Response, respBody []byte, requestID string, isOAuth bool) error {
+	if isGeminiClientInvalidRequestError(resp.StatusCode, respBody) {
+		MarkOpsRequestScopedError(c, "invalid_request_error")
+	}
 	respBody = unwrapIfNeeded(isOAuth, respBody)
 	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 	upstreamDetail := s.upstreamErrorDetail(respBody)
@@ -1816,6 +1834,9 @@ func sanitizeUpstreamErrorMessage(msg string) string {
 }
 
 func (s *GeminiMessagesCompatService) writeGeminiMappedError(c *gin.Context, account *Account, upstreamStatus int, upstreamRequestID string, body []byte) error {
+	if isGeminiClientInvalidRequestError(upstreamStatus, body) {
+		MarkOpsRequestScopedError(c, "invalid_request_error")
+	}
 	MarkResponseCommitted(c)
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(body))
 	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
@@ -3109,13 +3130,43 @@ func (s *GeminiMessagesCompatService) applyGeminiUpstreamErrorPolicy(
 	if s == nil || account == nil {
 		return decision
 	}
+	if isGeminiClientInvalidRequestError(statusCode, body) {
+		return UpstreamErrorDecision{}
+	}
 	if headers != nil && headers.Get(geminiAppliedTempPolicyHeader) == "1" {
 		headers.Del(geminiAppliedTempPolicyHeader)
 		decision.Policy = ErrorPolicyTempUnscheduled
 		decision.StopScheduling = true
 		return decision
 	}
-	if s.rateLimitService != nil {
+	// 池模式显式规则和自定义错误码先执行，保留管理员配置的冷却时长及范围。
+	explicitPolicyChecked := account.IsPoolMode() || account.IsCustomErrorCodesEnabled()
+	if s.rateLimitService != nil && explicitPolicyChecked {
+		decision.Policy = s.rateLimitService.ApplyExplicitErrorPolicy(ctx, account, statusCode, body, mappedModel)
+		decision.StopScheduling = decision.Policy == ErrorPolicyCustomMatched || decision.Policy == ErrorPolicyTempUnscheduled
+	}
+	switch decision.Policy {
+	case ErrorPolicyCustomMatched, ErrorPolicyTempUnscheduled:
+		decision.StopScheduling = true
+		return decision
+	case ErrorPolicyCustomSkipped:
+		return decision
+	}
+	// Gemini 与 OpenAI 使用相同的模型级故障边界；池模式未命中显式规则仍立即换号。
+	if !account.IsCustomErrorCodesEnabled() {
+		modelMissing := isUpstreamModelNotFoundError(statusCode, body)
+		if s.rateLimitService != nil {
+			modelMissing = s.rateLimitService.HandleUpstreamModelNotFound(ctx, account, mappedModel, statusCode, body) || modelMissing
+		}
+		if modelMissing {
+			return UpstreamErrorDecision{StopScheduling: true, ModelUnavailable: true}
+		}
+	}
+	if decision.Policy == ErrorPolicyPoolBypassed {
+		return decision
+	}
+	// 普通账号的宽泛临时规则继续排在精确模型隔离之后。
+	if s.rateLimitService != nil && !explicitPolicyChecked {
 		decision.Policy = s.rateLimitService.ApplyExplicitErrorPolicy(ctx, account, statusCode, body, mappedModel)
 		decision.StopScheduling = decision.Policy == ErrorPolicyCustomMatched || decision.Policy == ErrorPolicyTempUnscheduled
 	}

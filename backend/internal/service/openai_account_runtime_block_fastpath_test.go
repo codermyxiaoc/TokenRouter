@@ -457,6 +457,25 @@ func TestOpenAIModelNotFound_DoesNotRuntimeBlockWholeAccount(t *testing.T) {
 	require.Len(t, repo.modelRateLimitCalls, 1)
 }
 
+// 即使池模式配置了 404 原账号重试，也应直接换到备选账号；持久层缺失不阻止本次恢复。
+func TestOpenAIModelNotFoundPoolImmediatelySwitches(t *testing.T) {
+	for _, persistence := range []bool{false, true} {
+		repo := &modelNotFoundAccountRepoStub{}
+		svc := &OpenAIGatewayService{}
+		if persistence {
+			svc.rateLimitService = &RateLimitService{accountRepo: repo}
+		}
+		account := openAIModelNotFoundTempAccount()
+		account.Credentials["pool_mode"] = true
+		account.Credentials["pool_mode_retry_status_codes"] = []any{float64(404)}
+		decision := svc.applyOpenAIAccountUpstreamError(context.Background(), account, 404, nil, []byte(`{"error":{"code":"model_not_found"}}`), "gpt-5.4")
+		require.True(t, decision.ShouldFailoverWithDefaults(account, 404, false, false))
+		require.False(t, decision.RetryableOnSameAccount(account, 404))
+		require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+		require.Zero(t, repo.tempCalls)
+	}
+}
+
 func TestOpenAIModelTempUnschedulable_DoesNotRuntimeBlockWholeAccount(t *testing.T) {
 	repo := &modelNotFoundAccountRepoStub{}
 	svc := &OpenAIGatewayService{

@@ -152,11 +152,12 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 				UpstreamStatusCode: resp.StatusCode,
 				UpstreamRequestID:  resp.Header.Get("x-request-id"),
 				Kind:               "failover",
+				Reason:             upstreamModelNotFoundEventReason(resp.StatusCode, respBody),
 				Message:            upstreamMsg,
 				Detail:             upstreamDetail,
 			})
 			shouldDisable := s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
-			retryableOnSameAccount := !shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode)
+			retryableOnSameAccount := !shouldDisable && decision.RetryableOnSameAccount(account, resp.StatusCode)
 			if account.IsOpenAIOAuth() && resp.StatusCode == http.StatusTooManyRequests {
 				return nil, s.newOpenAIAccountFailoverError(account, resp.StatusCode, resp.Header, respBody, upstreamMsg, shouldDisable, retryableOnSameAccount)
 			}

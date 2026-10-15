@@ -283,7 +283,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 
 		msg400 := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		googleConfigError := resp.StatusCode == http.StatusBadRequest && isGoogleProjectConfigError(msg400)
-		if decision.ShouldFailover(account, resp.StatusCode, googleConfigError || s.shouldFailoverGeminiUpstreamError(resp.StatusCode)) {
+		if decision.ShouldFailover(account, resp.StatusCode, googleConfigError || isUpstreamModelNotFoundError(resp.StatusCode, respBody) || s.shouldFailoverGeminiUpstreamError(resp.StatusCode)) {
 			upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(evBody)))
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
@@ -293,6 +293,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 				UpstreamRequestID:  requestID,
 				Kind:               "failover",
 				Message:            upstreamMsg,
+				Reason:             upstreamModelNotFoundEventReason(resp.StatusCode, respBody),
 			})
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
@@ -304,6 +305,9 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 		return nil, s.writeGeminiOpenAICompatMappedError(c, account, resp.StatusCode, requestID, evBody, protocol)
 	}
 
+	if err := s.prepareGeminiResponseFailover(ctx, c, account, resp, mappedModel, requestID, useUpstreamStream, geminiReq); err != nil {
+		return nil, err
+	}
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 	if clientStream {
@@ -1015,6 +1019,9 @@ func (s *GeminiMessagesCompatService) writeGeminiOpenAICompatMappedError(
 	body []byte,
 	protocol geminiOpenAICompatProtocol,
 ) error {
+	if isGeminiClientInvalidRequestError(upstreamStatus, body) {
+		MarkOpsRequestScopedError(c, "invalid_request_error")
+	}
 	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))
 	setOpsUpstreamError(c, upstreamStatus, upstreamMsg, "")
 	if account != nil {

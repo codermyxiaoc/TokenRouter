@@ -65,6 +65,25 @@ func TestAntigravityModelNotFoundKeepsBare404Fallback(t *testing.T) {
 	}
 }
 
+// 只接受权威错误字段；生产 Google 文案与 OpenAI 文案都应命中，用户回显和参数错误不能冷却账号。
+func TestUpstreamModelNotFoundAuthoritativeEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{`{"error":{"code":404,"message":"The requested model or endpoint is unavailable.","status":"NOT_FOUND"}}`, true},
+		{`{"error":{"message":"Model \"gpt-5.6-terra\" is not supported by any configured account in this group"}}`, true},
+		{`{"error":{"code":"invalid_request_error","message":"model not found"}}`, false},
+		{`{"request":{"prompt":"model not found"},"error":{"message":"endpoint not found"}}`, false},
+		{`{"error":{"code":"model_not_found","message":"missing"}}`, true},
+		{`{"error":{"message":"temporary unavailable"}}`, false},
+	} {
+		if got := IsUpstreamModelNotFoundError(http.StatusNotFound, []byte(tc.body)); got != tc.want {
+			t.Errorf("body=%s got=%v want=%v", tc.body, got, tc.want)
+		}
+	}
+}
+
 func TestIsOpenAICodexPlanGatedModelError(t *testing.T) {
 	tests := []struct {
 		name       string

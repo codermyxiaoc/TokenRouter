@@ -15,6 +15,9 @@ import (
 type SmartRoutingGroupAvailability struct {
 	HasModel    bool
 	Schedulable bool
+	// Cooling 只在匹配模型、入口及续接归属的账号全部冷却时成立。
+	Cooling    bool
+	RetryAfter time.Duration
 }
 
 // SmartRoutingGroupResolver 只判断一个分组；密钥权限、候选顺序和选定后的计费由鉴权层负责。
@@ -103,6 +106,13 @@ func (s *SmartRoutingService) EvaluateSmartRoutingGroup(ctx context.Context, gro
 		thresholds = s.gateway.settingService.GetAccountSchedulingThresholds(ctx)
 	}
 	now := time.Now()
+	accountIDs := make([]int64, 0, len(accounts))
+	for i := range accounts {
+		accountIDs = append(accountIDs, accounts[i].ID)
+	}
+	cooling := s.loadSmartRoutingAccountCooldowns(ctx, accountIDs)
+	matchingAccounts, coolingAccounts := 0, 0
+	requiredAccountID := SmartRoutingRequiredAccountID(ctx)
 	eligible := make([]*Account, 0, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
@@ -115,6 +125,25 @@ func (s *SmartRoutingService) EvaluateSmartRoutingGroup(ctx context.Context, gro
 			continue
 		}
 		result.HasModel = true
+		if requiredAccountID > 0 && requiredAccountID != account.ID {
+			continue
+		}
+		if ttl := cooling[account.ID]; ttl > 0 {
+			// 冷却本身已有同模型/入口的失败证据，不能被调度硬过滤隐藏成无目录。
+			matchingAccounts++
+			coolingAccounts++
+			if result.RetryAfter == 0 || ttl < result.RetryAfter {
+				result.RetryAfter = ttl
+			}
+			continue
+		}
+		if !smartRoutingAccountEndpointEligible(ctx, account, routingModel, endpoint) {
+			continue
+		}
+		matchingAccounts++
+		if IsSmartRoutingAccountExcluded(ctx, account.ID) {
+			continue
+		}
 		// 错误策略可能把账号持久暂停，但其配置目录仍然存在；停调只影响可调度性。
 		if !account.IsActive() || !account.Schedulable {
 			continue
@@ -127,9 +156,6 @@ func (s *SmartRoutingService) EvaluateSmartRoutingGroup(ctx context.Context, gro
 		}
 		if account.Platform == PlatformAnthropic && isAnthropicFableModel(resolveAccountUpstreamModel(ctx, account, routingModel)) &&
 			evaluateAnthropicFableSchedulingThreshold(account, thresholds, now).ShouldPause {
-			continue
-		}
-		if !smartRoutingAccountEndpointEligible(ctx, account, routingModel, endpoint) {
 			continue
 		}
 		if account.IsOpenAICompatible() {
@@ -153,6 +179,7 @@ func (s *SmartRoutingService) EvaluateSmartRoutingGroup(ctx context.Context, gro
 		eligible = append(eligible, account)
 	}
 	if len(eligible) == 0 {
+		result.Cooling = matchingAccounts > 0 && matchingAccounts == coolingAccounts
 		return result, nil
 	}
 	concurrency := s.gateway.concurrencyService

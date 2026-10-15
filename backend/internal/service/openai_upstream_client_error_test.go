@@ -75,6 +75,7 @@ func TestHandleErrorResponse_Deterministic400IsNotRewrappedAs502(t *testing.T) {
 
 	var failoverErr *UpstreamFailoverError
 	require.False(t, errors.As(err, &failoverErr))
+	require.True(t, IsOpsRequestScopedError(c))
 }
 
 func TestHandleErrorResponse_Deterministic400MatchesCompatSibling(t *testing.T) {
@@ -87,20 +88,15 @@ func TestHandleErrorResponse_Deterministic400MatchesCompatSibling(t *testing.T) 
 	)
 	require.Error(t, nativeErr)
 
-	compatCtx, _ := newOpenAIUpstreamClientErrorTestContext()
-	var compatStatus int
-	var compatType, compatMessage string
-	writeError := func(_ *gin.Context, statusCode int, errType, message string) {
-		compatStatus, compatType, compatMessage = statusCode, errType, message
-	}
+	compatCtx, compatRecorder := newOpenAIUpstreamClientErrorTestContext()
 	_, compatErr := svc.handleCompatErrorResponse(
 		newOpenAIUpstreamClientErrorResponse(http.StatusBadRequest, openAIInvalidFunctionParametersBody),
-		compatCtx, newOpenAIUpstreamClientErrorTestAccount(), writeError, writeChatCompletionsErrorBody,
+		compatCtx, newOpenAIUpstreamClientErrorTestAccount(), writeChatCompletionsError, writeChatCompletionsErrorBody,
 	)
 	require.Error(t, compatErr)
-	require.Equal(t, compatStatus, nativeRecorder.Code)
-	require.Equal(t, compatType, gjson.Get(nativeRecorder.Body.String(), "error.type").String())
-	require.Equal(t, compatMessage, gjson.Get(nativeRecorder.Body.String(), "error.message").String())
+	require.Equal(t, compatRecorder.Code, nativeRecorder.Code)
+	require.JSONEq(t, compatRecorder.Body.String(), nativeRecorder.Body.String())
+	require.True(t, IsOpsRequestScopedError(compatCtx))
 }
 
 func TestHandleErrorResponse_Transient400KeepsGenericGatewayError(t *testing.T) {
@@ -119,7 +115,7 @@ func TestHandleErrorResponse_Transient400KeepsGenericGatewayError(t *testing.T) 
 	require.Equal(t, "upstream_error", gjson.Get(recorder.Body.String(), "error.type").String())
 }
 
-func TestHandleErrorResponse_PoolRetryable400StillFailsOver(t *testing.T) {
+func TestHandleErrorResponse_PoolCannotReplayClientSchema400(t *testing.T) {
 	c, recorder := newOpenAIUpstreamClientErrorTestContext()
 	svc := &OpenAIGatewayService{}
 	account := newOpenAIUpstreamClientErrorTestAccount()
@@ -136,11 +132,11 @@ func TestHandleErrorResponse_PoolRetryable400StillFailsOver(t *testing.T) {
 	)
 
 	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
-	require.True(t, failoverErr.RetryableOnSameAccount)
-	require.False(t, c.Writer.Written())
-	require.Empty(t, recorder.Body.String())
+	require.Error(t, err)
+	require.False(t, errors.As(err, &failoverErr))
+	require.True(t, IsOpsRequestScopedError(c))
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.JSONEq(t, openAIInvalidFunctionParametersBody, recorder.Body.String())
 }
 
 // 作用域守卫：本次只放行 400。其余落到 default 的状态码必须维持原样，
@@ -194,23 +190,32 @@ func TestHandleErrorResponse_NonDeterministicStatusesKeepGeneric502(t *testing.T
 
 // 顺序守卫：管理员配置的错误透传规则在更上游命中，新分支不得抢在它前面。
 func TestHandleErrorResponse_PassthroughRuleStillWinsOver400Branch(t *testing.T) {
-	c, rec := newOpenAIUpstreamErrorTestContext(t)
-	ruleSvc := &ErrorPassthroughService{}
-	ruleSvc.setLocalCache([]*model.ErrorPassthroughRule{
-		newNonFailoverPassthroughRule(http.StatusBadRequest, "automation_update", http.StatusTeapot, "自定义文案"),
-	})
-	BindErrorPassthroughService(c, ruleSvc)
-	svc := &OpenAIGatewayService{}
-
-	_, err := svc.handleErrorResponse(
-		context.Background(),
-		newOpenAIUpstreamClientErrorResponse(http.StatusBadRequest, openAIInvalidFunctionParametersBody),
-		c, newOpenAIUpstreamClientErrorTestAccount(), nil,
-	)
-
-	require.Error(t, err)
-	require.Equal(t, http.StatusTeapot, rec.Code)
-	require.Equal(t, "自定义文案", gjson.Get(rec.Body.String(), "error.message").String())
+	for _, protocol := range []string{"responses", "chat", "messages"} {
+		t.Run(protocol, func(t *testing.T) {
+			c, rec := newOpenAIUpstreamErrorTestContext(t)
+			ruleSvc := &ErrorPassthroughService{}
+			ruleSvc.setLocalCache([]*model.ErrorPassthroughRule{
+				newNonFailoverPassthroughRule(http.StatusBadRequest, "automation_update", http.StatusTeapot, "自定义文案"),
+			})
+			BindErrorPassthroughService(c, ruleSvc)
+			svc := &OpenAIGatewayService{}
+			resp := newOpenAIUpstreamClientErrorResponse(http.StatusBadRequest, openAIInvalidFunctionParametersBody)
+			account := newOpenAIUpstreamClientErrorTestAccount()
+			var err error
+			switch protocol {
+			case "responses":
+				_, err = svc.handleErrorResponse(context.Background(), resp, c, account, nil)
+			case "chat":
+				_, err = svc.handleCompatErrorResponse(resp, c, account, writeChatCompletionsError, writeChatCompletionsErrorBody)
+			case "messages":
+				_, err = svc.handleCompatErrorResponse(resp, c, account, writeAnthropicError, writeAnthropicErrorBody)
+			}
+			require.Error(t, err)
+			require.Equal(t, http.StatusTeapot, rec.Code)
+			require.Equal(t, "自定义文案", gjson.Get(rec.Body.String(), "error.message").String())
+			require.True(t, IsOpsRequestScopedError(c), "改写客户端响应不能重新允许参数错误换组")
+		})
+	}
 }
 
 func TestWriteOpenAIUpstreamClientError_UsesSafeFallbacks(t *testing.T) {

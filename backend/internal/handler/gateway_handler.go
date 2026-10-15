@@ -40,23 +40,23 @@ var gatewayCompatibilityMetricsLogCounter atomic.Uint64
 // GatewayHandler handles API gateway requests
 type GatewayHandler struct {
 	geminiCachedContentService *service.GeminiCachedContentService
-	gatewayService            *service.GatewayService
-	openAIGatewayService      *service.OpenAIGatewayService
-	geminiCompatService       *service.GeminiMessagesCompatService
-	antigravityGatewayService *service.AntigravityGatewayService
-	userService               *service.UserService
-	billingCacheService       *service.BillingCacheService
-	usageService              *service.UsageService
-	apiKeyService             *service.APIKeyService
-	usageRecordWorkerPool     *service.UsageRecordWorkerPool
-	errorPassthroughService   *service.ErrorPassthroughService
-	contentModerationService  *service.ContentModerationService
-	concurrencyHelper         *ConcurrencyHelper
-	userMsgQueueHelper        *UserMsgQueueHelper
-	maxAccountSwitches        int
-	maxAccountSwitchesGemini  int
-	cfg                       *config.Config
-	settingService            *service.SettingService
+	gatewayService             *service.GatewayService
+	openAIGatewayService       *service.OpenAIGatewayService
+	geminiCompatService        *service.GeminiMessagesCompatService
+	antigravityGatewayService  *service.AntigravityGatewayService
+	userService                *service.UserService
+	billingCacheService        *service.BillingCacheService
+	usageService               *service.UsageService
+	apiKeyService              *service.APIKeyService
+	usageRecordWorkerPool      *service.UsageRecordWorkerPool
+	errorPassthroughService    *service.ErrorPassthroughService
+	contentModerationService   *service.ContentModerationService
+	concurrencyHelper          *ConcurrencyHelper
+	userMsgQueueHelper         *UserMsgQueueHelper
+	maxAccountSwitches         int
+	maxAccountSwitchesGemini   int
+	cfg                        *config.Config
+	settingService             *service.SettingService
 }
 
 // NewGatewayHandler creates a new GatewayHandler
@@ -328,6 +328,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		geminiForwardBody := geminiAttempt.Body.Bytes()
 
 		fs := NewFailoverState(h.maxAccountSwitchesGemini, hasBoundSession)
+		slotRetry := &accountSlotReschedule{excluded: fs.FailedAccountIDs, switches: &fs.SwitchCount, maximum: fs.MaxSwitches}
 
 		// 单账号分组提前设置 SingleAccountRetry 标记，让 Service 层首次 503 就不设模型限流标记。
 		// 避免单账号分组收到 503 (MODEL_CAPACITY_EXHAUSTED) 时设 29s 限流，导致后续请求连续快速失败。
@@ -339,6 +340,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		for {
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), apiKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, "", int64(0)) // Gemini 不使用会话限制
 			if err != nil {
+				// 重选期间取消的请求必须静默结束，不能用上一次满槽记录覆盖成429。
+				if failoverClientGone(c) {
+					return
+				}
 				if len(fs.FailedAccountIDs) == 0 {
 					if handleGroupSelectionBusinessError(c, err, streamStarted, func(status int, errType string, message string, streamStarted bool) {
 						h.handleStreamingAwareError(c, status, errType, message, streamStarted)
@@ -361,6 +366,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						message = "No available accounts: " + err.Error()
 					}
 					h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
+					return
+				}
+				if fs.LastFailoverErr == nil && slotRetry.writeExhausted(func(status int, errType, code, message string) {
+					markOpsRoutingCapacityLimited(c)
+					h.handleStreamingAwareErrorWithCode(c, status, errType, code, message, streamStarted)
+				}) {
 					return
 				}
 				action := fs.HandleSelectionExhausted(c.Request.Context())
@@ -422,6 +433,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.Int64("account_id", account.ID),
 						zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 					)
+					slotRetry.excluded = fs.FailedAccountIDs
+					if slotRetry.handleCapacity(c, account.ID, http.StatusTooManyRequests, gatewayQueueFullCode, "Too many pending requests, please retry later") {
+						continue
+					}
 					h.handleStreamingAwareErrorWithCode(c, http.StatusTooManyRequests, "rate_limit_error", gatewayQueueFullCode, "Too many pending requests, please retry later", streamStarted)
 					return
 				}
@@ -439,13 +454,18 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					c,
 					account.ID,
 					selection.WaitPlan.MaxConcurrency,
-					selection.WaitPlan.Timeout,
+					slotRetry.waitTimeout(selection.WaitPlan.Timeout),
 					reqStream,
 					&streamStarted,
 				)
 				if err != nil {
 					reqLog.Warn("gateway.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 					releaseWait()
+					status, _, code, message := concurrencyErrorResponse(err, "account")
+					slotRetry.excluded = fs.FailedAccountIDs
+					if slotRetry.handleCapacity(c, account.ID, status, code, message) {
+						continue
+					}
 					h.handleConcurrencyError(c, err, "account", streamStarted)
 					return
 				}
@@ -629,6 +649,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	for {
 		fs := NewFailoverState(h.maxAccountSwitches, hasBoundSession)
+		slotRetry := &accountSlotReschedule{excluded: fs.FailedAccountIDs, switches: &fs.SwitchCount, maximum: fs.MaxSwitches}
 		retryWithFallback := false
 
 		for {
@@ -649,6 +670,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			)
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), currentAPIKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, parsedReq.MetadataUserID, subject.UserID)
 			if err != nil {
+				if failoverClientGone(c) {
+					return
+				}
 				if len(fs.FailedAccountIDs) == 0 {
 					if handleGroupSelectionBusinessError(c, err, streamStarted, func(status int, errType string, message string, streamStarted bool) {
 						h.handleStreamingAwareError(c, status, errType, message, streamStarted)
@@ -672,6 +696,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						message = "No available accounts: " + err.Error()
 					}
 					h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
+					return
+				}
+				if fs.LastFailoverErr == nil && slotRetry.writeExhausted(func(status int, errType, code, message string) {
+					markOpsRoutingCapacityLimited(c)
+					h.handleStreamingAwareErrorWithCode(c, status, errType, code, message, streamStarted)
+				}) {
 					return
 				}
 				action := fs.HandleSelectionExhausted(c.Request.Context())
@@ -746,6 +776,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.Int64("account_id", account.ID),
 						zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 					)
+					slotRetry.excluded = fs.FailedAccountIDs
+					if slotRetry.handleCapacity(c, account.ID, http.StatusTooManyRequests, gatewayQueueFullCode, "Too many pending requests, please retry later") {
+						continue
+					}
 					h.handleStreamingAwareErrorWithCode(c, http.StatusTooManyRequests, "rate_limit_error", gatewayQueueFullCode, "Too many pending requests, please retry later", streamStarted)
 					return
 				}
@@ -763,13 +797,18 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					c,
 					account.ID,
 					selection.WaitPlan.MaxConcurrency,
-					selection.WaitPlan.Timeout,
+					slotRetry.waitTimeout(selection.WaitPlan.Timeout),
 					reqStream,
 					&streamStarted,
 				)
 				if err != nil {
 					reqLog.Warn("gateway.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 					releaseWait()
+					status, _, code, message := concurrencyErrorResponse(err, "account")
+					slotRetry.excluded = fs.FailedAccountIDs
+					if slotRetry.handleCapacity(c, account.ID, status, code, message) {
+						continue
+					}
 					h.handleConcurrencyError(c, err, "account", streamStarted)
 					return
 				}

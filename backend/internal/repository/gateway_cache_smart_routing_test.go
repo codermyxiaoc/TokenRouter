@@ -2,13 +2,77 @@ package repository
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
+
+// 假 Redis 接受 TCP 后不回应，覆盖连接正常但 socket 读取悬挂，不能只依赖立即断连。
+func TestSmartRoutingRedisBudgetBoundsUnresponsiveSocket(t *testing.T) {
+	operations := map[string]func(context.Context, *gatewayCache) error{
+		"cooldown_read": func(ctx context.Context, c *gatewayCache) error {
+			_, err := c.GetSmartRoutingAccountCooldowns(ctx, 1, []int64{2}, "model", "/v1/responses")
+			return err
+		},
+		"cooldown_write": func(ctx context.Context, c *gatewayCache) error {
+			return c.CooldownSmartRoutingAccounts(ctx, 1, []int64{2}, "model", "/v1/responses", time.Minute)
+		},
+		"continuation_owner": func(ctx context.Context, c *gatewayCache) error {
+			_, err := c.GetSessionAccountID(ctx, 1, "response-owner")
+			return err
+		},
+		"session_claim": func(ctx context.Context, c *gatewayCache) error {
+			_, err := c.ClaimSmartRoutingSessionOwner(ctx, 1, "openai", "session", 2, "token", time.Minute)
+			return err
+		},
+		"session_finish": func(ctx context.Context, c *gatewayCache) error {
+			return c.FinishSmartRoutingSessionOwner(ctx, 1, "openai", "session", 2, "token", true)
+		},
+	}
+	for name, operation := range operations {
+		t.Run(name, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			stop, finished, accepted := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			go func() {
+				defer close(finished)
+				connection, acceptErr := listener.Accept()
+				if acceptErr != nil {
+					return
+				}
+				defer connection.Close()
+				close(accepted)
+				<-stop
+			}()
+			t.Cleanup(func() {
+				close(stop)
+				_ = listener.Close()
+				<-finished
+			})
+			client := redis.NewClient(&redis.Options{Addr: listener.Addr().String(), ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second})
+			t.Cleanup(func() { _ = client.Close() })
+			cache := NewGatewayCache(client).(*gatewayCache)
+			require.Same(t, client, cache.smartRoutingContextRedisClient(context.Background()), "普通会话保留原客户端")
+			ctx, cancel := context.WithTimeout(service.WithSmartRoutingScope(context.Background()), 100*time.Millisecond)
+			defer cancel()
+			start := time.Now()
+			require.Error(t, operation(ctx, cache))
+			require.Less(t, time.Since(start), 800*time.Millisecond, "必须由请求预算终止读取，不能等待原客户端 5 秒超时")
+			select {
+			case <-accepted:
+			default:
+				t.Fatal("用例必须实际建立 TCP 连接并等待无响应上游")
+			}
+			require.False(t, client.Options().ContextTimeoutEnabled, "局部视图不得修改共享客户端")
+			require.Equal(t, 5*time.Second, client.Options().ReadTimeout)
+		})
+	}
+}
 
 func TestSmartRoutingCooldownSharedTTLAndScope(t *testing.T) {
 	server := miniredis.RunT(t)
@@ -52,6 +116,54 @@ func TestSmartRoutingCooldownBoundedLocalFallback(t *testing.T) {
 	}
 	require.LessOrEqual(t, len(cache.smartRoutingCooldowns.entries), smartRoutingLocalCooldownLimit)
 	require.Zero(t, cache.smartRoutingCooldowns.get([2]int64{10, 2}, now.Add(2*time.Minute)))
+}
+
+func TestSmartRoutingAccountCooldownScopeAndBoundedRecovery(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	first := NewGatewayCache(client).(*gatewayCache)
+	second := NewGatewayCache(client).(*gatewayCache)
+	ctx := context.Background()
+	require.NoError(t, first.CooldownSmartRoutingAccounts(ctx, 11, []int64{21}, "model-a", "/v1/responses", time.Minute))
+	remaining, err := second.GetSmartRoutingAccountCooldowns(ctx, 11, []int64{21, 22}, "model-a", "/v1/responses")
+	require.NoError(t, err)
+	require.Equal(t, time.Minute, remaining[21])
+	require.Zero(t, remaining[22])
+	for _, test := range []struct {
+		key             int64
+		model, endpoint string
+	}{{12, "model-a", "/v1/responses"}, {11, "model-b", "/v1/responses"}, {11, "model-a", "/v1/chat/completions"}} {
+		remaining, err = second.GetSmartRoutingAccountCooldowns(ctx, test.key, []int64{21}, test.model, test.endpoint)
+		require.NoError(t, err)
+		require.Zero(t, remaining[21])
+	}
+	server.FastForward(20 * time.Second)
+	require.NoError(t, second.CooldownSmartRoutingAccounts(ctx, 11, []int64{21}, "model-a", "/v1/responses", time.Minute))
+	remaining, err = first.GetSmartRoutingAccountCooldowns(ctx, 11, []int64{21}, "model-a", "/v1/responses")
+	require.NoError(t, err)
+	require.Equal(t, 40*time.Second, remaining[21], "同批在途失败不延长已经开始的冷却")
+	server.FastForward(40 * time.Second)
+	remaining, err = second.GetSmartRoutingAccountCooldowns(ctx, 11, []int64{21}, "model-a", "/v1/responses")
+	require.NoError(t, err)
+	require.Zero(t, remaining[21])
+	require.Zero(t, second.smartRoutingAccountCooldowns.get(smartRoutingAccountCooldownKey(11, 21, "model-a", "/v1/responses"), time.Now()), "共享状态到期同步清理本地降级数据")
+}
+
+func TestSmartRoutingAccountCooldownLocalFallbackBoundedAndUnknownOpen(t *testing.T) {
+	cache := &gatewayCache{}
+	ctx := context.Background()
+	require.Error(t, cache.CooldownSmartRoutingAccounts(ctx, 1, []int64{2}, "model", "/v1/responses", time.Minute))
+	remaining, err := cache.GetSmartRoutingAccountCooldowns(ctx, 1, []int64{2, 3}, "model", "/v1/responses")
+	require.Error(t, err)
+	require.Positive(t, remaining[2])
+	require.Zero(t, remaining[3])
+	now := time.Now()
+	for id := int64(10); id < smartRoutingLocalCooldownLimit+30; id++ {
+		cache.smartRoutingAccountCooldowns.observe(smartRoutingAccountCooldownKey(1, id, "model", "endpoint"), time.Minute, now, true)
+	}
+	require.LessOrEqual(t, len(cache.smartRoutingAccountCooldowns.entries), smartRoutingLocalCooldownLimit)
+	require.NotEqual(t, smartRoutingAccountCooldownKey(1, 2, "ab", "c"), smartRoutingAccountCooldownKey(1, 2, "a", "bc"))
 }
 
 func TestSmartRoutingSessionClaimReleaseCommitAndOtherObserver(t *testing.T) {

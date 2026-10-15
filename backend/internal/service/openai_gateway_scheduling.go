@@ -411,6 +411,10 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if account == nil {
 		return "account_nil"
 	}
+	// 智能换组保留本次失败账号与当前模型端点冷却，粘性命中也不能绕过。
+	if IsSmartRoutingAccountExcluded(ctx, account.ID) {
+		return "smart_routing_account_cooling"
+	}
 	if account.Platform != platform || !account.IsOpenAICompatible() {
 		return "platform_mismatch"
 	}

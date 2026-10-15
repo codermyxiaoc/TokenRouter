@@ -48,6 +48,25 @@ func (r *catalogCooldownAccountRepo) SetError(_ context.Context, id int64, messa
 type catalogCooldownCache struct {
 	service.GatewayCache
 	*failoverResolver
+	accountCooling map[int64]time.Time
+}
+
+func (c *catalogCooldownCache) GetSmartRoutingAccountCooldowns(_ context.Context, _ int64, ids []int64, _, _ string) (map[int64]time.Duration, error) {
+	result := make(map[int64]time.Duration)
+	for _, id := range ids {
+		result[id] = max(0, c.accountCooling[id].Sub(c.now))
+	}
+	return result, nil
+}
+
+func (c *catalogCooldownCache) CooldownSmartRoutingAccounts(_ context.Context, _ int64, ids []int64, _, _ string, ttl time.Duration) error {
+	if c.accountCooling == nil {
+		c.accountCooling = make(map[int64]time.Time)
+	}
+	for _, id := range ids {
+		c.accountCooling[id] = c.now.Add(ttl)
+	}
+	return nil
 }
 
 func TestSmartRoutingRealCatalogPausedAccountsRemainCoolingWithoutInventingModels(t *testing.T) {
@@ -90,6 +109,7 @@ func TestSmartRoutingRealCatalogPausedAccountsRemainCoolingWithoutInventingModel
 		status := map[int64]int{1: 429, 2: 502, 3: 524}[groupID]
 		decision := policy.ApplyUpstreamError(c.Request.Context(), &account, status, http.Header{}, []byte(`{"error":{"message":"paused upstream"}}`), "target")
 		require.True(t, decision.StopScheduling)
+		c.Set(service.OpsUpstreamErrorsKey, []*service.OpsUpstreamErrorEvent{{AccountID: account.ID, GroupID: groupID, Kind: "http_error", UpstreamStatusCode: status}})
 		upstreamFailure(c, status, "last-upstream-failure")
 	})
 	response := callFailoverRouter(router, "/v1/responses", `{"model":"target"}`)

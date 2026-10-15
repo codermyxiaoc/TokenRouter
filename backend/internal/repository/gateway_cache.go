@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/service"
@@ -21,8 +22,11 @@ const openAIResponsesSessionWindowPrefix = "openai_responses_session_window:"
 const liveCallPrefix = "live:call:"
 
 type gatewayCache struct {
-	rdb                   *redis.Client
-	smartRoutingCooldowns smartRoutingLocalCooldowns
+	rdb                          *redis.Client
+	smartRoutingRedisOnce        sync.Once
+	smartRoutingRedis            *redis.Client
+	smartRoutingCooldowns        smartRoutingLocalCooldowns
+	smartRoutingAccountCooldowns smartRoutingLocalAccountCooldowns
 }
 
 func NewGatewayCache(rdb *redis.Client) service.GatewayCache {
@@ -47,7 +51,7 @@ func buildOpenAIResponsesSessionWindowKey(groupID int64, sessionHash string) str
 
 func (c *gatewayCache) GetSessionAccountID(ctx context.Context, groupID int64, sessionHash string) (int64, error) {
 	key := buildSessionKey(groupID, sessionHash)
-	return c.rdb.Get(ctx, key).Int64()
+	return c.smartRoutingContextRedisClient(ctx).Get(ctx, key).Int64()
 }
 
 func (c *gatewayCache) SetSessionAccountID(ctx context.Context, groupID int64, sessionHash string, accountID int64, ttl time.Duration) error {
@@ -75,7 +79,7 @@ func (c *gatewayCache) DeleteSessionAccountID(ctx context.Context, groupID int64
 // SetSessionOwnerGroupID 仅在首次写入时绑定显式会话的分组归属。
 func (c *gatewayCache) SetSessionOwnerGroupID(ctx context.Context, userID int64, source, sessionHash string, groupID int64, ttl time.Duration) (bool, error) {
 	key := buildSessionOwnerKey(userID, source, sessionHash)
-	written, err := setSessionOwnerWithSmartClaimScript.Run(ctx, c.rdb, []string{key, smartRoutingSessionClaimKey(key)}, groupID, ttl.Milliseconds()).Int()
+	written, err := setSessionOwnerWithSmartClaimScript.Run(ctx, c.smartRoutingContextRedisClient(ctx), []string{key, smartRoutingSessionClaimKey(key)}, groupID, ttl.Milliseconds()).Int()
 	return written == 1, err
 }
 
@@ -178,12 +182,12 @@ const (
 func (c *gatewayCache) GetSessionOwnerGroupID(ctx context.Context, userID int64, source, sessionHash string) (int64, error) {
 	key := buildSessionOwnerKey(userID, source, sessionHash)
 	// 另一个请求观察到 owner 后就保守提交，防止原失败请求随后删除并发请求正在使用的归属。
-	return getSessionOwnerAndCommitSmartClaimScript.Run(ctx, c.rdb, []string{key, smartRoutingSessionClaimKey(key)}).Int64()
+	return getSessionOwnerAndCommitSmartClaimScript.Run(ctx, c.smartRoutingContextRedisClient(ctx), []string{key, smartRoutingSessionClaimKey(key)}).Int64()
 }
 
 func (c *gatewayCache) RefreshSessionOwnerTTL(ctx context.Context, userID int64, source, sessionHash string, ttl time.Duration) error {
 	key := buildSessionOwnerKey(userID, source, sessionHash)
-	return refreshSessionOwnerAndCommitSmartClaimScript.Run(ctx, c.rdb, []string{key, smartRoutingSessionClaimKey(key)}, ttl.Milliseconds()).Err()
+	return refreshSessionOwnerAndCommitSmartClaimScript.Run(ctx, c.smartRoutingContextRedisClient(ctx), []string{key, smartRoutingSessionClaimKey(key)}, ttl.Milliseconds()).Err()
 }
 
 var _ service.GrokVideoBillingCache = (*gatewayCache)(nil)

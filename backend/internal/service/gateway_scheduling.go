@@ -1330,6 +1330,10 @@ func (s *GatewayService) isAccountSchedulableForModelSelection(ctx context.Conte
 	if account == nil {
 		return false
 	}
+	// 同一账号跨组共享失败事实，只对当前请求及对应模型端点的冷却生效。
+	if IsSmartRoutingAccountExcluded(ctx, account.ID) {
+		return false
+	}
 	routingModel := s.channelMappedModelForAccountLayer(ctx, requestedModel)
 	return account.IsSchedulableForModelWithContext(ctx, routingModel)
 }

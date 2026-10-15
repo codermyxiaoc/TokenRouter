@@ -108,15 +108,20 @@ func TestSeedanceValidationAndCapability(t *testing.T) {
 	require.False(t, a.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilitySeedance))
 }
 
-func TestSeedancePreservesUpstreamErrorsWithoutRetry(t *testing.T) {
+func TestSeedanceExplicitRejectionAllowsNextAccountBeforeResponse(t *testing.T) {
 	upstream := &grokMediaContentUpstreamStub{response: grokMediaContentStatusResponse(`{"error":{"code":"QuotaExceeded","message":"quota exhausted"}}`)}
 	upstream.response.StatusCode = 429
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
 	c, w := grokMediaContentTestContext(http.MethodPost, "/api/v3/contents/generations/tasks", nil)
 	_, err := svc.ForwardSeedance(context.Background(), c, seedanceTestAccount(), SeedanceEndpointCreate, "", []byte(`{"model":"video","content":[{"type":"text","text":"waves"}]}`))
-	require.Error(t, err)
-	require.Equal(t, 429, w.Code)
-	require.Contains(t, w.Body.String(), "QuotaExceeded")
+	var failover *UpstreamFailoverError
+	require.ErrorAs(t, err, &failover)
+	require.True(t, failover.ShouldRetryNextAccount())
+	require.False(t, failover.RetryableOnSameAccount)
+	require.Equal(t, 429, failover.StatusCode)
+	require.Contains(t, string(failover.ResponseBody), "QuotaExceeded")
+	require.Empty(t, w.Body.String())
+	require.False(t, c.Writer.Written())
 	require.Len(t, upstream.requests, 1)
 	_, recorded := c.Get(OpsUpstreamErrorsKey)
 	require.True(t, recorded, "原生错误也必须进入运维观测")

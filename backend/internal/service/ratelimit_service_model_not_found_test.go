@@ -69,9 +69,8 @@ func TestRateLimitService_HandleUpstreamError_ModelNotFoundUsesModelRateLimit(t 
 	require.WithinDuration(t, time.Now().Add(upstreamModelNotFoundCooldown), call.resetAt, 5*time.Second)
 }
 
-// TestRateLimitService_PoolModeModelNotFoundSkipsDefaultModelPause 验证池模式不会根据
-// 聚合上游的一次 404 暂停本地账号与模型组合。
-func TestRateLimitService_PoolModeModelNotFoundSkipsDefaultModelPause(t *testing.T) {
+// 池模式的确定模型缺失仍需隔离账号与模型组合，但不能停用整个账号。
+func TestRateLimitService_PoolModeModelNotFoundUsesModelIsolation(t *testing.T) {
 	repo := &modelNotFoundAccountRepoStub{}
 	svc := &RateLimitService{accountRepo: repo}
 	account := &Account{
@@ -92,10 +91,12 @@ func TestRateLimitService_PoolModeModelNotFoundSkipsDefaultModelPause(t *testing
 		"gpt-5.4",
 	)
 
-	require.Equal(t, ErrorPolicyPoolBypassed, decision.Policy)
-	require.False(t, decision.StopScheduling)
+	require.True(t, decision.ModelUnavailable)
+	require.True(t, decision.ShouldFailoverWithDefaults(account, http.StatusNotFound, false, false))
 	require.Zero(t, repo.tempCalls)
-	require.Empty(t, repo.modelRateLimitCalls)
+	require.Len(t, repo.modelRateLimitCalls, 1)
+	require.Equal(t, "gpt-5.4", repo.modelRateLimitCalls[0].scope)
+	require.WithinDuration(t, time.Now().Add(time.Minute), repo.modelRateLimitCalls[0].resetAt, 2*time.Second)
 }
 
 func TestRateLimitService_HandleUpstreamError_ModelNotFoundWriteFailureDoesNotTempUnschedule(t *testing.T) {

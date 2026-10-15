@@ -292,11 +292,18 @@ func TestSmartRoutingResponsesBusyRecoveryIntegration(t *testing.T) {
 			}
 			if concurrent {
 				require.Empty(t, cache.until, "冷却配置为 0 时不得产生跨请求冷却")
+				require.Empty(t, cache.accountUntil, "冷却配置为 0 时不得产生账号冷却")
 				return
 			}
-			left, err := resolver.GetSmartRoutingCooldown(context.Background(), key.ID, 1)
+			remaining, err := cache.GetSmartRoutingAccountCooldowns(context.Background(), key.ID, []int64{201, 202, 203}, "gpt-5.6-sol", "/v1/responses")
 			require.NoError(t, err)
-			require.Positive(t, left)
+			require.Empty(t, cache.until, "账号故障不得扩大为整组冷却")
+			ambiguousClientError := upstreamStatus == http.StatusBadRequest || upstreamStatus == http.StatusNotFound
+			if ambiguousClientError {
+				require.Empty(t, remaining, "普通 400 和未证实的模型 404 不能将账号加入冷却")
+			} else {
+				require.Positive(t, remaining[201])
+			}
 			visits = nil
 			next := call()
 			if scenario == "all_groups_fail" {
@@ -305,7 +312,11 @@ func TestSmartRoutingResponsesBusyRecoveryIntegration(t *testing.T) {
 				require.Empty(t, visits)
 			} else {
 				require.Equal(t, http.StatusOK, next.Code)
-				require.Equal(t, []int64{recoveredGroupID}, visits, "冷却后的新请求必须跳过故障组")
+				if ambiguousClientError {
+					require.Equal(t, []int64{1, 2, 3}, visits, "未证实账号故障不能污染后续请求的可用性")
+				} else {
+					require.Equal(t, []int64{recoveredGroupID}, visits, "冷却后的新请求必须跳过故障账号")
+				}
 			}
 		})
 	}

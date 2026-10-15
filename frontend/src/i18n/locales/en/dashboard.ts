@@ -141,9 +141,9 @@ export default {
     selectGroup: 'Select a group',
     smartRouting: {
       label: 'Smart routing',
-      hint: 'Select up to 10 groups across platforms and set their order. Groups with mismatched account model catalogs, active cooldowns, or no schedulable accounts are skipped. Text, token-count, and Embeddings requests can try the next group after upstream errors persist, provided no business output or usage settlement has started and the request is not canceled. Local validation, spending limits, and explicit content policy rejections stop retries. Image/video tasks and requests dependent on remote state are not replayed across groups.',
-      cooldownLabel: 'Failed group cooldown (seconds)',
-      cooldownHint: 'Defaults to 60 seconds; enter an integer from 0 to 3600. A confirmed upstream error temporarily skips the failed group for this key only. Replay still depends on business output, settlement, and request state. Zero disables cooldown, not failover. If every matching candidate is cooling down, the request returns 503.',
+      hint: 'Select up to 10 groups across platforms and set their order. Groups with mismatched account model catalogs or no schedulable accounts are skipped. An account cooldown leaves healthy accounts in the same group available. Text, token-count, and Embeddings requests can try the next group after upstream errors persist, provided no business output or usage settlement has started and the request is not canceled. Local validation, spending limits, and explicit content policy rejections stop retries. Image/video tasks and requests dependent on remote state are not replayed across groups.',
+      cooldownLabel: 'Failed account cooldown (seconds)',
+      cooldownHint: 'Defaults to 60 seconds; enter an integer from 0 to 3600. A confirmed upstream error temporarily skips only the failed account for this key, requested model, and endpoint. Healthy accounts in the same group remain available. Repeated failures during a cooldown do not extend it. Zero disables cooldown across requests; the current request still skips accounts that already failed. If every matching account is cooling down, the request returns 503.',
       cooldownInvalid: 'Enter a whole number of seconds from 0 to 3600',
       route: 'Route {index}',
       addGroup: 'Add group',
@@ -153,7 +153,7 @@ export default {
       unavailableGroup: 'Group #{id} (unavailable)',
       moveUp: 'Move candidate group up',
       moveDown: 'Move candidate group down',
-      useDescription: 'Use model IDs directly without a group prefix. Candidates are selected in order by model support and schedulability. Text, token-count, and Embeddings requests can advance after upstream errors persist, provided no business output or usage settlement has started and the request is not canceled. Local validation, spending limits, and explicit content policy rejections stop retries. Failed groups cool down only for this key. Image/video tasks and requests dependent on remote state are not replayed across groups.'
+      useDescription: 'Use model IDs directly without a group prefix. Candidates are selected in order by model support and schedulability. Text, token-count, and Embeddings requests can advance after upstream errors persist, provided no business output or usage settlement has started and the request is not canceled. Local validation, spending limits, and explicit content policy rejections stop retries. Failed accounts cool down only for this key, requested model, and endpoint; healthy accounts in the same group remain available. Image/video tasks and requests dependent on remote state are not replayed across groups.'
     },
     composite: {
       label: 'Composite key',

@@ -110,6 +110,7 @@ type routingConcurrentHarness struct {
 	router   *gin.Engine
 	usage    *routingConcurrentUsage
 	resolver *service.SmartRoutingService
+	cache    *encryptedRoutingCooldownCache
 	mu       sync.Mutex
 	visits   map[string][]int64
 }
@@ -197,6 +198,7 @@ func newRoutingConcurrentHarness(t *testing.T, passthrough bool, cooldown int) *
 	cfg := &config.Config{RunMode: config.RunModeSimple, Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{AllowInsecureHTTP: true}}}
 	cfg.Default.RateMultiplier = 1
 	cache := &encryptedRoutingCooldownCache{until: make(map[[2]int64]time.Time)}
+	h.cache = cache
 	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	t.Cleanup(billingCache.Stop)
 	forward := service.NewOpenAIGatewayService(accounts, h.usage, nil, nil, nil, nil, nil, cfg, nil, nil, service.NewBillingService(cfg, nil), nil, billingCache, upstream, nil, &service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil)
@@ -355,7 +357,7 @@ func TestSmartRoutingConcurrentRegressionPartialUsage(t *testing.T) {
 	}
 }
 
-// 冷却按 Key+分组共享同组模型，但不能污染另一个 Key；模型目录仍决定候选资格。
+// 冷却按 Key、账号、模型和入口隔离，不能污染其他模型或 Key；模型目录仍决定候选资格。
 func TestSmartRoutingConcurrentRegressionCooldownIsolation(t *testing.T) {
 	h := newRoutingConcurrentHarness(t, false, 60)
 	warm := h.call("sk-local-parallel-a", "gpt-6-astra", "recover-warm", false)
@@ -369,7 +371,7 @@ func TestSmartRoutingConcurrentRegressionCooldownIsolation(t *testing.T) {
 	for i := range cases {
 		switch i % 3 {
 		case 0:
-			cases[i] = requestCase{"sk-local-parallel-a", "gpt-6-sol", fmt.Sprintf("healthy-cool-%03d", i), 2}
+			cases[i] = requestCase{"sk-local-parallel-a", "gpt-6-sol", fmt.Sprintf("healthy-cool-%03d", i), 1}
 		case 1:
 			cases[i] = requestCase{"sk-local-parallel-b", "gpt-6-sol", fmt.Sprintf("healthy-key-%03d", i), 1}
 		case 2:
@@ -432,9 +434,10 @@ func TestSmartRoutingConcurrentRegressionCancellationAfterOutput(t *testing.T) {
 				for i := range count {
 					require.Equal(t, []int64{1}, h.attempted(fmt.Sprintf("cancel-output-%03d", i)))
 				}
-				ttl, err := h.resolver.GetSmartRoutingCooldown(context.Background(), 4401, 1)
+				ttls, err := h.cache.GetSmartRoutingAccountCooldowns(context.Background(), 4401, []int64{901}, "gpt-6-astra", "/v1/responses")
 				require.NoError(t, err)
-				require.Zero(t, ttl, "只有客户端取消而上游完成时，不应冷却健康组")
+				require.Empty(t, ttls, "只有客户端取消而上游完成时，不应冷却健康账号")
+				require.Empty(t, h.cache.until, "客户端取消不得写入旧整组冷却")
 			})
 		}
 	}

@@ -47,6 +47,24 @@ func TestShouldFailoverGeminiUpstreamError(t *testing.T) {
 	}
 }
 
+// 原生 Google 模型缺失只隔离实际请求型号，不能再次应用账号映射或让池模式原地重试。
+func TestGeminiModelNotFoundPolicyIsolation(t *testing.T) {
+	for _, pool := range []bool{false, true} {
+		repo := &modelNotFoundAccountRepoStub{}
+		svc := &GeminiMessagesCompatService{rateLimitService: &RateLimitService{accountRepo: repo}}
+		account := geminiSignalTestAccount()
+		account.Credentials["pool_mode"] = pool
+		account.Credentials["pool_mode_retry_status_codes"] = []any{float64(404)}
+		account.Credentials["model_mapping"] = map[string]any{"gemini-upstream": "gemini-wrong-second-map"}
+		decision := svc.applyGeminiUpstreamErrorPolicy(context.Background(), account, 404, nil, []byte(`{"error":{"code":404,"message":"The requested model or endpoint is unavailable."}}`), "gemini-upstream")
+		require.True(t, decision.ShouldFailover(account, 404, false))
+		require.False(t, decision.RetryableOnSameAccount(account, 404))
+		require.Len(t, repo.modelRateLimitCalls, 1)
+		require.Equal(t, "gemini-upstream", repo.modelRateLimitCalls[0].scope)
+		require.Zero(t, repo.tempCalls)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestCheckErrorPolicy_GeminiAccounts — verifies CheckErrorPolicy works
 // correctly for Gemini platform accounts (API Key type).

@@ -13,6 +13,48 @@ type SmartRoutingCooldownCache interface {
 	CooldownSmartRoutingGroup(context.Context, int64, int64, time.Duration) error
 }
 
+// SmartRoutingAccountCooldownCache 按账号、模型和入口隔离失败，旧的整组键不再参与生产准入。
+type SmartRoutingAccountCooldownCache interface {
+	GetSmartRoutingAccountCooldowns(context.Context, int64, []int64, string, string) (map[int64]time.Duration, error)
+	CooldownSmartRoutingAccounts(context.Context, int64, []int64, string, string, time.Duration) error
+}
+
+// UsesSmartRoutingAccountCooldown 区分生产账号冷却与旧适配器的组级兼容能力。
+func (s *SmartRoutingService) UsesSmartRoutingAccountCooldown() bool { return true }
+
+// CooldownSmartRoutingAccounts 仅记录有真实失败证据的账号，不暂停分组内其它健康账号。
+func (s *SmartRoutingService) CooldownSmartRoutingAccounts(ctx context.Context, keyID int64, accountIDs []int64, model, endpoint string, duration time.Duration) error {
+	if s == nil || s.gateway == nil || duration <= 0 || keyID <= 0 || len(accountIDs) == 0 {
+		return nil
+	}
+	cache, ok := s.gateway.cache.(SmartRoutingAccountCooldownCache)
+	if !ok {
+		return nil
+	}
+	cacheCtx, cancel := context.WithTimeout(ctx, smartRoutingCooldownCacheTimeout)
+	defer cancel()
+	return cache.CooldownSmartRoutingAccounts(cacheCtx, keyID, accountIDs, model, endpoint, min(duration, time.Hour))
+}
+
+func (s *SmartRoutingService) loadSmartRoutingAccountCooldowns(ctx context.Context, accountIDs []int64) map[int64]time.Duration {
+	config, _ := ctx.Value(smartRoutingAccountCooldownContextKey{}).(smartRoutingAccountCooldownContext)
+	if config.duration <= 0 || config.keyID <= 0 || len(accountIDs) == 0 || s == nil || s.gateway == nil {
+		return nil
+	}
+	cache, ok := s.gateway.cache.(SmartRoutingAccountCooldownCache)
+	if !ok {
+		return nil
+	}
+	cacheCtx, cancel := context.WithTimeout(ctx, smartRoutingCooldownCacheTimeout)
+	defer cancel()
+	remaining, err := cache.GetSmartRoutingAccountCooldowns(cacheCtx, config.keyID, accountIDs, config.model, config.endpoint)
+	if err != nil {
+		slog.Warn("smart_routing_account_cooldown_read_failed", "api_key_id", config.keyID, "error", err)
+	}
+	setSmartRoutingAccountCooldowns(ctx, accountIDs, remaining)
+	return remaining
+}
+
 const smartRoutingCooldownCacheTimeout = 250 * time.Millisecond
 
 func (s *SmartRoutingService) cooldownCache() SmartRoutingCooldownCache {

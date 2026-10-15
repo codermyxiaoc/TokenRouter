@@ -234,7 +234,21 @@ func (s *OpenAIGatewayService) applyOpenAIAccountUpstreamErrorInternal(
 	case ErrorPolicyTempUnscheduled:
 		decision.StopScheduling = true
 		return decision
-	case ErrorPolicyCustomSkipped, ErrorPolicyPoolBypassed:
+	case ErrorPolicyCustomSkipped:
+		return decision
+	}
+	// 池账号先尊重显式冷却策略；未命中时才按模型隔离并立即换号，不能同账号反复重试。
+	// 普通账号仍在宽泛临时规则之前处理精确模型状态，自定义错误码的优先级保持不变。
+	if !account.IsCustomErrorCodesEnabled() && len(canonicalModel) > 0 {
+		modelMissing := isUpstreamModelNotFoundError(statusCode, responseBody)
+		if s.rateLimitService != nil {
+			modelMissing = s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, canonicalModel[0], statusCode, responseBody) || modelMissing
+		}
+		if modelMissing {
+			return UpstreamErrorDecision{StopScheduling: true, ModelUnavailable: true}
+		}
+	}
+	if decision.Policy == ErrorPolicyPoolBypassed {
 		return decision
 	}
 
@@ -242,10 +256,6 @@ func (s *OpenAIGatewayService) applyOpenAIAccountUpstreamErrorInternal(
 		if s.rateLimitService != nil {
 			_ = s.rateLimitService.HandleOpenAIImageRateLimit(stateCtx, account, statusCode, headers, responseBody)
 		}
-		return decision
-	}
-	if s.rateLimitService != nil && len(canonicalModel) > 0 && s.rateLimitService.HandleUpstreamModelNotFound(stateCtx, account, canonicalModel[0], statusCode, responseBody) {
-		decision.StopScheduling = true
 		return decision
 	}
 	// 普通账号先保留模型不存在等精确处理，再应用管理员临时规则。

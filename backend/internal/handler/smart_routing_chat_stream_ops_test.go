@@ -185,9 +185,10 @@ func TestSmartRoutingChatStreamFailureAndOps(t *testing.T) {
 				require.Equal(t, http.StatusOK, job.entry.StatusCode)
 				require.Contains(t, job.entry.ErrorMessage, "Recovered upstream error")
 			}
-			ttl, err := resolver.GetSmartRoutingCooldown(context.Background(), key.ID, 1)
+			ttls, err := cache.GetSmartRoutingAccountCooldowns(context.Background(), key.ID, []int64{101}, "gpt-6-astra", "/v1/responses")
 			require.NoError(t, err)
-			require.Positive(t, ttl)
+			require.Positive(t, ttls[101])
+			require.Empty(t, cache.until, "账号故障不得扩大为整组冷却")
 			visits = nil
 			second := call()
 			if scenario == "all_stream_errors" {

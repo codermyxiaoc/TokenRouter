@@ -859,6 +859,40 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		return nil, fmt.Errorf("grok video create redirect: submission outcome is unknown")
 	}
 	if resp.StatusCode >= 400 {
+		if isGrokAsyncVideoCreateEndpoint(endpoint) {
+			// 错误包也可能带已受理的任务；先完整读取、持久保存归属，再允许客户端看到原响应。
+			errorBody, readErr := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
+			if readErr != nil {
+				return nil, readErr
+			}
+			if id, present := asyncVideoTaskID(errorBody); present {
+				if id == "" {
+					return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: errorBody, ResponseHeaders: resp.Header.Clone(), NextAccountAction: NextAccountStop}
+				}
+				setOpsUpstreamError(c, resp.StatusCode, "Video create returned an accepted task with an error response", "")
+				if c.GetBool(seedanceDeferredResponseKey) {
+					c.Set(seedanceDeferredResponseKey, &seedanceDeferredResponse{status: resp.StatusCode, header: resp.Header.Clone(), body: errorBody})
+				} else {
+					writeGrokMediaResponse(c, resp, errorBody, s.responseHeaderFilter)
+				}
+				return &OpenAIForwardResult{RequestID: requestIDHeader, ResponseID: id, Model: requestModel, BillingModel: billingModel,
+					UpstreamModel: upstreamModel, ResponseHeaders: resp.Header.Clone(), UpstreamHeaders: resp.Header,
+					Duration: time.Since(startTime), VideoResolution: requestInfo.Resolution, VideoDurationSeconds: requestInfo.DurationSeconds,
+					MediaTaskObservation: videoTaskObservation(endpoint, errorBody, resp.StatusCode)}, nil
+			}
+			_ = resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(errorBody))
+			result, forwardErr := s.handleGrokMediaErrorResponse(ctx, resp, c, account, requestIDHeader, upstreamModel)
+			var failoverErr *UpstreamFailoverError
+			if errors.As(forwardErr, &failoverErr) {
+				// 创建只对明确拒绝换号，普通 5xx 不足以证明没有产生付费任务。
+				failoverErr.RetryableOnSameAccount = false
+				if !VideoCreationDefinitelyRejected(resp.StatusCode, errorBody) {
+					failoverErr.NextAccountAction = NextAccountStop
+				}
+			}
+			return result, forwardErr
+		}
 		// 错误策略必须使用实际发往上游的映射后模型，确保模型级暂停与调度键一致。
 		return s.handleGrokMediaErrorResponse(ctx, resp, c, account, requestIDHeader, upstreamModel)
 	}
@@ -1522,10 +1556,11 @@ func (s *OpenAIGatewayService) handleGrokMediaErrorResponse(
 	if kind == "failover" {
 		retryable, retryDelay, retryDeadline, retryMax := grokSameAccountRetryMetadata(account, resp.StatusCode, body)
 		return nil, &UpstreamFailoverError{
-			StatusCode:               resp.StatusCode,
-			ResponseBody:             body,
-			ResponseHeaders:          resp.Header.Clone(),
-			RetryableOnSameAccount:   retryable || decision.RetryableOnSameAccount(account, resp.StatusCode),
+			StatusCode:      resp.StatusCode,
+			ResponseBody:    body,
+			ResponseHeaders: resp.Header.Clone(),
+			// 语义分类优先于池模式状态码，硬额度耗尽不能被通用 429 重试重新放行。
+			RetryableOnSameAccount:   retryable && !decision.StopScheduling,
 			RequestScopedTransient:   retryable && resp.StatusCode == http.StatusTooManyRequests,
 			SameAccountRetryDelay:    retryDelay,
 			SameAccountRetryDeadline: retryDeadline,

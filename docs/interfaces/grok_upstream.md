@@ -68,6 +68,8 @@ JSON 图片编辑和视频生成请求可在 `image`、`images`、`reference_ima
 
 Grok 兼容账号对所选端点返回 HTTP `405` 时，表示该账号不支持当前端点；在尚未向客户端输出内容时请求会切换到其它账号，非池模式账号同时临时排除 30 分钟，避免粘性会话反复命中。公共池账号继续跳过默认账号冷却，`405` 也不会被误记为模型级冷却。
 
+媒体错误分类中的硬额度或账户资格不足优先于池模式重试配置，不能因 pool 允许该状态码而在同一账号反复重试；请求级瞬时容量限制仍保留原有有界同号重试。视频创建完整错误响应若已有任务 ID，先保存原账号归属并返回该错误，不再换号；仅明确拒绝且无 ID 的创建允许按既有故障策略恢复，受理不明、通用错误与传输中断不重发生成。
+
 ## 搜索与语音
 
 `POST /v1/web_search` 和 `POST /v1/x_search` 只允许 Grok 分组，接收查询或 `input` 和最多 20 条结果。两者在选择账号前进入共同内容审计，随后复用常规 Grok 账号资格、并发等待和最多四次账号尝试。`web_search` 使用原生 Responses `web_search` 工具；`x_search` 强制使用 `x_search`，并接受 `allowed_x_handles`、`excluded_x_handles`、`from_date`、`to_date` 及图片/视频理解开关。两者只返回实际工具来源 URL 对应的结果，分别以 `grok-web-search` 和 `grok-x-search` 记录计费模型。每次调用使用独立服务端 request ID 作为结算幂等键；不得用查询、IP 或 User-Agent 哈希合并相同搜索。Responses/Chat 路径会保留原生 `x_search` 工具字段，并从上游 usage 或工具事件恢复 `SearchCount` 作为 token 费用之外的附加费。

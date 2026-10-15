@@ -179,9 +179,11 @@ func TestSeedanceCreatePersistsAfterClientCancellation(t *testing.T) {
 	slots.assertReleased(t)
 }
 
-func TestSeedanceHandlerDoesNotReplayRejectedCreation(t *testing.T) {
+func TestSeedanceHandlerRejectedCreationExhaustionPreservesNativeResponse(t *testing.T) {
 	h, slots, _, upstream := newGrokMediaSlotHandler(t, false, false, service.PlatformOpenAI)
-	upstream.call = func(*http.Request, int64) (*http.Response, error) {
+	attempted := make(map[int64]int)
+	upstream.call = func(_ *http.Request, accountID int64) (*http.Response, error) {
+		attempted[accountID]++
 		return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"ServiceUnavailable","message":"busy"}}`))}, nil
 	}
 	c, w := grokMediaSlotContext(context.Background(), true)
@@ -191,7 +193,11 @@ func TestSeedanceHandlerDoesNotReplayRejectedCreation(t *testing.T) {
 	h.SeedanceTasks(c)
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 	require.JSONEq(t, `{"error":{"code":"ServiceUnavailable","message":"busy"}}`, w.Body.String())
-	require.Equal(t, 1, upstream.calls, "异步创建失败不得切换账号重复创建")
+	require.Equal(t, 3, upstream.calls, "明确拒绝可尝试同组剩余账号，耗尽后保留原生错误")
+	require.Len(t, attempted, 3)
+	for _, count := range attempted {
+		require.Equal(t, 1, count, "失败账号不能在同次创建中反复调用")
+	}
 	slots.assertReleased(t)
 }
 

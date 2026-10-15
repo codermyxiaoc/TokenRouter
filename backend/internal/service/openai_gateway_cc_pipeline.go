@@ -143,6 +143,7 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 		UpstreamStatusCode: resp.StatusCode,
 		UpstreamRequestID:  resp.Header.Get("x-request-id"),
 		Kind:               "failover",
+		Reason:             upstreamModelNotFoundEventReason(resp.StatusCode, respBody),
 		Message:            upstreamMsg,
 		Detail:             upstreamDetail,
 	})

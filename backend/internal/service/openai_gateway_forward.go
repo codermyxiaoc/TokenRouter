@@ -1171,6 +1171,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					UpstreamStatusCode: resp.StatusCode,
 					UpstreamRequestID:  resp.Header.Get("x-request-id"),
 					Kind:               "failover",
+					Reason:             upstreamModelNotFoundEventReason(resp.StatusCode, respBody),
 					Message:            upstreamMsg,
 					Detail:             upstreamDetail,
 				})
@@ -1240,6 +1241,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 							UpstreamStatusCode: compactResp.StatusCode,
 							UpstreamRequestID:  compactResp.Header.Get("x-request-id"),
 							Kind:               "failover",
+							Reason:             upstreamModelNotFoundEventReason(compactResp.StatusCode, compactBody),
 							Message:            signal.message,
 						})
 						shouldDisable := s.handleFailoverSideEffects(ctx, compactResp, account, compactBody, upstreamModel)

@@ -193,6 +193,10 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 			defaultFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
 		}
 		if decision.ShouldFailover(account, resp.StatusCode, defaultFailover) {
+			// 即使关闭错误体日志，也保留明确模型缺失证据供跨组调度共享排除。
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+				UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
+				Kind: "failover", Reason: upstreamModelNotFoundEventReason(resp.StatusCode, respBody), Message: upstreamMsg})
 			return &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,

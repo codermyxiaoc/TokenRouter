@@ -10,6 +10,14 @@ func WithSmartRoutingScope(ctx context.Context) context.Context {
 }
 
 func isSmartRoutingScoped(ctx context.Context) bool {
+	return IsSmartRoutingScope(ctx)
+}
+
+// IsSmartRoutingScope 供缓存适配器限制智能路由的局部等待，不改变普通会话的超时语义。
+func IsSmartRoutingScope(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
 	enabled, _ := ctx.Value(smartRoutingScopeKey{}).(bool)
 	return enabled
 }

@@ -634,10 +634,11 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 		if kind == "failover" {
 			retryable, retryDelay, retryDeadline, retryMax := grokSameAccountRetryMetadata(account, resp.StatusCode, respBody)
 			return nil, &UpstreamFailoverError{
-				StatusCode:               resp.StatusCode,
-				ResponseBody:             respBody,
-				ResponseHeaders:          resp.Header.Clone(),
-				RetryableOnSameAccount:   retryable || decision.RetryableOnSameAccount(account, resp.StatusCode),
+				StatusCode:      resp.StatusCode,
+				ResponseBody:    respBody,
+				ResponseHeaders: resp.Header.Clone(),
+				// 额度和兼容性语义已决定是否原地重试，池模式不能覆盖该决定。
+				RetryableOnSameAccount:   retryable && !decision.StopScheduling,
 				RequestScopedTransient:   retryable && resp.StatusCode == http.StatusTooManyRequests,
 				SameAccountRetryDelay:    retryDelay,
 				SameAccountRetryDeadline: retryDeadline,

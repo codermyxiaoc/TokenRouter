@@ -25,20 +25,33 @@ type smartRoutingCooldownResolver interface {
 	CooldownSmartRoutingGroup(context.Context, int64, int64, time.Duration) error
 }
 
+// 新解析器返回账号粒度冷却；旧组缓存只留给尚未升级的内部适配器。
+type smartRoutingAccountCooldownResolver interface {
+	UsesSmartRoutingAccountCooldown() bool
+	CooldownSmartRoutingAccounts(context.Context, int64, []int64, string, string, time.Duration) error
+}
+
+type smartRoutingContinuationResolver interface {
+	ResolveSmartRoutingContinuation(context.Context, *service.APIKey, string) (service.SmartRoutingContinuationBinding, error)
+}
+
 // smartRoutingExecution 仅存在于本次 HTTP 请求，禁止共享认证快照保存尝试状态。
 type smartRoutingExecution struct {
-	base               *gin.Context
-	request            *http.Request
-	body               []byte
-	parent             gin.ResponseWriter
-	writer             *smartRoutingAttemptWriter
-	attempt            *service.SmartRoutingAttemptState
-	visited            map[int64]bool
-	keyID, groupID     int64
-	cooldown           time.Duration
-	replayBlockReason  string
-	active             bool
-	selectionExhausted bool
+	base                 *gin.Context
+	request              *http.Request
+	body                 []byte
+	parent               gin.ResponseWriter
+	writer               *smartRoutingAttemptWriter
+	attempt              *service.SmartRoutingAttemptState
+	visited              map[int64]bool
+	keyID, groupID       int64
+	cooldown             time.Duration
+	replayBlockReason    string
+	active               bool
+	selectionExhausted   bool
+	model, endpoint      string
+	continuationGroupID  int64
+	continuationResolved bool
 }
 
 // runSmartRoutingAuthentication 延迟提交失败响应，成功流仍在首次业务输出时立即放行。
@@ -66,11 +79,41 @@ func runSmartRoutingAuthentication(c *gin.Context, resolver service.SmartRouting
 		// 单独的历史上游错误可能已经由组内重试恢复，不能因此冷却成功组。
 		_, streamFailed := service.GetOpsStreamError(current)
 		failed := (w.failedResponse() || streamFailed) && smartRoutingUpstreamRetryable(current)
+		failedAccountIDs := smartRoutingFailedAccountIDs(current)
+		if !failed {
+			// 组内换号恢复后仍隔离失败账号；最终成功的同账号不能被早先重试错误误冷却。
+			successAccountID := current.GetInt64("ops_account_id")
+			if w.status >= 200 && w.status < 300 && !w.failedResponse() && !streamFailed && current.Request.Context().Err() == nil && successAccountID > 0 {
+				filtered := failedAccountIDs[:0]
+				for _, accountID := range failedAccountIDs {
+					if accountID != successAccountID {
+						filtered = append(filtered, accountID)
+					}
+				}
+				failedAccountIDs = filtered
+			} else {
+				failedAccountIDs = nil
+			}
+		}
+		if failed {
+			for _, accountID := range failedAccountIDs {
+				service.MarkSmartRoutingAccountFailed(current.Request.Context(), accountID)
+			}
+		}
 		canRetry := terminal != nil && len(guards) > 0 && attempts < 9 &&
 			!w.committed && state.attempt.CanReplay() && current.Request.Context().Err() == nil &&
 			state.replayBlockReason == "" && failed
-		// 同一 Key 的失败组进入冷却；0 只关闭跨请求冷却，不影响当前请求换组。
-		if cache, ok := resolver.(smartRoutingCooldownResolver); ok && failed && state.groupID > 0 && state.cooldown > 0 {
+		// 只冷却真实失败账号，0 只关闭跨请求冷却，不影响本次失败集合与换组。
+		if cache, ok := resolver.(smartRoutingAccountCooldownResolver); ok && cache.UsesSmartRoutingAccountCooldown() {
+			if len(failedAccountIDs) > 0 && state.cooldown > 0 {
+				cooldownCtx, cancelCooldown := context.WithTimeout(context.WithoutCancel(current.Request.Context()), 250*time.Millisecond)
+				err := cache.CooldownSmartRoutingAccounts(cooldownCtx, state.keyID, failedAccountIDs, state.model, state.endpoint, state.cooldown)
+				cancelCooldown()
+				if err != nil {
+					slog.Warn("smart routing account cooldown write failed", "key_id", state.keyID, "group_id", state.groupID, "error", err)
+				}
+			}
+		} else if cache, ok := resolver.(smartRoutingCooldownResolver); ok && failed && state.groupID > 0 && state.cooldown > 0 {
 			// 已确认的上游故障不能因客户端取消而丢失冷却；独立写入仍受短超时限制。
 			cooldownCtx, cancelCooldown := context.WithTimeout(context.WithoutCancel(current.Request.Context()), 250*time.Millisecond)
 			err := cache.CooldownSmartRoutingGroup(cooldownCtx, state.keyID, state.groupID, state.cooldown)
@@ -174,7 +217,7 @@ func prepareSmartRoutingExecution(c *gin.Context, key *service.APIKey) *smartRou
 		// 不可重放只禁止本次换组，不能同时关闭失败组的冷却观测。
 		state.replayBlockReason = smartRoutingReplayBlockReason(body)
 		// 各轮重新检查资格，但同一客户端请求的全局 RPM 只能递增一次。
-		requestCtx := service.WithSmartRoutingRPMAdmission(state.base.Request.Context())
+		requestCtx := service.WithSmartRoutingAccountFailures(service.WithSmartRoutingRPMAdmission(state.base.Request.Context()))
 		state.request = c.Request.Clone(requestCtx)
 		c.Request = c.Request.WithContext(requestCtx)
 		state.body = bytes.Clone(body)
@@ -254,7 +297,7 @@ func (s *smartRoutingExecution) continuationRequiresSameCandidate() bool {
 }
 
 func smartRoutingUpstreamRetryable(c *gin.Context) bool {
-	if service.HasOpsClientBusinessLimited(c) || service.GetOpsCyberPolicy(c) != nil {
+	if service.HasOpsClientBusinessLimited(c) || service.GetOpsCyberPolicy(c) != nil || service.IsOpsRequestScopedError(c) {
 		return false
 	}
 	// 内容策略等请求级终态不能借用之前组内重试留下的上游状态换组。
@@ -279,6 +322,30 @@ func smartRoutingUpstreamRetryable(c *gin.Context) bool {
 		return event.Stage != string(service.GatewayFailureStageAccountAuth)
 	}
 	return false
+}
+
+// 冷却只接受账号或上游故障证据；参数、内容策略等请求错误不能污染后续健康请求。
+func smartRoutingFailedAccountIDs(c *gin.Context) []int64 {
+	seen := make(map[int64]struct{})
+	var result []int64
+	for _, event := range smartRoutingUpstreamEvents(c) {
+		if event == nil || event.AccountID <= 0 || event.Scope == "request" {
+			continue
+		}
+		status := event.UpstreamStatusCode
+		upstreamFailure := status == 401 || status == 402 || status == 403 || status == 408 || status == 429 || status >= 500 && status <= 599 || smartRoutingTransportFailure(event)
+		// 未留存正文时只接受服务层严格判定后的稳定原因，不能把失去结构的显示文案当成证据。
+		upstreamFailure = upstreamFailure || status == http.StatusNotFound && event.Reason == "model_not_found" || service.IsUpstreamModelNotFoundError(status, []byte(event.UpstreamResponseBody))
+		if !upstreamFailure {
+			continue
+		}
+		if _, exists := seen[event.AccountID]; exists {
+			continue
+		}
+		seen[event.AccountID] = struct{}{}
+		result = append(result, event.AccountID)
+	}
+	return result
 }
 
 func smartRoutingUpstreamStatus(c *gin.Context) int {

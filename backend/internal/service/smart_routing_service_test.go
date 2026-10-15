@@ -154,17 +154,17 @@ func TestSmartRoutingDistinguishesModelAbsenceAndTemporaryUnavailability(t *test
 		endpoint string
 		want     SmartRoutingGroupAvailability
 	}{
-		{"有目录且可调度", nil, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{true, true}},
+		{"有目录且可调度", nil, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{HasModel: true, Schedulable: true}},
 		{"未知模型", nil, "unknown-probe", "/v1/responses", SmartRoutingGroupAvailability{}},
-		{"账号暂时停调", func(a *Account) { a.TempUnschedulableUntil = &future }, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{true, false}},
-		{"账号限流", func(a *Account) { a.RateLimitResetAt = &future }, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{true, false}},
-		{"账号持久暂停仍有目录", func(a *Account) { a.Schedulable = false }, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{true, false}},
-		{"账号错误仍有目录", func(a *Account) { a.Status = StatusError; a.Schedulable = false }, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{true, false}},
+		{"账号暂时停调", func(a *Account) { a.TempUnschedulableUntil = &future }, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
+		{"账号限流", func(a *Account) { a.RateLimitResetAt = &future }, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
+		{"账号持久暂停仍有目录", func(a *Account) { a.Schedulable = false }, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
+		{"账号错误仍有目录", func(a *Account) { a.Status = StatusError; a.Schedulable = false }, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
 		{"模型限流", func(a *Account) {
 			a.Extra = map[string]any{modelRateLimitsKey: map[string]any{"shared-model": map[string]any{"rate_limit_reset_at": future.Format(time.RFC3339)}}}
-		}, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{true, false}},
-		{"配额耗尽", func(a *Account) { a.Extra = map[string]any{"quota_limit": float64(1), "quota_used": float64(1)} }, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{true, false}},
-		{"compact能力禁用", func(a *Account) { a.Extra = map[string]any{"openai_compact_supported": false} }, "shared-model", "/v1/responses/compact", SmartRoutingGroupAvailability{true, false}},
+		}, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
+		{"配额耗尽", func(a *Account) { a.Extra = map[string]any{"quota_limit": float64(1), "quota_used": float64(1)} }, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
+		{"compact能力禁用", func(a *Account) { a.Extra = map[string]any{"openai_compact_supported": false} }, "shared-model", "/v1/responses/compact", SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
 		{"停用账号无目录", func(a *Account) { a.Status = StatusDisabled }, "shared-model", "/v1/responses", SmartRoutingGroupAvailability{}},
 	}
 	for _, test := range tests {
@@ -288,7 +288,7 @@ func TestSmartRoutingChannelMappingAndCatalogAgree(t *testing.T) {
 	svc := NewSmartRoutingService(&GatewayService{accountRepo: repo, channelService: newRequestableModelsChannelService(1, PlatformOpenAI, channel)}, nil)
 	result, err := svc.EvaluateSmartRoutingGroup(context.Background(), group, "client-alias", "/v1/responses")
 	require.NoError(t, err)
-	require.Equal(t, SmartRoutingGroupAvailability{true, true}, result)
+	require.Equal(t, SmartRoutingGroupAvailability{HasModel: true, Schedulable: true}, result)
 	models, err := svc.ResolveSmartRoutingModels(context.Background(), group)
 	require.NoError(t, err)
 	require.Contains(t, models, "client-alias")

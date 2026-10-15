@@ -20,6 +20,7 @@ func TestOpenAIBodyLimitFailoverExhausted_ReturnsRedactedJSON413(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
 
 	(&OpenAIGatewayHandler{}).handleFailoverExhausted(c, bodyLimitFailoverTestError(), false)
+	require.True(t, service.IsOpsRequestScopedError(c))
 
 	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 	var envelope map[string]any
@@ -38,6 +39,7 @@ func TestOpenAIBodyLimitFailoverExhausted_ReturnsRedactedResponsesSSE(t *testing
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
 
 	(&OpenAIGatewayHandler{}).handleFailoverExhausted(c, bodyLimitFailoverTestError(), true)
+	require.True(t, service.IsOpsRequestScopedError(c))
 
 	body := rec.Body.String()
 	require.True(t, strings.HasPrefix(body, "event: response.failed\n"))
@@ -55,6 +57,7 @@ func TestOpenAIBodyLimitFailoverExhausted_ReturnsRedactedAnthropicError(t *testi
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(nil))
 
 		(&OpenAIGatewayHandler{}).handleAnthropicFailoverExhausted(c, bodyLimitFailoverTestError(), false)
+		require.True(t, service.IsOpsRequestScopedError(c))
 
 		require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 		var envelope map[string]any
@@ -72,6 +75,7 @@ func TestOpenAIBodyLimitFailoverExhausted_ReturnsRedactedAnthropicError(t *testi
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(nil))
 
 		(&OpenAIGatewayHandler{}).handleAnthropicFailoverExhausted(c, bodyLimitFailoverTestError(), true)
+		require.True(t, service.IsOpsRequestScopedError(c))
 
 		body := rec.Body.String()
 		require.True(t, strings.HasPrefix(body, "event: error\n"))

@@ -80,7 +80,7 @@ func videoInputHasURL(value gjson.Result) bool {
 	return false
 }
 
-// SelectAccount 支持尚未发送付费POST的容量重选；已发送请求绝不能据此故障转移。
+// SelectAccount 用于创建前选号，以及已持久确认拒绝后的同任务重选；受理未知不能调用此方法重提。
 func (s *VideoUpstreamService) SelectAccount(ctx context.Context, key *APIKey, request VideoTaskSubmitRequest) (*VideoUpstreamSelection, error) {
 	if s == nil || s.gateway == nil || s.gateway.accountRepo == nil || s.gateway.concurrencyService == nil {
 		return nil, infraerrors.ServiceUnavailable("VIDEO_UNAVAILABLE", "Video gateway is unavailable")
@@ -132,6 +132,9 @@ func (s *VideoUpstreamService) SelectAccount(ctx context.Context, key *APIKey, r
 	var configErr error
 	for i := range accounts {
 		a := &accounts[i]
+		if IsSmartRoutingAccountExcluded(ctx, a.ID) {
+			continue
+		}
 		if _, excluded := request.ExcludedAccountIDs[a.ID]; excluded {
 			continue
 		}

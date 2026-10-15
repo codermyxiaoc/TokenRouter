@@ -1,8 +1,13 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -10,8 +15,333 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// geminiReplayResponseBody 保留预读内容及底层连接的关闭职责，协议适配器仍读取原始字节。
+type geminiReplayResponseBody struct {
+	io.Reader
+	io.Closer
+}
+
+// geminiReplayReadError 保留预读发生的截断错误，不把已有部分输出伪装成完整响应。
+type geminiReplayReadError struct{ err error }
+
+func (r geminiReplayReadError) Read([]byte) (int, error) { return 0, r.err }
+
+// prepareGeminiResponseFailover 在协议桥写入任何前导事件前检查上游结果。
+// 只对没有正文、工具、图片或计量的失败换号；缓存绑定和媒体生成保留原有副作用边界。
+func (s *GeminiMessagesCompatService) prepareGeminiResponseFailover(ctx context.Context, c *gin.Context, account *Account, resp *http.Response, model, requestID string, stream bool, requestBody []byte) error {
+	if resp == nil || resp.Body == nil || account == nil || geminiCachedContentBoundFromContext(ctx) ||
+		isImageGenerationModel(model) || geminiRequestHasGenerationSideEffects(requestBody) {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	original := resp.Body
+	if !stream {
+		limit := min(resolveUpstreamResponseReadLimit(s.cfg), int64(geminiSSEFallbackBodyLimit))
+		body, err := io.ReadAll(io.LimitReader(original, limit+1))
+		resp.Body = &geminiReplayResponseBody{Reader: bytes.NewReader(body), Closer: original}
+		if int64(len(body)) > limit {
+			// 大响应只回放有界前缀，保留各入口原有的大小限制和错误格式。
+			var remainder io.Reader = original
+			if err != nil {
+				remainder = geminiReplayReadError{err}
+			}
+			resp.Body = &geminiReplayResponseBody{Reader: io.MultiReader(bytes.NewReader(body), remainder), Closer: original}
+			return nil
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if len(body) > 0 {
+				// 截断正文可能已包含实际生成结果，交回原处理器报错，不能再调用另一账号。
+				resp.Body = &geminiReplayResponseBody{Reader: io.MultiReader(bytes.NewReader(body), geminiReplayReadError{err}), Closer: original}
+				return nil
+			}
+			return s.handleUpstreamTransportError(ctx, c, account, err)
+		}
+		return s.geminiPreOutputFailure(ctx, c, account, model, requestID, body, false)
+	}
+
+	// SSE 前导注释和元数据留在有界缓冲中；确认真实输出后原样回放，不拼接不同账号的输出。
+	reader := bufio.NewReaderSize(original, 32<<10)
+	var buffered bytes.Buffer
+	var eventData bytes.Buffer
+	var rawBody bytes.Buffer
+	var replayError error
+	defer func() {
+		var remainder io.Reader = reader
+		if replayError != nil {
+			remainder = io.MultiReader(reader, geminiReplayReadError{replayError})
+		}
+		resp.Body = &geminiReplayResponseBody{Reader: io.MultiReader(bytes.NewReader(buffered.Bytes()), remainder), Closer: original}
+	}()
+	sawData := false
+	for {
+		line, err := reader.ReadSlice('\n')
+		buffered.Write(line)
+		if buffered.Len() > geminiSSEFallbackBodyLimit {
+			// 无法在限定预读窗口内确认失败时交还原协议处理器，不能继续无界缓存或猜测重放。
+			return nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			return nil
+		}
+		trimmed := strings.TrimSpace(string(line))
+		switch {
+		case strings.HasPrefix(trimmed, "data:"):
+			sawData = true
+			payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+			if payload != "" && payload != "[DONE]" {
+				if eventData.Len() > 0 {
+					eventData.WriteByte('\n')
+				}
+				eventData.WriteString(payload)
+			}
+		case trimmed == "":
+			if eventData.Len() > 0 {
+				payload := eventData.Bytes()
+				if !geminiResponseIsPreamble(payload) {
+					if failure := s.geminiPreOutputFailure(ctx, c, account, model, requestID, payload, true); failure != nil {
+						return failure
+					}
+					return nil
+				}
+				eventData.Reset()
+			}
+		case strings.HasPrefix(trimmed, ":"), strings.HasPrefix(trimmed, "event:"), strings.HasPrefix(trimmed, "id:"), strings.HasPrefix(trimmed, "retry:"):
+		default:
+			rawBody.WriteString(string(line))
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !errors.Is(err, io.EOF) {
+				if buffered.Len() > 0 {
+					// 未闭合事件中的部分输出也不能重放，保留读取错误供原协议链路处理。
+					replayError = err
+					return nil
+				}
+				return s.handleUpstreamTransportError(ctx, c, account, err)
+			}
+			if eventData.Len() > 0 {
+				if geminiResponseIsPreamble(eventData.Bytes()) {
+					return s.geminiPreOutputFailure(ctx, c, account, model, requestID, nil, true)
+				}
+				return s.geminiPreOutputFailure(ctx, c, account, model, requestID, eventData.Bytes(), true)
+			}
+			if !sawData && rawBody.Len() > 0 {
+				return s.geminiPreOutputFailure(ctx, c, account, model, requestID, rawBody.Bytes(), true)
+			}
+			return s.geminiPreOutputFailure(ctx, c, account, model, requestID, nil, true)
+		}
+	}
+}
+
+// geminiResponseIsPreamble 只暂存已知元数据；未知扩展字段保守交还协议层，不能吞掉供应商输出。
+func geminiResponseIsPreamble(body []byte) bool {
+	if !geminiResponseIsKnownEmpty(body) {
+		return false
+	}
+	return true
+}
+
+// geminiResponseIsKnownEmpty 只有已知的空响应形态才允许重放，未知供应商字段可能承载结果。
+func geminiResponseIsKnownEmpty(body []byte) bool {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return true
+	}
+	if !gjson.ValidBytes(body) || geminiResponseHasOutputOrUsage(body) {
+		return false
+	}
+	root := gjson.ParseBytes(body)
+	if root.IsArray() {
+		for _, item := range root.Array() {
+			if !geminiResponseIsKnownEmpty([]byte(item.Raw)) {
+				return false
+			}
+		}
+		return true
+	}
+	if inner := root.Get("response"); inner.IsObject() {
+		// 包装层同样不能丢弃未知输出字段，仅接受单一 response 包装。
+		if len(root.Map()) != 1 {
+			return false
+		}
+		root = inner
+	}
+	if !root.IsObject() || root.Get("error").Exists() || root.Get("promptFeedback").Exists() {
+		return false
+	}
+	known := true
+	root.ForEach(func(key, _ gjson.Result) bool {
+		switch key.String() {
+		case "responseId", "modelVersion", "usageMetadata", "candidates":
+		default:
+			known = false
+		}
+		return known
+	})
+	if candidates := root.Get("candidates"); candidates.Exists() && (!candidates.IsArray() || len(candidates.Array()) > 0) {
+		return false
+	}
+	return known
+}
+
+// geminiRequestHasGenerationSideEffects 识别媒体与服务端工具执行；普通参考图片输入不影响文本请求恢复。
+func geminiRequestHasGenerationSideEffects(body []byte) bool {
+	for _, path := range []string{"generationConfig.responseModalities", "generation_config.response_modalities"} {
+		for _, item := range gjson.GetBytes(body, path).Array() {
+			if strings.EqualFold(item.String(), "IMAGE") || strings.EqualFold(item.String(), "AUDIO") {
+				return true
+			}
+		}
+	}
+	for _, tool := range gjson.GetBytes(body, "tools").Array() {
+		for _, key := range []string{"codeExecution", "code_execution", "googleSearch", "google_search", "googleSearchRetrieval", "google_search_retrieval", "urlContext", "url_context"} {
+			if tool.Get(key).Exists() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// geminiResponseHasOutputOrUsage 对数组和 Code Assist 包装体保守检查副作用证据。
+func geminiResponseHasOutputOrUsage(body []byte) bool {
+	root := gjson.ParseBytes(body)
+	if root.IsArray() {
+		for _, item := range root.Array() {
+			if geminiResponseHasOutputOrUsage([]byte(item.Raw)) {
+				return true
+			}
+		}
+		return false
+	}
+	// 即使同时带有错误信封，供应商扩展字段仍可能保存已完成的结果，不能盲目重新生成。
+	unknownOutput := false
+	root.ForEach(func(key, _ gjson.Result) bool {
+		switch key.String() {
+		case "error", "status", "message", "response", "responseId", "modelVersion", "usageMetadata", "candidates", "promptFeedback":
+		default:
+			unknownOutput = true
+		}
+		return !unknownOutput
+	})
+	if unknownOutput {
+		return true
+	}
+	if inner := root.Get("response"); inner.IsObject() {
+		return geminiResponseHasOutputOrUsage([]byte(inner.Raw))
+	}
+	// 不认识的计量字段也可能代表已产生费用，不能仅检查当前结算支持的几种 Token。
+	usage := root.Get("usageMetadata")
+	hasUsage := usage.Exists() && !usage.IsObject()
+	usage.ForEach(func(key, value gjson.Result) bool {
+		switch key.String() {
+		case "promptTokenCount", "candidatesTokenCount", "thoughtsTokenCount", "cachedContentTokenCount", "totalTokenCount", "toolUsePromptTokenCount":
+			hasUsage = value.Type != gjson.Number || value.Float() != 0
+		default:
+			hasUsage = true
+		}
+		return !hasUsage
+	})
+	if hasUsage {
+		return true
+	}
+	for _, candidate := range root.Get("candidates").Array() {
+		for _, part := range candidate.Get("content.parts").Array() {
+			if part.IsObject() && part.Raw != "{}" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isGeminiClientInvalidRequestError 只识别 Google 权威错误信封里的明确参数校验。
+// INVALID_ARGUMENT 也可能代表项目、凭据或模型配置错误，不能仅凭状态枚举停止恢复。
+func isGeminiClientInvalidRequestError(status int, body []byte) bool {
+	if status != http.StatusBadRequest || !gjson.ValidBytes(body) {
+		return false
+	}
+	if inner := gjson.GetBytes(body, "response"); inner.IsObject() {
+		body = []byte(inner.Raw)
+	}
+	if !strings.EqualFold(gjson.GetBytes(body, "error.status").String(), "INVALID_ARGUMENT") {
+		return false
+	}
+	message := strings.ToLower(gjson.GetBytes(body, "error.message").String())
+	if isGoogleProjectConfigError(message) || strings.Contains(message, "api key") || strings.Contains(message, "thought_signature") || strings.Contains(message, "thoughtsignature") {
+		return false
+	}
+	if strings.Contains(message, "invalid json payload received") && (strings.Contains(message, "unknown name") || strings.Contains(message, "invalid value")) {
+		return true
+	}
+	parameterPath := false
+	for _, field := range []string{"contents", "generation_config", "generationconfig", "tools", "tool_config", "toolconfig", "system_instruction", "systeminstruction", "safety_settings", "safetysettings"} {
+		if strings.Contains(message, "generatecontentrequest."+field) || strings.Contains(message, "'"+field+"[") || strings.Contains(message, "'"+field+".") || strings.HasPrefix(strings.TrimSpace(message), field+" ") {
+			parameterPath = true
+			break
+		}
+	}
+	if !parameterPath {
+		return false
+	}
+	for _, validation := range []string{"required", "not specified", "must ", "invalid value", "expected ", "should be", "cannot find field", "unknown name", "not a valid"} {
+		if strings.Contains(message, validation) {
+			return true
+		}
+	}
+	return false
+}
+
+// geminiPreOutputFailure 只把确定上游故障转为换号信号，不把内容拒绝和参数错误当作账号故障。
+func (s *GeminiMessagesCompatService) geminiPreOutputFailure(ctx context.Context, c *gin.Context, account *Account, model, requestID string, body []byte, stream bool) error {
+	if geminiResponseHasOutputOrUsage(body) {
+		return nil
+	}
+	sig, found := detectGeminiResponseSignalInBody(body)
+	if !found {
+		if !geminiResponseIsKnownEmpty(body) {
+			return nil
+		}
+		sig = geminiResponseSignal{Kind: geminiSignalAbnormalStop, Status: http.StatusBadGateway, Reason: geminiSignalEmptyResponseReason, Message: "Gemini upstream returned an empty response body"}
+		if stream {
+			sig.Reason, sig.Message = geminiSignalEmptyStreamReason, "Gemini upstream returned an empty stream body"
+		}
+	}
+	if sig.Kind != geminiSignalError && sig.Kind != geminiSignalAbnormalStop {
+		return nil
+	}
+	if isGeminiClientInvalidRequestError(sig.Status, body) {
+		MarkOpsRequestScopedError(c, "invalid_request_error")
+		return nil
+	}
+	if !s.shouldFailoverGeminiUpstreamError(sig.Status) && !isUpstreamModelNotFoundError(sig.Status, []byte(sig.Detail)) {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	errorBody := []byte(sig.Detail)
+	if len(errorBody) == 0 {
+		errorBody, _ = json.Marshal(map[string]any{"error": map[string]any{"code": sig.Status, "status": sig.Reason, "message": sig.Message}})
+	}
+	decision := s.applyGeminiUpstreamErrorPolicy(ctx, account, sig.Status, nil, errorBody, model)
+	if decision.ShouldReturnGenericError() {
+		return nil
+	}
+	message := sanitizeUpstreamErrorMessage(sig.Message)
+	setOpsUpstreamError(c, sig.Status, message, "")
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Platform: account.Platform, AccountID: account.ID, AccountName: account.Name, UpstreamStatusCode: sig.Status, UpstreamRequestID: requestID, Kind: "failover", Message: message, Reason: upstreamModelNotFoundEventReason(sig.Status, errorBody)})
+	return &UpstreamFailoverError{StatusCode: sig.Status, ResponseBody: errorBody}
+}
+
 // geminiResponseSignalKind 区分 Gemini 2xx 响应事件里携带的带内信号。
-// 这些信号都承载在 HTTP 2xx 之上，客户端字节原样透传，只影响 ops 记录。
+// 这些信号承载在 HTTP 2xx 之上；输出前确定的上游故障允许换号，输出后只登记 ops。
 // 数值越大优先级越高：同一响应出现多个信号时只登记优先级最高的一个。
 type geminiResponseSignalKind int
 
@@ -325,6 +655,11 @@ func (s *GeminiMessagesCompatService) markGeminiResponseSignal(c *gin.Context, a
 		return
 	}
 	message := sanitizeUpstreamErrorMessage(strings.TrimSpace(sig.Message))
+	if isGeminiClientInvalidRequestError(sig.Status, []byte(sig.Detail)) {
+		MarkOpsRequestScopedError(c, "invalid_request_error")
+		MarkOpsStreamErrorValue(c, OpsStreamError{ErrType: "invalid_request_error", Code: sig.Reason, Message: message, IntendedStatus: sig.Status, RequestScoped: true, NonStream: !stream})
+		return
+	}
 	switch sig.Kind {
 	case geminiSignalPromptBlocked, geminiSignalContentFilter:
 		MarkOpsStreamErrorValue(c, OpsStreamError{

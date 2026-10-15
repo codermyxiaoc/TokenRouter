@@ -61,6 +61,16 @@ func (s *OpenAIGatewayService) CommitSeedanceResponse(c *gin.Context) {
 	}
 }
 
+// CommitSeedanceFailoverResponse 在创建候选耗尽后沿用原生错误契约，不套用文本接口的错误映射。
+func (s *OpenAIGatewayService) CommitSeedanceFailoverResponse(c *gin.Context, failure *UpstreamFailoverError) bool {
+	if s == nil || c == nil || failure == nil || c.Writer.Written() || IsResponseCommitted(c) ||
+		failure.StatusCode < 400 || failure.StatusCode > 599 || len(failure.ResponseBody) == 0 {
+		return false
+	}
+	writeGrokMediaResponse(c, &http.Response{StatusCode: failure.StatusCode, Header: failure.ResponseHeaders}, failure.ResponseBody, s.responseHeaderFilter)
+	return true
+}
+
 // CheckSeedanceTaskStorage 在创建付费任务前确认任务缓存可访问，避免已知故障下继续创建。
 func (s *OpenAIGatewayService) CheckSeedanceTaskStorage(ctx context.Context) error {
 	if s.HasLegacyVideoRecovery() {
@@ -180,15 +190,28 @@ func (s *OpenAIGatewayService) ForwardSeedance(ctx context.Context, c *gin.Conte
 	if err != nil {
 		return nil, err
 	}
-	// 异步创建可能已经受理付费任务，任何含糊错误均不得自动重复创建。
-	// 错误保持原生状态和正文，同时写入现有运维观测链路。
-	if resp.StatusCode >= 300 {
+	acceptedTask := false
+	if endpoint == SeedanceEndpointCreate && resp.StatusCode >= 400 {
+		idValue := gjson.GetBytes(responseBody, "id")
+		id := strings.TrimSpace(idValue.String())
+		// 方舟的规范 ID 是 id；错误包已有该字段时仍走后续持久归属，禁止切号。
+		acceptedTask = idValue.Type == gjson.String && id != "" && validateUpstreamPathSegment("Seedance task ID", id) == nil
+	}
+	// 异步创建只允许明确未受理的错误换号；查询、取消和含糊响应仍保留原行为。
+	if resp.StatusCode >= 300 && !acceptedTask {
 		message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(responseBody)))
 		if message == "" {
 			message = fmt.Sprintf("Seedance upstream returned status %d", resp.StatusCode)
 		}
 		setOpsUpstreamError(c, resp.StatusCode, message, "")
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Platform: account.Platform, AccountID: account.ID, AccountName: account.Name, UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("X-Request-Id"), Kind: "http_error", Message: message})
+		kind := "http_error"
+		if endpoint == SeedanceEndpointCreate && VideoCreationDefinitelyRejected(resp.StatusCode, responseBody) {
+			kind = "failover"
+		}
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Platform: account.Platform, AccountID: account.ID, AccountName: account.Name, UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("X-Request-Id"), Kind: kind, Message: message})
+		if kind == "failover" {
+			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: responseBody, ResponseHeaders: resp.Header.Clone(), NextAccountAction: NextAccountRetry}
+		}
 		MarkResponseCommitted(c)
 		writeGrokMediaResponse(c, resp, responseBody, s.responseHeaderFilter)
 		return nil, fmt.Errorf("seedance upstream status %d", resp.StatusCode)

@@ -76,7 +76,7 @@ func resolveSmartRoutingAPIKeyRequest(c *gin.Context, apiKeyService *service.API
 		model = target
 	}
 	execution := prepareSmartRoutingExecution(c, apiKey)
-	requestCtx := c.Request.Context()
+	requestCtx := service.WithSmartRoutingScope(c.Request.Context())
 	if strings.Contains(c.Request.URL.Path, "/responses") {
 		body, bodyErr := readAndRestoreRequestBody(c.Request)
 		if bodyErr != nil {
@@ -92,6 +92,26 @@ func resolveSmartRoutingAPIKeyRequest(c *gin.Context, apiKeyService *service.API
 	if !ok || resolver == nil {
 		return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_UNAVAILABLE", "Smart routing is temporarily unavailable")
 	}
+	accountCooldown := false
+	if current, ok := resolver.(smartRoutingAccountCooldownResolver); ok {
+		accountCooldown = current.UsesSmartRoutingAccountCooldown()
+	}
+	if execution != nil {
+		execution.model, execution.endpoint = model, c.Request.URL.Path
+		requestCtx = service.WithSmartRoutingAccountCooldown(requestCtx, apiKey.ID, execution.cooldown, model, c.Request.URL.Path)
+		c.Request = c.Request.WithContext(requestCtx)
+		if accountCooldown && execution.continuationRequiresSameCandidate() && !execution.continuationResolved {
+			if ownerResolver, ok := resolver.(smartRoutingContinuationResolver); ok {
+				binding, err := ownerResolver.ResolveSmartRoutingContinuation(requestCtx, apiKey, gjson.GetBytes(execution.body, "previous_response_id").String())
+				if err != nil {
+					return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_UNAVAILABLE", "Unable to verify continuation routing")
+				}
+				execution.continuationGroupID = binding.GroupID
+				service.SetSmartRoutingContinuationAccount(requestCtx, binding.AccountID)
+			}
+			execution.continuationResolved = true
+		}
+	}
 	forcedPlatform, _ := GetForcePlatformFromContext(c)
 	hasModel := false
 	matchingGroups, coolingGroups := 0, 0
@@ -100,6 +120,9 @@ func resolveSmartRoutingAPIKeyRequest(c *gin.Context, apiKeyService *service.API
 		binding := &apiKey.CompositeGroups[index]
 		group := binding.Group
 		if group == nil || !group.IsActive() || apiKey.User == nil || !apiKey.User.CanBindGroup(group.ID, group.IsExclusive) {
+			continue
+		}
+		if execution != nil && execution.continuationGroupID > 0 && execution.continuationGroupID != group.ID {
 			continue
 		}
 		if forcedPlatform != "" && group.Platform != forcedPlatform {
@@ -121,7 +144,19 @@ func resolveSmartRoutingAPIKeyRequest(c *gin.Context, apiKeyService *service.API
 		}
 		hasModel = true
 		matchingGroups++
-		if execution != nil && execution.cooldown > 0 {
+		if accountCooldown && availability.Cooling {
+			if execution != nil && execution.continuationRequiresSameCandidate() {
+				c.Set("ops_routing_capacity_limited", true)
+				c.Header("Retry-After", strconv.Itoa(max(1, int(math.Ceil(availability.RetryAfter.Seconds())))))
+				return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_CONTINUATION_GROUP_COOLING", "Service temporarily unavailable: the continuation account is cooling down")
+			}
+			coolingGroups++
+			if retryAfter == 0 || availability.RetryAfter < retryAfter {
+				retryAfter = availability.RetryAfter
+			}
+			continue
+		}
+		if !accountCooldown && execution != nil && execution.cooldown > 0 {
 			if cache, ok := resolver.(smartRoutingCooldownResolver); ok {
 				ttl, cacheErr := cache.GetSmartRoutingCooldown(requestCtx, apiKey.ID, group.ID)
 				if cacheErr != nil {
@@ -142,6 +177,11 @@ func resolveSmartRoutingAPIKeyRequest(c *gin.Context, apiKeyService *service.API
 			}
 		}
 		if !availability.Schedulable {
+			// 归属未知的远端历史也不能借容量不足漂移到其它供应商。
+			if accountCooldown && execution != nil && execution.continuationRequiresSameCandidate() {
+				c.Set("ops_routing_capacity_limited", true)
+				return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_NO_AVAILABLE_ACCOUNTS", "No schedulable account for this continuation")
+			}
 			continue
 		}
 		selected, selectErr := apiKeyService.SelectCompositeGroupForRequest(c.Request.Context(), apiKey, binding)

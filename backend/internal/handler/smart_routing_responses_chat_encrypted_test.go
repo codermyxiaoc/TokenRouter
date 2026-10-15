@@ -60,8 +60,46 @@ func (r *encryptedRoutingKeyRepo) UpdateLastUsed(context.Context, int64, time.Ti
 // encryptedRoutingCooldownCache 仅替代缓存存储，冷却读写仍走生产 SmartRoutingService。
 type encryptedRoutingCooldownCache struct {
 	service.GatewayCache
-	mu    sync.Mutex
-	until map[[2]int64]time.Time
+	mu           sync.Mutex
+	until        map[[2]int64]time.Time
+	accountUntil map[encryptedRoutingCooldownKey]time.Time
+}
+
+type encryptedRoutingCooldownKey struct {
+	keyID, accountID int64
+	model, endpoint  string
+}
+
+// 账号冷却按模型和入口隔离，重复失败不得刷新当前窗口。
+func (c *encryptedRoutingCooldownCache) GetSmartRoutingAccountCooldowns(_ context.Context, keyID int64, accountIDs []int64, model, endpoint string) (map[int64]time.Duration, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	remaining := make(map[int64]time.Duration)
+	for _, accountID := range accountIDs {
+		if left := time.Until(c.accountUntil[encryptedRoutingCooldownKey{keyID, accountID, model, endpoint}]); left > 0 {
+			remaining[accountID] = left
+		}
+	}
+	return remaining, nil
+}
+
+func (c *encryptedRoutingCooldownCache) CooldownSmartRoutingAccounts(_ context.Context, keyID int64, accountIDs []int64, model, endpoint string, ttl time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ttl <= 0 {
+		return nil
+	}
+	if c.accountUntil == nil {
+		c.accountUntil = make(map[encryptedRoutingCooldownKey]time.Time)
+	}
+	now := time.Now()
+	for _, accountID := range accountIDs {
+		id := encryptedRoutingCooldownKey{keyID, accountID, model, endpoint}
+		if !c.accountUntil[id].After(now) {
+			c.accountUntil[id] = now.Add(ttl)
+		}
+	}
+	return nil
 }
 
 func (c *encryptedRoutingCooldownCache) GetSmartRoutingCooldown(_ context.Context, keyID, groupID int64) (time.Duration, error) {
@@ -195,9 +233,11 @@ func TestSmartRoutingResponsesChatEncryptedHistoryRetriesAndCools(t *testing.T) 
 	require.NotContains(t, first.Body.String(), "Upstream service temporarily unavailable")
 	require.Equal(t, []int64{1, 2}, attempts)
 	require.Equal(t, []int{http.StatusBadGateway}, mappedStatuses, "原始 503 经真实 handler 映射为 502 后仍应换组")
-	remaining, err := resolver.GetSmartRoutingCooldown(context.Background(), key.ID, 1)
+	remaining, err := cache.GetSmartRoutingAccountCooldowns(context.Background(), key.ID, []int64{101, 102}, "gpt-6-astra", "/v1/responses")
 	require.NoError(t, err)
-	require.Positive(t, remaining)
+	require.Positive(t, remaining[101])
+	require.Zero(t, remaining[102], "恢复成功的账号不得冷却")
+	require.Empty(t, cache.until, "生产智能路由不得写入旧整组冷却")
 	second := call()
 	require.Equal(t, http.StatusOK, second.Code, second.Body.String())
 	require.Contains(t, second.Body.String(), "second-group-success")

@@ -56,6 +56,15 @@ type VideoTaskRecord struct {
 	PollAttempts          int
 	LeaseToken            string
 	LeaseUntil            time.Time
+	// 明确拒绝的已放弃尝试仅留安全路由与状态，用户任务和资金账本始终保持唯一。
+	RejectedAttempts []VideoRejectedAttempt `json:",omitempty"`
+}
+
+// VideoRejectedAttempt 不保存凭据、提示词或失败响应正文。
+type VideoRejectedAttempt struct {
+	Target     VideoUpstreamTarget
+	StatusCode int
+	RejectedAt time.Time
 }
 
 // VideoTaskRepository 的租约仅保护短期状态推进，资金事务另外使用任务行锁互斥。

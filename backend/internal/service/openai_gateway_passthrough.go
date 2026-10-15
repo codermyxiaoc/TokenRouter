@@ -681,6 +681,10 @@ func shouldFailoverOpenAIPassthroughResponse(account *Account, statusCode int, r
 	if isOpenAIContextWindowError("", responseBody) {
 		return false
 	}
+	// 模型属于本站可路由目录但当前上游不可提供时，应保留组内其它账号的恢复机会。
+	if isUpstreamModelNotFoundError(statusCode, responseBody) {
+		return true
+	}
 	if isOpenAIHTTPUpstreamAccessStateError(statusCode, "", responseBody) {
 		return true
 	}
@@ -823,6 +827,7 @@ func (s *OpenAIGatewayService) handleFailoverErrorResponsePassthrough(
 		UpstreamRequestID:    resp.Header.Get("x-request-id"),
 		Passthrough:          true,
 		Kind:                 "failover",
+		Reason:               upstreamModelNotFoundEventReason(resp.StatusCode, body),
 		Message:              upstreamMsg,
 		Detail:               upstreamDetail,
 		UpstreamResponseBody: upstreamDetail,
@@ -875,6 +880,10 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
 	clientInvalidRequest := isOpenAIClientInvalidRequestError(resp.StatusCode, upstreamMsg, body)
+	if clientInvalidRequest || isOpenAIRequestBodyTooLargeError(resp.StatusCode, upstreamMsg, body) {
+		// 组内已经确认的参数终态，也必须阻止智能路由外层跨组重放。
+		MarkOpsRequestScopedError(c, "invalid_request_error")
+	}
 	if cyberHit || IsOpenAICyberWarningPayload(body, upstreamMsg) {
 		// 透传路径也保留明确风控终态，其它真实上游参数错误仍可换组恢复。
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)

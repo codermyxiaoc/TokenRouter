@@ -18,7 +18,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// VideoTaskService 是独立视频任务协调器，生成请求只提交一次，恢复只查询和结算。
+// VideoTaskService 在明确拒绝时有界换号，已有任务或受理未知时只查询和结算。
 type VideoTaskService struct {
 	repo         VideoTaskRepository
 	upstream     VideoTaskTransport
@@ -166,10 +166,7 @@ func (s *VideoTaskService) Submit(ctx context.Context, key *APIKey, req VideoTas
 		}
 		return videoCreateProtocolResponse(task, req), nil
 	}
-	if selection.Release != nil {
-		defer selection.Release()
-	}
-	return s.submitPreparedTask(ctx, req, task, selection)
+	return s.submitPreparedTask(ctx, key, req, task, selection)
 }
 
 // prepareTask 保存前只做选号和价格校验；失败和幂等命中都会立即释放账号槽。
@@ -270,8 +267,16 @@ func (s *VideoTaskService) prepareTask(ctx context.Context, key *APIKey, req Vid
 	return existing, selection, created, nil
 }
 
-// submitPreparedTask 从预算事务开始固定账号，任何受理不明均保留原任务交后台恢复。
-func (s *VideoTaskService) submitPreparedTask(ctx context.Context, req VideoTaskSubmitRequest, t *VideoTaskRecord, selection *VideoUpstreamSelection) (*VideoTaskResponse, error) {
+// submitPreparedTask 保留唯一预算合同，仅在明确拒绝且没有任务 ID 时迁移账号。
+func (s *VideoTaskService) submitPreparedTask(ctx context.Context, key *APIKey, req VideoTaskSubmitRequest, t *VideoTaskRecord, selection *VideoUpstreamSelection) (*VideoTaskResponse, error) {
+	release := selection.Release
+	releaseSelection := func() {
+		if release != nil {
+			release()
+			release = nil
+		}
+	}
+	defer releaseSelection()
 	if _, err := s.billing.ReserveBatchImageBalance(ctx, &t.Hold); err != nil {
 		// 提交事务的网络错误可能发生在成功之后；先重读账务状态，不能直接宣称已释放。
 		cleanup, done := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -308,28 +313,82 @@ func (s *VideoTaskService) submitPreparedTask(ctx context.Context, req VideoTask
 	// 客户端断连不能中断已经开始的上游受理与归属保存，所有操作仍有独立截止时间。
 	work, done := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
 	defer done()
-	response, callErr := s.upstream.Submit(work, selection)
-	if callErr != nil {
-		t.Status = "submission_unknown"
-		t.ErrorMessage = "上游受理结果未确认，请勿重新提交"
-		t.BillingStatus = "reconciliation"
-		t.NextPollAt = time.Now().Add(time.Hour)
-		_ = s.repo.Save(work, t, true)
-		_ = s.observe(work, t)
-		result := videoProtocolResponse(t, req.InboundProtocol, false)
-		result.StatusCode = http.StatusBadGateway
-		return result, nil
+	maxSwitches := 3
+	if s.cfg != nil && s.cfg.Gateway.MaxAccountSwitches > 0 {
+		maxSwitches = min(s.cfg.Gateway.MaxAccountSwitches, 10)
 	}
-	s.applySubmissionResponse(t, response)
-	if err = s.repo.Save(work, t, false); err != nil {
-		return &VideoTaskResponse{StatusCode: http.StatusServiceUnavailable, LocalTaskID: t.ID, Body: []byte(fmt.Sprintf(`{"error":{"code":"video_task_storage_unavailable","message":"任务可能已受理，请勿重新提交","task_id":%q,"upstream_task_id":%q}}`, t.ID, t.UpstreamTaskID))}, nil
+	var response *VideoUpstreamResponse
+	// 首次提交及换号都在实际发送前检查取消；独立清理预算不受客户端或创建总预算中断影响。
+	stopUnsubmittedAttempt := func() (*VideoTaskResponse, error) {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		t.Status = "failed"
+		t.ErrorMessage = "视频提交前执行中断"
+		now := time.Now().UTC()
+		t.CompletedAt = &now
+		if s.repo.Save(cleanup, t, false) == nil {
+			s.finish(cleanup, t)
+		}
+		_ = s.repo.Save(cleanup, t, true)
+		// 首次尝试还没有上游响应，返回原中断原因；换号仍保留上一次明确拒绝的响应。
+		if response == nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return nil, work.Err()
+		}
+		return &VideoTaskResponse{StatusCode: response.StatusCode, Header: response.Header, Body: response.Body, LocalTaskID: t.ID}, nil
 	}
-	if !videoStoredResponseMatchesTask(t) {
-		// 首次原生创建也不能绕过投影门禁直接回传冲突包，预算留给人工核对。
-		t.NextPollAt = time.Now().Add(time.Hour)
-		_ = s.repo.Save(work, t, true)
-		_ = s.observe(work, t)
-		return videoTaskMismatchResponse(t), nil
+	for switches := 0; ; switches++ {
+		// 写入 submitting 也可能等待数据库；首次或重试 POST 都不能忽略期间发生的取消。
+		if ctx.Err() != nil || work.Err() != nil {
+			return stopUnsubmittedAttempt()
+		}
+		var callErr error
+		response, callErr = s.upstream.Submit(work, selection)
+		if callErr != nil {
+			t.Status = "submission_unknown"
+			t.ErrorMessage = "上游受理结果未确认，请勿重新提交"
+			t.BillingStatus = "reconciliation"
+			t.NextPollAt = time.Now().Add(time.Hour)
+			_ = s.repo.Save(work, t, true)
+			_ = s.observe(work, t)
+			result := videoProtocolResponse(t, req.InboundProtocol, false)
+			result.StatusCode = http.StatusBadGateway
+			return result, nil
+		}
+		s.applySubmissionResponse(t, response)
+		if err = s.repo.Save(work, t, false); err != nil {
+			return &VideoTaskResponse{StatusCode: http.StatusServiceUnavailable, LocalTaskID: t.ID, Body: []byte(fmt.Sprintf(`{"error":{"code":"video_task_storage_unavailable","message":"任务可能已受理，请勿重新提交","task_id":%q,"upstream_task_id":%q}}`, t.ID, t.UpstreamTaskID))}, nil
+		}
+		if !videoStoredResponseMatchesTask(t) {
+			// 首次原生创建也不能绕过投影门禁直接回传冲突包，预算留给人工核对。
+			t.NextPollAt = time.Now().Add(time.Hour)
+			_ = s.repo.Save(work, t, true)
+			_ = s.observe(work, t)
+			return videoTaskMismatchResponse(t), nil
+		}
+		if switches >= maxSwitches || ctx.Err() != nil || work.Err() != nil || !VideoTaskCanRetrySubmission(t) {
+			break
+		}
+		releaseSelection()
+		nextTask, nextSelection, retryErr := s.nextRejectedVideoAccount(work, key, &req, t)
+		if retryErr != nil {
+			// 仓储提交结果未知时不发送下一次 POST，持久租约恢复会释放尚未发送的 prepared 任务。
+			return &VideoTaskResponse{StatusCode: http.StatusServiceUnavailable, LocalTaskID: t.ID, Body: []byte(fmt.Sprintf(`{"error":{"code":"video_task_storage_unavailable","message":"任务正在恢复，请查询原任务，不要重新提交","task_id":%q}}`, t.ID))}, nil
+		}
+		if nextSelection == nil {
+			break
+		}
+		t, selection, release = nextTask, nextSelection, nextSelection.Release
+		// 选账号及容量迁移使用独立上下文收尾，但不能据此忽略期间发生的客户端取消。
+		if ctx.Err() != nil || work.Err() != nil {
+			return stopUnsubmittedAttempt()
+		}
+		t.Status = "submitting"
+		if err = s.repo.Save(work, t, false); err != nil {
+			return &VideoTaskResponse{StatusCode: http.StatusServiceUnavailable, LocalTaskID: t.ID, Body: []byte(fmt.Sprintf(`{"error":{"code":"video_task_storage_unavailable","message":"任务正在恢复，请查询原任务，不要重新提交","task_id":%q}}`, t.ID))}, nil
+		}
 	}
 	s.finish(work, t)
 	t.NextPollAt = time.Now().Add(15 * time.Second)
@@ -341,7 +400,7 @@ func (s *VideoTaskService) submitPreparedTask(ctx context.Context, req VideoTask
 }
 
 // applySubmissionResponse 只处理创建响应，不能用查询失败触发退款。
-// 创建收到错误响应且没有任务 ID 时由平台承担不确定成本，向用户释放预算；不自动重提。
+// 创建错误无任务 ID 最终仍释放预算；只有有明确拒绝证据的响应允许在释放前有界换号。
 func (s *VideoTaskService) applySubmissionResponse(t *VideoTaskRecord, response *VideoUpstreamResponse) {
 	t.ResponseStatus = response.StatusCode
 	t.RawResponse = append([]byte(nil), response.Body...)

@@ -488,6 +488,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		}
 	}
 	fs := NewFailoverState(maxAccountSwitches, hasBoundSession)
+	slotRetry := &accountSlotReschedule{excluded: fs.FailedAccountIDs, switches: &fs.SwitchCount, maximum: fs.MaxSwitches, requiredAccount: cachedContentBinding != nil}
 
 	// 单账号分组提前设置 SingleAccountRetry 标记，让 Service 层首次 503 就不设模型限流标记。
 	// 避免单账号分组收到 503 (MODEL_CAPACITY_EXHAUSTED) 时设 29s 限流，导致后续请求连续快速失败。
@@ -510,6 +511,10 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 			err = service.ErrNoAvailableAccounts
 		}
 		if err != nil {
+			// 选号期间取消不能改写成容量不足，也不能开始下一次上游请求。
+			if failoverClientGone(c) {
+				return
+			}
 			if cachedContentBinding != nil {
 				if fs.LastFailoverErr != nil {
 					h.handleGeminiCachedContentFailoverExhausted(c, fs.LastFailoverErr)
@@ -532,6 +537,12 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 					message = "No available Gemini accounts: " + err.Error()
 				}
 				googleError(c, cls.Status, message)
+				return
+			}
+			if fs.LastFailoverErr == nil && slotRetry.writeExhausted(func(status int, _, _, message string) {
+				markOpsRoutingCapacityLimited(c)
+				googleError(c, status, message)
+			}) {
 				return
 			}
 			action := fs.HandleSelectionExhausted(c.Request.Context())
@@ -592,6 +603,10 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 					zap.Int64("account_id", account.ID),
 					zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 				)
+				slotRetry.excluded = fs.FailedAccountIDs
+				if slotRetry.handleCapacity(c, account.ID, http.StatusTooManyRequests, gatewayQueueFullCode, "Too many pending requests, please retry later") {
+					continue
+				}
 				googleError(c, http.StatusTooManyRequests, "Too many pending requests, please retry later")
 				return
 			}
@@ -608,13 +623,27 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 				c,
 				account.ID,
 				selection.WaitPlan.MaxConcurrency,
-				selection.WaitPlan.Timeout,
+				slotRetry.waitTimeout(selection.WaitPlan.Timeout),
 				stream,
 				&streamStarted,
 			)
 			if err != nil {
 				reqLog.Warn("gemini.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-				googleError(c, http.StatusTooManyRequests, err.Error())
+				// 在下一次选号前释放当前等待计数，不能等整个请求结束才回收。
+				if accountWaitCounted {
+					geminiConcurrency.DecrementAccountWaitCount(c.Request.Context(), account.ID)
+					accountWaitCounted = false
+				}
+				if failoverClientGone(c) {
+					return
+				}
+				status, _, code, message := concurrencyErrorResponse(err, "account")
+				slotRetry.excluded = fs.FailedAccountIDs
+				if slotRetry.handleCapacity(c, account.ID, status, code, message) {
+					continue
+				}
+				// 本地并发服务故障保留503，仅真实满槽或等待超时返回429。
+				googleErrorWithType(c, status, googleClientErrorType(status), code, message)
 				return
 			}
 			if accountWaitCounted {
@@ -654,7 +683,10 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 			accountReleaseFunc()
 		}
 		unbilledUpstreamFailure := err == nil && smartRoutingGeminiFailureWithoutUsage(c, apiKey, result)
-		h.gatewayService.ReportAdvancedAccountScheduleResult(selection, account.ID, err == nil && !unbilledUpstreamFailure, result)
+		// HTTP 200 的带内错误也属于失败，普通 Key 与智能路由必须使用同一调度健康标准。
+		semanticFailure, hasSemanticFailure := service.GetOpsStreamError(c)
+		upstreamFailed := hasSemanticFailure && semanticFailure.CountTowardsSLA && !semanticFailure.RequestScoped
+		h.gatewayService.ReportAdvancedAccountScheduleResult(selection, account.ID, err == nil && !upstreamFailed, result)
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
@@ -751,9 +783,9 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 }
 
 // smartRoutingGeminiFailureWithoutUsage 仅跳过真实带内失败的零用量成功后处理。
-// 请求级策略拒绝不借用历史错误，普通 Key 与已观测计量仍沿用原有结算路径。
+// 请求级策略拒绝不借用历史错误；普通 Key 同样不能将上游带内失败伪记为零费用成功。
 func smartRoutingGeminiFailureWithoutUsage(c *gin.Context, key *service.APIKey, result *service.ForwardResult) bool {
-	if key == nil || !key.SmartRouting || result == nil {
+	if key == nil || result == nil {
 		return false
 	}
 	failure, exists := service.GetOpsStreamError(c)

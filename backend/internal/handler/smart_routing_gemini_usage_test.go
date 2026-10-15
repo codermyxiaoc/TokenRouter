@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 只有智能路由实际观测到的无计量失败跳过成功后处理，不能丢失部分用量或借用历史拒绝。
+// 普通与智能路由密钥的无计量失败均跳过成功后处理，不能丢失部分用量或借用历史拒绝。
 func TestSmartRoutingGeminiFailureUsageBoundary(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, test := range []struct {
@@ -19,7 +19,7 @@ func TestSmartRoutingGeminiFailureUsageBoundary(t *testing.T) {
 		want   bool
 	}{
 		{name: "upstream_400_without_usage", want: true},
-		{name: "normal_key", mutate: func(_ *gin.Context, key *service.APIKey, _ *service.ForwardResult) { key.SmartRouting = false }},
+		{name: "normal_key", want: true, mutate: func(_ *gin.Context, key *service.APIKey, _ *service.ForwardResult) { key.SmartRouting = false }},
 		{name: "input_tokens", mutate: func(_ *gin.Context, _ *service.APIKey, r *service.ForwardResult) { r.Usage.InputTokens = 4 }},
 		{name: "output_tokens", mutate: func(_ *gin.Context, _ *service.APIKey, r *service.ForwardResult) { r.Usage.OutputTokens = 2 }},
 		{name: "cached_tokens", mutate: func(_ *gin.Context, _ *service.APIKey, r *service.ForwardResult) { r.Usage.CacheReadInputTokens = 9 }},

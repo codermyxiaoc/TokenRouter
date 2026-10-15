@@ -194,7 +194,16 @@ func isOpenAIClientInvalidRequestError(upstreamStatusCode int, upstreamMsg strin
 	}
 	errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.type").String()))
 	errCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.code").String()))
-	return errType == "invalid_request_error" && errCode == OpenAIPropertyNameAboveMaxLengthCode
+	if errType != "invalid_request_error" {
+		return false
+	}
+	// 仅加入明确的客户端结构错误码，普通上游 400 及兼容性问题仍保留恢复资格。
+	switch errCode {
+	case OpenAIPropertyNameAboveMaxLengthCode, "invalid_function_parameters", "invalid_json_schema":
+		return true
+	default:
+		return false
+	}
 }
 
 // isOpenAICapacityShedMessage 识别没有稳定错误码时的上游容量降载文案。
@@ -277,6 +286,9 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode i
 	}
 	if isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
 		return false
+	}
+	if isUpstreamModelNotFoundError(statusCode, upstreamBody) {
+		return true
 	}
 	if isOpenAIHTTPUpstreamAccessStateError(statusCode, upstreamMsg, upstreamBody) {
 		return true
@@ -591,6 +603,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	}
 
 	if isOpenAIRequestBodyTooLargeError(resp.StatusCode, upstreamMsg, body) {
+		MarkOpsRequestScopedError(c, "invalid_request_error")
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -600,6 +613,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			Kind:               "http_error",
 			Message:            upstreamMsg,
 			Detail:             upstreamDetail,
+			Scope:              "request",
 		})
 		writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 		contentType := resp.Header.Get("Content-Type")
@@ -616,6 +630,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 
 	if isOpenAIClientInvalidRequestError(resp.StatusCode, upstreamMsg, body) {
 		// 参数型 400 不影响账号健康；保留上游上下文供 Ops 排障，并向客户端透传完整错误结构。
+		MarkOpsRequestScopedError(c, "invalid_request_error")
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -625,7 +640,14 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			Kind:               "http_error",
 			Message:            upstreamMsg,
 			Detail:             upstreamDetail,
+			Scope:              "request",
 		})
+		// 参数错误不触发账号策略，但管理员的最终响应改写仍然优先。
+		if status, errType, message, matched := applyErrorPassthroughRule(c, account.Platform, resp.StatusCode, body, http.StatusBadRequest, "invalid_request_error", upstreamMsg); matched {
+			MarkResponseCommitted(c)
+			c.JSON(status, gin.H{"error": gin.H{"type": errType, "message": message}})
+			return nil, fmt.Errorf("upstream invalid request: %d (passthrough rule matched)", resp.StatusCode)
+		}
 		writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 		contentType := resp.Header.Get("Content-Type")
 		if contentType == "" {
@@ -695,6 +717,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		Kind:               kind,
 		Message:            upstreamMsg,
 		Detail:             upstreamDetail,
+		Reason:             upstreamModelNotFoundEventReason(resp.StatusCode, body),
 	})
 	if kind == "failover" {
 		return nil, &UpstreamFailoverError{
@@ -854,6 +877,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 
 	if isOpenAIClientInvalidRequestError(resp.StatusCode, upstreamMsg, body) {
 		// 兼容协议也必须保留上游 error 对象中的 code、param 等结构化详情。
+		MarkOpsRequestScopedError(c, "invalid_request_error")
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -863,12 +887,18 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 			Kind:               "http_error",
 			Message:            upstreamMsg,
 			Detail:             upstreamDetail,
+			Scope:              "request",
 		})
 		MarkResponseCommitted(c)
+		if status, errType, message, matched := applyErrorPassthroughRule(c, account.Platform, resp.StatusCode, body, http.StatusBadRequest, "invalid_request_error", upstreamMsg); matched {
+			writeError(c, status, errType, message)
+			return nil, fmt.Errorf("upstream invalid request: %d (passthrough rule matched)", resp.StatusCode)
+		}
 		writeErrorBody(c, http.StatusBadRequest, body)
 		return nil, fmt.Errorf("upstream invalid request: %d message=%s", resp.StatusCode, upstreamMsg)
 	}
 	if isOpenAIRequestBodyTooLargeError(resp.StatusCode, upstreamMsg, body) {
+		MarkOpsRequestScopedError(c, "invalid_request_error")
 		MarkResponseCommitted(c)
 		writeErrorBody(c, resp.StatusCode, body)
 		return nil, fmt.Errorf("upstream request body too large: %d message=%s", resp.StatusCode, upstreamMsg)
@@ -920,6 +950,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		Kind:               kind,
 		Message:            upstreamMsg,
 		Detail:             upstreamDetail,
+		Reason:             upstreamModelNotFoundEventReason(resp.StatusCode, body),
 	})
 	if kind == "failover" {
 		return nil, &UpstreamFailoverError{

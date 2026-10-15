@@ -26,7 +26,7 @@ type VideoTaskSubmitRequest struct {
 	NativePath      string
 	Native          bool
 	IdempotencyKey  string
-	// ExcludedAccountIDs 仅用于创建前的原子容量拒绝后重选，不接收客户端JSON或参与幂等摘要。
+	// ExcludedAccountIDs 用于容量拒绝及明确未受理后的重选，不接收客户端 JSON 或参与幂等摘要。
 	ExcludedAccountIDs map[int64]struct{} `json:"-"`
 }
 

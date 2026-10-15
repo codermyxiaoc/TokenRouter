@@ -196,7 +196,7 @@ func (s *OpenAIGatewayService) handleResponsesInputTokensUpstreamError(
 ) error {
 	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))
 	// 错误策略可能提前返回通用错误，先保存实际响应证据与原始状态供智能路由判断。
-	recordResponsesInputTokensHTTPError(c, account, resp, upstreamMsg)
+	recordResponsesInputTokensHTTPError(c, account, resp, upstreamMsg, body)
 	var decision UpstreamErrorDecision
 	if account.Platform == PlatformGrok {
 		decision = s.applyGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, prepared.UpstreamModel)
@@ -233,11 +233,15 @@ func (s *OpenAIGatewayService) handleResponsesInputTokensUpstreamError(
 }
 
 // recordResponsesInputTokensHTTPError 统一记录已收到的上游错误，允许错误体缺失但不猜测状态。
-func recordResponsesInputTokensHTTPError(c *gin.Context, account *Account, resp *http.Response, message string) {
+func recordResponsesInputTokensHTTPError(c *gin.Context, account *Account, resp *http.Response, message string, body ...[]byte) {
+	reason := ""
+	if len(body) > 0 {
+		reason = upstreamModelNotFoundEventReason(resp.StatusCode, body[0])
+	}
 	setOpsUpstreamError(c, resp.StatusCode, message, "")
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 		Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
 		UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
-		Kind: "http_error", Message: message,
+		Kind: "http_error", Message: message, Reason: reason,
 	})
 }

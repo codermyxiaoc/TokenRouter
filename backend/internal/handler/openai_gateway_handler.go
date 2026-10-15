@@ -677,6 +677,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	var passthroughFailoverState openAIPassthroughFailoverState
+	slotRetry := &accountSlotReschedule{excluded: failedAccountIDs, switches: &switchCount, maximum: maxAccountSwitches, requiredAccount: previousResponseID != ""}
 
 	// 生图意图的 /v1/responses 请求必须调度到确实支持 Responses API 的账号，否则
 	// 会在 forward 阶段被静默降级为无法生图的 Chat Completions 直转（#4417）。
@@ -715,6 +716,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("openai.account_select_aborted_client_disconnected", zap.Error(err))
+				return
+			}
+			if lastFailoverErr == nil && slotRetry.writeExhausted(func(status int, errType, code, message string) {
+				markOpsRoutingCapacityLimited(c)
+				h.handleStreamingAwareErrorWithCode(c, status, errType, code, message, streamStarted, false)
+			}) {
 				return
 			}
 			reqLog.Warn("openai.account_select_failed",
@@ -790,8 +797,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog, slotRetry)
 		if !acquired {
+			if slotRetry.retry {
+				continue
+			}
 			return
 		}
 
@@ -1295,6 +1305,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	currentRoutingModel := accountLayerModel
+	slotRetry := &accountSlotReschedule{excluded: failedAccountIDs, switches: &switchCount, maximum: maxAccountSwitches}
 
 	for {
 		if failoverClientGone(c) {
@@ -1318,6 +1329,12 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("openai_messages.account_select_aborted_client_disconnected", zap.Error(err))
+				return
+			}
+			if lastFailoverErr == nil && slotRetry.writeExhausted(func(status int, errType, code, message string) {
+				markOpsRoutingCapacityLimited(c)
+				h.anthropicStreamingAwareError(c, status, errType, message, streamStarted)
+			}) {
 				return
 			}
 			reqLog.Warn("openai_messages.account_select_failed",
@@ -1359,8 +1376,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog, slotRetry)
 		if !acquired {
+			if slotRetry.retry {
+				continue
+			}
 			return
 		}
 
@@ -1624,6 +1644,8 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 // handleAnthropicFailoverExhausted 将上游切号错误转换为 Anthropic 格式。
 func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, streamStarted bool) {
 	if failoverErr != nil && failoverErr.IsOpenAIRequestBodyTooLarge() {
+		// 组内不同代理限额已经尝试完毕，不能再把同一超大请求跨组重放。
+		service.MarkOpsRequestScopedError(c, "invalid_request_error")
 		service.SetOpsUpstreamError(c, http.StatusRequestEntityTooLarge, service.OpenAIRequestBodyTooLargeClientMessage, "")
 		h.anthropicStreamingAwareError(
 			c,
@@ -2123,8 +2145,23 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	reqStream bool,
 	streamStarted *bool,
 	reqLog *zap.Logger,
+	reschedules ...*accountSlotReschedule,
 ) (func(), bool) {
-	release, result := h.acquireOpenAIAccountSlot(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, nil)
+	var retry *accountSlotReschedule
+	if len(reschedules) > 0 {
+		retry = reschedules[0]
+	}
+	var writeError openAISlotErrorWriter
+	if retry != nil {
+		retry.retry = false
+		writeError = func(status int, errType, code, message string) {
+			if selection != nil && selection.Account != nil && retry.handleCapacity(c, selection.Account.ID, status, code, message) {
+				return
+			}
+			h.handleStreamingAwareErrorWithCode(c, status, errType, code, message, *streamStarted, false)
+		}
+	}
+	release, result := h.acquireOpenAIAccountSlot(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, writeError, retry)
 	return release, result == openAISlotAcquireOK
 }
 
@@ -2142,6 +2179,7 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	streamStarted *bool,
 	reqLog *zap.Logger,
 	writeError openAISlotErrorWriter,
+	reschedules ...*accountSlotReschedule,
 ) (func(), openAISlotAcquireResult) {
 	if writeError == nil {
 		writeError = func(status int, errType, code, message string) {
@@ -2184,6 +2222,16 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 		}
 		return wrapReleaseOnDone(ctx, fastReleaseFunc), openAISlotAcquireOK
 	}
+	// 首次排队用尽后仍可尝试其它账号的空闲槽，但不能再次等待完整超时。
+	waitTimeout := selection.WaitPlan.Timeout
+	if len(reschedules) > 0 && reschedules[0] != nil {
+		waitTimeout = reschedules[0].waitTimeout(waitTimeout)
+		if waitTimeout <= 0 {
+			status, errType, code, message := concurrencyErrorResponse(&ConcurrencyError{SlotType: "account", IsTimeout: true}, "account")
+			writeError(status, errType, code, message)
+			return nil, openAISlotAcquireFailed
+		}
+	}
 
 	canWait, waitErr := h.concurrencyHelper.IncrementAccountWaitCount(ctx, account.ID, selection.WaitPlan.MaxWaiting)
 	if waitErr != nil {
@@ -2210,7 +2258,7 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 		c,
 		account.ID,
 		selection.WaitPlan.MaxConcurrency,
-		selection.WaitPlan.Timeout,
+		waitTimeout,
 		reqStream,
 		streamStarted,
 	)
@@ -3254,6 +3302,8 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		return
 	}
 	if failoverErr.IsOpenAIRequestBodyTooLarge() {
+		// 保留账号间体积限制恢复，但耗尽后按请求终态交给智能路由。
+		service.MarkOpsRequestScopedError(c, "invalid_request_error")
 		service.SetOpsUpstreamError(c, http.StatusRequestEntityTooLarge, service.OpenAIRequestBodyTooLargeClientMessage, "")
 		h.handleStreamingAwareError(
 			c,

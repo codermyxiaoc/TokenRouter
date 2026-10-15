@@ -327,6 +327,8 @@ const (
 type UpstreamErrorDecision struct {
 	Policy         ErrorPolicyResult
 	StopScheduling bool
+	// ModelUnavailable 仅隔离当前账号的目标模型；池模式也必须让本次请求立即换号。
+	ModelUnavailable bool
 }
 
 // ShouldReturnGenericError 表示应按自定义错误码约定返回通用 500，且不切换账号。
@@ -357,6 +359,9 @@ func (d UpstreamErrorDecision) ShouldFailoverWithDefaults(
 	nonPoolDefault bool,
 	poolDefault bool,
 ) bool {
+	if d.ModelUnavailable {
+		return true
+	}
 	switch d.Policy {
 	case ErrorPolicyCustomSkipped:
 		return false
@@ -371,7 +376,7 @@ func (d UpstreamErrorDecision) ShouldFailoverWithDefaults(
 
 // RetryableOnSameAccount 仅允许未命中显式策略的池模式错误在当前账号上重试。
 func (d UpstreamErrorDecision) RetryableOnSameAccount(account *Account, statusCode int) bool {
-	return d.Policy == ErrorPolicyPoolBypassed && account != nil && account.IsPoolModeRetryableStatus(statusCode)
+	return !d.ModelUnavailable && d.Policy == ErrorPolicyPoolBypassed && account != nil && account.IsPoolModeRetryableStatus(statusCode)
 }
 
 // upstreamErrorDecisionWithoutPersistence 在错误状态服务未注入时保留纯配置决策。
@@ -450,14 +455,14 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	return s.ApplyUpstreamError(ctx, account, statusCode, headers, responseBody, requestedModel...).StopScheduling
 }
 
-// ApplyUpstreamError 先执行显式策略，再在非池模式下执行平台默认账号状态处理。
+// ApplyUpstreamError 保留自定义错误码优先权；明确模型缺失独立隔离，其余错误先执行显式策略再走非池默认处理。
 func (s *RateLimitService) ApplyUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) UpstreamErrorDecision {
 	// Team 联动熔断必须先于池模式、自定义错误码和临时不可调度的各类早退；
 	// fastpath 入口的重复调用由方法内去重吸收。
 	s.maybeHandleOpenAITeamLinkedError(ctx, account, statusCode, responseBody)
 	policy := ErrorPolicyNone
 	// 非池账号未启用自定义错误码时，模型不存在和官方硬窗口等精确状态必须
-	// 先于宽泛的临时不可调度规则；池模式和自定义错误码仍作为前置显式策略。
+	// 先于宽泛的临时不可调度规则；池模式的显式冷却配置和自定义错误码仍优先。
 	if account != nil && (account.IsPoolMode() || account.IsCustomErrorCodesEnabled()) {
 		policy = s.ApplyExplicitErrorPolicy(ctx, account, statusCode, responseBody, requestedModel...)
 	}
@@ -466,7 +471,16 @@ func (s *RateLimitService) ApplyUpstreamError(ctx context.Context, account *Acco
 	case ErrorPolicyCustomMatched, ErrorPolicyTempUnscheduled:
 		decision.StopScheduling = true
 		return decision
-	case ErrorPolicyCustomSkipped, ErrorPolicyPoolBypassed:
+	case ErrorPolicyCustomSkipped:
+		return decision
+	}
+	// 池模式没有命中显式规则时，模型能力缺失仍立即换号并只隔离该模型。
+	// 必须在显式规则之后写默认状态，避免用 60 秒兜底覆盖管理员设置的时长和作用范围。
+	if account != nil && !account.IsCustomErrorCodesEnabled() && len(requestedModel) > 0 &&
+		s.HandleUpstreamModelNotFound(ctx, account, requestedModel[0], statusCode, responseBody) {
+		return UpstreamErrorDecision{StopScheduling: true, ModelUnavailable: true}
+	}
+	if policy == ErrorPolicyPoolBypassed {
 		return decision
 	}
 	decision.StopScheduling = s.handleDefaultUpstreamError(ctx, account, statusCode, headers, responseBody, requestedModel...)
@@ -2586,6 +2600,9 @@ func parseOpenAIImageTryAgainCooldown(body []byte) time.Duration {
 }
 
 const upstreamModelNotFoundCooldown = 30 * time.Minute
+
+// 聚合池内部的模型供给可能很快恢复，只短暂避开本地账号与模型组合。
+const upstreamPoolModelNotFoundCooldown = time.Minute
 const upstreamModelNotFoundReason = "upstream_404_model_not_found"
 const upstreamModelNotFound401Reason = "upstream_401_model_not_found"
 const upstreamCodexPlanGatedModelCooldown = 30 * time.Minute
@@ -2598,10 +2615,6 @@ const tempUnschedMessageMaxBytes = 2048
 // 应切换账号；冷却结束前调度器会跳过该组合，避免反复选择必然失败的账号。
 func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, account *Account, upstreamModel string, statusCode int, responseBody []byte) bool {
 	if s == nil || account == nil || s.accountRepo == nil {
-		return false
-	}
-	// 池模式不根据聚合上游的一次 404 暂停本地账号与模型组合。
-	if account.IsPoolMode() {
 		return false
 	}
 	if !account.ShouldHandleErrorCode(statusCode) {
@@ -2618,6 +2631,9 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 		cooldown, reason = upstreamCodexPlanGatedModelCooldown, upstreamCodexPlanGatedModelReason
 	default:
 		return false
+	}
+	if account.IsPoolMode() {
+		cooldown = upstreamPoolModelNotFoundCooldown
 	}
 	modelKey := modelRateLimitKeyForUpstreamModelNotFound(ctx, account, upstreamModel)
 	if modelKey == "" {
@@ -2648,6 +2664,10 @@ func shouldSkipCodexPlanGatedImageModelCooldown(ctx context.Context, reason, ups
 func modelRateLimitKeyForUpstreamModelNotFound(ctx context.Context, account *Account, upstreamModel string) string {
 	modelKey := strings.TrimSpace(upstreamModel)
 	if account == nil || modelKey == "" {
+		return modelKey
+	}
+	// Gemini 转发入口已传入完成账号映射的型号，不能重复映射到未实际请求的模型。
+	if account.Platform == PlatformGemini {
 		return modelKey
 	}
 	if account.Platform == PlatformAntigravity {

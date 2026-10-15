@@ -376,7 +376,7 @@ riskControl: {
   "price": "Unit price",
   "unconfigured": "Unconfigured",
   "empty": "No resolutions yet. Add any resolutions that need specific prices.",
-  "resolutionPlaceholder": "Resolution, e.g. 2160p or 2K",
+  "resolutionPlaceholder": "Resolution or exact size, e.g. 768p, 2K, 1280x720",
   "addResolution": "Add resolution",
   "invalid": "Video prices must be nonnegative with one price per resolution",
   "groupHint": "Set one model price per resolution, with group prices taking precedence over channel prices. Video rates can follow the group multiplier or use an independent multiplier."

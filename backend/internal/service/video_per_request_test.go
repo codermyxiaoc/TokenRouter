@@ -243,6 +243,7 @@ func TestVideoPerRequestMismatchAndUnknownSubmissionRetainHold(t *testing.T) {
 	require.Zero(t, b.releases)
 
 	s, key, u, b, _ = newVideoLifecycleFixture(BillingModeVideoPerRequest)
+	u.submit = nil
 	u.submitErr = errors.New("connection lost after upstream accepted the request")
 	response, err = s.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(`{}`)})
 	require.NoError(t, err)

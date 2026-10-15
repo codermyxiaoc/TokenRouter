@@ -18,9 +18,10 @@ func ParseVideoRequestMetadata(body []byte, modelPath string) (VideoRequestMetad
 
 // ParseVideoEndpointRequestMetadata 按已选定的协议优先级提取有效参数，不改变原始JSON。
 func ParseVideoEndpointRequestMetadata(body []byte, modelPath string, endpoint VideoEndpoint) (VideoRequestMetadata, error) {
-	// OpenAI 视频 JSON 中继与 compat 共用保守维度校验，避免混用结构绕过计费冲突检查。
+	// OpenAI Videos 扩展规范字段，但旧 compat 与其它原生协议保持原有合同。
 	if endpoint == VideoEndpointOpenAIVideos {
-		endpoint = VideoEndpointCompat
+		_, metadata, err := PrepareVideoOpenAIRequest(body, modelPath, "")
+		return metadata, err
 	}
 	out, err := ParseVideoRequestModel(body, modelPath)
 	if err != nil {

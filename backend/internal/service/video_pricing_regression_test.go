@@ -62,12 +62,12 @@ func TestVideoPricingRegressionMissingIdentityAndResolution(t *testing.T) {
 	resolver := videoPricingTestResolver(group, &ChannelModelPricing{Platform: PlatformVideo, BillingMode: BillingModeVideoToken, VideoFallbackPrice: &price})
 	for _, tc := range []struct{ model, resolution string }{
 		{"", "720p"}, {" ", "720p"}, {"unknown-video-model", "720p"}, {"video-model", ""}, {"video-model", "auto"},
-		{"video-model", "1280x720"}, {"video-model", "0p"}, {"video-model", "0720p"}, {"video-model", "65537p"},
+		{"video-model", "01280x720"}, {"video-model", "0p"}, {"video-model", "0720p"}, {"video-model", "65537p"},
 	} {
 		_, err := resolver.QuoteVideo(context.Background(), VideoPriceInput{Group: group, Model: tc.model, Resolution: tc.resolution, RateMultiplier: 1})
 		require.ErrorIs(t, err, ErrVideoPricingUnavailable, "%+v", tc)
 	}
-	for _, resolution := range []string{"720", "720P", " 720p ", "2K", "4k", "540p"} {
+	for _, resolution := range []string{"720", "720P", " 720p ", "2K", "4k", "540p", "1280x720", "720X1280"} {
 		quote, err := resolver.QuoteVideo(context.Background(), VideoPriceInput{Group: group, Model: "video-model", Resolution: resolution, RateMultiplier: 1})
 		require.NoError(t, err)
 		require.True(t, quote.FallbackUsed)

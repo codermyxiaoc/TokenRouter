@@ -60,7 +60,21 @@ export interface VideoPriceFormEntry {
   price: number | string | null
 }
 
-export const normalizeVideoResolution = (value: string): string => (/k$/i.test(value.trim()) ? value.trim().toLowerCase() : value.trim().toLowerCase().replace(/p$/, '') + 'p')
+// 精确尺寸保留横竖方向，不按短边推断厂商档位，避免把 H3 的 768p 错配成 720p。
+export function normalizeVideoResolution(value: string): string {
+  const normalized = value.trim().toLowerCase()
+  return /k$/.test(normalized) || normalized.includes('x') ? normalized : normalized.replace(/p$/, '') + 'p'
+}
+
+// 与服务端相同的边界：数字档位和尺寸的每一边都必须是规范正整数，最大 65536。
+export function validVideoResolution(value: string): boolean {
+  const normalized = value.trim().toLowerCase()
+  if (/^[24]k$/.test(normalized)) return true
+  if (/^[1-9]\d*x[1-9]\d*$/.test(normalized)) {
+    return normalized.split('x').every(side => Number(side) <= 65536)
+  }
+  return /^[1-9]\d*p?$/.test(normalized) && Number(normalized.replace(/p$/, '')) <= 65536
+}
 
 const hasVideoPrice = (value: VideoPriceFormEntry) => value.price != null && String(value.price).trim() !== ''
 
@@ -89,7 +103,7 @@ export function videoPricesToAPI(values: VideoPriceFormEntry[] | undefined): Vid
 export function validVideoPrices(values: VideoPriceFormEntry[] | undefined): boolean {
   const seen = new Set<string>()
   return (values || []).every(value => {
-    if (!/^(?:[1-9]\d*p?|[24]k)$/i.test(value.resolution.trim())) return false
+    if (!validVideoResolution(value.resolution)) return false
     const key = normalizeVideoResolution(value.resolution)
     if (seen.has(key)) return false
     seen.add(key)

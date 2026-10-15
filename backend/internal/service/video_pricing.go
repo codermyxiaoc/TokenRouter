@@ -65,6 +65,20 @@ func NormalizeVideoPriceResolution(value string) (string, error) {
 	if value == "2k" || value == "4k" {
 		return value, nil
 	}
+	// OpenAI Videos 的精确尺寸单独报价，不按短边猜测供应商清晰度档位。
+	if strings.Contains(value, "x") {
+		parts := strings.Split(value, "x")
+		if len(parts) != 2 {
+			return "", fmt.Errorf("invalid video pricing resolution %q", value)
+		}
+		for _, part := range parts {
+			n, err := strconv.Atoi(part)
+			if err != nil || n <= 0 || n > 65536 || strconv.Itoa(n) != part {
+				return "", fmt.Errorf("invalid video pricing resolution %q", value)
+			}
+		}
+		return value, nil
+	}
 	digits := strings.TrimSuffix(value, "p")
 	n, err := strconv.Atoi(digits)
 	if err != nil || n <= 0 || n > 65536 || strconv.Itoa(n) != digits {

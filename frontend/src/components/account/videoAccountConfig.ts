@@ -1,11 +1,14 @@
 // 两种 OpenAI 视频路径是独立能力，保留旧 compat 标识，不自动迁移历史账号。
 export const VIDEO_ENDPOINTS = ['compat', 'openai_videos', 'seedance', 'kling', 'wan', 'minimax'] as const
 export type VideoEndpoint = typeof VIDEO_ENDPOINTS[number]
+export const VIDEO_OPENAI_PROFILES = ['passthrough', 'metaso_h3'] as const
+export type VideoOpenAIProfile = typeof VIDEO_OPENAI_PROFILES[number]
 export const VIDEO_MODEL_PATHS = ['/text-to-video/{model}', '/image-to-video/{model}', '/omni-video/{model}', '/v1/videos/text2video', '/v1/videos/omni-video'] as const
 
 export interface VideoModelBindingForm { model: string; endpoint: VideoEndpoint; path: string }
 export interface VideoAccountForm {
   endpoints: VideoEndpoint[]
+  openAIProfile: VideoOpenAIProfile
   baseUrls: Partial<Record<VideoEndpoint, string>>
   bindings: VideoModelBindingForm[]
   // 没有显式 Kling 绑定的历史路径仍可能用于继承端点，不擅自新增绑定收窄能力。
@@ -24,6 +27,8 @@ export function createVideoAccountForm(credentials: Record<string, unknown> = {}
   const paths = (credentials.video_model_paths || {}) as Record<string, string>
   return {
     endpoints,
+    // 默认不转换历史请求；未知配置保留给校验处理，不能静默切换供应商协议。
+    openAIProfile: (String(credentials.video_openai_profile ?? '').trim() || 'passthrough') as VideoOpenAIProfile,
     baseUrls: { ...(credentials.video_base_urls || {}) as Partial<Record<VideoEndpoint, string>> },
     // 旧字符串和新数组统一展开成行；模型路径只属于 Kling 行，不能被其他协议行覆盖。
     bindings: Object.entries(bindings).flatMap(([model, value]) =>
@@ -41,6 +46,7 @@ const present = (value: unknown) => value !== null && value !== undefined && val
 
 export function validateVideoAccountForm(form: VideoAccountForm, baseUrl: string): string | null {
   if (!form.endpoints.length) return 'endpointsRequired'
+  if (!VIDEO_OPENAI_PROFILES.includes(form.openAIProfile)) return 'openAIProfileInvalid'
   if (form.endpoints.some(endpoint => !(form.baseUrls[endpoint] || baseUrl).trim())) return 'baseUrlRequired'
   const pending = Number(form.maxPendingTasks)
   if (!Number.isInteger(pending) || pending < 1 || pending > 1000) return 'pendingInvalid'
@@ -76,6 +82,8 @@ export function videoAccountCredentials(form: VideoAccountForm): Record<string, 
   }
   return {
     video_endpoints: [...form.endpoints],
+    // 取消端点只暂停适配，保留选择以便重新启用；其他端点不会使用该配置。
+    video_openai_profile: form.openAIProfile,
     video_base_urls: Object.fromEntries(form.endpoints.filter(endpoint => form.baseUrls[endpoint]?.trim()).map(endpoint => [endpoint, form.baseUrls[endpoint]!.trim()])),
     video_model_bindings: Object.fromEntries([...modelEndpoints].map(([model, endpoints]) => [model, endpoints.length === 1 ? endpoints[0] : endpoints])),
     video_model_paths: modelPaths,

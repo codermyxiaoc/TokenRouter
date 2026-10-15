@@ -376,7 +376,7 @@ riskControl: {
   "price": "单价",
   "unconfigured": "未配置",
   "empty": "暂无分辨率，请按需添加分辨率配置价格。",
-  "resolutionPlaceholder": "自定义分辨率，如 2160p、2K",
+  "resolutionPlaceholder": "分辨率或精确尺寸，如 768p、2K、1280x720",
   "addResolution": "添加分辨率",
   "invalid": "视频价格必须非负，同一分辨率只能配置一个单价",
   "groupHint": "模型价卡按分辨率配置单价，优先于渠道价格。视频倍率默认跟随分组倍率，也可独立设置。"

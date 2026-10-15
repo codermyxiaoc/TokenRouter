@@ -31,6 +31,8 @@ Compose 的 `.env` 还包含只供部署工具插值的变量：`SUB2API_IMAGE` 
 
 `api_key_create.max_per_user_per_hour`（环境变量 `API_KEY_CREATE_MAX_PER_USER_PER_HOUR`）默认 60，0 关闭每小时创建频率限制，负数拒绝启动；它独立于用户级 `api_key_limit` 的现存数量上限及网关请求限流。频率窗口按实际创建者计数，删除不返还，Redis 故障时放行；数据库数量校验仍在事务中执行。详见[身份与租户](../domains/identity_and_tenancy.md)。
 
+`gateway.video_create_timeout_seconds`（环境变量 `GATEWAY_VIDEO_CREATE_TIMEOUT_SECONDS`）控制独立 Video 创建及全部安全换号尝试共用的执行预算，默认 180 秒，0 沿用 180 秒，负数或大于 600 拒绝启动；修改需要重启。创建租约自动保留至少三分钟及预算另加 30 秒的收尾空间，保存或换号不会缩短已有长租约。它不改变旧 Grok/Seedance/图片任务的超时及后台 Video 单次 90 秒查询预算；无持久响应证据的创建超时另按固定 15 分钟核对策略处理，详见[视频任务生命周期](../domains/video_tasks.md#video_task_lifecycle)。
+
 `config.load` 使用 Viper，最终优先级为：
 
 ```text

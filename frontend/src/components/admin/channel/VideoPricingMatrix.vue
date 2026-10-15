@@ -3,7 +3,7 @@
     <p class="input-hint">{{ t('admin.channels.videoPricing.hint') }}</p>
     <p v-if="resolutions.length === 0" class="rounded-lg border border-dashed border-gray-300 p-4 text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400" data-testid="video-pricing-empty">{{ t('admin.channels.videoPricing.empty') }}</p>
     <div v-for="resolution in resolutions" :key="resolution" class="grid grid-cols-1 gap-3 rounded-lg border border-gray-200 p-3 dark:border-dark-600 sm:grid-cols-[5rem_1fr_auto] sm:items-end">
-      <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ resolution }}</span>
+      <span class="break-words text-sm font-medium text-gray-700 dark:text-gray-200">{{ resolution }}</span>
       <div>
         <label class="input-label">{{ t('admin.channels.videoPricing.price') }} <span class="text-xs text-gray-400">{{ unit }}</span></label>
         <input class="input" type="number" min="0" step="any" :value="priceFor(resolution)" :placeholder="t('admin.channels.videoPricing.unconfigured')" :data-testid="`video-price-${resolution}`" @input="updatePrice(resolution, ($event.target as HTMLInputElement).value)" />
@@ -20,7 +20,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { normalizeVideoResolution, videoPricesFromAPI, type VideoPriceFormEntry } from './videoPricing'
+import { normalizeVideoResolution, validVideoResolution, videoPricesFromAPI, type VideoPriceFormEntry } from './videoPricing'
 const props = defineProps<{ modelValue?: VideoPriceFormEntry[]; mode: 'video' | 'video_token' | 'video_per_request' }>()
 const emit = defineEmits<{ 'update:modelValue': [values: VideoPriceFormEntry[]] }>()
 const { t } = useI18n()
@@ -29,7 +29,7 @@ const prices = computed(() => videoPricesFromAPI(props.modelValue))
 const resolutions = computed(() => prices.value.map(value => value.resolution))
 const unit = computed(() => props.mode === 'video_token' ? '$/1M Token' : props.mode === 'video_per_request' ? t('admin.channels.videoPricing.perRequestUnit') : '$/s')
 const newResolution = ref('')
-const canAdd = computed(() => /^(?:[1-9]\d*p?|[24]k)$/i.test(newResolution.value.trim()) && !resolutions.value.includes(normalizeVideoResolution(newResolution.value)))
+const canAdd = computed(() => validVideoResolution(newResolution.value) && !resolutions.value.includes(normalizeVideoResolution(newResolution.value)))
 const priceFor = (resolution: string) => prices.value.find(value => value.resolution === resolution)?.price ?? ''
 function updatePrice(resolution: string, price: string) {
   const next = { resolution, price: price === '' ? null : price }

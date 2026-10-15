@@ -150,11 +150,15 @@ func (s *VideoUpstreamService) SelectAccount(ctx context.Context, key *APIKey, r
 			configErr = targetErr
 			continue
 		}
-		metadata, err = ParseVideoEndpointRequestMetadata(request.Body, request.ModelPath, target.Endpoint)
+		body := append([]byte(nil), request.Body...)
+		if target.Endpoint == VideoEndpointOpenAIVideos {
+			body, metadata, err = PrepareVideoOpenAIRequest(body, request.ModelPath, target.OpenAIProfile)
+		} else {
+			metadata, err = ParseVideoEndpointRequestMetadata(body, request.ModelPath, target.Endpoint)
+		}
 		if err != nil {
 			return nil, err
 		}
-		body := append([]byte(nil), request.Body...)
 		if gjson.GetBytes(body, "model").Exists() {
 			body, err = sjson.SetBytes(body, "model", model)
 			if err != nil {
@@ -229,7 +233,11 @@ func (s *VideoUpstreamService) resolveTarget(a *Account, model string, request V
 		}
 		path = strings.ReplaceAll(path, "{model}", url.PathEscape(model))
 	}
-	return VideoUpstreamTarget{Version: 1, Endpoint: endpoint, BaseURL: base, CreatePath: path, Model: model, AccountID: a.ID}, nil
+	target = VideoUpstreamTarget{Version: 1, Endpoint: endpoint, BaseURL: base, CreatePath: path, Model: model, AccountID: a.ID}
+	if endpoint == VideoEndpointOpenAIVideos {
+		target.OpenAIProfile = cfg.OpenAIProfile
+	}
+	return target, nil
 }
 
 // Submit 不重试上游创建；HTTP返回与传输错误分别交给持久任务状态机处理。
@@ -340,6 +348,13 @@ func (s *VideoUpstreamService) forward(ctx context.Context, account *Account, ta
 	if err != nil {
 		observation.StatusCode, observation.ErrorMessage = http.StatusBadGateway, "Video upstream transport failed; acceptance is unknown"
 		observeVideoUpstream(ctx, observation)
+		if resp != nil {
+			// 已取得响应的错误不能被解释为完全未收到受理证据的传输超时。
+			if resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			return nil, &VideoSubmissionResponseError{Err: err}
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -347,7 +362,7 @@ func (s *VideoUpstreamService) forward(ctx context.Context, account *Account, ta
 	if err != nil {
 		observation.StatusCode, observation.ErrorMessage = http.StatusBadGateway, "Video upstream response could not be read; acceptance is unknown"
 		observeVideoUpstream(ctx, observation)
-		return nil, err
+		return nil, &VideoSubmissionResponseError{Err: err}
 	}
 	header := make(http.Header)
 	writeOpenAIPassthroughResponseHeaders(header, resp.Header, s.gateway.responseHeaderFilter)
@@ -364,7 +379,7 @@ func (s *VideoUpstreamService) forward(ctx context.Context, account *Account, ta
 		observeVideoUpstream(ctx, observation)
 		return nil, errVideoTaskResponseMismatch
 	}
-	result := ExtractVideoUpstreamResponse(target.Endpoint, responseBody, taskID)
+	result := ExtractVideoUpstreamResponseWithProfile(target.Endpoint, responseBody, taskID, target.OpenAIProfile)
 	result.StatusCode, result.Header, result.Body = resp.StatusCode, header, responseBody
 	if resp.StatusCode >= 400 {
 		// 复用账号配置的错误码和临时停调规则，但不据此重放已发送的创建请求。
@@ -387,6 +402,11 @@ func (s *VideoUpstreamService) forward(ctx context.Context, account *Account, ta
 // ExtractVideoUpstreamResponse 读取供应商观测，不改变客户端原生响应或凭空补齐用量。
 // @project-doc docs/interfaces/video_upstream.md#video_protocols
 func ExtractVideoUpstreamResponse(endpoint VideoEndpoint, body []byte, taskID string) *VideoUpstreamResponse {
+	return ExtractVideoUpstreamResponseWithProfile(endpoint, body, taskID, "")
+}
+
+// ExtractVideoUpstreamResponseWithProfile 只按持久化配置解释供应商尺寸和终态秒数。
+func ExtractVideoUpstreamResponseWithProfile(endpoint VideoEndpoint, body []byte, taskID, profile string) *VideoUpstreamResponse {
 	out := &VideoUpstreamResponse{TaskID: taskID}
 	if !videoResponseMatchesTask(endpoint, body, taskID) {
 		return out
@@ -503,6 +523,9 @@ func ExtractVideoUpstreamResponse(endpoint VideoEndpoint, body []byte, taskID st
 			out.Metadata.DurationSeconds = value.Float()
 			break
 		}
+	}
+	if endpoint == VideoEndpointOpenAIVideos {
+		applyVideoOpenAIResponseMetadata(out, root, profile)
 	}
 	// 已观测到 MiniMax 中继用三项全零 Token 配合真实输出秒数占位，不能据此免费结算 Token 模型。
 	miniMaxPlaceholderTokens := false

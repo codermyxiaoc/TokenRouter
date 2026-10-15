@@ -115,6 +115,172 @@ func TestVideoAccountTestSixProtocolsUseConfiguredEndpointAndMappedModel(t *test
 	}
 }
 
+// 使用完整管理员测试链路确认显式 H3 配置转换生效，模型映射与单次提交行为保持不变。
+func TestVideoAccountTestMetasoH3UsesConfiguredProfile(t *testing.T) {
+	for _, test := range []struct {
+		resolution, ratio, size string
+		duration                *int
+		wantSeconds             int64
+	}{
+		{"768p", "16:9", "1280x720", nil, 5},
+		{"768p", "9:16", "720x1280", videoAccountTestInt(7), 7},
+		{"2k", "16:9", "1792x1024", videoAccountTestInt(15), 15},
+		{"2K", "9:16", "1024x1792", videoAccountTestInt(5), 5},
+	} {
+		t.Run(test.resolution+"_"+test.ratio, func(t *testing.T) {
+			account := videoFixtureAccount(VideoEndpointOpenAIVideos)
+			account.Credentials["video_openai_profile"] = VideoOpenAIProfileMetasoH3
+			account.Credentials["model_mapping"] = map[string]any{"visible-h3": "MiniMax-H3"}
+			account.Credentials["model_whitelist"] = []string{"MiniMax-H3"}
+			before, err := json.Marshal(account)
+			require.NoError(t, err)
+			imageURL := grokModesImageDataURL(t, 8)
+			svc, upstream := videoAccountTestService(account, func(r *http.Request, body []byte) (*http.Response, error) {
+				if r.Method == http.MethodPost {
+					require.Equal(t, "MiniMax-H3", gjson.GetBytes(body, "model").String())
+					require.Equal(t, test.wantSeconds, gjson.GetBytes(body, "seconds").Int())
+					require.Equal(t, test.size, gjson.GetBytes(body, "size").String())
+					require.Equal(t, imageURL, gjson.GetBytes(body, "input_reference.image_url").String())
+					for _, field := range []string{"duration", "resolution", "ratio", "images"} {
+						require.False(t, gjson.GetBytes(body, field).Exists(), "legacy field %s must not reach H3", field)
+					}
+					return videoAccountTestJSON(200, `{"id":"h3-test","status":"queued"}`), nil
+				}
+				require.Equal(t, http.MethodGet, r.Method)
+				return videoAccountTestJSON(200, `{"id":"h3-test","status":"completed","video":{"url":"https://cdn.example/h3.mp4"}}`), nil
+			})
+			c, recorder := grokModesContext(context.Background())
+			err = svc.TestAccountConnectionWithOptions(c, account.ID, "visible-h3", "A red ball.", "video", "", "", AccountTestOptions{
+				VideoEndpoint: "openai_videos", Duration: test.duration, Resolution: test.resolution, Ratio: test.ratio, ImageDataURL: imageURL,
+			})
+			require.NoError(t, err)
+			require.Len(t, upstream.requests, 2)
+			require.Equal(t, 1, strings.Count(recorder.Body.String(), `"success":true`))
+			require.NotContains(t, recorder.Body.String(), "fixture-secret")
+			after, err := json.Marshal(account)
+			require.NoError(t, err)
+			require.JSONEq(t, string(before), string(after))
+		})
+	}
+}
+
+// 模型名称不能暗中启用适配；同一账号保存的 H3 配置也不能影响兼容旧路径。
+func TestVideoAccountTestMetasoH3DoesNotChangePassthrough(t *testing.T) {
+	for _, test := range []struct {
+		name, profile string
+		endpoint      VideoEndpoint
+	}{
+		{"legacy-default", "", VideoEndpointOpenAIVideos},
+		{"explicit-passthrough", VideoOpenAIProfilePassthrough, VideoEndpointOpenAIVideos},
+		{"other-endpoint", VideoOpenAIProfileMetasoH3, VideoEndpointCompat},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			account := videoFixtureAccount(test.endpoint)
+			if test.profile != "" {
+				account.Credentials["video_openai_profile"] = test.profile
+			}
+			imageURL := grokModesImageDataURL(t, 8)
+			svc, upstream := videoAccountTestService(account, func(r *http.Request, body []byte) (*http.Response, error) {
+				require.Equal(t, http.MethodPost, r.Method)
+				require.Equal(t, int64(5), gjson.GetBytes(body, "duration").Int())
+				require.Equal(t, "540p", gjson.GetBytes(body, "resolution").String())
+				require.Equal(t, "1:1", gjson.GetBytes(body, "ratio").String())
+				require.Equal(t, imageURL, gjson.GetBytes(body, "images.0").String())
+				for _, field := range []string{"seconds", "size", "input_reference"} {
+					require.False(t, gjson.GetBytes(body, field).Exists())
+				}
+				return videoAccountTestJSON(200, `{"id":"legacy-test","status":"completed","video":{"url":"https://cdn.example/video.mp4"}}`), nil
+			})
+			c, recorder := grokModesContext(context.Background())
+			require.NoError(t, svc.TestAccountConnectionWithOptions(c, account.ID, "MiniMax-H3", "A red ball.", "video", "", "", AccountTestOptions{
+				VideoEndpoint: string(test.endpoint), Resolution: "540p", Ratio: "1:1", ImageDataURL: imageURL,
+			}))
+			require.Len(t, upstream.requests, 1)
+			require.Contains(t, recorder.Body.String(), `"success":true`)
+		})
+	}
+}
+
+// 参数转换失败必须在任何上游请求之前结束，不能创建可能收费的无效测试任务。
+func TestVideoAccountTestMetasoH3RejectsUnsupportedGeometryBeforeSubmit(t *testing.T) {
+	for _, test := range []struct{ resolution, ratio string }{
+		{"768p", "1:1"}, {"768p", "adaptive"}, {"540p", "16:9"}, {"", "16:9"}, {"768p", ""},
+	} {
+		t.Run(test.resolution+"_"+test.ratio, func(t *testing.T) {
+			account := videoFixtureAccount(VideoEndpointOpenAIVideos)
+			account.Credentials["video_openai_profile"] = VideoOpenAIProfileMetasoH3
+			svc, upstream := videoAccountTestService(account, func(*http.Request, []byte) (*http.Response, error) {
+				t.Fatal("invalid H3 parameters must not create an upstream task")
+				return nil, nil
+			})
+			c, recorder := grokModesContext(context.Background())
+			require.Error(t, svc.TestAccountConnectionWithOptions(c, account.ID, "MiniMax-H3", "A red ball.", "video", "", "", AccountTestOptions{
+				VideoEndpoint: "openai_videos", Resolution: test.resolution, Ratio: test.ratio,
+			}))
+			require.Empty(t, upstream.requests)
+			require.Contains(t, recorder.Body.String(), `"type":"error"`)
+			require.NotContains(t, recorder.Body.String(), `"success":true`)
+		})
+	}
+}
+
+// 排队包常使用零秒和空尺寸占位；测试应继续查询，按完成包的真实元数据判断成功。
+func TestVideoAccountTestMetasoH3AllowsQueuedPlaceholderMetadata(t *testing.T) {
+	account := videoFixtureAccount(VideoEndpointOpenAIVideos)
+	account.Credentials["video_openai_profile"] = VideoOpenAIProfileMetasoH3
+	queued := []byte(`{"id":"h3-placeholder","status":"queued","seconds":0,"size":""}`)
+	parsed := ExtractVideoUpstreamResponseWithProfile(VideoEndpointOpenAIVideos, queued, "", VideoOpenAIProfileMetasoH3)
+	parsed.Body, parsed.StatusCode = queued, http.StatusOK
+	require.NotEmpty(t, parsed.MetadataError, "夹具必须覆盖已被解析器标记的排队占位值")
+	require.NoError(t, videoAccountTestResponseError(VideoEndpointOpenAIVideos, parsed))
+	svc, upstream := videoAccountTestService(account, func(r *http.Request, _ []byte) (*http.Response, error) {
+		if r.Method == http.MethodPost {
+			return videoAccountTestJSON(http.StatusOK, string(queued)), nil
+		}
+		require.Equal(t, http.MethodGet, r.Method)
+		return videoAccountTestJSON(http.StatusOK, `{"id":"h3-placeholder","status":"completed","seconds":5,"size":"1280x720","video":{"url":"https://cdn.example/video.mp4"}}`), nil
+	})
+	c, recorder := grokModesContext(context.Background())
+	require.NoError(t, svc.TestAccountConnectionWithOptions(c, account.ID, "MiniMax-H3", "A red ball.", "video", "", "", AccountTestOptions{
+		VideoEndpoint: "openai_videos", Resolution: "768p", Ratio: "16:9",
+	}))
+	require.Len(t, upstream.requests, 2)
+	require.Contains(t, recorder.Body.String(), `"type":"video"`)
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), `"success":true`))
+	require.NotContains(t, recorder.Body.String(), `"type":"error"`)
+}
+
+// 管理员诊断与正式任务使用同一元数据校验，错误的完成包不得显示成功或预览。
+func TestVideoAccountTestMetasoH3RejectsInvalidCompletionMetadata(t *testing.T) {
+	for _, stage := range []string{"create", "poll"} {
+		for _, fields := range []string{`"seconds":"invalid"`, `"size":"800x800"`, `"seconds":5,"duration":8`} {
+			t.Run(stage+"_"+fields, func(t *testing.T) {
+				account := videoFixtureAccount(VideoEndpointOpenAIVideos)
+				account.Credentials["video_openai_profile"] = VideoOpenAIProfileMetasoH3
+				svc, upstream := videoAccountTestService(account, func(r *http.Request, _ []byte) (*http.Response, error) {
+					if stage == "poll" && r.Method == http.MethodPost {
+						return videoAccountTestJSON(200, `{"id":"h3-invalid","status":"queued"}`), nil
+					}
+					return videoAccountTestJSON(200, `{"id":"h3-invalid","status":"completed",`+fields+`,"video":{"url":"https://cdn.example/video.mp4"},"debug":"fixture-secret"}`), nil
+				})
+				c, recorder := grokModesContext(context.Background())
+				require.Error(t, svc.TestAccountConnectionWithOptions(c, account.ID, "MiniMax-H3", "A red ball.", "video", "", "", AccountTestOptions{
+					VideoEndpoint: "openai_videos", Resolution: "768p", Ratio: "16:9",
+				}))
+				wantRequests := 1
+				if stage == "poll" {
+					wantRequests = 2
+				}
+				require.Len(t, upstream.requests, wantRequests)
+				require.Contains(t, recorder.Body.String(), "上游视频时长、尺寸或用量数据异常")
+				require.NotContains(t, recorder.Body.String(), `"success":true`)
+				require.NotContains(t, recorder.Body.String(), `"type":"video"`)
+				require.NotContains(t, recorder.Body.String(), "fixture-secret")
+			})
+		}
+	}
+}
+
 func TestVideoAccountTestRejectsConfigurationBeforeAnyRequest(t *testing.T) {
 	cases := []struct {
 		name, model, testType, endpoint, mode string

@@ -40,11 +40,11 @@ describe.each([
   })
   afterEach(() => vi.unstubAllGlobals())
 
-  async function open() {
+  async function open(profile?: string) {
     const wrapper = mount(component, {
       props: { show: false, account: {
         id: 1, platform: 'video', type: 'apikey', name: 'test', status: 'active',
-        credentials: { video_endpoints: [...VIDEO_ENDPOINTS] }
+        credentials: { video_endpoints: [...VIDEO_ENDPOINTS], ...(profile ? { video_openai_profile: profile } : {}) }
       } as Account },
       global: { stubs: {
         BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
@@ -57,6 +57,91 @@ describe.each([
     await flushPromises()
     return wrapper
   }
+
+  // 两个入口都在发送前提示 H3 限制，但不把这些限制施加给透传或其他原生端点。
+  it('validates explicit H3 geometry and preserves the five-second test default', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_endpoints: ['openai_videos', 'compat'] }])
+    const wrapper = await open('metaso_h3')
+    const vm = wrapper.vm as any
+    vm.videoEndpoint = 'openai_videos'
+    await flushPromises()
+    expect(vm.canStartTest).toBe(false)
+    expect(wrapper.text()).toContain('admin.accounts.video.testH3ResolutionInvalid')
+    expect(wrapper.text()).toContain('admin.accounts.video.testH3ImageHint')
+    expect(wrapper.find('input[type="file"][accept*="image"]').attributes('multiple')).toBeUndefined()
+    vm.videoResolution = '768p'
+    vm.videoRatio = '1:1'
+    await flushPromises()
+    expect(wrapper.text()).toContain('admin.accounts.video.testH3RatioInvalid')
+    await vm.startTest()
+    expect(fetch).not.toHaveBeenCalled()
+    for (const [resolution, ratio] of [['768p', '16:9'], ['2K', '9:16']]) {
+      vm.videoResolution = resolution
+      vm.videoRatio = ratio
+      await flushPromises()
+      expect(vm.canStartTest).toBe(true)
+      await vm.startTest()
+      expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body)).toMatchObject({ duration: 5, resolution, ratio, video_endpoint: 'openai_videos' })
+    }
+    vm.videoEndpoint = 'compat'
+    vm.videoResolution = '540p'
+    vm.videoRatio = '1:1'
+    await flushPromises()
+    expect(vm.canStartTest).toBe(true)
+    expect(wrapper.text()).not.toContain('admin.accounts.video.testH3ImageHint')
+    await vm.startTest()
+    expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body)).toMatchObject({ resolution: '540p', ratio: '1:1', video_endpoint: 'compat' })
+    wrapper.unmount()
+  })
+
+  it('does not infer H3 restrictions from the model name for passthrough accounts', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_endpoints: ['openai_videos'] }])
+    const wrapper = await open('passthrough')
+    const vm = wrapper.vm as any
+    vm.videoResolution = '540p'
+    vm.videoRatio = '1:1'
+    await flushPromises()
+    expect(vm.canStartTest).toBe(true)
+    await vm.startTest()
+    expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body)).toMatchObject({ resolution: '540p', ratio: '1:1', duration: 5 })
+    wrapper.unmount()
+  })
+
+  // 账号编辑后重开测试必须采用新配置，移除标准端点不能留下可发起的旧选项。
+  it('refreshes profile validation and endpoint visibility when the same account configuration changes', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_endpoints: ['openai_videos'] }])
+    const wrapper = await open('passthrough')
+    const vm = wrapper.vm as any
+    expect(vm.canStartTest).toBe(true)
+    await wrapper.setProps({ account: {
+      ...wrapper.props('account')!, credentials: { video_endpoints: ['openai_videos'], video_openai_profile: 'metaso_h3' }
+    } as Account })
+    await flushPromises()
+    expect(vm.canStartTest).toBe(false)
+    expect(wrapper.text()).toContain('admin.accounts.video.testH3ResolutionInvalid')
+    expect(wrapper.find('label[for="account-test-video-resolution"]').text()).toBe('admin.accounts.video.testH3Resolution')
+    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_endpoints: ['compat'] }])
+    await wrapper.setProps({ account: {
+      ...wrapper.props('account')!, credentials: { video_endpoints: ['compat'], video_openai_profile: 'metaso_h3' }
+    } as Account })
+    await flushPromises()
+    expect(vm.videoEndpoint).toBe('compat')
+    expect(vm.videoEndpointOptions.map((option: { value: string }) => option.value)).toEqual(['compat'])
+    expect(vm.canStartTest).toBe(true)
+    expect(wrapper.text()).not.toContain('admin.accounts.video.testH3ImageHint')
+    expect(wrapper.find('label[for="account-test-video-resolution"]').text()).toBe('admin.accounts.video.testResolution')
+    await vm.startTest()
+    expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body).video_endpoint).toBe('compat')
+    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_endpoints: ['openai_videos'] }])
+    await wrapper.setProps({ account: {
+      ...wrapper.props('account')!, credentials: { video_endpoints: ['openai_videos'], video_openai_profile: 'passthrough' }
+    } as Account })
+    await flushPromises()
+    expect(vm.videoEndpoint).toBe('openai_videos')
+    expect(vm.canStartTest).toBe(true)
+    expect(wrapper.text()).not.toContain('admin.accounts.video.testH3ResolutionInvalid')
+    wrapper.unmount()
+  })
 
   it('uses model endpoint metadata instead of expanding account-wide capabilities', async () => {
     const wrapper = await open()

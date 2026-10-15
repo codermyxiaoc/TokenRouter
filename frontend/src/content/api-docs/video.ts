@@ -14,6 +14,7 @@ const videoErrors: ApiDocError[] = [
   { status: 400, code: 'VIDEO_MODEL_REQUIRED / VIDEO_MODEL_CONFLICT', description: '缺少 model，或路径模型与正文 model 不一致。' },
   { status: 400, code: 'VIDEO_PRICING_UNAVAILABLE', description: '模型或分辨率缺少匹配价卡与兜底价，生成不会继续。' },
   { status: 400, code: 'VIDEO_METADATA_CONFLICT', description: '混用多个参数结构，分辨率、时长或参考媒体信息互相冲突。' },
+  { status: 400, code: 'VIDEO_INVALID_OPENAI_PARAMETERS', description: 'OpenAI Videos 秒数、尺寸或参考图结构不合法，或不符合账号显式配置的 H3 参数要求。' },
   { status: 400, code: 'VIDEO_TASK_BUDGET_REQUIRED', description: '按秒预留或 Token 秒价预扣需要时长；自动时长请求需由管理员配置任务时长预留上限。' },
   { status: 409, code: 'VIDEO_TASK_CONFLICT', description: '幂等键对应了不同请求，或当前任务状态不允许该操作。' },
   { status: 415, code: 'VIDEO_CONTENT_TYPE', description: '创建独立 Video 任务必须使用 application/json，不接受 multipart。' },
@@ -34,7 +35,7 @@ const nativeNotes = [
 const billingNotes = [
   '按秒模式预留预计视频费；按次模式预留一次成功任务费。Token 模式可按模型配置先用独立秒价预扣，也可完成后结算。最终按任务创建时冻结的价卡、实际用量和适用倍率结算；参考图片附加费为固定金额。',
   '缺少价格会阻止提交，缺少可信 Token 用量会进入待核对，不能按零费用处理。完成、失败和退款请同时检查 status 与 billing_status。',
-  '创建完整收到 HTTP 4xx/5xx 且没有上游任务 ID 时，独立 Video 任务失败并释放预扣。网络中断、响应读取失败或成功响应缺少任务 ID 时，受理仍可能不明，会保留预算待核对；查询错误不会自动退款。',
+  '创建完整收到 HTTP 4xx/5xx 且没有上游任务 ID 时，独立 Video 任务失败并释放预扣。新任务若创建超时且没有任务 ID 或持久响应证据，核对 15 分钟后按失败释放，不自动重发；提交进程中断且满足同样条件时按已保存的创建截止时间起算。已取得 ID、响应读取失败、冲突 ID、成功响应缺 ID 或缺少分类的旧任务仍需核对；查询错误不会自动退款。',
 ]
 const commonVideoParameters: ApiDocParameter[] = [
   { name: 'model', type: 'string', required: true, description: '模型广场中当前分组可用的模型 ID，必须已有可用账号和匹配视频定价。' },
@@ -45,6 +46,16 @@ const commonVideoParameters: ApiDocParameter[] = [
   { name: 'images / image_urls / content', type: 'array', required: false, description: '按上游协议提供参考图片。若价卡启用图片附加费，按可识别输入数量计费；避免同时提交互相冲突的图片表示。' },
   { name: 'videos / video_url / content', type: 'array / string / array', required: false, description: '按上游协议提供参考视频；同一分辨率统一单价，不区分是否携带参考视频。参考图片附加费按模型配置单独计算。' },
   { name: 'generate_audio / watermark / seed', type: 'boolean / boolean / number', required: false, description: '可选厂商参数，是否支持、默认值和合法范围由模型与上游决定。' },
+  idempotency,
+]
+// OpenAI Videos 明确列出标准 JSON 字段，不能让旧中继示例误导使用 H3 的调用方。
+const openAIVideoParameters: ApiDocParameter[] = [
+  { name: 'model', type: 'string', required: true, description: '模型广场中当前分组可用的模型 ID。' },
+  { name: 'prompt', type: 'string', required: 'conditional', description: '视频生成提示词，遵循实际供应商的内容限制。' },
+  { name: 'seconds', type: 'number / string', required: 'conditional', description: '生成时长（秒），支持数值或规范数字字符串；与 duration 同时填写时必须一致。合法时长由上游决定。' },
+  { name: 'size', type: 'string', required: 'conditional', description: '精确尺寸，如 1280x720、720x1280。默认按精确尺寸价档或已配置兜底价计费，不自动按短边降档。秘塔 H3 适配将这两个尺寸对应到 768p，将 1792x1024、1024x1792 对应到 2K。' },
+  { name: 'input_reference.image_url', type: 'string', required: false, description: '单张参考图片的可访问 URL 或上游支持的图片 Data URL，计入参考图片附加费。优先采用稳定可访问的 URL，避免大体积 Base64 上传超时。' },
+  { name: 'duration / resolution / ratio / images', type: 'JSON', required: false, description: '旧中继字段仅在实际上游支持时使用；管理员显式选择“秘塔 H3”适配后可转换为规范字段。H3 仅支持单张参考图；不要同时填写冲突的字段或重复表示参考图。' },
   idempotency,
 ]
 const unifiedResponse = {
@@ -73,12 +84,13 @@ export const videoEndpoints: ApiDocEndpoint[] = [
     id: 'video-create', category: 'video', videoProtocol: 'openai', title: 'Video · 创建 OpenAI Videos 任务',
     summary: '使用 /v1/videos 创建异步 JSON 视频任务。Video 分组返回本站任务对象；同名 Grok 入口仍使用 xAI 任务格式。',
     platforms: ['video', 'grok'], method: 'POST', path: '/v1/videos', aliases: ['/videos'], auth: 'bearer', contentType: 'application/json',
-    parameters: commonVideoParameters,
-    requestExample: json({ model: 'video-model', prompt: '一只小猫在雪地追逐雪花，电影镜头', duration: 8, resolution: '720p', ratio: '16:9' }),
+    parameters: openAIVideoParameters,
+    requestExample: json({ model: 'video-model', prompt: '一只小猫在雪地追逐雪花，电影镜头', seconds: 8, size: '1280x720' }),
     responseExample: json(videosResponse), responseStatus: 200,
     responseDescription: '示例是 Video 分组的成功受理响应；Grok 分组通常返回 request_id，见 Grok 视频生成。受理成功只代表任务已创建。',
     notes: [
       'Video 账号必须明确勾选 OpenAI Videos（/v1/videos），且模型允许使用该端点，才能调用此入口。未启用时该入口不可用，不会回退到其他端点。请求体遵循该上游端点的参数约定。',
+      '秘塔 H3 账号需由管理员选择“秘塔 H3”参数适配，才能转换旧参数并使用 768p/2K 价档；默认透传不会按域名或模型名自动启用。Grok 分组仍按其专用参数约定调用。',
       '状态为 queued（排队）、in_progress（生成中）、completed（完成）、failed（失败）。受理不明或过期还会返回 task_status，不能把 in_progress 直接当成可重试。',
       '接口只接收 JSON；没有开放 GET /v1/videos 集合列表、multipart、remix 或 DELETE /v1/videos/{id}。任务列表请使用站内任务记录页面。',
       ...billingNotes,
@@ -89,7 +101,7 @@ export const videoEndpoints: ApiDocEndpoint[] = [
     summary: '用本站任务 ID 查询进度和账务状态。Grok 任务 ID 同路径仍由原 Grok 链路处理。',
     platforms: ['video', 'grok'], method: 'GET', path: '/v1/videos/{video_id}', requestPath: '/v1/videos/vid_example', aliases: ['/videos/{video_id}'], auth: 'bearer', parameters: [taskId],
     responseExample: json({ ...videosResponse, status: 'completed', billing_status: 'settled', completed_at: 1750000060, usage: { completion_tokens: 80770 } }),
-    responseDescription: 'HTTP 200 表示查到任务；status=failed 仍可返回 HTTP 200，并附 error.code 和 error.message。duration、resolution、usage 仅在已知时返回。',
+    responseDescription: 'HTTP 200 表示查到任务；status=failed 仍可返回 HTTP 200，并附 error.code 和 error.message。seconds、size、duration、resolution、usage 仅在已知时返回，实际终态秒数用于按秒结算。',
     notes: ['billing_status=settled 表示已结算，released 表示预留已释放，reconciliation 表示待核对，reserved 表示预算仍预留。生成状态和账务状态应分开判断。', 'Video 任务有后台恢复轮询。重复查询不会重新 POST 生成；原生任务也可通过 X-Video-Task-ID 对应的本站 ID 查询。', ...grokNotes.slice(1)], errors: taskErrors,
   },
   {

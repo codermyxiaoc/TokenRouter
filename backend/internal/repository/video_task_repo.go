@@ -182,13 +182,13 @@ func (r *videoTaskRepository) Save(ctx context.Context, t *service.VideoTaskReco
 	if err != nil {
 		return err
 	}
-	// 金额和结算状态由资金事务更新，本方法不能用旧的JSON快照覆盖账务结果。
+	// 金额和结算状态由资金事务更新；保留更长的创建租约，不能在长请求执行中缩回三分钟。
 	res, err := r.db.ExecContext(ctx, `UPDATE video_tasks SET record=$3,status=$4,upstream_task_id=$5,next_poll_at=$6,updated_at=NOW(),effects_done=$8,
  billing_status=CASE WHEN billing_status IN ('settled','released') THEN billing_status ELSE $9 END,
- lease_until=CASE WHEN $7 THEN NULL ELSE NOW()+INTERVAL '3 minutes' END,lease_token=CASE WHEN $7 THEN '' ELSE lease_token END
+ lease_until=CASE WHEN $7 THEN NULL ELSE GREATEST(lease_until,$10,NOW()+INTERVAL '3 minutes') END,lease_token=CASE WHEN $7 THEN '' ELSE lease_token END
  WHERE id=$1 AND lease_token=$2 AND lease_until>NOW()
  AND ($9<>'released' OR billing_status='released' OR (billing_status='pending' AND NOT allowance_reserved
- AND balance_hold_amount=0 AND hold_amount=0))`, t.ID, t.LeaseToken, string(raw), t.Status, t.UpstreamTaskID, t.NextPollAt, release, t.EffectsDone, t.BillingStatus)
+ AND balance_hold_amount=0 AND hold_amount=0))`, t.ID, t.LeaseToken, string(raw), t.Status, t.UpstreamTaskID, t.NextPollAt, release, t.EffectsDone, t.BillingStatus, t.LeaseUntil)
 	if err != nil {
 		return err
 	}

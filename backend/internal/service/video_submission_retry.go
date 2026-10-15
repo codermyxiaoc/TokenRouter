@@ -155,6 +155,31 @@ func VideoTaskCanRetrySubmission(t *VideoTaskRecord) bool {
 		t.UpstreamTaskID == "" && VideoCreationDefinitelyRejected(t.CreateResponseStatus, t.CreateResponse)
 }
 
+// VideoTaskRetryTargetCompatible 保持已冻结请求的参数和计价含义，模型映射可变但转换协议不可变。
+func VideoTaskRetryTargetCompatible(task *VideoTaskRecord, target VideoUpstreamTarget, metadata VideoRequestMetadata) bool {
+	if task == nil || task.Target.Endpoint != target.Endpoint {
+		return false
+	}
+	profile := func(value string) string {
+		if value == "" {
+			return VideoOpenAIProfilePassthrough
+		}
+		return value
+	}
+	if profile(task.Target.OpenAIProfile) != profile(target.OpenAIProfile) {
+		return false
+	}
+	original := task.Metadata
+	if original.Resolution != metadata.Resolution || original.Size != metadata.Size ||
+		original.DurationSeconds != metadata.DurationSeconds || original.HasReferenceVideo != metadata.HasReferenceVideo {
+		return false
+	}
+	if (original.ReferenceImageCount == nil) != (metadata.ReferenceImageCount == nil) {
+		return false
+	}
+	return original.ReferenceImageCount == nil || *original.ReferenceImageCount == *metadata.ReferenceImageCount
+}
+
 // nextRejectedVideoAccount 只负责迁移明确失败的归属，不再次预扣或重新计算用户价卡。
 func (s *VideoTaskService) nextRejectedVideoAccount(ctx context.Context, key *APIKey, req *VideoTaskSubmitRequest, task *VideoTaskRecord) (*VideoTaskRecord, *VideoUpstreamSelection, error) {
 	repo, ok := s.repo.(VideoTaskRetryRepository)
@@ -183,7 +208,7 @@ func (s *VideoTaskService) nextRejectedVideoAccount(ctx context.Context, key *AP
 			limit = 10
 		}
 		// 同一入站协议不允许在换号时改变厂商参数含义。
-		if next.Target.Endpoint != task.Target.Endpoint {
+		if !VideoTaskRetryTargetCompatible(task, next.Target, next.Metadata) {
 			if next.Release != nil {
 				next.Release()
 			}

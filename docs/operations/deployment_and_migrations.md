@@ -11,6 +11,7 @@
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
 - [平台额度事务化升级](#transactional_platform_quotas)：切换额度统计权威来源、旧实例及缓存处理时读取。
+- [v3.14 H3 视频协议与超时恢复](#v3_14_upgrade)：升级显式协议适配、精确尺寸价档和无响应超时释放时读取。
 - [v3.13 上游故障切换](#v3_13_upgrade)：升级调度、冷却和视频安全重提时读取。
 - [v3.11 自动结算订阅顺序](#v3_11_upgrade)：升级额度重置与到期优先级时读取。
 - [Sub2API 0.2.16 兼容迁移](#upstream_v216_migrations)：同步分组译文和 Gemini 显式缓存时读取。
@@ -54,7 +55,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.13`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.14`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -69,11 +70,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.13`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.14`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.13 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.14 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -165,7 +166,20 @@ Gemini 缓存费用复用本站持久资金合同，使用 `gemini_cache` 报价
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.13`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `309_creative_quota_platform.sql`。从 v3.12 升级不新增或修改 SQL 迁移；更早版本仍须遵循对应迁移与恢复边界。
+当前发布版本为 `v0.1.278-ct-v3.14`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `309_creative_quota_platform.sql`。从 v3.13 升级不新增或修改 SQL 迁移；更早版本仍须遵循对应迁移与恢复边界。
+
+<a id="v3_14_upgrade"></a>
+### v3.14 H3 视频协议与超时恢复
+
+从 v3.13 升级不新增或修改 SQL 迁移，最高迁移仍为 `309_creative_quota_platform.sql`。新增协议配置及提交起止时刻、故障分类、超时核对起点沿用既有账号与任务 JSON 保存，不回填没有阶段证据的旧任务，也不重算历史已结算费用。
+
+账号只有显式设置 `video_openai_profile=metaso_h3`，且实际使用 `openai_videos`，才转换旧 H3 参数。默认保真，其它端点不读取该配置；创建时冻结协议配置，后续编辑账号不会改变在途任务解释。通用 OpenAI Videos 支持规范 `seconds`、`size` 与单图 `input_reference`，精确尺寸可配置独立价格或使用显式兜底；H3 的尺寸映射以显式协议规则为准，不从短边或域名推测。终态按有效的实际时长与冻结价卡结算，存在冲突或非法元数据时继续核对，具体约束见[视频上游协议](../interfaces/video_upstream.md#video_protocols)和[视频任务](../domains/video_tasks.md#video_task_lifecycle)。
+
+`gateway.video_create_timeout_seconds`（环境变量 `GATEWAY_VIDEO_CREATE_TIMEOUT_SECONDS`）默认 180 秒，0 使用默认，最大 600 秒；所有安全换号共享总预算，创建租约至少覆盖预算另加 30 秒。明确创建超时只有在没有任务 ID、HTTP 状态、原始响应、上游状态、产物或用量等持久证据时，才从首次保存的超时起点核对 15 分钟后进入正常释放事务。本版 `submitting` 进程中断还须具备有效的提交开始与截止时刻，从原截止时刻计时；进程取得响应但尚未落盘即退出也属于无持久响应证据，由平台承担上游可能已受理的成本。恢复不会自动重发 POST。正文读取失败、完整响应缺 ID 或冲突 ID、有归属任务，以及没有分类或提交时点的旧未知记录不套用此规则；仍需按原流程查询或人工核对。
+
+升级前验证数据库和配置备份，停止新提交并排空在途创建，统一更新所有应用和后台工作进程，不能混跑旧恢复器。保留未完成任务及资金账本，沿用 PostgreSQL、Redis、数据目录和稳定安全密钥，无需清空缓存。全部实例和嵌入前端更新后再启用 H3 配置、编辑精确尺寸价档；升级后抽查实际发送参数、实际秒数结算、任务终态、预扣释放及仅一次的使用记录，旧未知任务另行核对。
+
+回退前停止新提交并排空、核对在途及待结算/待释放任务，再将新 H3 协议配置与精确尺寸价格档恢复为旧版可识别的配置或升级前备份。旧版不会执行新的适配、超时分类及尺寸定价，不能将新在途任务交给旧恢复器。保留任务、预留、捕获和释放账本；回退程序不会撤销已经完成的退款或上游生成，也不能直接恢复旧数据库覆盖升级后的资金变更。从更早版本升级仍须遵循下面的平台额度事务化迁移边界。
 
 <a id="v3_13_upgrade"></a>
 ### v3.13 上游故障切换

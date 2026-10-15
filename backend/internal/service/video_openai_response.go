@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 )
 
 // 入口协议决定客户端响应形状，实际供应商协议继续由冻结的路由快照决定。
@@ -36,6 +37,10 @@ func videoProtocolResponse(t *VideoTaskRecord, protocol string, native bool) *Vi
 	}
 	if t.Metadata.DurationSeconds > 0 {
 		value["duration"] = t.Metadata.DurationSeconds
+		value["seconds"] = strconv.FormatFloat(t.Metadata.DurationSeconds, 'f', -1, 64)
+	}
+	if t.Metadata.Size != "" {
+		value["size"] = t.Metadata.Size
 	}
 	if t.Metadata.Resolution != "" {
 		value["resolution"] = t.Metadata.Resolution

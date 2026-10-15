@@ -372,16 +372,18 @@ x-goog-api-key: <tokenrouter_api_key>
 
 ### Video 平台 OpenAI 兼容视频任务
 
-使用绑定 Video 分组的站内 API Key。账号勾选 **OpenAI Videos (/v1/videos)** 时请求上游同路径；**OpenAI Videos (/v1/video/generations)** 对应原有兼容路径。请求参数遵循实际上游，下面示例模型需要在当前账号及价卡中配置。
+使用绑定 Video 分组的站内 API Key。账号勾选 **OpenAI Videos (/v1/videos)** 时请求上游同路径；**OpenAI Videos (/v1/video/generations)** 对应原有兼容路径。请求参数遵循实际上游，下面为标准 OpenAI Videos JSON 字段，模型及精确尺寸价档或兜底价需要预先配置。
 
 ```bash
 curl https://api.example.com/v1/videos \
   -H "Authorization: Bearer $TOKENROUTER_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"seedance-2.5","prompt":"A city at sunset","duration":10,"resolution":"720p","ratio":"16:9"}'
+  -d '{"model":"video-model","prompt":"A city at sunset","seconds":8,"size":"1280x720"}'
 ```
 
-任务返回本站 `vid_` 开头的 ID，成功受理响应包含 `object: "video"`、`model`、`created_at`、`status` 和 `billing_status`。用原 Key 查询或下载：
+单张参考图使用 `input_reference: {"image_url":"https://media.example.com/first-frame.jpg"}`；上游支持时也可填写图片 Data URL。管理员显式选择账号的“秘塔 H3”适配后，才会把旧 `duration/resolution/ratio/images` 转为规范字段，并把 `1280x720`/`720x1280` 映射到 `768p` 价档、`1792x1024`/`1024x1792` 映射到 `2k`；默认透传不根据域名或模型名推断。冲突参数及 H3 多图请求在预扣前拒绝。旧 `/v1/video/generations` 和其他原生协议继续使用自身的参数约定。
+
+任务返回本站 `vid_` 开头的 ID，成功受理响应包含 `object: "video"`、`model`、`created_at`、`status` 和 `billing_status`。已知时输出 `seconds/size` 并保留 `duration/resolution` 兼容字段；按秒结算读取可信终态秒数。用原 Key 查询或下载：
 
 ```http
 GET /v1/videos/{video_id}

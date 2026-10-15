@@ -1070,6 +1070,8 @@ type GatewayConfig struct {
 	MaxAccountSwitches int `mapstructure:"max_account_switches"`
 	// Gemini 账户切换最大次数（Gemini 平台单独配置，因 API 限制更严格）
 	MaxAccountSwitchesGemini int `mapstructure:"max_account_switches_gemini"`
+	// 独立视频创建及安全换号共用的秒数预算，0 使用默认 180 秒。
+	VideoCreateTimeoutSeconds int `mapstructure:"video_create_timeout_seconds"`
 
 	// Antigravity 429 fallback 限流时间（分钟），解析重置时间失败时使用
 	AntigravityFallbackCooldownMinutes int `mapstructure:"antigravity_fallback_cooldown_minutes"`
@@ -2438,6 +2440,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.failover_on_400", false)
 	viper.SetDefault("gateway.max_account_switches", 10)
 	viper.SetDefault("gateway.max_account_switches_gemini", 3)
+	viper.SetDefault("gateway.video_create_timeout_seconds", 180)
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
@@ -3467,6 +3470,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.ConcurrencySlotTTLMinutes <= 0 {
 		return fmt.Errorf("gateway.concurrency_slot_ttl_minutes must be positive")
+	}
+	if c.Gateway.VideoCreateTimeoutSeconds < 0 || c.Gateway.VideoCreateTimeoutSeconds > 600 {
+		return fmt.Errorf("gateway.video_create_timeout_seconds must be between 0-600 seconds (0 uses 180)")
 	}
 	if c.Gateway.StreamDataIntervalTimeout < 0 {
 		return fmt.Errorf("gateway.stream_data_interval_timeout must be non-negative")

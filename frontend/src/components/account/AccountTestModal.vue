@@ -97,15 +97,15 @@
         </div>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div class="space-y-1.5">
-            <label for="account-test-video-resolution" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testResolution') }}</label>
+            <label for="account-test-video-resolution" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3Resolution' : 'admin.accounts.video.testResolution') }}</label>
             <input id="account-test-video-resolution" v-model="videoResolution" class="input" type="text" maxlength="32" placeholder="768p" :disabled="status === 'connecting'" data-testid="account-test-video-resolution" />
           </div>
           <div class="space-y-1.5">
-            <label for="account-test-video-ratio" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testRatio') }}</label>
+            <label for="account-test-video-ratio" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3Ratio' : 'admin.accounts.video.testRatio') }}</label>
             <input id="account-test-video-ratio" v-model="videoRatio" class="input" type="text" maxlength="32" placeholder="16:9" :disabled="status === 'connecting'" data-testid="account-test-video-ratio" />
           </div>
         </div>
-        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.video.testResolutionHint') }}</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3ResolutionHint' : 'admin.accounts.video.testResolutionHint') }}</p>
         <p v-if="!loadingModels && videoTestValidationMessage" class="text-xs text-amber-600 dark:text-amber-400" role="alert">{{ videoTestValidationMessage }}</p>
       </template>
 
@@ -157,7 +157,7 @@
           <button v-if="uploadImageDataURL" type="button" class="text-xs text-gray-500" :disabled="status === 'connecting'" @click="clearMediaUploads">{{ t('common.remove') }}</button>
           <input ref="imageFileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden" :disabled="status === 'connecting'" @change="onImageFileChange" />
         </div>
-        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(testType === 'video' ? 'admin.accounts.grok.videoFirstFrameHint' : 'admin.accounts.grok.imageUploadHint') }}</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3ImageHint' : testType === 'video' ? 'admin.accounts.grok.videoFirstFrameHint' : 'admin.accounts.grok.imageUploadHint') }}</p>
         <img v-if="uploadImageDataURL" :src="uploadImageDataURL" :alt="t('admin.accounts.grok.uploadPreviewAlt')" class="max-h-40 w-full rounded-lg object-contain" />
       </div>
       <div v-if="supportsAudioUpload" class="space-y-1.5">
@@ -406,7 +406,7 @@ const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-ima
 // 图片/文字请求类型完全由管理员选择，不再从模型名称推断。
 const supportsImageTest = computed(() => testType.value === 'image')
 const {
-  isVideoAccount, videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
+  isVideoAccount, isMetasoH3VideoTest, videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
   testEndpoint, isGrokAccount, testTypeOptions, endpointOptions, showEndpointSelect,
   showModelSelect, modelOptionsForMode, supportsImageUpload, supportsAudioUpload,
   supportsPromptInput, promptInputLabel, promptInputPlaceholder, promptInputHint,

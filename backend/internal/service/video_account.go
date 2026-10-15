@@ -17,6 +17,7 @@ type VideoAccountConfiguration struct {
 	ModelBindings map[string]VideoEndpointSet `json:"video_model_bindings"`
 	BaseURLs      map[VideoEndpoint]string    `json:"video_base_urls"`
 	ModelPaths    map[string]string           `json:"video_model_paths"`
+	OpenAIProfile string                      `json:"video_openai_profile,omitempty"`
 }
 
 // VideoEndpointSet 兼容旧单字符串绑定；旧值仅表示一个端点，不自动扩展账号能力。
@@ -119,7 +120,10 @@ func (a *Account) VideoConfiguration() (VideoAccountConfiguration, error) {
 	if err != nil {
 		return out, err
 	}
-	err = json.Unmarshal(body, &out)
+	if err = json.Unmarshal(body, &out); err != nil {
+		return out, err
+	}
+	out.OpenAIProfile, err = normalizeVideoOpenAIProfile(out.OpenAIProfile)
 	return out, err
 }
 

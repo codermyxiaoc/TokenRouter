@@ -37,7 +37,24 @@ describe('Video account credentials', () => {
       { model: 'shared', endpoint: 'openai_videos', path: '' },
     ])
     expect(validateVideoAccountForm(form, '')).toBeNull()
-    expect(videoAccountCredentials(form)).toEqual(credentials)
+    expect(videoAccountCredentials(form)).toEqual({ ...credentials, video_openai_profile: 'passthrough' })
+  })
+
+  // 历史配置不自动转换参数；供应商适配是显式选择，暂时停用端点也不会丢失。
+  it('defaults to passthrough and round-trips an explicit H3 profile while its endpoint is disabled', () => {
+    const form = createVideoAccountForm({ video_endpoints: ['openai_videos'] })
+    expect(form.openAIProfile).toBe('passthrough')
+    const h3 = createVideoAccountForm({ video_endpoints: ['compat'], video_openai_profile: 'metaso_h3' })
+    expect(h3.openAIProfile).toBe('metaso_h3')
+    expect(validateVideoAccountForm(h3, 'https://video.test')).toBeNull()
+    expect(videoAccountCredentials(h3).video_openai_profile).toBe('metaso_h3')
+    h3.openAIProfile = 'passthrough'
+    expect(videoAccountCredentials(h3).video_openai_profile).toBe('passthrough')
+  })
+
+  it('rejects an unknown persisted profile instead of silently changing it', () => {
+    const form = createVideoAccountForm({ video_endpoints: ['openai_videos'], video_openai_profile: 'future_profile' })
+    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('openAIProfileInvalid')
   })
 
   // 未绑定模型继承账号端点；只有同一模型和端点的重复行才非法。

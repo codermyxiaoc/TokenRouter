@@ -297,6 +297,7 @@ func TestVideoTaskLifecycleUnknownSubmissionNeverRepostsOrRefunds(t *testing.T) 
 		t.Run(map[bool]string{false: "success_missing_id", true: "connection_lost"}[network], func(t *testing.T) {
 			s, key, u, b, _ := newVideoLifecycleFixture(BillingModeVideo)
 			if network {
+				u.submit = nil
 				u.submitErr = errors.New("connection lost after write")
 			} else {
 				u.submit = &VideoUpstreamResponse{StatusCode: 200, Body: []byte(`{"status":"pending"}`)}

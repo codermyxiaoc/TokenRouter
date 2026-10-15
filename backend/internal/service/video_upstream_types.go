@@ -46,14 +46,18 @@ type VideoUpstreamTarget struct {
 	CreatePath string        `json:"create_path"`
 	Model      string        `json:"model"`
 	AccountID  int64         `json:"account_id"`
+	// 仅 OpenAI Videos 使用显式适配配置；冻结后不受账号后续编辑影响。
+	OpenAIProfile string `json:"openai_profile,omitempty"`
 }
 
 // VideoRequestMetadata 只供定价与观测，绝不修改供应商原始请求。
 type VideoRequestMetadata struct {
-	Model             string  `json:"model"`
-	Resolution        string  `json:"resolution"`
-	DurationSeconds   float64 `json:"duration_seconds"`
-	HasReferenceVideo bool    `json:"has_reference_video"`
+	Model           string  `json:"model"`
+	Resolution      string  `json:"resolution"`
+	DurationSeconds float64 `json:"duration_seconds"`
+	// Size 保留像素尺寸；Resolution 仍表示实际报价所用的精确尺寸或供应商档位。
+	Size              string `json:"size,omitempty"`
+	HasReferenceVideo bool   `json:"has_reference_video"`
 	// nil 表示输入图片数量存在歧义；明确无图片使用指向零的指针，不读取输出图片数量。
 	ReferenceImageCount *int   `json:"reference_image_count,omitempty"`
 	Tokens              *int64 `json:"tokens,omitempty"`
@@ -105,6 +109,8 @@ type VideoUpstreamResponse struct {
 	UpstreamStatus string
 	Metadata       VideoRequestMetadata
 	VideoURL       string
+	// 元数据存在歧义时保留任务归属与状态，但终态不得沿用请求预估值扣费。
+	MetadataError string
 }
 
 // VideoTaskLifecycle 隔离HTTP协议处理与持久任务、预留和结算状态机。

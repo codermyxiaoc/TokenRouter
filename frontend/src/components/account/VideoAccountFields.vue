@@ -10,6 +10,11 @@
         {{ endpointLabel(endpoint) }}
       </label>
     </div>
+    <div v-if="modelValue.endpoints.includes('openai_videos')" data-testid="video-openai-profile-field">
+      <label class="input-label">{{ t('admin.accounts.video.openAIProfile') }}</label>
+      <Select :model-value="modelValue.openAIProfile" :options="openAIProfileOptions" data-testid="video-openai-profile" @update:model-value="patch({ openAIProfile: $event as VideoOpenAIProfile })" />
+      <p class="input-hint">{{ t('admin.accounts.video.openAIProfileHint') }}</p>
+    </div>
     <div v-for="endpoint in modelValue.endpoints" :key="endpoint">
       <label class="input-label break-all">{{ endpointUrlLabel(endpoint) }} · {{ t('admin.accounts.video.endpointUrl') }}</label>
       <input class="input" type="url" :value="modelValue.baseUrls[endpoint] || ''" :data-testid="`video-endpoint-url-${endpoint}`" placeholder="https://api.example.com" @input="patch({ baseUrls: { ...modelValue.baseUrls, [endpoint]: ($event.target as HTMLInputElement).value } })" />
@@ -44,7 +49,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
-import { VIDEO_ENDPOINTS, VIDEO_MODEL_PATHS, type VideoAccountForm, type VideoEndpoint, type VideoModelBindingForm } from './videoAccountConfig'
+import { VIDEO_ENDPOINTS, VIDEO_MODEL_PATHS, VIDEO_OPENAI_PROFILES, type VideoAccountForm, type VideoEndpoint, type VideoModelBindingForm, type VideoOpenAIProfile } from './videoAccountConfig'
 
 const props = defineProps<{ modelValue: VideoAccountForm }>()
 const emit = defineEmits<{ 'update:modelValue': [value: VideoAccountForm] }>()
@@ -69,6 +74,7 @@ function endpointUrlLabel(endpoint: VideoEndpoint) {
   return path ? t('admin.accounts.video.endpointWithPath', { name: endpointLabel(endpoint), path }) : endpointLabel(endpoint)
 }
 const endpointOptions = computed(() => props.modelValue.endpoints.map(value => ({ value, label: endpointLabel(value) })))
+const openAIProfileOptions = computed(() => VIDEO_OPENAI_PROFILES.map(value => ({ value, label: t(`admin.accounts.video.openAIProfiles.${value}`) })))
 const pathOptions = computed(() => [{ value: '', label: t('admin.accounts.video.nativePath') }, ...VIDEO_MODEL_PATHS.map(value => ({ value, label: value }))])
 const patch = (value: Partial<VideoAccountForm>) => emit('update:modelValue', { ...props.modelValue, ...value })
 // 绑定只能从用户已勾选的端点中初始化，空配置不能隐式补入兼容端点。

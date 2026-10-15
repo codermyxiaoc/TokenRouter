@@ -19,6 +19,8 @@ export function useAccountTestOptions(
   const videoResolution = ref('')
   const videoRatio = ref('16:9')
   const isVideoAccount = computed(() => account.value?.platform === 'video')
+  // 适配器必须由账号明确选择；同账号的其他端点仍保留供应商原参数。
+  const isMetasoH3VideoTest = computed(() => isVideoAccount.value && videoEndpoint.value === 'openai_videos' && account.value?.credentials?.video_openai_profile === 'metaso_h3')
   const isGrokAccount = computed(() => account.value?.platform === 'grok')
   const imageTestAvailable = computed(() => {
     const platform = account.value?.platform
@@ -54,6 +56,10 @@ export function useAccountTestOptions(
     }
     const duration = Number(videoDuration.value)
     if (!Number.isInteger(duration) || duration < 1 || duration > 60) return t('admin.accounts.video.testDurationInvalid')
+    if (isMetasoH3VideoTest.value) {
+      if (!['768p', '2k'].includes(videoResolution.value.trim().toLowerCase())) return t('admin.accounts.video.testH3ResolutionInvalid')
+      if (!['16:9', '9:16'].includes(videoRatio.value.trim())) return t('admin.accounts.video.testH3RatioInvalid')
+    }
     return ''
   })
   const endpointOptions = computed(() => {
@@ -140,7 +146,7 @@ export function useAccountTestOptions(
     }
   })
   return {
-    isVideoAccount, videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
+    isVideoAccount, isMetasoH3VideoTest, videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
     testEndpoint, isGrokAccount, testTypeOptions, endpointOptions, showEndpointSelect,
     showModelSelect, modelOptionsForMode, supportsImageUpload, supportsAudioUpload,
     supportsPromptInput, promptInputLabel, promptInputPlaceholder, promptInputHint,

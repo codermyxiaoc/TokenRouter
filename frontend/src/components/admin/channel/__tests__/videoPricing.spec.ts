@@ -64,6 +64,37 @@ describe('Video pricing matrix', () => {
     expect(validVideoPrices([{ resolution: '1080p', price: -1 }])).toBe(false)
   })
 
+  // 精确尺寸不混入数字档位，横屏和竖屏能分别定价；异常尺寸不能绕过后端价格校验。
+  it('preserves exact dimensions and rejects malformed or duplicate dimension tiers', () => {
+    const dimensions = [
+      { resolution: '1280X720', price: 0.15 },
+      { resolution: '720x1280', price: 0.2 },
+      { resolution: '768p', price: 0.3 },
+    ]
+    expect(validVideoPrices(dimensions)).toBe(true)
+    expect(videoPricesToAPI(dimensions)).toEqual([
+      { resolution: '1280x720', price: 0.15 },
+      { resolution: '720x1280', price: 0.2 },
+      { resolution: '768p', price: 0.3 },
+    ])
+    expect(validVideoPrices([{ resolution: '1280x720', price: 1 }, { resolution: ' 1280X720 ', price: 2 }])).toBe(false)
+    for (const resolution of ['0x720', '1280x0', '01280x720', '1280x0720', '1280 x 720', '1280×720', '1280x720p', '1280x720x2', '65537x720', '720x65537', '65537p']) {
+      expect(validVideoPrices([{ resolution, price: 1 }]), resolution).toBe(false)
+    }
+  })
+
+  // 矩阵新增入口与保存入口共用尺寸校验，不能生成带错误 p 后缀的精确尺寸。
+  it('adds an exact size without converting it into a p tier', async () => {
+    const wrapper = mount(VideoPricingMatrix, { props: { mode: 'video', modelValue: [] } })
+    await wrapper.get('input:not([type="number"])').setValue('1280X720')
+    await wrapper.get('input:not([type="number"])').trigger('keydown.enter')
+    expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toEqual([{ resolution: '1280x720', price: null }])
+    await wrapper.setProps({ modelValue: [{ resolution: '1280x720', price: 0.15 }] })
+    await wrapper.get('input:not([type="number"])').setValue('1280x720')
+    expect(wrapper.findAll('button').at(-1)!.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
   // 回读旧双价时保留零价和仅参考视频有价的配置，避免空行覆盖用户价格。
   it.each([false, true])('merges legacy prices independently of row order, reversed=%s', reverse => {
     const legacy = [

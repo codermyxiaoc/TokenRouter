@@ -5,6 +5,29 @@ import { createVideoAccountForm, videoAccountCredentials, type VideoAccountForm 
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 describe('Video account endpoint rows', () => {
+  // 只在标准视频端点展示自研选择框，端点反复启停不重置已选适配器。
+  it('shows the OpenAI adapter only for its endpoint and preserves it across endpoint toggles', async () => {
+    const wrapper = mount(VideoAccountFields, { props: { modelValue: createVideoAccountForm({ video_endpoints: ['compat'] }) }, global: { stubs: { Select: true } } })
+    const acceptUpdate = async () => wrapper.setProps({ modelValue: wrapper.emitted('update:modelValue')!.at(-1)![0] as VideoAccountForm })
+    expect(wrapper.find('[data-testid="video-openai-profile-field"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="video-endpoint-openai_videos"]').setValue(true)
+    await acceptUpdate()
+    const profile = wrapper.findAllComponents({ name: 'Select' }).find(select => select.attributes('data-testid') === 'video-openai-profile')!
+    expect(profile.props('modelValue')).toBe('passthrough')
+    expect(profile.props('options').map((option: { value: string }) => option.value)).toEqual(['passthrough', 'metaso_h3'])
+    profile.vm.$emit('update:modelValue', 'metaso_h3')
+    await acceptUpdate()
+    await wrapper.get('[data-testid="video-endpoint-openai_videos"]').setValue(false)
+    await acceptUpdate()
+    expect(wrapper.find('[data-testid="video-openai-profile-field"]').exists()).toBe(false)
+    expect(videoAccountCredentials(wrapper.props('modelValue')).video_openai_profile).toBe('metaso_h3')
+    await wrapper.get('[data-testid="video-endpoint-openai_videos"]').setValue(true)
+    await acceptUpdate()
+    expect(wrapper.findAllComponents({ name: 'Select' }).find(select => select.attributes('data-testid') === 'video-openai-profile')!.props('modelValue')).toBe('metaso_h3')
+    expect(wrapper.find('select').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   // 初始为空时不能添加隐式 compat 绑定，勾选原生协议后只使用该明确选择。
   it('leaves compatibility unchecked and requires an endpoint before adding bindings', async () => {
     const wrapper = mount(VideoAccountFields, { props: { modelValue: createVideoAccountForm() }, global: { stubs: { Select: true } } })

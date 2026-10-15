@@ -227,7 +227,7 @@ func (s *VideoTaskService) prepareTask(ctx context.Context, key *APIKey, req Vid
 	t := &VideoTaskRecord{ID: "vid_" + strings.ReplaceAll(uuid.NewString(), "-", ""), UserID: usageActorUserID(key, key.User), APIKeyID: key.ID, GroupID: key.Group.ID, AccountID: selection.Account.ID,
 		IdempotencyKey: req.IdempotencyKey, PayloadHash: hash, Status: "prepared", BillingStatus: "pending", Target: selection.Target, Metadata: selection.Metadata,
 		RequestedModel: selection.RequestedModel, InternalModel: selection.InternalModel, Native: req.Native, InboundPath: req.NativePath, Quote: quote,
-		CreatedAt: now, NextPollAt: now.Add(15 * time.Second), LeaseToken: uuid.NewString(), LeaseUntil: now.Add(3 * time.Minute), AccountRateMultiplier: selection.Account.BillingRateMultiplier()}
+		CreatedAt: now, NextPollAt: now.Add(15 * time.Second), LeaseToken: uuid.NewString(), LeaseUntil: now.Add(s.videoSubmissionLease()), AccountRateMultiplier: selection.Account.BillingRateMultiplier()}
 	if t.InboundPath == "" {
 		t.InboundPath = "/v1/video/generations"
 		if req.InboundProtocol == string(VideoEndpointOpenAIVideos) {
@@ -306,12 +306,16 @@ func (s *VideoTaskService) submitPreparedTask(ctx context.Context, key *APIKey, 
 	if t.LeaseToken != ownedToken {
 		return nil, ErrVideoTaskConflict
 	}
+	started := time.Now().UTC()
+	deadline := started.Add(s.videoCreateTimeout())
 	t.Status = "submitting"
+	t.SubmissionStartedAt, t.SubmissionDeadlineAt = &started, &deadline
+	t.LeaseUntil = started.Add(s.videoSubmissionLease())
 	if err = s.repo.Save(ctx, t, false); err != nil {
 		return nil, err
 	}
 	// 客户端断连不能中断已经开始的上游受理与归属保存，所有操作仍有独立截止时间。
-	work, done := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
+	work, done := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 	defer done()
 	maxSwitches := 3
 	if s.cfg != nil && s.cfg.Gateway.MaxAccountSwitches > 0 {
@@ -350,22 +354,38 @@ func (s *VideoTaskService) submitPreparedTask(ctx context.Context, key *APIKey, 
 			t.Status = "submission_unknown"
 			t.ErrorMessage = "上游受理结果未确认，请勿重新提交"
 			t.BillingStatus = "reconciliation"
+			t.SubmissionFailureKind = videoSubmissionFailureKind(callErr)
+			unknownSince := time.Now().UTC()
+			t.SubmissionUnknownSince = &unknownSince
 			t.NextPollAt = time.Now().Add(time.Hour)
-			_ = s.repo.Save(work, t, true)
-			_ = s.observe(work, t)
+			if t.SubmissionFailureKind == "timeout" {
+				t.NextPollAt = unknownSince.Add(videoUnknownSubmissionGrace)
+			}
+			// 替代传输即使同时返回错误，也不能丢掉已得到的响应证据后进入无 ID 自动退款。
+			if response != nil {
+				t.SubmissionFailureKind = "response"
+				t.RawResponse, t.CreateResponse = append([]byte(nil), response.Body...), append([]byte(nil), response.Body...)
+				t.ResponseStatus, t.CreateResponseStatus = response.StatusCode, response.StatusCode
+				if !videoResponseHasConflictingTaskIDs(t.Target.Endpoint, response.Body) && videoUpstreamResponseMatchesTask(t.Target.Endpoint, response, response.TaskID) {
+					t.UpstreamTaskID = response.TaskID
+					if t.UpstreamTaskID != "" {
+						t.NextPollAt = time.Now().Add(15 * time.Second)
+					}
+				}
+			}
+			s.saveVideoUnknownSubmission(ctx, t)
 			result := videoProtocolResponse(t, req.InboundProtocol, false)
 			result.StatusCode = http.StatusBadGateway
 			return result, nil
 		}
 		s.applySubmissionResponse(t, response)
-		if err = s.repo.Save(work, t, false); err != nil {
+		if err = s.saveVideoTaskState(ctx, t, false); err != nil {
 			return &VideoTaskResponse{StatusCode: http.StatusServiceUnavailable, LocalTaskID: t.ID, Body: []byte(fmt.Sprintf(`{"error":{"code":"video_task_storage_unavailable","message":"任务可能已受理，请勿重新提交","task_id":%q,"upstream_task_id":%q}}`, t.ID, t.UpstreamTaskID))}, nil
 		}
 		if !videoStoredResponseMatchesTask(t) {
 			// 首次原生创建也不能绕过投影门禁直接回传冲突包，预算留给人工核对。
 			t.NextPollAt = time.Now().Add(time.Hour)
-			_ = s.repo.Save(work, t, true)
-			_ = s.observe(work, t)
+			s.saveVideoUnknownSubmission(ctx, t)
 			return videoTaskMismatchResponse(t), nil
 		}
 		if switches >= maxSwitches || ctx.Err() != nil || work.Err() != nil || !VideoTaskCanRetrySubmission(t) {
@@ -386,13 +406,17 @@ func (s *VideoTaskService) submitPreparedTask(ctx context.Context, key *APIKey, 
 			return stopUnsubmittedAttempt()
 		}
 		t.Status = "submitting"
+		attemptStarted := time.Now().UTC()
+		t.SubmissionStartedAt, t.SubmissionDeadlineAt = &attemptStarted, &deadline
+		t.SubmissionUnknownSince, t.SubmissionFailureKind = nil, ""
+		t.LeaseUntil = deadline.Add(30 * time.Second)
 		if err = s.repo.Save(work, t, false); err != nil {
 			return &VideoTaskResponse{StatusCode: http.StatusServiceUnavailable, LocalTaskID: t.ID, Body: []byte(fmt.Sprintf(`{"error":{"code":"video_task_storage_unavailable","message":"任务正在恢复，请查询原任务，不要重新提交","task_id":%q}}`, t.ID))}, nil
 		}
 	}
-	s.finish(work, t)
+	s.finish(ctx, t)
 	t.NextPollAt = time.Now().Add(15 * time.Second)
-	_ = s.repo.Save(work, t, true)
+	_ = s.saveVideoTaskState(ctx, t, true)
 	if req.Native || response.StatusCode < 200 || response.StatusCode >= 300 {
 		return &VideoTaskResponse{StatusCode: response.StatusCode, Header: response.Header, Body: response.Body, LocalTaskID: t.ID}, nil
 	}
@@ -402,6 +426,8 @@ func (s *VideoTaskService) submitPreparedTask(ctx context.Context, key *APIKey, 
 // applySubmissionResponse 只处理创建响应，不能用查询失败触发退款。
 // 创建错误无任务 ID 最终仍释放预算；只有有明确拒绝证据的响应允许在释放前有界换号。
 func (s *VideoTaskService) applySubmissionResponse(t *VideoTaskRecord, response *VideoUpstreamResponse) {
+	// 已取得完整响应的未知受理不得混入纯传输超时的十五分钟退款范围。
+	t.SubmissionFailureKind = "response"
 	t.ResponseStatus = response.StatusCode
 	t.RawResponse = append([]byte(nil), response.Body...)
 	t.CreateResponse = append([]byte(nil), response.Body...)
@@ -456,7 +482,7 @@ func (s *VideoTaskService) recoverSubmissionResponse(ctx context.Context, t *Vid
 	if t.UpstreamTaskID != "" || (t.Status != "submission_unknown" && t.Status != "submitting") || t.CreateResponseStatus == 0 {
 		return false
 	}
-	response := ExtractVideoUpstreamResponse(t.Target.Endpoint, t.CreateResponse, "")
+	response := ExtractVideoUpstreamResponseWithProfile(t.Target.Endpoint, t.CreateResponse, "", t.Target.OpenAIProfile)
 	response.StatusCode, response.Body = t.CreateResponseStatus, t.CreateResponse
 	if response.TaskID == "" && response.Status != "failed" && response.Status != "cancelled" &&
 		(response.StatusCode < 400 || response.StatusCode > 599) {
@@ -660,6 +686,9 @@ func (s *VideoTaskService) advance(ctx context.Context, t *VideoTaskRecord) {
 	if s.recoverSubmissionResponse(ctx, t) {
 		return
 	}
+	if s.recoverUnknownVideoSubmission(ctx, t, time.Now().UTC()) {
+		return
+	}
 	if t.UpstreamTaskID == "" {
 		t.Status = "submission_unknown"
 		t.BillingStatus = "reconciliation"
@@ -711,14 +740,32 @@ func (s *VideoTaskService) applyObservation(t *VideoTaskRecord, r *VideoUpstream
 	t.UpstreamStatus = r.UpstreamStatus
 	t.ResponseStatus = r.StatusCode
 	t.RawResponse = append([]byte(nil), r.Body...)
+	metadataValid := r.Status != "completed" || r.MetadataError == ""
+	if r.Status == "completed" {
+		if r.MetadataError != "" {
+			t.PricingMismatch = true
+			t.ResponseMetadataError = r.MetadataError
+		} else if t.ResponseMetadataError != "" {
+			// 空完成包不能证明先前冲突已消除，必须重新提供收费所需的可信终态元数据。
+			metadataValid = t.Quote != nil && r.Metadata.DurationSeconds > 0 && r.Metadata.Resolution != "" &&
+				(t.Quote.Mode != BillingModeVideoToken || r.Metadata.Tokens != nil)
+			if metadataValid {
+				t.PricingMismatch = false
+				t.ResponseMetadataError = ""
+			}
+		}
+	}
 	// 排队包里的零通常是占位值，只有完成响应的显式用量才可用于结算。
-	if r.Status == "completed" && r.Metadata.Tokens != nil {
+	if r.Status == "completed" && metadataValid && r.Metadata.Tokens != nil {
 		t.Metadata.Tokens = r.Metadata.Tokens
 	}
-	if r.Status == "completed" && r.Metadata.DurationSeconds > 0 {
+	if r.Status == "completed" && metadataValid && r.Metadata.DurationSeconds > 0 {
 		t.Metadata.DurationSeconds = r.Metadata.DurationSeconds
 	}
-	if r.Status == "completed" && r.Metadata.Resolution != "" {
+	if r.Status == "completed" && metadataValid && r.Metadata.Size != "" {
+		t.Metadata.Size = r.Metadata.Size
+	}
+	if r.Status == "completed" && metadataValid && r.Metadata.Resolution != "" {
 		resolution, err := NormalizeVideoPriceResolution(r.Metadata.Resolution)
 		if t.Quote.Mode == BillingModeVideoPerRequest && t.Quote.Resolution == "" && t.Quote.FallbackUsed {
 			// 统一按次价没有分辨率条件，完成时的真实档位只用于展示，不重新读取或改写价卡。
@@ -744,6 +791,10 @@ func (s *VideoTaskService) applyObservation(t *VideoTaskRecord, r *VideoUpstream
 }
 
 func (s *VideoTaskService) finish(ctx context.Context, t *VideoTaskRecord) {
+	// 上游刚好在创建截止时间返回时，结算与投影仍有独立预算；失败留给持久恢复器重试。
+	cleanup, done := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer done()
+	ctx = cleanup
 	if t.BillingStatus != "settled" && t.BillingStatus != "released" {
 		command := t.Hold
 		command.RequestFingerprint = ""

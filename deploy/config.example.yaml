@@ -223,6 +223,9 @@ gateway:
   # Timeout for waiting upstream response headers (seconds)
   # 等待上游响应头超时时间（秒）
   response_header_timeout: 600
+  # 独立 Video 创建总预算，包含上传与安全换号；0 使用默认 180 秒，最大 600 秒。
+  # 超时后不盲目重发；无上游 ID 且无完整响应的超时任务核对 15 分钟后释放预扣。
+  video_create_timeout_seconds: 180
   # OpenAI/Codex upstream response header timeout (seconds, 0=disabled)
   # OpenAI/Codex 等待上游响应头超时时间（秒，0=禁用本地响应头超时）
   openai_response_header_timeout: 0

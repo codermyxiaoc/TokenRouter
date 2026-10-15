@@ -33,7 +33,7 @@ func (r *videoTaskRepository) SwitchRejected(ctx context.Context, id, lease stri
 		return nil, err
 	}
 	if lease == "" || task.LeaseToken != lease || !valid || !service.VideoTaskCanRetrySubmission(task) ||
-		task.AccountID == target.AccountID || task.Target.Endpoint != target.Endpoint {
+		task.AccountID == target.AccountID || !service.VideoTaskRetryTargetCompatible(task, target, metadata) {
 		return nil, service.ErrVideoTaskConflict
 	}
 	var count int
@@ -56,7 +56,7 @@ func (r *videoTaskRepository) SwitchRejected(ctx context.Context, id, lease stri
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE video_tasks SET account_id=$2,record=$3,status='prepared',upstream_task_id='',updated_at=NOW(),
- next_poll_at=$4,lease_until=clock_timestamp()+INTERVAL '3 minutes' WHERE id=$1`, id, target.AccountID, string(raw), task.NextPollAt); err != nil {
+ next_poll_at=$4,lease_until=GREATEST(lease_until,clock_timestamp()+INTERVAL '3 minutes') WHERE id=$1`, id, target.AccountID, string(raw), task.NextPollAt); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {

@@ -37,10 +37,12 @@ type VideoTaskRecord struct {
 	InboundPath    string
 	UpstreamTaskID string
 	// 响应以字节保存，非 JSON 的 502 页面也不能破坏状态持久化。
-	RawResponse           []byte
-	CreateResponse        []byte
-	CreateResponseStatus  int
-	PricingMismatch       bool
+	RawResponse          []byte
+	CreateResponse       []byte
+	CreateResponseStatus int
+	PricingMismatch      bool
+	// 与创建时请求参数区分，保存完成响应的元数据校验错误，等待后续合法观测恢复。
+	ResponseMetadataError string `json:",omitempty"`
 	ResponseStatus        int
 	UpstreamStatus        string
 	VideoURL              string
@@ -56,6 +58,11 @@ type VideoTaskRecord struct {
 	PollAttempts          int
 	LeaseToken            string
 	LeaseUntil            time.Time
+	// 提交时点及不明原因持久化，恢复轮询不得把十五分钟核对期限向后续期。
+	SubmissionStartedAt    *time.Time `json:",omitempty"`
+	SubmissionDeadlineAt   *time.Time `json:",omitempty"`
+	SubmissionUnknownSince *time.Time `json:",omitempty"`
+	SubmissionFailureKind  string     `json:",omitempty"`
 	// 明确拒绝的已放弃尝试仅留安全路由与状态，用户任务和资金账本始终保持唯一。
 	RejectedAttempts []VideoRejectedAttempt `json:",omitempty"`
 }

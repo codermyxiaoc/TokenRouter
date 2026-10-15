@@ -168,7 +168,7 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 	}
 }
 
-// buildVideoAccountTestPayload 仅构造诊断模板，正式网关仍按原生协议保真转发。
+// buildVideoAccountTestPayload 仅构造诊断模板，显式适配时与正式网关复用同一参数校验。
 func buildVideoAccountTestPayload(target VideoUpstreamTarget, prompt, imageURL string, duration int, options AccountTestOptions) ([]byte, error) {
 	body := map[string]any{"model": target.Model, "duration": duration}
 	params := body
@@ -212,7 +212,15 @@ func buildVideoAccountTestPayload(target VideoUpstreamTarget, prompt, imageURL s
 		}
 		params[key] = options.Ratio
 	}
-	return json.Marshal(body)
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	// 历史账号和其他端点保留原参数，只有明确选择秘塔 H3 才转换为标准视频字段。
+	if target.Endpoint == VideoEndpointOpenAIVideos && target.OpenAIProfile == VideoOpenAIProfileMetasoH3 {
+		encoded, _, err = PrepareVideoOpenAIRequest(encoded, "", target.OpenAIProfile)
+	}
+	return encoded, err
 }
 
 // videoAccountTestResponseError 不回显供应商原始正文，避免自定义认证头或调试信息泄露。
@@ -225,6 +233,10 @@ func videoAccountTestResponseError(endpoint VideoEndpoint, result *VideoUpstream
 	}
 	if !json.Valid(result.Body) || !gjson.ParseBytes(result.Body).IsObject() {
 		return fmt.Errorf("Video upstream returned an invalid JSON response")
+	}
+	// 排队中的零值可能只是占位；只在生成完成后检查元数据，并避免泄露供应商原始正文。
+	if result.Status == "completed" && result.MetadataError != "" {
+		return fmt.Errorf("上游视频时长、尺寸或用量数据异常，请核对上游响应")
 	}
 	errorPaths := []string{"error"}
 	codePaths := []string{}

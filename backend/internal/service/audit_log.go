@@ -133,8 +133,6 @@ var auditBodySensitiveExactKeys = func() map[string]struct{} {
 		// custom_key 为用户自设的平台 API Key 明文，
 		// session 为 Ollama Cloud 用量的浏览器会话 Cookie 明文。
 		"proxy_key", "custom_key", "session",
-		// 账号测试素材可能含签名访问凭据或完整私有媒体，审计仅保留参数键名。
-		"reference_image_url", "image_data_url", "audio_data_url",
 	}
 	set := make(map[string]struct{}, len(builtin)+len(SensitiveCredentialKeys)+16)
 	for _, k := range builtin {

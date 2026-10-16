@@ -13,7 +13,6 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 )
 
@@ -21,7 +20,6 @@ const videoAccountTestTimeout = 10 * time.Minute
 
 var videoAccountTestResolution = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`)
 var videoAccountTestRatio = regexp.MustCompile(`^(adaptive|[1-9][0-9]{0,2}:[1-9][0-9]{0,2})$`)
-var videoAccountTestUnsupportedResolution = regexp.MustCompile(`^当前分辨率 [A-Za-z0-9][A-Za-z0-9._-]{0,31} 不支持$`)
 
 // VideoAccountTestEndpoints 返回最终上游模型真正允许的端点，保持账号配置顺序供测试选择框使用。
 func VideoAccountTestEndpoints(account *Account, requestedModel string) []VideoEndpoint {
@@ -79,29 +77,7 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 	if !allowed {
 		return s.sendErrorAndEnd(c, "Selected video endpoint is not enabled for this model")
 	}
-	options.ReferenceImageURL = strings.TrimSpace(options.ReferenceImageURL)
-	options.ReferenceImageTransport = strings.TrimSpace(options.ReferenceImageTransport)
-	if endpoint != VideoEndpointMiniMax && (options.ReferenceImageURL != "" || options.AIGCWatermark != nil || options.ReferenceImageTransport != "") {
-		return s.sendErrorAndEnd(c, "Reference image URL, transport and AIGC watermark options require the MiniMax video endpoint")
-	}
-	switch options.ReferenceImageTransport {
-	case "", "data_url", "https_url":
-	default:
-		return s.sendErrorAndEnd(c, "Reference image transport must be data_url or https_url")
-	}
-	imageURL := options.ReferenceImageURL
-	if imageURL != "" {
-		if options.ImageDataURL != "" {
-			return s.sendErrorAndEnd(c, "Choose either an uploaded image or a reference image URL")
-		}
-		if options.ReferenceImageTransport != "" {
-			return s.sendErrorAndEnd(c, "Reference image transport only applies to an uploaded image")
-		}
-		// 素材 URL 仅交给上游读取，本站不下载；拒绝内联数据、私网字面地址和含凭据的 URL。
-		if !validVideoAccountTestReferenceURL(imageURL) {
-			return s.sendErrorAndEnd(c, "Reference image URL must be a public HTTPS URL without credentials or a fragment")
-		}
-	}
+	imageURL := ""
 	if options.ImageDataURL != "" {
 		var err error
 		imageURL, err = normalizeGrokTestImage(options.ImageDataURL)
@@ -136,22 +112,13 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 	if err != nil {
 		return s.sendErrorAndEnd(c, err.Error())
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), videoAccountTestTimeout)
-	defer cancel()
-	if options.ImageDataURL != "" && options.ReferenceImageTransport == "https_url" {
-		imageURL, err = s.storeVideoAccountTestReferenceImage(ctx, imageURL)
-		if err != nil {
-			return s.sendErrorAndEnd(c, err.Error())
-		}
-	}
 	prompt = firstNonEmpty(strings.TrimSpace(prompt), "A red ball bouncing once on a white floor, short simple motion.")
 	body, err := buildVideoAccountTestPayload(target, prompt, imageURL, duration, options)
 	if err != nil {
 		return s.sendErrorAndEnd(c, err.Error())
 	}
-	if ctx.Err() != nil {
-		return s.sendErrorAndEnd(c, "Video test was cancelled before creating a task")
-	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), videoAccountTestTimeout)
+	defer cancel()
 	// 查询也禁跟随重定向，防止诊断把账号凭据发送到上游给出的其它主机。
 	ctx = WithHTTPUpstreamRedirectsDisabled(ctx)
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: model})
@@ -199,43 +166,6 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 		case <-time.After(3 * time.Second):
 		}
 	}
-}
-
-// 校验传给上游的链接格式与私网字面地址；本站不会为此解析或下载图片链接。
-func validVideoAccountTestReferenceURL(raw string) bool {
-	parsed, err := url.Parse(raw)
-	return err == nil && safeMediaPreviewURL(raw) && parsed.Scheme == "https" && parsed.Fragment == "" && !urlvalidator.IsBlockedHost(parsed.Hostname())
-}
-
-// 转存只发生在管理员明确选择后；随机对象键不覆盖旧测试，保留期沿用存储桶生命周期。
-func (s *AccountTestService) storeVideoAccountTestReferenceImage(ctx context.Context, dataURL string) (string, error) {
-	if ctx.Err() != nil {
-		return "", fmt.Errorf("Reference image upload was cancelled before creating a video task")
-	}
-	if s.imageStorageResolver == nil {
-		return "", fmt.Errorf("上传转 HTTPS 需要先启用并配置图片对象存储；也可改用已有 HTTPS 图片链接")
-	}
-	uploader, enabled := s.imageStorageResolver()
-	if !enabled || uploader == nil || uploader.storage == nil {
-		return "", fmt.Errorf("上传转 HTTPS 需要先启用并配置图片对象存储；也可改用已有 HTTPS 图片链接")
-	}
-	// 复用图片存储的 Data URL 解码、内容校验及有限上传重试，不触发任何图片生成。
-	encoded, err := json.Marshal(map[string]any{"data": []map[string]string{{"url": dataURL}}})
-	if err != nil {
-		return "", fmt.Errorf("参考图转存失败，未创建视频任务")
-	}
-	uploadCtx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	result, err := uploader.Rewrite(uploadCtx, "account-test-reference-"+uuid.NewString(), encoded)
-	if err != nil {
-		// 存储错误可能包含凭据、桶名和签名 URL，只返回固定安全原因。
-		return "", fmt.Errorf("参考图转存失败，未创建视频任务，请检查图片对象存储配置")
-	}
-	imageURL := gjson.GetBytes(result, "data.0.url").String()
-	if !validVideoAccountTestReferenceURL(imageURL) {
-		return "", fmt.Errorf("图片存储未返回可用的公网 HTTPS 链接，未创建视频任务")
-	}
-	return imageURL, nil
 }
 
 // videoAccountTestTaskIDDiagnostic 只在创建 ID 缺失或不能安全查询时展示固定字段的类型，不回显响应值或任意键名。
@@ -329,9 +259,6 @@ func buildVideoAccountTestPayload(target VideoUpstreamTarget, prompt, imageURL s
 		}
 		params[key] = options.Ratio
 	}
-	if target.Endpoint == VideoEndpointMiniMax && options.AIGCWatermark != nil {
-		body["aigc_watermark"] = *options.AIGCWatermark
-	}
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -348,23 +275,7 @@ func videoAccountTestResponseError(endpoint VideoEndpoint, result *VideoUpstream
 	if result == nil {
 		return fmt.Errorf("Video upstream returned an invalid JSON response")
 	}
-	// 仅转换已实测确认的拒绝，不回显任意上游文本，也不改变任务状态或重发生成。
-	if endpoint == VideoEndpointMiniMax && json.Valid(result.Body) {
-		for _, path := range []string{"error.message", "task.error.message"} {
-			message := gjson.GetBytes(result.Body, path)
-			if message.Type == gjson.String && message.String() == "refusing to download from disallowed scheme 'data': base64数据 (2003)" {
-				return fmt.Errorf("上游不接受 Base64 参考图，请选择 HTTPS 图片链接或上传转 HTTPS 方式")
-			}
-		}
-	}
 	if result.StatusCode < 200 || result.StatusCode >= 300 {
-		// 仅把已确认的 MiniMax 参数拒绝转换成固定提示，不回显上游文本里的链接、凭据或扩展字段。
-		if endpoint == VideoEndpointMiniMax && result.StatusCode == 400 && json.Valid(result.Body) {
-			message := gjson.GetBytes(result.Body, "error.message")
-			if message.Type == gjson.String && videoAccountTestUnsupportedResolution.MatchString(message.String()) {
-				return fmt.Errorf("Video upstream returned HTTP 400：上游不支持所填分辨率，请按该模型支持的值和大小写填写；也可留空使用上游默认值")
-			}
-		}
 		return fmt.Errorf("Video upstream returned HTTP %d", result.StatusCode)
 	}
 	if !json.Valid(result.Body) || !gjson.ParseBytes(result.Body).IsObject() {

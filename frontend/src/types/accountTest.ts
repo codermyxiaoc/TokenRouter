@@ -18,8 +18,4 @@ export interface AccountTestRequest {
   duration?: number
   resolution?: string
   ratio?: string
-  // MiniMax 原生测试可选择公网首帧地址及显式水印，省略时保留供应商默认值。
-  reference_image_url?: string
-  reference_image_transport?: 'data_url' | 'https_url'
-  aigc_watermark?: boolean
 }

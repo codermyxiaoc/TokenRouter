@@ -46,7 +46,6 @@ func TestVideoNativeProtocolFixturesPreservePayloadAndResponse(t *testing.T) {
 		{VideoEndpointKling, "/omni-video/m", `{"model":"m","prompt":"x","camera_control":{"zoom":0},"future":null}`, `{"data":{"task_id":"kling-task","task_status":"submitted"},"code":0}`, "kling-task"},
 		{VideoEndpointWan, "/api/v1/services/aigc/video-generation/video-synthesis", `{"model":"m","input":{"prompt":"x","video_url":"https://asset/video"},"parameters":{"duration":5,"resolution":"1080P"},"future":false}`, `{"output":{"task_id":"wan-task","task_status":"PENDING"},"request_id":"trace-only"}`, "wan-task"},
 		{VideoEndpointMiniMax, "/v2/video_generation", `{"model":"m","content":[{"type":"text","text":"x"}],"resolution":"2K","duration":5,"aigc_watermark":false}`, `{"task_id":"minimax-task","base_resp":{"status_code":0},"future":"keep"}`, "minimax-task"},
-		{VideoEndpointMiniMax, "/v2/video_generation", `{"model":"MiniMax-H3","content":[{"type":"text","text":"城市霓虹雨夜"},{"type":"image_url","image_url":{"url":"https://cdn.example/first_frame.png"},"role":"first_frame"}],"resolution":"2K","duration":5,"aigc_watermark":true}`, `{"TaskId":"h3-task"}`, "h3-task"},
 	}
 	for _, f := range fixtures {
 		t.Run(string(f.endpoint), func(t *testing.T) {

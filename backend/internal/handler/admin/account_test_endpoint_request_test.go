@@ -23,23 +23,10 @@ func TestAccountTestRequestBindsEndpointAndMediaOptions(t *testing.T) {
 	require.Equal(t, "data:audio/wav;base64,fixture", request.AudioDataURL)
 }
 
-// MiniMax 选项保持扁平，显式关闭水印与未提供必须能区分。
-func TestAccountTestRequestBindsMiniMaxOptions(t *testing.T) {
-	var request TestAccountRequest
-	require.NoError(t, json.Unmarshal([]byte(`{"test_type":"video","video_endpoint":"minimax","reference_image_url":"https://cdn.example/first_frame.png","reference_image_transport":"https_url","aigc_watermark":false}`), &request))
-	require.Equal(t, "https://cdn.example/first_frame.png", request.ReferenceImageURL)
-	require.Equal(t, "https_url", request.ReferenceImageTransport)
-	require.NotNil(t, request.AIGCWatermark)
-	require.False(t, *request.AIGCWatermark)
-	var omitted TestAccountRequest
-	require.NoError(t, json.Unmarshal([]byte(`{"test_type":"video","video_endpoint":"minimax"}`), &omitted))
-	require.Nil(t, omitted.AIGCWatermark)
-}
-
 // 无效 JSON 和过大素材必须在调用任何上游前失败，因此故意不配置测试服务。
 func TestAccountTestRejectsInvalidBodyBeforeUpstream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, body := range []string{`{"model_id":`, `{"test_endpoint":123}`, `{"reference_image_url":true}`, `{"reference_image_transport":true}`, `{"reference_image_transport":{}}`, `{"aigc_watermark":"true"}`, `{"aigc_watermark":1}`, `{"audio_data_url":"` + strings.Repeat("a", 32<<20) + `"}`} {
+	for _, body := range []string{`{"model_id":`, `{"test_endpoint":123}`, `{"audio_data_url":"` + strings.Repeat("a", 32<<20) + `"}`} {
 		handler := &AccountHandler{}
 		router := gin.New()
 		router.POST("/accounts/:id/test", handler.Test)

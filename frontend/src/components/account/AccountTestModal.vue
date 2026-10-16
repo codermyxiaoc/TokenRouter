@@ -98,7 +98,7 @@
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div class="space-y-1.5">
             <label for="account-test-video-resolution" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3Resolution' : 'admin.accounts.video.testResolution') }}</label>
-            <input id="account-test-video-resolution" v-model="videoResolution" class="input" type="text" maxlength="32" :placeholder="videoEndpoint === 'minimax' ? '2K' : '768p'" :disabled="status === 'connecting'" data-testid="account-test-video-resolution" />
+            <input id="account-test-video-resolution" v-model="videoResolution" class="input" type="text" maxlength="32" placeholder="768p" :disabled="status === 'connecting'" data-testid="account-test-video-resolution" />
           </div>
           <div class="space-y-1.5">
             <label for="account-test-video-ratio" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3Ratio' : 'admin.accounts.video.testRatio') }}</label>
@@ -106,17 +106,6 @@
           </div>
         </div>
         <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3ResolutionHint' : 'admin.accounts.video.testResolutionHint') }}</p>
-        <template v-if="isMiniMaxVideoTest">
-          <div class="space-y-1.5">
-            <label for="account-test-reference-image-url" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testReferenceImageURL') }}</label>
-            <input id="account-test-reference-image-url" v-model="videoReferenceImageURL" class="input" type="url" maxlength="16384" placeholder="https://..." :disabled="status === 'connecting'" data-testid="account-test-reference-image-url" />
-            <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.video.testReferenceImageURLHint') }}</p>
-          </div>
-          <div class="space-y-1.5">
-            <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testWatermark') }}</label>
-            <Select v-model="videoAigcWatermark" :options="videoWatermarkOptions" :disabled="status === 'connecting'" data-testid="account-test-watermark" />
-          </div>
-        </template>
         <p v-if="!loadingModels && videoTestValidationMessage" class="text-xs text-amber-600 dark:text-amber-400" role="alert">{{ videoTestValidationMessage }}</p>
       </template>
 
@@ -169,11 +158,6 @@
           <input ref="imageFileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden" :disabled="status === 'connecting'" @change="onImageFileChange" />
         </div>
         <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3ImageHint' : testType === 'video' ? 'admin.accounts.grok.videoFirstFrameHint' : 'admin.accounts.grok.imageUploadHint') }}</p>
-        <div v-if="isMiniMaxVideoTest" class="space-y-1.5">
-          <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testReferenceImageTransport') }}</label>
-          <Select v-model="videoReferenceImageTransport" :options="videoReferenceImageTransportOptions" :disabled="status === 'connecting'" data-testid="account-test-reference-image-transport" />
-          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.video.testReferenceImageTransportHint') }}</p>
-        </div>
         <img v-if="uploadImageDataURL" :src="uploadImageDataURL" :alt="t('admin.accounts.grok.uploadPreviewAlt')" class="max-h-40 w-full rounded-lg object-contain" />
       </div>
       <div v-if="supportsAudioUpload" class="space-y-1.5">
@@ -422,8 +406,7 @@ const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-ima
 // 图片/文字请求类型完全由管理员选择，不再从模型名称推断。
 const supportsImageTest = computed(() => testType.value === 'image')
 const {
-  isVideoAccount, isMetasoH3VideoTest, isMiniMaxVideoTest, videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
-  videoReferenceImageURL, videoReferenceImageTransport, videoReferenceImageTransportOptions, videoAigcWatermark, videoWatermarkOptions,
+  isVideoAccount, isMetasoH3VideoTest, videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
   testEndpoint, isGrokAccount, testTypeOptions, endpointOptions, showEndpointSelect,
   showModelSelect, modelOptionsForMode, supportsImageUpload, supportsAudioUpload,
   supportsPromptInput, promptInputLabel, promptInputPlaceholder, promptInputHint,
@@ -431,19 +414,11 @@ const {
 } = useAccountTestOptions(toRef(props, 'account'), availableModels, selectedModelId, testType, t)
 const {
   imageFileInput, audioFileInput, uploadImageDataURL, uploadImageName, uploadAudioDataURL,
-  uploadAudioName, loadingUpload, clearMediaUploads, onImageFileChange: readImageFile, onAudioFileChange
+  uploadAudioName, loadingUpload, clearMediaUploads, onImageFileChange, onAudioFileChange
 } = useAccountTestUploads(t, (message) => {
   status.value = 'error'
   errorMessage.value = message
 })
-// 公网首帧与上传图片二选一；切换输入时使未完成的文件读取失效，避免隐式带上两张图。
-watch(videoReferenceImageURL, (value) => {
-  if (isMiniMaxVideoTest.value && value.trim()) clearMediaUploads()
-}, { flush: 'sync' })
-const onImageFileChange = (event: Event) => {
-  if (isMiniMaxVideoTest.value && (event.target as HTMLInputElement).files?.length) videoReferenceImageURL.value = ''
-  return readImageFile(event)
-}
 const generatedAudios = ref<PreviewImage[]>([])
 const generatedVideos = ref<PreviewImage[]>([])
 const canStartTest = computed(() => status.value !== 'connecting' && !loadingModels.value &&
@@ -468,9 +443,6 @@ watch(
   async ([newVal]) => {
     abortStream()
     clearMediaUploads()
-    videoReferenceImageURL.value = ''
-    videoReferenceImageTransport.value = 'data_url'
-    videoAigcWatermark.value = 'unset'
     if (newVal && props.account) {
       testPrompt.value = ''
       lastDefaultPrompt = ''
@@ -608,12 +580,6 @@ const startTest = async () => {
       requestBody.duration = Number(videoDuration.value)
       if (videoResolution.value.trim()) requestBody.resolution = videoResolution.value.trim()
       if (videoRatio.value.trim()) requestBody.ratio = videoRatio.value.trim()
-      if (isMiniMaxVideoTest.value) {
-        if (videoReferenceImageURL.value.trim()) requestBody.reference_image_url = videoReferenceImageURL.value.trim()
-        // 只有管理员为已上传图片明确选择 HTTPS 时才请求转存，默认上传格式保持兼容。
-        if (!videoReferenceImageURL.value.trim() && uploadImageDataURL.value && videoReferenceImageTransport.value === 'https_url') requestBody.reference_image_transport = 'https_url'
-        if (videoAigcWatermark.value === 'on' || videoAigcWatermark.value === 'off') requestBody.aigc_watermark = videoAigcWatermark.value === 'on'
-      }
     }
     if (isOpenAIAccount.value) requestBody.mode = testMode.value
     // 自动测试省略端点，保持历史客户端和既有账号协议的默认行为。

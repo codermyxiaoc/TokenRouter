@@ -41,7 +41,7 @@ func VideoCreationDefinitelyRejected(status int, body []byte) bool {
 		return false
 	}
 	// request_id 在万相等协议中只是追踪号，Grok 调用方另行按自身协议检查它。
-	for _, path := range []string{"id", "task_id", "data.id", "data.task_id", "video.id", "video.task_id", "output.task_id", "task.id", "task.task_id"} {
+	for _, path := range []string{"TaskId", "id", "task_id", "data.id", "data.task_id", "video.id", "video.task_id", "output.task_id", "task.id", "task.task_id"} {
 		v := gjson.GetBytes(body, path)
 		if v.Exists() && v.Type != gjson.Null && (v.Type != gjson.String || strings.TrimSpace(v.String()) != "") {
 			return false
@@ -116,7 +116,8 @@ func videoCreationTaskHasAcceptanceEvidence(task gjson.Result) bool {
 	if !task.IsObject() {
 		return false
 	}
-	for _, field := range []string{"id", "task_id"} {
+	// MiniMax H3 的 TaskId 也证明可能已经受理，不能在错误 HTTP 下安全重提。
+	for _, field := range []string{"TaskId", "id", "task_id"} {
 		value := task.Get(field)
 		if value.Exists() && value.Type != gjson.Null && (value.Type != gjson.String || strings.TrimSpace(value.String()) != "") {
 			return true

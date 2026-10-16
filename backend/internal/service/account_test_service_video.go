@@ -138,7 +138,7 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 		return s.sendErrorAndEnd(c, message)
 	}
 	if result.TaskID == "" || validateUpstreamPathSegment("video task ID", result.TaskID) != nil {
-		return s.sendErrorAndEnd(c, "Video creation returned no usable task ID; it will not be resubmitted")
+		return s.sendErrorAndEnd(c, videoAccountTestTaskIDDiagnostic(endpoint, result))
 	}
 	taskID := result.TaskID
 	s.sendEvent(c, TestEvent{Type: "content", Text: "视频任务已创建：" + taskID + "\n"})
@@ -165,6 +165,53 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 			return s.sendErrorAndEnd(c, "视频测试等待超时或已取消；已提交任务可能继续生成（任务 ID："+taskID+"）")
 		case <-time.After(3 * time.Second):
 		}
+	}
+}
+
+// videoAccountTestTaskIDDiagnostic 只在创建 ID 缺失或不能安全查询时展示固定字段的类型，不回显响应值或任意键名。
+func videoAccountTestTaskIDDiagnostic(endpoint VideoEndpoint, result *VideoUpstreamResponse) string {
+	reason := "视频创建响应中未识别到任务 ID"
+	if result.TaskID != "" {
+		reason = "视频创建响应的任务 ID 不能安全用于查询路径"
+	}
+	paths := []string{"id", "task_id", "output", "output.task_id", "data", "data.task_id", "data.id"}
+	switch endpoint {
+	case VideoEndpointMiniMax:
+		paths = []string{"TaskId", "task", "task.id", "task.task_id", "task_id", "data", "data.task_id", "data.id", "id"}
+	case VideoEndpointWan:
+		paths = []string{"output", "output.task_id", "task_id"}
+	case VideoEndpointKling:
+		paths = []string{"data", "data.task_id", "task_id", "data.id", "id"}
+	}
+	root := gjson.ParseBytes(result.Body)
+	fields := make([]string, 0, len(paths))
+	for _, path := range paths {
+		fields = append(fields, path+"="+videoAccountTestJSONFieldType(root.Get(path)))
+	}
+	return fmt.Sprintf("%s（HTTP %d）；已知响应字段：%s。上游可能已开始生成，不会自动重复提交", reason, result.StatusCode, strings.Join(fields, ", "))
+}
+
+// 类型名称来自固定集合，不能将供应商正文、凭据、链接或扩展键拼入诊断事件。
+func videoAccountTestJSONFieldType(value gjson.Result) string {
+	if !value.Exists() {
+		return "missing"
+	}
+	switch value.Type {
+	case gjson.Null:
+		return "null"
+	case gjson.False, gjson.True:
+		return "boolean"
+	case gjson.Number:
+		return "number"
+	case gjson.String:
+		return "string"
+	case gjson.JSON:
+		if value.IsArray() {
+			return "array"
+		}
+		return "object"
+	default:
+		return "missing"
 	}
 }
 

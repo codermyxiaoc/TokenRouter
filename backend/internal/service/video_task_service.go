@@ -444,6 +444,13 @@ func (s *VideoTaskService) applySubmissionResponse(t *VideoTaskRecord, response 
 		// 错误响应也可能携带已经受理的任务，必须保留其归属供原账号继续查询。
 		t.UpstreamTaskID = response.TaskID
 	}
+	if t.Target.Endpoint == VideoEndpointMiniMax && t.UpstreamTaskID == "" && videoMiniMaxHasUnusableTaskID(response.Body) {
+		// 存在异常类型的受理字段时，错误状态也不能证明未生成；保留预算核对且不自动重提。
+		t.Status = "submission_unknown"
+		t.BillingStatus = "reconciliation"
+		t.ErrorMessage = "上游创建响应任务 ID 类型异常，需要核对"
+		return
+	}
 	if !videoUpstreamResponseMatchesTask(t.Target.Endpoint, response, t.UpstreamTaskID) {
 		// 替代传输返回的结构化 ID 与原包冲突时保留归属证据，但不得停在提交中或自动结算。
 		t.Status = "submission_unknown"

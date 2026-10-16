@@ -422,7 +422,7 @@ func ExtractVideoUpstreamResponseWithProfile(endpoint VideoEndpoint, body []byte
 			if id == "" && alias == "" && (task.Get("id").Exists() || task.Get("task_id").Exists()) {
 				// 有一个有效别名时仍沿用它；两者都不可解析时只保留已知归属，不应用终态。
 				if out.TaskID == "" {
-					out.TaskID = firstVideoString(envelope, "task_id", "data.task_id", "id")
+					out.TaskID = firstVideoString(envelope, "TaskId", "task_id", "data.task_id", "id")
 				}
 				return out
 			}
@@ -431,7 +431,7 @@ func ExtractVideoUpstreamResponseWithProfile(endpoint VideoEndpoint, body []byte
 			}
 			if id == "" {
 				// 不完整封装仍保留旧平铺位置已返回的受理 ID，不能把已受理错误包误判为无 ID 拒绝。
-				id = firstVideoString(envelope, "task_id", "data.task_id", "id")
+				id = firstVideoString(envelope, "TaskId", "task_id", "data.task_id", "id")
 			}
 			if alias != "" && ((id != "" && id != alias) || (taskID != "" && taskID != alias)) {
 				// 规范 ID 与旧别名冲突时不能任选其一，否则创建和查询可能落到不同任务。
@@ -471,7 +471,8 @@ func ExtractVideoUpstreamResponseWithProfile(endpoint VideoEndpoint, body []byte
 		case VideoEndpointKling:
 			out.TaskID = firstVideoString(root, "data.task_id", "task_id", "data.id", "id")
 		case VideoEndpointMiniMax:
-			out.TaskID = firstVideoString(root, "task_id", "data.task_id", "id")
+			// H3 原生创建返回 TaskId，查询仍返回 task.id；只在 MiniMax 中识别此精确字段。
+			out.TaskID = firstVideoString(root, "TaskId", "task_id", "data.task_id", "id")
 		default:
 			out.TaskID = firstVideoString(root, "id", "task_id", "output.task_id", "data.task_id", "data.id")
 		}
@@ -574,6 +575,12 @@ func videoResponseHasConflictingTaskIDs(endpoint VideoEndpoint, body []byte) boo
 	return !videoResponseTaskIdentityMatches(endpoint, body, "", false)
 }
 
+// MiniMax 创建包中的非空异常类型仍可能代表受理证据，不能在丢失可查询 ID 后直接退款。
+func videoMiniMaxHasUnusableTaskID(body []byte) bool {
+	value := gjson.GetBytes(body, "TaskId")
+	return value.Exists() && value.Type != gjson.Null && value.Type != gjson.String
+}
+
 func videoResponseTaskIdentityMatches(endpoint VideoEndpoint, body []byte, taskID string, requireValid bool) bool {
 	root := gjson.ParseBytes(body)
 	if !videoResponseIdentityFieldsUnambiguous(endpoint, root) {
@@ -609,11 +616,11 @@ func videoResponseTaskIdentityMatches(endpoint VideoEndpoint, body []byte, taskI
 		if task := root.Get("task"); task.IsObject() {
 			if task.Get("id").Exists() || task.Get("task_id").Exists() {
 				// 原生 task 是规范封装，外层追踪 ID 和封装内协议扩展不能覆盖其归属。
-				return matchFields(task, "id", "task_id")
+				return matchFields(root, "task.id", "task.task_id", "TaskId")
 			}
-			return matchFields(root, "task_id", "data.task_id", "id")
+			return matchFields(root, "TaskId", "task_id", "data.task_id", "id")
 		}
-		paths = []string{"task_id", "data.task_id", "id"}
+		paths = []string{"TaskId", "task_id", "data.task_id", "id"}
 	}
 	if !matchFields(root, paths...) {
 		return false
@@ -646,7 +653,8 @@ func videoResponseTaskIdentityMatches(endpoint VideoEndpoint, body []byte, taskI
 // 普通空/非 JSON 错误包及厂商扩展字段不在此处校验，继续遵循原有创建错误处理。
 func videoResponseIdentityFieldsUnambiguous(endpoint VideoEndpoint, root gjson.Result) bool {
 	if endpoint == VideoEndpointMiniMax {
-		if !videoIdentityObjectKeysUnique(root, "task") {
+		// 新创建字段同样必须消歧，不能凭嵌套 ID 忽略外层 TaskId 的冲突。
+		if !videoIdentityObjectKeysUnique(root, "task", "TaskId") {
 			return false
 		}
 		if task := root.Get("task"); task.IsObject() {

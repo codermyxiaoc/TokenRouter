@@ -8,6 +8,7 @@ marketplace: {
         kling: 'Kling（可灵）',
         wan: 'Wan（万相）',
         minimax: 'MiniMax',
+        vidu: 'Vidu',
         grok: 'Grok',
       },
       copy: '复制端点 {path}',

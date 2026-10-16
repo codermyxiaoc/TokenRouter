@@ -22,6 +22,7 @@ export const apiDocVideoProtocols = [
   { id: 'kling', label: 'Kling / 可灵' },
   { id: 'wan', label: 'Wan / 万相' },
   { id: 'minimax', label: 'MiniMax' },
+  { id: 'vidu', label: 'Vidu' },
   { id: 'grok', label: 'Grok / xAI' },
 ] as const satisfies ReadonlyArray<{ id: ApiDocVideoProtocol; label: string }>
 

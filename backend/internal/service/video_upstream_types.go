@@ -15,6 +15,7 @@ const (
 	VideoEndpointKling        VideoEndpoint = "kling"
 	VideoEndpointWan          VideoEndpoint = "wan"
 	VideoEndpointMiniMax      VideoEndpoint = "minimax"
+	VideoEndpointVidu         VideoEndpoint = "vidu"
 )
 
 // VideoTaskSubmitRequest 保留入站原始参数；协议差异只影响路由和模型位置。
@@ -48,9 +49,11 @@ type VideoUpstreamTarget struct {
 	AccountID  int64         `json:"account_id"`
 	// 仅 OpenAI Videos 使用显式适配配置；冻结后不受账号后续编辑影响。
 	OpenAIProfile string `json:"openai_profile,omitempty"`
+	// 版本二冻结内置协议及其版本号；旧版本一继续使用原端点和旧适配字段。
+	ProtocolAdapter string `json:"protocol_adapter,omitempty"`
 }
 
-// VideoRequestMetadata 只供定价与观测，绝不修改供应商原始请求。
+// VideoRequestMetadata 只供定价与观测，显式协议适配时必须与真正发送的载荷一致。
 type VideoRequestMetadata struct {
 	Model           string  `json:"model"`
 	Resolution      string  `json:"resolution"`

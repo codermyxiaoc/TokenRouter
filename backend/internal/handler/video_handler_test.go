@@ -91,6 +91,27 @@ func TestVideoHandlerKlingSingleTaskBoundary(t *testing.T) {
 	require.Equal(t, "kling", f.protocol)
 }
 
+// Vidu 的操作路径必须原样传入任务服务，查询仅传已认证用户的任务 ID。
+func TestVideoHandlerViduNativeOperationAndQuery(t *testing.T) {
+	f := &videoLifecycleFixture{response: &service.VideoTaskResponse{StatusCode: 200, Body: []byte(`{"task_id":"owned","state":"created"}`)}}
+	c, w := videoHandlerContext(http.MethodPost, "/ent/v2/reference2video", `{"model":"viduq3-pro","images":["a","b"]}`, service.PlatformVideo)
+	NewVideoHandler(f).Handle(c)
+	require.Equal(t, 200, w.Code)
+	require.Equal(t, "/ent/v2/reference2video", f.request.NativePath)
+	require.Equal(t, "vidu", f.request.InboundProtocol)
+	require.True(t, f.request.Native)
+	c, w = videoHandlerContext(http.MethodGet, "/ent/v2/tasks/owned/creations", "", service.PlatformVideo)
+	NewVideoHandler(f).Handle(c)
+	require.Equal(t, 200, w.Code)
+	require.Equal(t, "owned", f.id)
+	require.Equal(t, "vidu", f.protocol)
+	require.Equal(t, 1, f.queries)
+	c, w = videoHandlerContext(http.MethodDelete, "/ent/v2/tasks/owned/creations", "", service.PlatformVideo)
+	NewVideoHandler(f).Handle(c)
+	require.Equal(t, 404, w.Code)
+	require.Zero(t, f.cancels)
+}
+
 func TestVideoHandlerSeedanceLegacyDispatch(t *testing.T) {
 	for _, platform := range []string{service.PlatformOpenAI, service.PlatformVideo, ""} {
 		t.Run(platform, func(t *testing.T) {

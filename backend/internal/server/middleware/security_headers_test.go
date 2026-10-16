@@ -284,6 +284,55 @@ func TestCSPNonceKey(t *testing.T) {
 	})
 }
 
+// 主站默认媒体策略允许已有预览来源，同时保持脚本、页面嵌入及表单的原有限制。
+func TestSecurityHeadersMediaPolicy(t *testing.T) {
+	directiveSources := func(policy, directive string) []string {
+		for _, raw := range strings.Split(policy, ";") {
+			fields := strings.Fields(raw)
+			if len(fields) > 0 && fields[0] == directive {
+				return fields[1:]
+			}
+		}
+		return nil
+	}
+	for _, policy := range []string{"", config.DefaultCSPPolicy} {
+		t.Run(map[bool]string{true: "empty-config-default", false: "explicit-default"}[policy == ""], func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodGet, "/admin/accounts", nil)
+			SecurityHeaders(config.CSPConfig{Enabled: true, Policy: policy}, nil)(c)
+			csp := w.Header().Get("Content-Security-Policy")
+			require.ElementsMatch(t, []string{"'self'", "https:", "data:", "blob:"}, directiveSources(csp, "media-src"))
+			require.Equal(t, []string{"'self'"}, directiveSources(csp, "default-src"))
+			require.Equal(t, []string{"'none'"}, directiveSources(csp, "frame-ancestors"))
+			require.Equal(t, []string{"'self'"}, directiveSources(csp, "base-uri"))
+			require.Equal(t, []string{"'self'"}, directiveSources(csp, "form-action"))
+			for _, source := range []string{"https:", "http:", "data:", "blob:", "*", "'unsafe-inline'", "'unsafe-eval'"} {
+				require.NotContains(t, directiveSources(csp, "script-src"), source)
+			}
+			require.Contains(t, csp, "'nonce-")
+			require.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
+			require.Equal(t, "DENY", w.Header().Get("X-Frame-Options"))
+		})
+	}
+	for _, media := range []string{"", "'none'", "'self'", "https://approved.example"} {
+		t.Run("custom-"+media, func(t *testing.T) {
+			policy := "default-src 'self'; script-src 'self' __CSP_NONCE__"
+			var expected []string
+			if media != "" {
+				policy += "; media-src " + media
+				expected = []string{media}
+			}
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodGet, "/admin/accounts", nil)
+			SecurityHeaders(config.CSPConfig{Enabled: true, Policy: policy}, nil)(c)
+			// 不把新默认媒体来源强加给已有自定义策略，包括显式禁止与继承 default-src。
+			require.Equal(t, expected, directiveSources(w.Header().Get("Content-Security-Policy"), "media-src"))
+		})
+	}
+}
+
 func TestNonceTemplate(t *testing.T) {
 	t.Run("constant_value", func(t *testing.T) {
 		assert.Equal(t, "__CSP_NONCE__", NonceTemplate)

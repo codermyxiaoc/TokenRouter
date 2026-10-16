@@ -39,7 +39,7 @@ func (f *videoBillingFixture) task(base, subRate, balanceRate float64) *service.
 	f.t.Helper()
 	id := "video_" + uuid.NewString()
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	record := &service.VideoTaskRecord{ID: id, UserID: f.userID, APIKeyID: f.keyID, GroupID: f.groupID, AccountID: f.accountID, PayloadHash: uuid.NewString(), Status: "prepared", BillingStatus: "pending", CreatedAt: now, LeaseToken: uuid.NewString(), LeaseUntil: now.Add(time.Minute), Target: service.VideoUpstreamTarget{Endpoint: service.VideoEndpointSeedance}}
+	record := &service.VideoTaskRecord{ID: id, UserID: f.userID, APIKeyID: f.keyID, GroupID: f.groupID, AccountID: f.accountID, PayloadHash: uuid.NewString(), Status: "prepared", BillingStatus: "pending", CreatedAt: now, LeaseToken: uuid.NewString(), LeaseUntil: now.Add(time.Minute), Target: service.VideoUpstreamTarget{Version: 1, Endpoint: service.VideoEndpointSeedance}}
 	record.Hold = service.BatchImageBalanceHoldCommand{RequestID: "video_hold:" + id, BatchID: id, UserID: f.userID, ActorUserID: f.userID, APIKeyID: f.keyID, GroupID: &f.groupID, APIKeyBillingMode: service.APIKeyBillingModeAuto, PricingSnapshotVersion: 3, BaseAmountUSD: base, SubscriptionRateMultiplier: subRate, SubscriptionRateMultiplierScale: 1, BalanceRateMultiplier: balanceRate, SettlementRateScale: 1, ReservedAt: now, VideoEntity: true, VideoAccountID: f.accountID}
 	record.Hold.VideoLeaseToken = record.LeaseToken
 	_, created, err := f.tasks.Create(context.Background(), record, 1000)

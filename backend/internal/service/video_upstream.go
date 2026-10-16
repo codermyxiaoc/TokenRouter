@@ -151,13 +151,12 @@ func (s *VideoUpstreamService) SelectAccount(ctx context.Context, key *APIKey, r
 			continue
 		}
 		body := append([]byte(nil), request.Body...)
-		if target.Endpoint == VideoEndpointOpenAIVideos {
-			body, metadata, err = PrepareVideoOpenAIRequest(body, request.ModelPath, target.OpenAIProfile)
-		} else {
-			metadata, err = ParseVideoEndpointRequestMetadata(body, request.ModelPath, target.Endpoint)
-		}
+		body, metadata, err = PrepareVideoProtocolRequest(body, request.ModelPath, target)
 		if err != nil {
-			return nil, err
+			// 各账号可选择不同协议；当前候选不支持参数时，允许其它候选在发送前验证。
+			// 所有候选均失败才返回错误，此阶段尚未预扣或创建任何上游任务。
+			configErr = err
+			continue
 		}
 		if gjson.GetBytes(body, "model").Exists() {
 			body, err = sjson.SetBytes(body, "model", model)
@@ -220,6 +219,20 @@ func (s *VideoUpstreamService) resolveTarget(a *Account, model string, request V
 		path = "/api/v1/services/aigc/video-generation/video-synthesis"
 	case VideoEndpointMiniMax:
 		path = "/v2/video_generation"
+	case VideoEndpointVidu:
+		path = cfg.ViduModelPaths[model]
+		if request.NativePath != "" {
+			path = request.NativePath
+		}
+		if !validViduVideoPath(path) {
+			return target, infraerrors.BadRequest("VIDEO_VIDU_PATH_REQUIRED", "Vidu requires an explicit supported operation path")
+		}
+		// 可美特定模型限制只属于该方案，不能套用到官方或保留原请求的账号。
+		if adapter, _ := cfg.ProtocolAdapter(model, endpoint); adapter == VideoProtocolAdapterKemei {
+			if err := validateVideoViduOperationModel(model, path); err != nil {
+				return target, err
+			}
+		}
 	case VideoEndpointKling:
 		path = cfg.ModelPaths[model]
 		if request.Native {
@@ -236,6 +249,14 @@ func (s *VideoUpstreamService) resolveTarget(a *Account, model string, request V
 	target = VideoUpstreamTarget{Version: 1, Endpoint: endpoint, BaseURL: base, CreatePath: path, Model: model, AccountID: a.ID}
 	if endpoint == VideoEndpointOpenAIVideos {
 		target.OpenAIProfile = cfg.OpenAIProfile
+	}
+	if adapter, explicit := cfg.ProtocolAdapter(model, endpoint); explicit {
+		target.Version, target.ProtocolAdapter = 2, adapter
+		// 新字段是唯一协议来源，清除可能冲突的历史字段，避免恢复时产生两套解释。
+		target.OpenAIProfile = ""
+	}
+	if err := ValidateVideoProtocolTarget(target); err != nil {
+		return target, infraerrors.BadRequest("VIDEO_PROTOCOL_ADAPTER_INVALID", err.Error())
 	}
 	return target, nil
 }
@@ -268,13 +289,15 @@ func videoTaskPath(target VideoUpstreamTarget, taskID string) (string, error) {
 		return "/api/v1/tasks/" + id, nil
 	case VideoEndpointMiniMax:
 		return "/v2/query/video_generation/" + id, nil
+	case VideoEndpointVidu:
+		return "/ent/v2/tasks/" + id + "/creations", nil
 	}
 	return "", fmt.Errorf("unsupported video endpoint")
 }
 
 // Poll 始终使用持久化端点快照和任务原账号，账号能力修改不会改变任务归属。
 func (s *VideoUpstreamService) Poll(ctx context.Context, account *Account, target VideoUpstreamTarget, taskID string) (*VideoUpstreamResponse, error) {
-	path, err := videoTaskPath(target, taskID)
+	path, err := VideoProtocolTaskPath(target, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +309,7 @@ func (s *VideoUpstreamService) Cancel(ctx context.Context, account *Account, tar
 	if target.Endpoint != VideoEndpointSeedance && target.Endpoint != VideoEndpointCompat {
 		return nil, infraerrors.BadRequest("VIDEO_CANCEL_UNSUPPORTED", "This video endpoint does not support cancellation")
 	}
-	path, err := videoTaskPath(target, taskID)
+	path, err := VideoProtocolTaskPath(target, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +318,7 @@ func (s *VideoUpstreamService) Cancel(ctx context.Context, account *Account, tar
 
 func videoEndpointURL(base, path string) string {
 	base = strings.TrimRight(base, "/")
-	for _, prefix := range []string{"/api/v3", "/api/v1", "/v3", "/v2", "/v1"} {
+	for _, prefix := range []string{"/ent/v2", "/api/v3", "/api/v1", "/v3", "/v2", "/v1"} {
 		if strings.HasSuffix(base, prefix) && strings.HasPrefix(path, prefix+"/") {
 			return base + strings.TrimPrefix(path, prefix)
 		}
@@ -304,7 +327,7 @@ func videoEndpointURL(base, path string) string {
 }
 
 func (s *VideoUpstreamService) forward(ctx context.Context, account *Account, target VideoUpstreamTarget, method, path string, body []byte, taskID string) (*VideoUpstreamResponse, error) {
-	if s == nil || s.gateway == nil || account == nil || account.ID != target.AccountID || account.Platform != PlatformVideo || account.Type != AccountTypeAPIKey || target.Version != 1 || !validVideoEndpoint(target.Endpoint) {
+	if s == nil || s.gateway == nil || account == nil || account.ID != target.AccountID || account.Platform != PlatformVideo || account.Type != AccountTypeAPIKey || ValidateVideoProtocolTarget(target) != nil {
 		return nil, fmt.Errorf("invalid video task account or endpoint snapshot")
 	}
 	base, err := s.gateway.validateUpstreamBaseURL(target.BaseURL)
@@ -320,6 +343,10 @@ func (s *VideoUpstreamService) forward(ctx context.Context, account *Account, ta
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	// Vidu 官方使用 Token 鉴权；查询按冻结方案选择，不随账号后来改为可美而切换。
+	if target.Endpoint == VideoEndpointVidu && target.ProtocolAdapter == VideoProtocolAdapterVidu {
+		req.Header.Set("Authorization", "Token "+token)
+	}
 	req.Header.Set("Accept", "application/json")
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/json")
@@ -373,13 +400,16 @@ func (s *VideoUpstreamService) forward(ctx context.Context, account *Account, ta
 		// 创建跳转不得继续交给客户端自动重放；HTTP 状态和原包仍保留供核对。
 		header.Del("Location")
 	}
-	if !videoResponseMatchesTask(target.Endpoint, responseBody, taskID) {
+	if !VideoProtocolResponseMatchesTask(target, responseBody, taskID) {
 		// 查询或取消返回其它任务时整包拒绝，不能把其状态、产物或原生正文交给调用方。
 		observation.StatusCode, observation.ErrorMessage = http.StatusBadGateway, "Video upstream returned a different task"
 		observeVideoUpstream(ctx, observation)
 		return nil, errVideoTaskResponseMismatch
 	}
-	result := ExtractVideoUpstreamResponseWithProfile(target.Endpoint, responseBody, taskID, target.OpenAIProfile)
+	result, err := ExtractVideoProtocolResponse(target, resp.StatusCode, responseBody, taskID)
+	if err != nil {
+		return nil, err
+	}
 	result.StatusCode, result.Header, result.Body = resp.StatusCode, header, responseBody
 	if resp.StatusCode >= 400 {
 		// 复用账号配置的错误码和临时停调规则，但不据此重放已发送的创建请求。
@@ -449,7 +479,7 @@ func ExtractVideoUpstreamResponseWithProfile(endpoint VideoEndpoint, body []byte
 		}
 	}
 	// Kling 单ID查询可能返回数组；只读取精确ID的项，不投影其它账号任务。
-	if !miniMaxTaskEnvelope {
+	if !miniMaxTaskEnvelope && endpoint != VideoEndpointVidu {
 		for _, path := range []string{"data", "tasks"} {
 			arr := root.Get(path)
 			if arr.IsArray() {
@@ -466,6 +496,8 @@ func ExtractVideoUpstreamResponseWithProfile(endpoint VideoEndpoint, body []byte
 	if out.TaskID == "" && !miniMaxTaskEnvelope {
 		// request_id 在万相等协议中只是HTTP追踪号，绝不能作为异步任务归属。
 		switch endpoint {
+		case VideoEndpointVidu:
+			out.TaskID = firstVideoString(root, "task_id", "id")
 		case VideoEndpointWan:
 			out.TaskID = firstVideoString(root, "output.task_id", "task_id")
 		case VideoEndpointKling:
@@ -607,6 +639,9 @@ func videoResponseTaskIdentityMatches(endpoint VideoEndpoint, body []byte, taskI
 	}
 	paths := []string{"id", "task_id", "output.task_id", "data.task_id", "data.id"}
 	switch endpoint {
+	case VideoEndpointVidu:
+		// Vidu 产物列表中的 id 不属于任务归属，任务只认外层规范标识。
+		return matchFields(root, "id", "task_id")
 	case VideoEndpointWan:
 		// 万相的 request_id 和外层 id 不是任务 ID。
 		paths = []string{"output.task_id", "task_id"}
@@ -652,6 +687,9 @@ func videoResponseTaskIdentityMatches(endpoint VideoEndpoint, body []byte, taskI
 // 只对协议中的任务 ID 和其父容器消歧，避免不同解析器取重复键首值或末值而绕过归属校验。
 // 普通空/非 JSON 错误包及厂商扩展字段不在此处校验，继续遵循原有创建错误处理。
 func videoResponseIdentityFieldsUnambiguous(endpoint VideoEndpoint, root gjson.Result) bool {
+	if endpoint == VideoEndpointVidu {
+		return videoIdentityObjectKeysUnique(root, "id", "task_id")
+	}
 	if endpoint == VideoEndpointMiniMax {
 		// 新创建字段同样必须消歧，不能凭嵌套 ID 忽略外层 TaskId 的冲突。
 		if !videoIdentityObjectKeysUnique(root, "task", "TaskId") {

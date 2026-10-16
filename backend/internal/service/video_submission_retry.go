@@ -129,6 +129,33 @@ func videoCreationTaskHasAcceptanceEvidence(task gjson.Result) bool {
 			return true
 		}
 	}
+	// 原生任务状态与产物也可证明已经受理。遍历全部同名字段，不能让重复键首值掩盖受理证据。
+	nativeAccepted := false
+	task.ForEach(func(key, value gjson.Result) bool {
+		switch key.String() {
+		case "state":
+			switch strings.ToLower(strings.TrimSpace(value.String())) {
+			case "created", "queueing", "queued", "processing", "success":
+				nativeAccepted = true
+			}
+		case "creations":
+			// 产物暂缺 URL 仍可能已经生成；这里只禁止重复 POST，不改变退款结算。
+			nativeAccepted = value.IsArray() && len(value.Array()) > 0
+		case "outputs":
+			// 可灵新协议的产物列表属于任务事实；不扫描 input 或其它用户回显。
+			for _, output := range value.Array() {
+				url := output.Get("url")
+				if output.Get("type").String() == "video" && url.Type == gjson.String && strings.TrimSpace(url.String()) != "" {
+					nativeAccepted = true
+					break
+				}
+			}
+		}
+		return !nativeAccepted
+	})
+	if nativeAccepted {
+		return true
+	}
 	for _, path := range []string{"url", "video_url", "download_url", "content.url", "content.video_url", "video.url"} {
 		if value := task.Get(path); value.Type == gjson.String && strings.TrimSpace(value.String()) != "" {
 			return true
@@ -161,13 +188,10 @@ func VideoTaskRetryTargetCompatible(task *VideoTaskRecord, target VideoUpstreamT
 	if task == nil || task.Target.Endpoint != target.Endpoint {
 		return false
 	}
-	profile := func(value string) string {
-		if value == "" {
-			return VideoOpenAIProfilePassthrough
-		}
-		return value
-	}
-	if profile(task.Target.OpenAIProfile) != profile(target.OpenAIProfile) {
+	// 只在同一协议版本之间重选；不能把另一套请求/计费语义带入已预扣的任务。
+	originalAdapter, originalErr := VideoTargetProtocolAdapter(task.Target)
+	nextAdapter, nextErr := VideoTargetProtocolAdapter(target)
+	if originalErr != nil || nextErr != nil || originalAdapter != nextAdapter {
 		return false
 	}
 	original := task.Metadata

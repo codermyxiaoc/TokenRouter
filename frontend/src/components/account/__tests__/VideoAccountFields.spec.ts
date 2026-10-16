@@ -1,29 +1,142 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import VideoAccountFields from '../VideoAccountFields.vue'
-import { createVideoAccountForm, videoAccountCredentials, type VideoAccountForm } from '../videoAccountConfig'
+import { VIDEO_ENDPOINTS, VIDEO_DEFAULT_ADAPTERS, createVideoAccountForm, validateVideoAccountForm, videoAccountCredentials, type VideoAccountForm } from '../videoAccountConfig'
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 describe('Video account endpoint rows', () => {
-  // 只在标准视频端点展示自研选择框，端点反复启停不重置已选适配器。
-  it('shows the OpenAI adapter only for its endpoint and preserves it across endpoint toggles', async () => {
+  it('shows Kemei labels for compatibility endpoints and saves Vidu paths independently', async () => {
+    const wrapper = mount(VideoAccountFields, { props: { modelValue: createVideoAccountForm({
+      video_endpoints: ['compat', 'kling'], video_model_bindings: { shared: 'kling' },
+      video_model_paths: { shared: '/omni-video/{model}' },
+    }) }, global: { stubs: { Select: true } } })
+    const acceptUpdate = async () => wrapper.setProps({ modelValue: wrapper.emitted('update:modelValue')!.at(-1)![0] as VideoAccountForm })
+    const select = (id: string) => wrapper.findAllComponents({ name: 'Select' }).find(item => item.attributes('data-testid') === id)!
+    expect(select('video-endpoint-adapter-compat').props('options')).toContainEqual({ value: 'kemei_v1', label: 'admin.accounts.video.adapters.kemei_v1' })
+    select('video-endpoint-adapter-compat').vm.$emit('update:modelValue', 'kemei_v1')
+    await acceptUpdate()
+    await wrapper.get('[data-testid="video-endpoint-vidu"]').setValue(true)
+    await acceptUpdate()
+    expect(select('video-endpoint-adapter-vidu').props('modelValue')).toBe('vidu_v2')
+    expect(select('video-endpoint-adapter-vidu').props('options')).toEqual([
+      { value: 'vidu_v2', label: 'admin.accounts.video.adapters.vidu_v2' },
+      { value: 'kemei_v1', label: 'admin.accounts.video.adapters.kemei_v1' },
+      { value: 'legacy_v1', label: 'admin.accounts.video.adapters.legacy_v1' },
+    ])
+    await wrapper.get('[data-testid="video-add-binding"]').trigger('click')
+    await acceptUpdate()
+    await wrapper.get('[data-testid="video-binding-model-1"]').setValue('shared')
+    await acceptUpdate()
+    select('video-binding-endpoint-1').vm.$emit('update:modelValue', 'vidu')
+    await acceptUpdate()
+    expect(select('video-binding-path-1').props('options').map((item: { value: string }) => item.value)).toEqual(['', '/ent/v2/img2video', '/ent/v2/reference2video', '/ent/v2/text2video', '/ent/v2/start-end2video'])
+    select('video-binding-path-1').vm.$emit('update:modelValue', '/ent/v2/reference2video')
+    await acceptUpdate()
+    expect(videoAccountCredentials(wrapper.props('modelValue'))).toMatchObject({
+      video_model_paths: { shared: '/omni-video/{model}' }, video_vidu_model_paths: { shared: '/ent/v2/reference2video' },
+      video_endpoint_adapters: { compat: 'kemei_v1', vidu: 'vidu_v2' },
+      video_model_bindings: { shared: ['kling', 'vidu'] },
+    })
+    // 不同路径协议之间切换时清空旧路径，不能把 Vidu 操作带到 Kling。
+    select('video-binding-endpoint-1').vm.$emit('update:modelValue', 'kling')
+    await acceptUpdate()
+    expect(select('video-binding-path-1').props('modelValue')).toBe('')
+    expect(wrapper.find('select').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('uses the same legacy label for every endpoint and distinguishes the compatibility OpenAI format', async () => {
+    const wrapper = mount(VideoAccountFields, { props: { modelValue: { ...createVideoAccountForm(), endpoints: [...VIDEO_ENDPOINTS] } }, global: { stubs: { Select: true } } })
+    const select = (id: string) => wrapper.findAllComponents({ name: 'Select' }).find(item => item.attributes('data-testid') === id)!
+    for (const endpoint of VIDEO_ENDPOINTS) {
+      expect(select(`video-endpoint-adapter-${endpoint}`).props('options')).toContainEqual({ value: 'legacy_v1', label: 'admin.accounts.video.adapters.legacy_v1' })
+    }
+    expect(select('video-endpoint-adapter-compat').props('options')).toEqual([
+      { value: 'legacy_v1', label: 'admin.accounts.video.adapters.legacy_v1' },
+      { value: 'openai_v1', label: 'admin.accounts.video.adapters.compat_openai' },
+      { value: 'kemei_v1', label: 'admin.accounts.video.adapters.kemei_v1' },
+    ])
+    expect(select('video-endpoint-adapter-openai_videos').props('options')).toContainEqual({ value: 'openai_v1', label: 'admin.accounts.video.adapters.openai_v1' })
+    select('video-endpoint-adapter-compat').vm.$emit('update:modelValue', 'openai_v1')
+    await wrapper.setProps({ modelValue: wrapper.emitted('update:modelValue')!.at(-1)![0] as VideoAccountForm })
+    expect(wrapper.text()).toContain('admin.accounts.video.adapterHints.compat_openai')
+    expect(videoAccountCredentials(wrapper.props('modelValue')).video_endpoint_adapters).toMatchObject({ compat: 'openai_v1' })
+    wrapper.unmount()
+  })
+
+  it('does not display an implicit Vidu legacy selection when the saved adapter is missing', async () => {
+    const wrapper = mount(VideoAccountFields, { props: { modelValue: createVideoAccountForm({ video_endpoints: ['vidu'] }) }, global: { stubs: { Select: true } } })
+    const select = wrapper.findAllComponents({ name: 'Select' }).find(item => item.attributes('data-testid') === 'video-endpoint-adapter-vidu')!
+    expect(select.props('modelValue')).toBe('')
+    expect(select.props('placeholder')).toBe('admin.accounts.video.adapterPlaceholder')
+    expect(validateVideoAccountForm(wrapper.props('modelValue'), 'https://video.test')).toBe('adapterInvalid')
+    select.vm.$emit('update:modelValue', 'legacy_v1')
+    await wrapper.setProps({ modelValue: wrapper.emitted('update:modelValue')!.at(-1)![0] as VideoAccountForm })
+    expect(validateVideoAccountForm(wrapper.props('modelValue'), 'https://video.test')).toBeNull()
+    expect(videoAccountCredentials(wrapper.props('modelValue')).video_endpoint_adapters).toEqual({ vidu: 'legacy_v1' })
+    wrapper.unmount()
+  })
+
+  it.each(['kemei_v1', 'legacy_v1', 'vidu_v2'])('keeps saved Vidu scheme %s across disable and re-enable', async adapter => {
+    const wrapper = mount(VideoAccountFields, { props: { modelValue: createVideoAccountForm({ video_endpoints: ['vidu'], video_endpoint_adapters: { vidu: adapter } }) }, global: { stubs: { Select: true } } })
+    for (const checked of [false, true]) {
+      await wrapper.get('[data-testid="video-endpoint-vidu"]').setValue(checked)
+      await wrapper.setProps({ modelValue: wrapper.emitted('update:modelValue')!.at(-1)![0] as VideoAccountForm })
+      expect(videoAccountCredentials(wrapper.props('modelValue')).video_endpoint_adapters).toEqual({ vidu: adapter })
+    }
+    wrapper.unmount()
+  })
+
+  // 每个已选端点都有独立选择框，反复启停不重置选择，不提供跨端点适配器。
+  it('shows each enabled endpoint adapter and preserves it across endpoint toggles', async () => {
     const wrapper = mount(VideoAccountFields, { props: { modelValue: createVideoAccountForm({ video_endpoints: ['compat'] }) }, global: { stubs: { Select: true } } })
     const acceptUpdate = async () => wrapper.setProps({ modelValue: wrapper.emitted('update:modelValue')!.at(-1)![0] as VideoAccountForm })
-    expect(wrapper.find('[data-testid="video-openai-profile-field"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="video-endpoint-adapter-compat"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="video-endpoint-adapter-openai_videos"]').exists()).toBe(false)
     await wrapper.get('[data-testid="video-endpoint-openai_videos"]').setValue(true)
     await acceptUpdate()
-    const profile = wrapper.findAllComponents({ name: 'Select' }).find(select => select.attributes('data-testid') === 'video-openai-profile')!
-    expect(profile.props('modelValue')).toBe('passthrough')
-    expect(profile.props('options').map((option: { value: string }) => option.value)).toEqual(['passthrough', 'metaso_h3'])
-    profile.vm.$emit('update:modelValue', 'metaso_h3')
+    const profile = wrapper.findAllComponents({ name: 'Select' }).find(select => select.attributes('data-testid') === 'video-endpoint-adapter-openai_videos')!
+    expect(profile.props('modelValue')).toBe('legacy_v1')
+    expect(profile.props('options').map((option: { value: string }) => option.value)).toEqual(['openai_v1', 'metaso_h3_v1', 'legacy_v1'])
+    profile.vm.$emit('update:modelValue', 'metaso_h3_v1')
     await acceptUpdate()
     await wrapper.get('[data-testid="video-endpoint-openai_videos"]').setValue(false)
     await acceptUpdate()
-    expect(wrapper.find('[data-testid="video-openai-profile-field"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="video-endpoint-adapter-openai_videos"]').exists()).toBe(false)
     expect(videoAccountCredentials(wrapper.props('modelValue')).video_openai_profile).toBe('metaso_h3')
     await wrapper.get('[data-testid="video-endpoint-openai_videos"]').setValue(true)
     await acceptUpdate()
-    expect(wrapper.findAllComponents({ name: 'Select' }).find(select => select.attributes('data-testid') === 'video-openai-profile')!.props('modelValue')).toBe('metaso_h3')
+    expect(wrapper.findAllComponents({ name: 'Select' }).find(select => select.attributes('data-testid') === 'video-endpoint-adapter-openai_videos')!.props('modelValue')).toBe('metaso_h3_v1')
+    expect(wrapper.find('select').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows official defaults for new accounts and allows independent model inheritance', async () => {
+    const wrapper = mount(VideoAccountFields, { props: { modelValue: { ...createVideoAccountForm(), endpoints: [...VIDEO_ENDPOINTS] } }, global: { stubs: { Select: true } } })
+    const acceptUpdate = async () => wrapper.setProps({ modelValue: wrapper.emitted('update:modelValue')!.at(-1)![0] as VideoAccountForm })
+    const select = (id: string) => wrapper.findAllComponents({ name: 'Select' }).find(item => item.attributes('data-testid') === id)!
+    for (const endpoint of VIDEO_ENDPOINTS) expect(select(`video-endpoint-adapter-${endpoint}`).props('modelValue')).toBe(VIDEO_DEFAULT_ADAPTERS[endpoint])
+    await wrapper.get('[data-testid="video-add-binding"]').trigger('click')
+    await acceptUpdate()
+    await wrapper.get('[data-testid="video-binding-model-0"]').setValue('shared')
+    await acceptUpdate()
+    select('video-binding-endpoint-0').vm.$emit('update:modelValue', 'openai_videos')
+    await acceptUpdate()
+    expect(select('video-binding-adapter-0').props('modelValue')).toBe('')
+    select('video-binding-adapter-0').vm.$emit('update:modelValue', 'metaso_h3_v1')
+    await acceptUpdate()
+    expect(videoAccountCredentials(wrapper.props('modelValue')).video_model_adapters).toEqual({ shared: { openai_videos: 'metaso_h3_v1' } })
+    expect(select('video-endpoint-adapter-openai_videos').props('modelValue')).toBe('openai_v1')
+    // 改端点应清掉不适用的旧覆盖，删除绑定后也不得保留隐藏的模型配置。
+    select('video-binding-endpoint-0').vm.$emit('update:modelValue', 'minimax')
+    await acceptUpdate()
+    expect(select('video-binding-adapter-0').props('modelValue')).toBe('')
+    expect(select('video-binding-adapter-0').props('options').map((item: { value: string }) => item.value)).toEqual(['', 'minimax_v2', 'kemei_v1', 'legacy_v1'])
+    select('video-binding-adapter-0').vm.$emit('update:modelValue', 'legacy_v1')
+    await acceptUpdate()
+    await wrapper.get('[data-testid="video-remove-binding-0"]').trigger('click')
+    await acceptUpdate()
+    expect(videoAccountCredentials(wrapper.props('modelValue')).video_model_adapters).toEqual({})
     expect(wrapper.find('select').exists()).toBe(false)
     wrapper.unmount()
   })

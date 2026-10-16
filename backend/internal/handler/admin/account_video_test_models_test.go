@@ -75,3 +75,31 @@ func TestAccountHandlerGetAvailableModels_VideoTestCatalog(t *testing.T) {
 		})
 	}
 }
+
+// 测试菜单按最终上游模型提供协议，不把公开别名错误地用于模型覆盖匹配。
+func TestAccountHandlerVideoCatalogIncludesResolvedProtocolAdapters(t *testing.T) {
+	account := service.Account{ID: 42, Platform: service.PlatformVideo, Type: service.AccountTypeAPIKey, Credentials: map[string]any{
+		"api_key": "fixture-private-key", "base_url": "https://fixture-private.example",
+		"video_endpoints": []string{"openai_videos", "minimax"},
+		"model_mapping":   map[string]any{"public": "private"}, "model_whitelist": []string{"private"},
+		"video_endpoint_adapters": map[string]string{"openai_videos": "openai_v1", "minimax": "minimax_v2"},
+		"video_model_adapters":    map[string]any{"private": map[string]string{"openai_videos": "metaso_h3_v1"}},
+	}}
+	router := setupAvailableModelsRouter(&availableModelsAdminService{stubAdminService: newStubAdminService(), account: account})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/42/models", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var result struct {
+		Data []struct {
+			ID       string            `json:"id"`
+			Adapters map[string]string `json:"video_protocol_adapters"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	require.NotEmpty(t, result.Data)
+	for _, model := range result.Data {
+		require.Equal(t, map[string]string{"openai_videos": "metaso_h3_v1", "minimax": "minimax_v2"}, model.Adapters, model.ID)
+	}
+	require.NotContains(t, rec.Body.String(), "fixture-private-key")
+	require.NotContains(t, rec.Body.String(), "fixture-private.example")
+}

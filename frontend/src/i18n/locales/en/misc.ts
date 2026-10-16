@@ -8,6 +8,7 @@ marketplace: {
         kling: 'Kling',
         wan: 'Wan',
         minimax: 'MiniMax',
+        vidu: 'Vidu',
         grok: 'Grok',
       },
       copy: 'Copy endpoint {path}',

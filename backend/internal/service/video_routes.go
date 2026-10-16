@@ -57,6 +57,9 @@ func MatchVideoGatewayRoute(method, path string) (VideoGatewayRoute, bool) {
 		}
 	}
 	if method == http.MethodPost {
+		if validViduVideoPath(path) {
+			return VideoGatewayRoute{Protocol: "vidu", Native: true, Create: true, PathTemplate: path}, true
+		}
 		for _, prefix := range []string{"/text-to-video/", "/image-to-video/", "/omni-video/"} {
 			if strings.HasPrefix(path, prefix) && strings.TrimPrefix(path, prefix) != "" {
 				return VideoGatewayRoute{Protocol: "kling", Native: true, Create: true, Model: strings.TrimPrefix(path, prefix), PathTemplate: prefix + "{model}"}, true
@@ -75,6 +78,11 @@ func MatchVideoGatewayRoute(method, path string) (VideoGatewayRoute, bool) {
 		}
 	}
 	if method == http.MethodGet {
+		if strings.HasSuffix(path, "/creations") {
+			if id, ok := videoRouteID(strings.TrimSuffix(path, "/creations"), "/ent/v2/tasks"); ok {
+				return VideoGatewayRoute{Protocol: "vidu", Native: true, TaskID: id}, true
+			}
+		}
 		if path == "/tasks" {
 			return VideoGatewayRoute{Protocol: "kling", Native: true}, true
 		}

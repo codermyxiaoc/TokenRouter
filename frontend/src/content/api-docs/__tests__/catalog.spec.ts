@@ -6,6 +6,25 @@ import { apiDocCategories, apiDocEndpoints, apiDocPlatforms, apiDocVideoProtocol
 import { apiDocBaseUrl, apiDocCurl, apiDocEnvironment, apiDocMarkdown } from '../format'
 
 describe('公开网关文档契约', () => {
+  it('Vidu 文档覆盖已注册的四个创建操作和查询，示例图片数量匹配操作', () => {
+    // 从真实路由对照文档，防止供应商适配完成后遗漏端点或宣传未提供的删除接口。
+    const videoRoutes = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../backend/internal/server/routes/video.go'), 'utf8')
+    const registered = [...videoRoutes.matchAll(/\{http\.Method(Post|Get), "(\/ent\/v2[^"\n]*)"\}/g)]
+      .map(match => `${match[1]!.toUpperCase()} ${match[2]!.replace(':task_id', '{task_id}')}`).sort()
+    const documented = apiDocEndpoints.filter(endpoint => endpoint.videoProtocol === 'vidu')
+    expect(documented.map(endpoint => `${endpoint.method} ${endpoint.path}`).sort()).toEqual(registered)
+    expect(documented).toHaveLength(5)
+    expect(filterApiDocEndpoints('Vidu', 'video')).toHaveLength(5)
+    for (const [operation, count] of [['img2video', 1], ['reference2video', 1], ['text2video', 0], ['start-end2video', 2]] as const) {
+      const endpoint = documented.find(item => item.id === `vidu-${operation}`)!
+      const request = JSON.parse(endpoint.requestExample!)
+      expect(request.images?.length ?? 0).toBe(count)
+      expect(request.duration).toBe(5)
+      expect(request.resolution).toBe('540p')
+      expect(apiDocCurl(endpoint)).toContain('Authorization: Bearer $TOKENROUTER_API_KEY')
+    }
+  })
+
   it('保持稳定且唯一的文档 ID，所有平台和 JSON 示例均有效', () => {
     expect(new Set(apiDocEndpoints.map(item => item.id)).size).toBe(apiDocEndpoints.length)
     expect(apiDocEndpoints.length).toBeGreaterThan(70)

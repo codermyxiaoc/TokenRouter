@@ -10,7 +10,7 @@
 
 维护路由或协议时同时核对这里的工程参考与对应前端内容，包括 HTTP 方法、任务归属、别名、请求头、参数、响应与错误条件。不能把已注册的通配路径当作任意上游能力，也不能把厂商文档中的未注册接口加入可用清单；原生视频按各协议保真，统一入口不代表自动转换所有厂商参数。
 
-视频目录按端点协议细分为 OpenAI Videos、Seedance / 火山方舟、Kling、万相、MiniMax 和 Grok 子标题，正文导航显示对应协议。该分类独立于账号平台资格，搜索和平台筛选后隐藏空子分类，保留原文档地址与跨平台接口归属。
+视频目录按端点协议细分为 OpenAI Videos、Seedance / 火山方舟、Kling、万相、MiniMax、Vidu 和 Grok 子标题，正文导航显示对应协议。该分类独立于账号平台资格，搜索和平台筛选后隐藏空子分类，保留原文档地址与跨平台接口归属。
 
 ## 快速约定
 
@@ -21,6 +21,7 @@
 - `/v1`：OpenAI、Anthropic、Grok、OpenCode 等兼容接口。
 - `/v1beta`：Gemini 原生 GenerateContent 接口。
 - `/api/v3`、`/v3`、`/v1` 或无前缀的 `/contents/generations/tasks`：Seedance（火山方舟）原生视频任务接口。
+- `/ent/v2`：Vidu 原生视频创建和产物查询，要求 Video 账号显式启用 `vidu` 与对应协议方案。
 - `/backend-api/codex`：Codex 兼容的 Responses、实时会话和搜索别名。
 
 除 Gemini 兼容请求外，推荐使用：
@@ -95,6 +96,7 @@ Gemini 错误遵循 Google 格式：
 | `POST/GET` | `/v1/videos`、`/v1/videos/{video_id}`、`/v1/videos/{video_id}/content` 及无前缀别名 | Video 分组创建 JSON 异步任务、查询和下载；与 Grok 同名端点按平台分流，见[OpenAI 视频入口](video_upstream.md#video_openai_content) |
 | `POST/GET/DELETE` | `/v1/video/generations`、`/video/generations` 及任务 ID 子路径；`GET/DELETE /v1/tasks/{task_id}` | 独立 Video 统一 URL，请求体使用已绑定上游的原生格式，见[协议与原生路径](video_upstream.md#video_protocols) |
 | `POST/GET` | Kling 模型路径及 `/tasks`、Wan `/api/v1/services/aigc/video-generation/video-synthesis` 与 `/api/v1/tasks/{id}`、MiniMax `/v2/video_generation` 与查询路径 | 独立 Video 原生协议；Kling 明确的 `/v1/videos/text2video`、`/v1/videos/omni-video` 不进入 Grok |
+| `POST` / `GET` | `POST /ent/v2/img2video`、`/ent/v2/reference2video`、`/ent/v2/text2video`、`/ent/v2/start-end2video`；`GET /ent/v2/tasks/{task_id}/creations` | Vidu 原生操作与产物查询，不提供取消；具体图片数量、任务身份和可美适配边界见[独立 Video 上游](video_upstream.md#video_adapters) |
 | `POST/GET/PATCH/DELETE` | `/v1/tts`、`/v1/stt`、`/v1/custom-voices...` | Grok Voice |
 | `POST` | `/v1/systemone`、无前缀 `/systemone` | OpenCode Zen Jev System One |
 | `POST` | `/v1/alpha/search`、无前缀 `/alpha/search`、`/backend-api/codex/alpha/search` | OpenAI/Codex 搜索兼容入口 |

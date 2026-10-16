@@ -10,7 +10,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/TokenFlux/TokenRouter/internal/util/logredact"
 	"github.com/TokenFlux/TokenRouter/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -40,6 +42,46 @@ func VideoAccountTestEndpoints(account *Account, requestedModel string) []VideoE
 	return out
 }
 
+// VideoAccountTestAdapters 给管理员测试返回最终映射模型的有效协议，不把账号密钥或地址交给客户端。
+func VideoAccountTestAdapters(account *Account, requestedModel string) map[VideoEndpoint]string {
+	result := make(map[VideoEndpoint]string)
+	if account == nil {
+		return result
+	}
+	cfg, err := account.VideoConfiguration()
+	if err != nil {
+		return result
+	}
+	for _, endpoint := range VideoAccountTestEndpoints(account, requestedModel) {
+		result[endpoint], _ = cfg.ProtocolAdapter(account.GetMappedModel(requestedModel), endpoint)
+	}
+	return result
+}
+
+// VideoAccountTestViduOperation 只公开固定操作路径，不返回上游地址或凭据。
+func VideoAccountTestViduOperation(account *Account, requestedModel string) string {
+	if account == nil || !account.IsModelSupported(requestedModel) {
+		return ""
+	}
+	cfg, err := account.VideoConfiguration()
+	if err != nil {
+		return ""
+	}
+	model := account.GetMappedModel(requestedModel)
+	if _, err := cfg.SelectEndpoint(model, string(VideoEndpointVidu), true); err != nil {
+		return ""
+	}
+	path := cfg.ViduModelPaths[model]
+	if !validViduVideoPath(path) {
+		return ""
+	}
+	// 默认测试操作与实际转发使用相同的方案边界，可美限制不能影响官方或保留协议。
+	if adapter, _ := cfg.ProtocolAdapter(model, VideoEndpointVidu); adapter == VideoProtocolAdapterKemei && validateVideoViduOperationModel(model, path) != nil {
+		return ""
+	}
+	return path
+}
+
 // testVideoAccountConnection 只做管理员明确发起的诊断，不创建站内任务、预算预留或使用记录。
 // @project-doc docs/interfaces/video_upstream.md#video_account_tests
 func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account *Account, modelID, prompt string, options AccountTestOptions) error {
@@ -54,6 +96,13 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 		return s.sendErrorAndEnd(c, "Video account tests only accept an optional reference image")
 	}
 	duration := 5
+	// 新官方协议的试跑默认值遵循协议；历史账号仍使用原先的五秒模板。
+	if cfg, err := account.VideoConfiguration(); err == nil {
+		adapter, _ := cfg.ProtocolAdapter(account.GetMappedModel(modelID), VideoEndpoint(options.VideoEndpoint))
+		if adapter == VideoProtocolAdapterOpenAI {
+			duration = 4
+		}
+	}
 	if options.Duration != nil {
 		duration = *options.Duration
 	}
@@ -92,13 +141,34 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 	// 仅装配协议传输所需依赖，不接入正常网关的调度、停调、账务和持久任务服务。
 	upstream := NewVideoUpstreamService(&OpenAIGatewayService{cfg: s.cfg, httpUpstream: s.httpUpstream, tlsFPProfileService: s.tlsFPProfileService})
 	request := VideoTaskSubmitRequest{InboundProtocol: string(endpoint), Native: true}
+	if endpoint == VideoEndpointVidu {
+		request.NativePath = strings.TrimSpace(options.VideoOperation)
+		if request.NativePath == "" {
+			request.NativePath = VideoAccountTestViduOperation(account, modelID)
+		}
+		if !validViduVideoPath(request.NativePath) {
+			return s.sendErrorAndEnd(c, "Select a Vidu operation before testing")
+		}
+		// 账号测试只有单图输入；首尾帧需通过正式 API 显式传入两张图片。
+		if request.NativePath == "/ent/v2/start-end2video" {
+			return s.sendErrorAndEnd(c, "Vidu start-end2video requires two reference images; use the native API to test")
+		}
+	}
 	if endpoint == VideoEndpointKling {
 		cfg, _ := account.VideoConfiguration()
 		request.NativePath = cfg.ModelPaths[model]
 		if request.NativePath == "" {
-			request.NativePath = "/v1/videos/text2video"
-			if imageURL != "" {
-				request.NativePath = "/v1/videos/omni-video"
+			adapter, _ := cfg.ProtocolAdapter(model, endpoint)
+			if adapter == VideoProtocolAdapterKling || adapter == "kemei_v1" {
+				request.NativePath = "/text-to-video/{model}"
+				if imageURL != "" {
+					request.NativePath = "/image-to-video/{model}"
+				}
+			} else {
+				request.NativePath = "/v1/videos/text2video"
+				if imageURL != "" {
+					request.NativePath = "/v1/videos/omni-video"
+				}
 			}
 		}
 		if imageURL != "" && (request.NativePath == "/text-to-video/{model}" || request.NativePath == "/v1/videos/text2video") {
@@ -123,14 +193,19 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 	ctx = WithHTTPUpstreamRedirectsDisabled(ctx)
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: model})
 	s.sendEvent(c, TestEvent{Type: "status", Text: "正在通过 " + target.CreatePath + " 创建测试视频"})
+	// 当前账号的非标准凭据也精确遮罩，不能仅依赖 sk- 或 Bearer 等格式识别。
+	diagnosticSecrets := []string{account.GetCredential("api_key")}
+	for _, value := range account.GetHeaderOverrides() {
+		diagnosticSecrets = append(diagnosticSecrets, value)
+	}
 	result, err := upstream.Submit(ctx, &VideoUpstreamSelection{Account: account, Target: target, Body: body})
 	if err != nil {
 		return s.sendErrorAndEnd(c, "视频创建请求失败或受理结果未知；不会自动重复提交。"+err.Error())
 	}
-	if videoResponseHasConflictingTaskIDs(endpoint, result.Body) {
+	if VideoProtocolResponseHasConflictingTaskIDs(target, result.Body) {
 		return s.sendErrorAndEnd(c, "Video creation returned conflicting task IDs; acceptance is unknown")
 	}
-	if err := videoAccountTestResponseError(endpoint, result); err != nil {
+	if err := videoAccountTestResponseError(endpoint, result, diagnosticSecrets...); err != nil {
 		message := err.Error()
 		if result.TaskID != "" && validateUpstreamPathSegment("video task ID", result.TaskID) == nil {
 			message += "；已收到任务 ID：" + result.TaskID + "，上游可能已受理并继续生成，不会自动重复提交"
@@ -154,7 +229,7 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 		if result, err = upstream.Poll(ctx, account, target, taskID); err != nil {
 			return s.sendErrorAndEnd(c, "视频查询失败或已取消；已提交任务可能继续生成（任务 ID："+taskID+"）。"+err.Error())
 		}
-		if err := videoAccountTestResponseError(endpoint, result); err != nil {
+		if err := videoAccountTestResponseError(endpoint, result, diagnosticSecrets...); err != nil {
 			return s.sendErrorAndEnd(c, "Video task "+taskID+": "+err.Error())
 		}
 		if result.Status == "completed" || result.Status == "failed" || result.Status == "cancelled" || result.Status == "expired" {
@@ -182,6 +257,8 @@ func videoAccountTestTaskIDDiagnostic(endpoint VideoEndpoint, result *VideoUpstr
 		paths = []string{"output", "output.task_id", "task_id"}
 	case VideoEndpointKling:
 		paths = []string{"data", "data.task_id", "task_id", "data.id", "id"}
+	case VideoEndpointVidu:
+		paths = []string{"task_id", "id", "state"}
 	}
 	root := gjson.ParseBytes(result.Body)
 	fields := make([]string, 0, len(paths))
@@ -237,7 +314,14 @@ func buildVideoAccountTestPayload(target VideoUpstreamTarget, prompt, imageURL s
 	case VideoEndpointKling:
 		body["prompt"] = prompt
 		if imageURL != "" {
-			if strings.HasPrefix(target.CreatePath, "/image-to-video/") {
+			// 可美端点由统一素材数组转换为 contents，避免沿用旧 Omni 的 image_list 格式。
+			adapter, adapterErr := VideoTargetProtocolAdapter(target)
+			if adapterErr != nil {
+				return nil, adapterErr
+			}
+			if adapter == VideoProtocolAdapterKemei {
+				body["images"] = []string{imageURL}
+			} else if strings.HasPrefix(target.CreatePath, "/image-to-video/") {
 				body["image"] = imageURL
 			} else {
 				body["image_list"] = []map[string]string{{"image_url": imageURL}}
@@ -254,7 +338,7 @@ func buildVideoAccountTestPayload(target VideoUpstreamTarget, prompt, imageURL s
 	}
 	if options.Ratio != "" {
 		key := "ratio"
-		if target.Endpoint == VideoEndpointKling {
+		if target.Endpoint == VideoEndpointKling || target.Endpoint == VideoEndpointVidu {
 			key = "aspect_ratio"
 		}
 		params[key] = options.Ratio
@@ -263,20 +347,26 @@ func buildVideoAccountTestPayload(target VideoUpstreamTarget, prompt, imageURL s
 	if err != nil {
 		return nil, err
 	}
-	// 历史账号和其他端点保留原参数，只有明确选择秘塔 H3 才转换为标准视频字段。
-	if target.Endpoint == VideoEndpointOpenAIVideos && target.OpenAIProfile == VideoOpenAIProfileMetasoH3 {
-		encoded, _, err = PrepareVideoOpenAIRequest(encoded, "", target.OpenAIProfile)
+	// 历史测试模板保持原行为；显式协议与正式网关使用同一转换及元数据校验。
+	if target.Version == 2 || target.Endpoint == VideoEndpointOpenAIVideos && target.OpenAIProfile == VideoOpenAIProfileMetasoH3 {
+		encoded, _, err = PrepareVideoProtocolRequest(encoded, "", target)
 	}
 	return encoded, err
 }
 
-// videoAccountTestResponseError 不回显供应商原始正文，避免自定义认证头或调试信息泄露。
-func videoAccountTestResponseError(endpoint VideoEndpoint, result *VideoUpstreamResponse) error {
+// videoAccountTestResponseError 仅供管理员诊断，错误摘要不能回显原包、凭据或素材。
+func videoAccountTestResponseError(endpoint VideoEndpoint, result *VideoUpstreamResponse, secrets ...string) error {
 	if result == nil {
 		return fmt.Errorf("Video upstream returned an invalid JSON response")
 	}
+	diagnostic := func(reason string) error {
+		if message := videoAccountTestUpstreamErrorSummary(endpoint, result.Body, secrets); message != "" {
+			return fmt.Errorf("%s: %s", reason, message)
+		}
+		return fmt.Errorf("%s", reason)
+	}
 	if result.StatusCode < 200 || result.StatusCode >= 300 {
-		return fmt.Errorf("Video upstream returned HTTP %d", result.StatusCode)
+		return diagnostic(fmt.Sprintf("Video upstream returned HTTP %d", result.StatusCode))
 	}
 	if !json.Valid(result.Body) || !gjson.ParseBytes(result.Body).IsObject() {
 		return fmt.Errorf("Video upstream returned an invalid JSON response")
@@ -296,20 +386,101 @@ func videoAccountTestResponseError(endpoint VideoEndpoint, result *VideoUpstream
 	case VideoEndpointWan:
 		errorPaths = append(errorPaths, "output.error")
 		codePaths = append(codePaths, "code", "output.code")
+	case VideoEndpointVidu:
+		codePaths = append(codePaths, "err_code")
 	}
 	for _, path := range errorPaths {
 		if value := gjson.GetBytes(result.Body, path); value.Exists() && value.Type != gjson.Null {
-			return fmt.Errorf("Video upstream returned a business error")
+			return diagnostic(fmt.Sprintf("Video upstream returned a business error (HTTP %d)", result.StatusCode))
 		}
 	}
 	// 只解释已知协议的业务码，兼容端点的同名扩展字段不作为新的失败契约。
 	for _, path := range codePaths {
 		value := gjson.GetBytes(result.Body, path)
 		if value.Type == gjson.Number && value.Float() != 0 || value.Type == gjson.String && value.String() != "" && value.String() != "0" {
-			return fmt.Errorf("Video upstream returned a business error")
+			return diagnostic(fmt.Sprintf("Video upstream returned a business error (HTTP %d)", result.StatusCode))
 		}
 	}
 	return nil
+}
+
+var (
+	videoAccountTestErrorURL    = regexp.MustCompile(`(?i)(?:[a-z][a-z0-9+.-]*://|https?%3a%2f%2f|www\.)[^\s<>"'，。]+`)
+	videoAccountTestErrorData   = regexp.MustCompile(`(?i)data:[^\s<>"']+`)
+	videoAccountTestErrorAuth   = regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+[^\s,;<>"']+`)
+	videoAccountTestErrorKey    = regexp.MustCompile(`(?i)\b(?:sk|sess|pk|rk)-[a-z0-9_-]+`)
+	videoAccountTestErrorOpaque = regexp.MustCompile(`[A-Za-z0-9+/_=-]{32,}`)
+	videoAccountTestErrorHTML   = regexp.MustCompile(`(?is)<\s*/?\s*[a-z!][^>]*>`)
+)
+
+// 通用提取器会把对象转成 JSON 文本，此处只读取固定字符串字段，不使用原包兜底。
+func videoAccountTestUpstreamErrorSummary(endpoint VideoEndpoint, body []byte, secrets []string) string {
+	paths := []string{"error.message", "detail", "message", "error_description", "error", "msg"}
+	switch endpoint {
+	case VideoEndpointMiniMax:
+		paths = append(paths, "base_resp.status_msg", "task.error.message", "task.error", "task.message")
+	case VideoEndpointWan:
+		paths = append(paths, "output.message", "output.error.message", "output.error")
+	case VideoEndpointKling:
+		paths = append(paths, "data.message", "data.task_status_msg", "data.0.message", "data.0.task_status_msg")
+	case VideoEndpointVidu:
+		paths = append(paths, "err_msg")
+	}
+	var extract func([]byte, int) string
+	extract = func(raw []byte, depth int) string {
+		if depth > 2 || !json.Valid(raw) || !gjson.ParseBytes(raw).IsObject() {
+			return ""
+		}
+		root := gjson.ParseBytes(raw)
+		for _, path := range paths {
+			value := root.Get(path)
+			if value.Type != gjson.String {
+				continue
+			}
+			message := strings.TrimSpace(value.String())
+			// 超长值可能包含整张参考图；不截出其中一段再当错误消息展示。
+			if message == "" || len(message) > 8192 {
+				continue
+			}
+			if strings.HasPrefix(message, "{") || strings.HasPrefix(message, "[") {
+				if nested := extract([]byte(message), depth+1); nested != "" {
+					return nested
+				}
+				continue
+			}
+			if strings.ContainsAny(message, "{}") || videoAccountTestErrorHTML.MatchString(message) {
+				continue
+			}
+			for _, secret := range secrets {
+				secret = strings.TrimSpace(secret)
+				if secret != "" {
+					message = strings.ReplaceAll(message, secret, "[redacted]")
+					message = strings.ReplaceAll(message, url.QueryEscape(secret), "[redacted]")
+				}
+			}
+			message = videoAccountTestErrorData.ReplaceAllString(message, "[media redacted]")
+			message = videoAccountTestErrorURL.ReplaceAllString(message, "[URL redacted]")
+			message = videoAccountTestErrorAuth.ReplaceAllString(message, "[credential redacted]")
+			message = videoAccountTestErrorKey.ReplaceAllString(message, "[credential redacted]")
+			message = logredact.RedactText(sanitizeUpstreamErrorMessage(message), "api_key", "api-key", "apikey", "authorization", "x-api-key", "token", "secret", "credential", "base64", "image_data_url")
+			// 裸 Base64、JWT 和长凭据没有可靠标签，统一遮罩长的不透明片段。
+			message = videoAccountTestErrorOpaque.ReplaceAllString(message, "[data redacted]")
+			message = strings.Map(func(r rune) rune {
+				if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+					return ' '
+				}
+				return r
+			}, message)
+			message = strings.Join(strings.Fields(message), " ")
+			runes := []rune(message)
+			if len(runes) > 400 {
+				message = string(runes[:400]) + "…"
+			}
+			return message
+		}
+		return ""
+	}
+	return extract(body, 0)
 }
 
 // emitVideoAccountTestResult 公共产物链接直接预览；只有固定内容端点才携带上游凭据。

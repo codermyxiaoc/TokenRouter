@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 
@@ -108,16 +107,8 @@ func TestGetSchedulableAccount_AppliesGrokFreeSoftGate(t *testing.T) {
 	usageRepo := &grokFreeQuotaUsageRepoStub{stats: map[int64]*usagestats.AccountStats{
 		account.ID: {Tokens: 480_000}, // above 95% of 500k
 	}}
-	// 清理共享网关免费层门禁缓存，保证测试结果稳定。
-	gatewayGrokFreeQuotaGateCache.Range(func(key, _ any) bool {
-		gatewayGrokFreeQuotaGateCache.Delete(key)
-		return true
-	})
-	if root, ok := freeQuotaRefreshInFlight.Load(&gatewayGrokFreeQuotaGateCache); ok {
-		if m, ok := root.(*sync.Map); ok {
-			m.Delete(account.ID)
-		}
-	}
+	// 等待刷新收尾后隔离共享缓存，并在测试结束时回收本轮异步刷新。
+	isolateGrokFreeQuotaTestCache(t, &gatewayGrokFreeQuotaGateCache)
 	svc := &GatewayService{
 		cfg:          cfg,
 		accountRepo:  repo,
@@ -155,15 +146,7 @@ func TestOpenAIGetSchedulableAccount_AppliesGrokFreeSoftGate(t *testing.T) {
 	usageRepo := &grokFreeQuotaUsageRepoStub{stats: map[int64]*usagestats.AccountStats{
 		account.ID: {Tokens: 480_000},
 	}}
-	openaiGrokFreeQuotaGateCache.Range(func(key, _ any) bool {
-		openaiGrokFreeQuotaGateCache.Delete(key)
-		return true
-	})
-	if root, ok := freeQuotaRefreshInFlight.Load(&openaiGrokFreeQuotaGateCache); ok {
-		if m, ok := root.(*sync.Map); ok {
-			m.Delete(account.ID)
-		}
-	}
+	isolateGrokFreeQuotaTestCache(t, &openaiGrokFreeQuotaGateCache)
 	svc := &OpenAIGatewayService{
 		cfg:          cfg,
 		accountRepo:  repo,

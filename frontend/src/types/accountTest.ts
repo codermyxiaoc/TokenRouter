@@ -15,6 +15,8 @@ export interface AccountTestRequest {
   audio_data_url?: string
   // 视频账号仅测试所选模型已配置的协议，时长单位为秒。
   video_endpoint?: VideoEndpoint
+  // Vidu 原生操作仅影响本次测试，不写回账号配置。
+  video_operation?: string
   duration?: number
   resolution?: string
   ratio?: string

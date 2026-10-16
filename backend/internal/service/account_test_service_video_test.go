@@ -350,6 +350,9 @@ func TestVideoAccountTestNeverRetriesFailedOrAmbiguousCreate(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			account := videoFixtureAccount(VideoEndpointCompat)
+			// 允许安全错误摘要后，使用实际认证头值验证脱敏，而不是禁止所有可读错误信息。
+			account.Credentials["header_override_enabled"] = true
+			account.Credentials["header_overrides"] = map[string]any{"X-Custom-Auth": "secret-override"}
 			svc, upstream := videoAccountTestService(account, func(*http.Request, []byte) (*http.Response, error) {
 				if test.err != nil {
 					return nil, test.err
@@ -508,6 +511,72 @@ func TestVideoAccountTestKlingRespectsConfiguredOperations(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.Len(t, upstream.requests, 1)
+			}
+		})
+	}
+}
+
+// 可美管理员试跑与正式请求使用相同的原生 contents，覆盖默认与显式操作路径。
+func TestVideoAccountTestKemeiKlingOperations(t *testing.T) {
+	for _, test := range []struct {
+		name, configured, wantPath string
+		image, rejected            bool
+	}{
+		{name: "default-text", wantPath: "/text-to-video/m"},
+		{name: "default-image", wantPath: "/image-to-video/m", image: true},
+		{name: "configured-text", configured: "/text-to-video/{model}", wantPath: "/text-to-video/m"},
+		{name: "text-rejects-image", configured: "/text-to-video/{model}", image: true, rejected: true},
+		{name: "configured-image", configured: "/image-to-video/{model}", wantPath: "/image-to-video/m", image: true},
+		{name: "image-required", configured: "/image-to-video/{model}", rejected: true},
+		{name: "omni-text", configured: "/omni-video/{model}", wantPath: "/omni-video/m"},
+		{name: "omni-image", configured: "/omni-video/{model}", wantPath: "/omni-video/m", image: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			account := videoFixtureAccount(VideoEndpointKling)
+			account.Credentials["video_endpoint_adapters"] = map[string]string{"kling": VideoProtocolAdapterKemei}
+			if test.configured != "" {
+				account.Credentials["video_model_paths"] = map[string]string{"m": test.configured}
+			}
+			options := AccountTestOptions{VideoEndpoint: "kling", Duration: videoAccountTestInt(6), Resolution: "720p", Ratio: "16:9"}
+			if test.image {
+				options.ImageDataURL = grokModesImageDataURL(t, 8)
+			}
+			svc, upstream := videoAccountTestService(account, func(r *http.Request, body []byte) (*http.Response, error) {
+				require.Equal(t, http.MethodPost, r.Method)
+				require.Equal(t, "/prefix"+test.wantPath, r.URL.Path)
+				require.False(t, gjson.GetBytes(body, "model").Exists(), "Kling model is carried in the operation path")
+				require.Equal(t, int64(6), gjson.GetBytes(body, "settings.duration").Int())
+				require.Equal(t, "720p", gjson.GetBytes(body, "settings.resolution").String())
+				require.Equal(t, "16:9", gjson.GetBytes(body, "settings.aspect_ratio").String())
+				for _, field := range []string{"image_list", "image", "images", "duration", "resolution", "aspect_ratio"} {
+					require.False(t, gjson.GetBytes(body, field).Exists(), "unexpected untranslated %s", field)
+				}
+				if strings.HasPrefix(test.wantPath, "/text-to-video/") {
+					require.Equal(t, "a distinct test prompt", gjson.GetBytes(body, "prompt").String())
+					require.False(t, gjson.GetBytes(body, "contents").Exists())
+				} else {
+					contents := gjson.GetBytes(body, "contents").Array()
+					require.Equal(t, "prompt", contents[0].Get("type").String())
+					require.Equal(t, "a distinct test prompt", contents[0].Get("text").String())
+					if test.image {
+						require.Len(t, contents, 2)
+						require.Equal(t, "first_frame", contents[1].Get("type").String())
+						require.Equal(t, options.ImageDataURL, contents[1].Get("url").String())
+					} else {
+						require.Len(t, contents, 1)
+					}
+				}
+				return videoAccountTestJSON(200, `{"id":"task-1","status":"completed","data":[{"url":"https://cdn.example/video.mp4"}],"duration":6,"resolution":"720p"}`), nil
+			})
+			c, recorder := grokModesContext(context.Background())
+			err := svc.TestAccountConnectionWithOptions(c, account.ID, "m", "a distinct test prompt", "video", "", "", options)
+			if test.rejected {
+				require.Error(t, err)
+				require.Empty(t, upstream.requests)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, upstream.requests, 1)
+				require.Contains(t, recorder.Body.String(), `"success":true`)
 			}
 		})
 	}

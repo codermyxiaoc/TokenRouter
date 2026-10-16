@@ -366,7 +366,7 @@ func (s *VideoTaskService) submitPreparedTask(ctx context.Context, key *APIKey, 
 				t.SubmissionFailureKind = "response"
 				t.RawResponse, t.CreateResponse = append([]byte(nil), response.Body...), append([]byte(nil), response.Body...)
 				t.ResponseStatus, t.CreateResponseStatus = response.StatusCode, response.StatusCode
-				if !videoResponseHasConflictingTaskIDs(t.Target.Endpoint, response.Body) && videoUpstreamResponseMatchesTask(t.Target.Endpoint, response, response.TaskID) {
+				if !VideoProtocolResponseHasConflictingTaskIDs(t.Target, response.Body) && videoProtocolUpstreamResponseMatchesTask(t.Target, response, response.TaskID) {
 					t.UpstreamTaskID = response.TaskID
 					if t.UpstreamTaskID != "" {
 						t.NextPollAt = time.Now().Add(15 * time.Second)
@@ -432,7 +432,7 @@ func (s *VideoTaskService) applySubmissionResponse(t *VideoTaskRecord, response 
 	t.RawResponse = append([]byte(nil), response.Body...)
 	t.CreateResponse = append([]byte(nil), response.Body...)
 	t.CreateResponseStatus = response.StatusCode
-	if videoResponseHasConflictingTaskIDs(t.Target.Endpoint, response.Body) {
+	if VideoProtocolResponseHasConflictingTaskIDs(t.Target, response.Body) {
 		// 多个矛盾的受理 ID 不能被当作无 ID 的错误退款，也不能任选一个任务自动结算。
 		t.UpstreamTaskID = ""
 		t.Status = "submission_unknown"
@@ -451,7 +451,7 @@ func (s *VideoTaskService) applySubmissionResponse(t *VideoTaskRecord, response 
 		t.ErrorMessage = "上游创建响应任务 ID 类型异常，需要核对"
 		return
 	}
-	if !videoUpstreamResponseMatchesTask(t.Target.Endpoint, response, t.UpstreamTaskID) {
+	if !videoProtocolUpstreamResponseMatchesTask(t.Target, response, t.UpstreamTaskID) {
 		// 替代传输返回的结构化 ID 与原包冲突时保留归属证据，但不得停在提交中或自动结算。
 		t.Status = "submission_unknown"
 		t.BillingStatus = "reconciliation"
@@ -489,7 +489,11 @@ func (s *VideoTaskService) recoverSubmissionResponse(ctx context.Context, t *Vid
 	if t.UpstreamTaskID != "" || (t.Status != "submission_unknown" && t.Status != "submitting") || t.CreateResponseStatus == 0 {
 		return false
 	}
-	response := ExtractVideoUpstreamResponseWithProfile(t.Target.Endpoint, t.CreateResponse, "", t.Target.OpenAIProfile)
+	response, err := ExtractVideoProtocolResponse(t.Target, t.CreateResponseStatus, t.CreateResponse, "")
+	if err != nil {
+		// 不支持的历史协议或错误归属不能用当前账号配置重新解释，更不能据此退款。
+		return false
+	}
 	response.StatusCode, response.Body = t.CreateResponseStatus, t.CreateResponse
 	if response.TaskID == "" && response.Status != "failed" && response.Status != "cancelled" &&
 		(response.StatusCode < 400 || response.StatusCode > 599) {
@@ -507,12 +511,18 @@ func (s *VideoTaskService) recoverSubmissionResponse(ctx context.Context, t *Vid
 	return false
 }
 
+// 结构化观测与原包都必须通过冻结协议的归属检查。
+func videoProtocolUpstreamResponseMatchesTask(target VideoUpstreamTarget, response *VideoUpstreamResponse, taskID string) bool {
+	return response != nil && (taskID == "" || response.TaskID == "" || response.TaskID == taskID) &&
+		VideoProtocolResponseMatchesTask(target, response.Body, taskID)
+}
+
 // 已保存的响应也需要校验；升级前错误保存的原包不能通过无租约查询、幂等重放或预览再次泄漏。
 func videoStoredResponseMatchesTask(t *VideoTaskRecord) bool {
-	return t != nil && !videoResponseHasConflictingTaskIDs(t.Target.Endpoint, t.RawResponse) &&
-		!videoResponseHasConflictingTaskIDs(t.Target.Endpoint, t.CreateResponse) &&
-		videoResponseMatchesTask(t.Target.Endpoint, t.RawResponse, t.UpstreamTaskID) &&
-		videoResponseMatchesTask(t.Target.Endpoint, t.CreateResponse, t.UpstreamTaskID)
+	return t != nil && !VideoProtocolResponseHasConflictingTaskIDs(t.Target, t.RawResponse) &&
+		!VideoProtocolResponseHasConflictingTaskIDs(t.Target, t.CreateResponse) &&
+		VideoProtocolResponseMatchesTask(t.Target, t.RawResponse, t.UpstreamTaskID) &&
+		VideoProtocolResponseMatchesTask(t.Target, t.CreateResponse, t.UpstreamTaskID)
 }
 
 // 响应投影的最后一道防线只返回固定错误，不回传供应商正文、产物或费用元数据。
@@ -630,7 +640,7 @@ func (s *VideoTaskService) Cancel(ctx context.Context, key *APIKey, id, protocol
 	if err != nil {
 		return nil, err
 	}
-	if !videoUpstreamResponseMatchesTask(t.Target.Endpoint, response, t.UpstreamTaskID) {
+	if !videoProtocolUpstreamResponseMatchesTask(t.Target, response, t.UpstreamTaskID) {
 		return nil, errVideoTaskResponseMismatch
 	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
@@ -715,7 +725,7 @@ func (s *VideoTaskService) advance(ctx context.Context, t *VideoTaskRecord) {
 	}
 	response, err := s.upstream.Poll(ctx, account, t.Target, t.UpstreamTaskID)
 	t.PollAttempts++
-	if err != nil || !videoUpstreamResponseMatchesTask(t.Target.Endpoint, response, t.UpstreamTaskID) || response.StatusCode < 200 || response.StatusCode >= 300 {
+	if err != nil || !videoProtocolUpstreamResponseMatchesTask(t.Target, response, t.UpstreamTaskID) || response.StatusCode < 200 || response.StatusCode >= 300 {
 		// HTTP查询失败不代表视频生成失败，更不能触发退款或重新生成。
 		t.ErrorMessage = "上游任务状态查询暂不可用"
 		t.NextPollAt = time.Now().Add(time.Duration(min(300, 15+t.PollAttempts*5)) * time.Second)
@@ -730,7 +740,7 @@ func (s *VideoTaskService) advance(ctx context.Context, t *VideoTaskRecord) {
 }
 
 func (s *VideoTaskService) applyObservation(t *VideoTaskRecord, r *VideoUpstreamResponse) {
-	if !videoUpstreamResponseMatchesTask(t.Target.Endpoint, r, t.UpstreamTaskID) {
+	if !videoProtocolUpstreamResponseMatchesTask(t.Target, r, t.UpstreamTaskID) {
 		return
 	}
 	// 生成终态不可被迟到的排队状态回退；用量和产物可以在成功后继续补齐。
@@ -750,12 +760,31 @@ func (s *VideoTaskService) applyObservation(t *VideoTaskRecord, r *VideoUpstream
 	metadataValid := r.Status != "completed" || r.MetadataError == ""
 	if r.Status == "completed" {
 		if r.MetadataError != "" {
+			previousMismatch, previousError := t.PricingMismatch, t.ResponseMetadataError
 			t.PricingMismatch = true
 			t.ResponseMetadataError = r.MetadataError
+			if adapter, err := VideoTargetProtocolAdapter(t.Target); err == nil && adapter == VideoProtocolAdapterKling {
+				resolutionConflict := false
+				if r.Metadata.Resolution != "" && videoProtocolQuoteRequiresResolution(t.Quote) {
+					resolution, normalizeErr := NormalizeVideoPriceResolution(r.Metadata.Resolution)
+					resolutionConflict = normalizeErr != nil || resolution != t.Quote.Resolution
+				}
+				if resolutionConflict || (previousMismatch && !videoKlingOutputErrorRecoverable(previousError)) {
+					// 同包或此前的档位冲突都要保留，不能被产物错误覆盖后绕过确认。
+					t.ResponseMetadataError = videoKlingResolutionConfirmationRequired
+				}
+			}
+			if videoViduResponseTarget(t.Target) && (videoViduOutputDimensionsConflict(t, r) || (previousMismatch && !videoViduOutputErrorRecoverable(previousError))) {
+				// 产物稍后补齐不能抹掉同包或历史的真实维度异常，必须继续取得明确用量确认。
+				t.ResponseMetadataError = videoViduDimensionConfirmationNeeded
+			}
 		} else if t.ResponseMetadataError != "" {
 			// 空完成包不能证明先前冲突已消除，必须重新提供收费所需的可信终态元数据。
-			metadataValid = t.Quote != nil && r.Metadata.DurationSeconds > 0 && r.Metadata.Resolution != "" &&
-				(t.Quote.Mode != BillingModeVideoToken || r.Metadata.Tokens != nil)
+			if videoViduResponseTarget(t.Target) && videoViduOutputDimensionsConflict(t, r) {
+				// 补产物响应自身新出现的维度冲突也要保留，不能被再下一次省略维度的查询绕过。
+				t.ResponseMetadataError = videoViduDimensionConfirmationNeeded
+			}
+			metadataValid = videoProtocolMetadataRecovered(t, r)
 			if metadataValid {
 				t.PricingMismatch = false
 				t.ResponseMetadataError = ""
@@ -803,6 +832,10 @@ func (s *VideoTaskService) finish(ctx context.Context, t *VideoTaskRecord) {
 	defer done()
 	ctx = cleanup
 	if t.BillingStatus != "settled" && t.BillingStatus != "released" {
+		if err := s.prepareSeedanceFrameSettlement(ctx, t); err != nil {
+			slog.Error("video frame metadata save pending", "task_id", t.ID, "error", err)
+			return
+		}
 		command := t.Hold
 		command.RequestFingerprint = ""
 		command.VideoAccountID = t.AccountID

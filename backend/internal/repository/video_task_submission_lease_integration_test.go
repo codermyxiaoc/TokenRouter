@@ -148,6 +148,10 @@ func TestVideoSubmissionLeaseRetryRejectsContractChange(t *testing.T) {
 			metadata := task.Metadata
 			switch kind {
 			case "profile":
+				// H3 只属于 OpenAI Videos，使用真实适用端点验证转换合同差异。
+				task.Target.Endpoint = service.VideoEndpointOpenAIVideos
+				target.Endpoint = service.VideoEndpointOpenAIVideos
+				require.NoError(t, f.tasks.Save(context.Background(), task, false))
 				target.OpenAIProfile = service.VideoOpenAIProfileMetasoH3
 			case "seconds":
 				metadata.DurationSeconds = 8

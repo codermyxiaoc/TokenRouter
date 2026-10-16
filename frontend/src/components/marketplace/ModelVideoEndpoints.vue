@@ -47,6 +47,7 @@ const endpointTitleKeys: Record<string, string> = {
   kling: 'kling',
   wan: 'wan',
   minimax: 'minimax',
+  vidu: 'vidu',
   grok: 'grok',
 }
 

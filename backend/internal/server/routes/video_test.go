@@ -21,6 +21,8 @@ func TestVideoRoutesRegisteredAlongsideLegacyMedia(t *testing.T) {
 		{"POST", "/v1/videos/text2video"}, {"POST", "/v1/videos/omni-video"}, {"GET", "/tasks?task_ids=id"},
 		{"POST", "/api/v1/services/aigc/video-generation/video-synthesis"}, {"GET", "/api/v1/tasks/id"},
 		{"POST", "/v2/video_generation"}, {"GET", "/v2/query/video_generation/id"},
+		{"POST", "/ent/v2/img2video"}, {"POST", "/ent/v2/reference2video"}, {"POST", "/ent/v2/text2video"},
+		{"POST", "/ent/v2/start-end2video"}, {"GET", "/ent/v2/tasks/id/creations"},
 		{"POST", "/v1/videos"}, {"GET", "/v1/videos/vid_owned"}, {"GET", "/v1/videos/vid_owned/content"},
 		{"POST", "/videos"}, {"GET", "/videos/vid_owned"}, {"GET", "/videos/vid_owned/content"},
 	} {

@@ -12,7 +12,7 @@ import (
 // SwitchRejected 沿用原任务、价卡和预扣；目标账号容量与租约在同一事务内验证。
 // @project-doc docs/domains/video_tasks.md#video_task_lifecycle
 func (r *videoTaskRepository) SwitchRejected(ctx context.Context, id, lease string, target service.VideoUpstreamTarget, metadata service.VideoRequestMetadata, accountRate float64, limit int) (*service.VideoTaskRecord, error) {
-	if target.AccountID <= 0 || target.Version != 1 || limit <= 0 || accountRate < 0 || math.IsNaN(accountRate) || math.IsInf(accountRate, 0) {
+	if target.AccountID <= 0 || service.ValidateVideoProtocolTarget(target) != nil || limit <= 0 || accountRate < 0 || math.IsNaN(accountRate) || math.IsInf(accountRate, 0) {
 		return nil, service.ErrVideoTaskConflict
 	}
 	tx, err := r.db.BeginTx(ctx, nil)

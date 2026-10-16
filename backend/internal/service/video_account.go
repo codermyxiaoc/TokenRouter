@@ -17,7 +17,12 @@ type VideoAccountConfiguration struct {
 	ModelBindings map[string]VideoEndpointSet `json:"video_model_bindings"`
 	BaseURLs      map[VideoEndpoint]string    `json:"video_base_urls"`
 	ModelPaths    map[string]string           `json:"video_model_paths"`
-	OpenAIProfile string                      `json:"video_openai_profile,omitempty"`
+	// Vidu 操作路径独立保存，避免同模型同时绑定 Kling 时相互覆盖。
+	ViduModelPaths map[string]string `json:"video_vidu_model_paths,omitempty"`
+	OpenAIProfile  string            `json:"video_openai_profile,omitempty"`
+	// 协议选择与端点授权分离；模型覆盖使用账号映射完成后的精确模型名。
+	EndpointAdapters map[VideoEndpoint]string            `json:"video_endpoint_adapters,omitempty"`
+	ModelAdapters    map[string]map[VideoEndpoint]string `json:"video_model_adapters,omitempty"`
 }
 
 // VideoEndpointSet 兼容旧单字符串绑定；旧值仅表示一个端点，不自动扩展账号能力。
@@ -104,7 +109,7 @@ func (cfg VideoAccountConfiguration) SelectEndpoint(model, inboundProtocol strin
 
 func validVideoEndpoint(endpoint VideoEndpoint) bool {
 	switch endpoint {
-	case VideoEndpointCompat, VideoEndpointOpenAIVideos, VideoEndpointSeedance, VideoEndpointKling, VideoEndpointWan, VideoEndpointMiniMax:
+	case VideoEndpointCompat, VideoEndpointOpenAIVideos, VideoEndpointSeedance, VideoEndpointKling, VideoEndpointWan, VideoEndpointMiniMax, VideoEndpointVidu:
 		return true
 	}
 	return false
@@ -124,7 +129,48 @@ func (a *Account) VideoConfiguration() (VideoAccountConfiguration, error) {
 		return out, err
 	}
 	out.OpenAIProfile, err = normalizeVideoOpenAIProfile(out.OpenAIProfile)
+	if err == nil {
+		err = out.validateProtocolAdapters()
+	}
 	return out, err
+}
+
+// ProtocolAdapter 固定按模型覆盖、端点默认、旧配置的顺序解析，不推断厂商或扩大端点资格。
+func (cfg VideoAccountConfiguration) ProtocolAdapter(model string, endpoint VideoEndpoint) (string, bool) {
+	if id, ok := cfg.ModelAdapters[model][endpoint]; ok {
+		return id, true
+	}
+	if id, ok := cfg.EndpointAdapters[endpoint]; ok {
+		return id, true
+	}
+	if endpoint == VideoEndpointOpenAIVideos && cfg.OpenAIProfile == VideoOpenAIProfileMetasoH3 {
+		return VideoProtocolAdapterMetasoH3, false
+	}
+	return VideoProtocolAdapterLegacy, false
+}
+
+// 配置只接受内置版本，未启用端点的选择可保留但不会因此获得转发权限。
+func (cfg VideoAccountConfiguration) validateProtocolAdapters() error {
+	validate := func(adapters map[VideoEndpoint]string) error {
+		for endpoint, id := range adapters {
+			if !ValidVideoProtocolAdapter(endpoint, id) {
+				return fmt.Errorf("video protocol adapter is unknown or incompatible with its endpoint")
+			}
+		}
+		return nil
+	}
+	if err := validate(cfg.EndpointAdapters); err != nil {
+		return err
+	}
+	for model, adapters := range cfg.ModelAdapters {
+		if model == "" || model != strings.TrimSpace(model) || strings.ContainsAny(model, "*?") {
+			return fmt.Errorf("video_model_adapters requires an exact non-empty upstream model")
+		}
+		if err := validate(adapters); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validKlingVideoPath(path string) bool {
@@ -188,6 +234,23 @@ func normalizeVideoCredentials(a *Account) error {
 	for model, path := range cfg.ModelPaths {
 		if strings.TrimSpace(model) == "" || !validKlingVideoPath(path) {
 			return invalid("video_model_paths contains an invalid Kling path template")
+		}
+		if adapter, _ := cfg.ProtocolAdapter(model, VideoEndpointKling); adapter == VideoProtocolAdapterKling && path != "/text-to-video/{model}" && path != "/image-to-video/{model}" {
+			return invalid("kling_v1 requires /text-to-video/{model} or /image-to-video/{model}; use legacy_v1 for other operations")
+		}
+		if adapter, _ := cfg.ProtocolAdapter(model, VideoEndpointKling); adapter == VideoProtocolAdapterKemei && path != "/text-to-video/{model}" && path != "/image-to-video/{model}" && path != "/omni-video/{model}" {
+			return invalid("kemei_v1 requires a native Kling model operation path")
+		}
+	}
+	for model, path := range cfg.ViduModelPaths {
+		if strings.TrimSpace(model) == "" || model != strings.TrimSpace(model) || strings.ContainsAny(model, "*?") || !validViduVideoPath(path) {
+			return invalid("video_vidu_model_paths requires exact models and supported Vidu operation paths")
+		}
+	}
+	if seen[VideoEndpointVidu] {
+		// 新增端点仍须显式选择方案；不把缺失配置推断成官方或原样协议。
+		if id, explicit := cfg.ProtocolAdapter("", VideoEndpointVidu); !explicit || !ValidVideoProtocolAdapter(VideoEndpointVidu, id) {
+			return invalid("Vidu requires an explicit endpoint protocol adapter")
 		}
 	}
 	// 旧 Token 预算配置在账号保存时清理；已受理任务的持久预算不受影响。

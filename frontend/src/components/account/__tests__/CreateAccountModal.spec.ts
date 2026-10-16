@@ -274,6 +274,8 @@ describe('CreateAccountModal OpenAI account options', () => {
     expect(payload).toMatchObject({ platform: 'video', type: 'apikey', credentials: {
       api_key: 'video-secret', base_url: 'https://video.example.test', video_endpoints: ['compat'],
       video_max_pending_tasks: 10, video_max_duration_seconds: 15,
+      video_endpoint_adapters: { compat: 'legacy_v1', openai_videos: 'openai_v1', seedance: 'seedance_v1', kling: 'kling_v1', wan: 'wan_v1', minimax: 'minimax_v2' },
+      video_model_adapters: {},
     } })
     expect(payload.credentials).not.toHaveProperty('video_max_output_tokens')
     expect(payload.credentials).not.toHaveProperty('api_protocol')

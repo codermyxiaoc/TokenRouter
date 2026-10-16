@@ -227,7 +227,8 @@ func TestVideoOpenAIResponseMetadataValidation(t *testing.T) {
 	standard := ExtractVideoUpstreamResponse(VideoEndpointOpenAIVideos, []byte(`{"id":"owned","status":"completed","seconds":"4","size":"1280x720"}`), "owned")
 	require.Empty(t, standard.MetadataError)
 	require.Equal(t, "1280x720", standard.Metadata.Resolution)
-	projection := videoProtocolResponse(&VideoTaskRecord{ID: "vid_owned", Status: "completed", Metadata: standard.Metadata}, "openai_videos", false)
+	projection := videoProtocolResponse(&VideoTaskRecord{ID: "vid_owned", Status: "completed", Metadata: standard.Metadata,
+		Target: VideoUpstreamTarget{Version: 1, Endpoint: VideoEndpointOpenAIVideos}}, "openai_videos", false)
 	require.Equal(t, "4", gjson.GetBytes(projection.Body, "seconds").String())
 	require.Equal(t, 4., gjson.GetBytes(projection.Body, "duration").Float())
 	require.Equal(t, "1280x720", gjson.GetBytes(projection.Body, "size").String())

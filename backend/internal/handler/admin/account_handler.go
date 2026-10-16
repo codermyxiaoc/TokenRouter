@@ -2932,11 +2932,13 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	// 视频目录仅来自账号配置；空配置不能回落到聊天默认模型或默认开放兼容端点。
 	if account.Platform == service.PlatformVideo {
 		type videoTestModel struct {
-			ID             string                  `json:"id"`
-			Object         string                  `json:"object"`
-			Type           string                  `json:"type"`
-			DisplayName    string                  `json:"display_name"`
-			VideoEndpoints []service.VideoEndpoint `json:"video_endpoints"`
+			ID                    string                           `json:"id"`
+			Object                string                           `json:"object"`
+			Type                  string                           `json:"type"`
+			DisplayName           string                           `json:"display_name"`
+			VideoEndpoints        []service.VideoEndpoint          `json:"video_endpoints"`
+			VideoProtocolAdapters map[service.VideoEndpoint]string `json:"video_protocol_adapters"`
+			VideoViduOperation    string                           `json:"video_vidu_operation,omitempty"`
 		}
 		models := make([]videoTestModel, 0)
 		for _, model := range account.GetConfiguredRequestModels() {
@@ -2944,7 +2946,9 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 				continue
 			}
 			models = append(models, videoTestModel{ID: model, Object: "model", Type: "model", DisplayName: model,
-				VideoEndpoints: service.VideoAccountTestEndpoints(account, model)})
+				VideoEndpoints:        service.VideoAccountTestEndpoints(account, model),
+				VideoProtocolAdapters: service.VideoAccountTestAdapters(account, model),
+				VideoViduOperation:    service.VideoAccountTestViduOperation(account, model)})
 		}
 		response.Success(c, models)
 		return

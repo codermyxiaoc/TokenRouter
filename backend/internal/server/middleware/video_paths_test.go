@@ -49,13 +49,13 @@ func TestSharedVideoTaskAuthPreservesLegacyGrokBillingGate(t *testing.T) {
 
 // 精确查询识别只免除消费检查，未知集合和子路径仍不能读取共享上游账号。
 func TestVideoManagementPathBoundary(t *testing.T) {
-	for _, path := range []string{"/v1/video/generations/owned", "/api/v1/tasks/owned", "/v2/query/video_generation/owned", "/v1/videos/vid_owned", "/v1/videos/vid_owned/content", "/videos/vid_owned/content"} {
+	for _, path := range []string{"/v1/video/generations/owned", "/api/v1/tasks/owned", "/v2/query/video_generation/owned", "/v1/videos/vid_owned", "/v1/videos/vid_owned/content", "/videos/vid_owned/content", "/ent/v2/tasks/owned/creations"} {
 		require.True(t, isVideoTaskManagementRequest(http.MethodGet, path))
 		require.True(t, isCompositeKeyNoModelEndpoint(http.MethodGet, path))
 		require.True(t, isAPIKeyNonConsumingRequest(http.MethodGet, path))
 		require.False(t, isAPIKeyNonConsumingRequest(http.MethodPost, path))
 	}
-	for _, path := range []string{"/v1/video/generations", "/api/v1/tasks", "/api/v1/tasks/owned/content", "/v2/query/video_generation/../foreign", "/v1/videos", "/v1/videos/upstream_id", "/v1/videos/vid_owned/content/extra"} {
+	for _, path := range []string{"/v1/video/generations", "/api/v1/tasks", "/api/v1/tasks/owned/content", "/v2/query/video_generation/../foreign", "/v1/videos", "/v1/videos/upstream_id", "/v1/videos/vid_owned/content/extra", "/ent/v2/tasks", "/ent/v2/tasks/owned/creations/extra", "/ent/v2/img2video"} {
 		require.False(t, isVideoTaskManagementRequest(http.MethodGet, path))
 	}
 }

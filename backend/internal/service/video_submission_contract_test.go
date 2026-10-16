@@ -19,6 +19,12 @@ func TestVideoSubmissionRetryKeepsParameterContract(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, key, u, b, _, repo := newVideoRetryFixture()
+			if name == "profile" {
+				// H3 profile 只属于 OpenAI Videos，不以其他端点的无关字段制造协议差异。
+				for _, selection := range u.selections {
+					selection.Target.Endpoint = VideoEndpointOpenAIVideos
+				}
+			}
 			mutate(u.selections[1])
 			u.responses = []*VideoUpstreamResponse{retryVideoResponse(429, `{"error":{"code":"QuotaExceeded"}}`), retryVideoResponse(200, `{"id":"accepted","status":"queued"}`)}
 			result, err := s.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(`{}`)})
@@ -35,7 +41,7 @@ func TestVideoSubmissionRetryKeepsParameterContract(t *testing.T) {
 
 func TestVideoSubmissionRetryEmptyAndPassthroughProfilesEquivalent(t *testing.T) {
 	for _, profile := range []string{"", VideoOpenAIProfilePassthrough} {
-		task := &VideoTaskRecord{Target: VideoUpstreamTarget{Endpoint: VideoEndpointOpenAIVideos, OpenAIProfile: profile}, Metadata: VideoRequestMetadata{Model: "old", Resolution: "1280x720", Size: "1280x720", DurationSeconds: 4}}
+		task := &VideoTaskRecord{Target: VideoUpstreamTarget{Version: 1, Endpoint: VideoEndpointOpenAIVideos, OpenAIProfile: profile}, Metadata: VideoRequestMetadata{Model: "old", Resolution: "1280x720", Size: "1280x720", DurationSeconds: 4}}
 		next := task.Target
 		next.OpenAIProfile = VideoOpenAIProfilePassthrough
 		metadata := task.Metadata

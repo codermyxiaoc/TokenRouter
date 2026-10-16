@@ -78,7 +78,12 @@
             :placeholder="t('admin.accounts.video.testEndpointPlaceholder')"
             data-testid="account-test-video-endpoint"
           />
+          <p class="input-hint" data-testid="account-test-video-adapter">{{ t('admin.accounts.video.testAdapter') }}：{{ t(`admin.accounts.video.adapters.${videoAdapterTextKey(videoEndpoint, videoProtocolAdapter)}`) }}</p>
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.video.testEndpointHint') }}</p>
+        </div>
+        <div v-if="videoEndpoint === 'vidu'" class="space-y-1.5">
+          <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testViduOperation') }}</label>
+          <Select v-model="videoOperation" :options="videoOperationOptions" :disabled="status === 'connecting'" :placeholder="t('admin.accounts.video.testViduOperationRequired')" data-testid="account-test-video-operation" />
         </div>
         <div class="space-y-1.5">
           <label for="account-test-video-duration" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testDuration') }}</label>
@@ -92,21 +97,22 @@
             class="input"
             :disabled="status === 'connecting'"
             data-testid="account-test-video-duration"
+            @input="markVideoOptionEdited('duration')"
           />
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.video.testDurationHint') }}</p>
         </div>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div class="space-y-1.5">
             <label for="account-test-video-resolution" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3Resolution' : 'admin.accounts.video.testResolution') }}</label>
-            <input id="account-test-video-resolution" v-model="videoResolution" class="input" type="text" maxlength="32" placeholder="768p" :disabled="status === 'connecting'" data-testid="account-test-video-resolution" />
+            <input id="account-test-video-resolution" v-model="videoResolution" class="input" type="text" maxlength="32" :placeholder="videoResolutionPlaceholder" :disabled="status === 'connecting'" data-testid="account-test-video-resolution" @input="markVideoOptionEdited('resolution')" />
           </div>
           <div class="space-y-1.5">
             <label for="account-test-video-ratio" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3Ratio' : 'admin.accounts.video.testRatio') }}</label>
-            <input id="account-test-video-ratio" v-model="videoRatio" class="input" type="text" maxlength="32" placeholder="16:9" :disabled="status === 'connecting'" data-testid="account-test-video-ratio" />
+            <input id="account-test-video-ratio" v-model="videoRatio" class="input" type="text" maxlength="32" :placeholder="videoRatioPlaceholder" :disabled="status === 'connecting'" data-testid="account-test-video-ratio" @input="markVideoOptionEdited('ratio')" />
           </div>
         </div>
-        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3ResolutionHint' : 'admin.accounts.video.testResolutionHint') }}</p>
-        <p v-if="!loadingModels && videoTestValidationMessage" class="text-xs text-amber-600 dark:text-amber-400" role="alert">{{ videoTestValidationMessage }}</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(videoResolutionHint) }}</p>
+        <p v-if="!loadingModels && (videoTestValidationMessage || videoMediaValidationMessage)" class="text-xs text-amber-600 dark:text-amber-400" role="alert">{{ videoTestValidationMessage || videoMediaValidationMessage }}</p>
       </template>
 
       <div v-if="showEndpointSelect" class="space-y-1.5">
@@ -147,7 +153,7 @@
 
       <div v-if="supportsImageUpload" class="space-y-1.5">
         <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-          {{ t(testType === 'video' ? 'admin.accounts.grok.videoFirstFrameLabel' : 'admin.accounts.grok.imageUploadLabel') }}
+          {{ t(isVideoAccount && videoEndpoint === 'vidu' ? 'admin.accounts.video.testViduImageLabel' : testType === 'video' ? 'admin.accounts.grok.videoFirstFrameLabel' : 'admin.accounts.grok.imageUploadLabel') }}
         </label>
         <div class="flex items-center gap-3">
           <button type="button" class="btn btn-secondary btn-sm shrink-0" :disabled="status === 'connecting'" @click="imageFileInput?.click()">
@@ -157,7 +163,7 @@
           <button v-if="uploadImageDataURL" type="button" class="text-xs text-gray-500" :disabled="status === 'connecting'" @click="clearMediaUploads">{{ t('common.remove') }}</button>
           <input ref="imageFileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden" :disabled="status === 'connecting'" @change="onImageFileChange" />
         </div>
-        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3ImageHint' : testType === 'video' ? 'admin.accounts.grok.videoFirstFrameHint' : 'admin.accounts.grok.imageUploadHint') }}</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(isVideoAccount && videoEndpoint === 'vidu' ? 'admin.accounts.video.testViduImageHint' : isMetasoH3VideoTest ? 'admin.accounts.video.testH3ImageHint' : testType === 'video' ? 'admin.accounts.grok.videoFirstFrameHint' : 'admin.accounts.grok.imageUploadHint') }}</p>
         <img v-if="uploadImageDataURL" :src="uploadImageDataURL" :alt="t('admin.accounts.grok.uploadPreviewAlt')" class="max-h-40 w-full rounded-lg object-contain" />
       </div>
       <div v-if="supportsAudioUpload" class="space-y-1.5">
@@ -254,7 +260,7 @@
       </div>
       <div v-if="generatedVideos.length > 0" class="space-y-2">
         <div class="text-xs font-medium text-gray-600 dark:text-gray-300">{{ t('admin.accounts.videoPreview') }}</div>
-        <video v-for="(video, index) in generatedVideos" :key="index" :src="video.url" controls preload="metadata" class="max-h-[360px] w-full rounded-xl" />
+        <AccountTestVideoPreview v-for="(video, index) in generatedVideos" :key="index" :url="video.url" />
       </div>
 
       <!-- Image Lightbox -->
@@ -355,6 +361,7 @@ import type { Account, ClaudeModel } from '@/types'
 import type { AccountTestRequest, AccountTestType } from '@/types/accountTest'
 import { useAccountTestOptions } from '@/composables/useAccountTestOptions'
 import { useAccountTestUploads } from '@/composables/useAccountTestUploads'
+import AccountTestVideoPreview from '@/components/account/AccountTestVideoPreview.vue'
 
 const { t } = useI18n()
 const { copyToClipboard } = useClipboard()
@@ -406,7 +413,9 @@ const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-ima
 // 图片/文字请求类型完全由管理员选择，不再从模型名称推断。
 const supportsImageTest = computed(() => testType.value === 'image')
 const {
-  isVideoAccount, isMetasoH3VideoTest, videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
+  isVideoAccount, isMetasoH3VideoTest, videoProtocolAdapter, videoAdapterTextKey, videoResolutionHint, videoResolutionPlaceholder, videoRatioPlaceholder, resetVideoOptions, markVideoOptionEdited,
+  videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
+  videoOperation, videoOperationOptions, videoTestRatio, videoTestMediaValidation,
   testEndpoint, isGrokAccount, testTypeOptions, endpointOptions, showEndpointSelect,
   showModelSelect, modelOptionsForMode, supportsImageUpload, supportsAudioUpload,
   supportsPromptInput, promptInputLabel, promptInputPlaceholder, promptInputHint,
@@ -421,9 +430,10 @@ const {
 })
 const generatedAudios = ref<PreviewImage[]>([])
 const generatedVideos = ref<PreviewImage[]>([])
+const videoMediaValidationMessage = computed(() => videoTestMediaValidation(Boolean(uploadImageDataURL.value)))
 const canStartTest = computed(() => status.value !== 'connecting' && !loadingModels.value &&
   !loadingUpload.value && (!showModelSelect.value || Boolean(selectedModelId.value)) &&
-  !videoTestValidationMessage.value)
+  !videoTestValidationMessage.value && !videoMediaValidationMessage.value)
 
 
 const sortTestModels = (models: ClaudeModel[]) => {
@@ -449,10 +459,7 @@ watch(
       testMode.value = 'default'
       testType.value = isVideoAccount.value ? 'video' : 'text'
       testEndpoint.value = 'auto'
-      videoEndpoint.value = ''
-      videoDuration.value = 5
-      videoResolution.value = ''
-      videoRatio.value = '16:9'
+      resetVideoOptions()
       resetState()
       await loadAvailableModels()
     } else {
@@ -579,7 +586,9 @@ const startTest = async () => {
       requestBody.video_endpoint = videoEndpoint.value
       requestBody.duration = Number(videoDuration.value)
       if (videoResolution.value.trim()) requestBody.resolution = videoResolution.value.trim()
-      if (videoRatio.value.trim()) requestBody.ratio = videoRatio.value.trim()
+      const ratio = videoTestRatio(Boolean(uploadImageDataURL.value))
+      if (ratio) requestBody.ratio = ratio
+      if (videoEndpoint.value === 'vidu') requestBody.video_operation = videoOperation.value
     }
     if (isOpenAIAccount.value) requestBody.mode = testMode.value
     // 自动测试省略端点，保持历史客户端和既有账号协议的默认行为。

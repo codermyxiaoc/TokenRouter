@@ -28,7 +28,7 @@ const taskErrors: ApiDocError[] = [
   { status: 503, code: 'VIDEO_ACCOUNT_BUSY', description: '原任务账号当前繁忙，稍后查询；不会换账号查询或重新生成。' },
 ]
 const nativeNotes = [
-  '这是 Video 平台原生入口。需要绑定 Video 分组的站内 Key，账号还需启用相应端点。请求 JSON 扩展字段保留；模型会按站内映射替换，其余厂商字段不会自动转换。',
+  '这是 Video 平台原生入口。需要绑定 Video 分组的站内 Key，账号还需启用相应端点。模型会按站内映射替换；原有协议保留厂商字段，显式协议适配按该方案支持的参数及别名处理。',
   '原生响应保留上游格式和任务 ID；响应头 X-Video-Task-ID 提供本站 vid_… ID，可用于统一任务查询。示例字段由具体上游决定，不是固定面板响应包。',
   '任务记录由后台持久轮询推进；生成完成不等于扣费已完成，统一查询中的 billing_status=settled 才表示已结算。查询和下载不会再次生成。',
 ]
@@ -239,6 +239,34 @@ export const videoEndpoints: ApiDocEndpoint[] = [
     responseExample: json({ task_id: 'minimax_task_example', status: 'Success', data: { video_url: 'https://media.example.com/output.mp4' }, base_resp: { status_code: 0, status_msg: 'success' } }),
     responseDescription: '这是支持直接视频地址的上游响应示例；实际状态大小写、结果字段和 usage 由所接入上游决定。',
     notes: ['同时检查 HTTP 状态、base_resp 等业务错误和生成状态。HTTP 200 本身不代表生成成功。', '若上游只提供私有 file_id，本站不会凭空合成下载链接；当前没有独立 MiniMax 文件下载网关接口，需管理员适配实际供应商的结果合同。'], errors: taskErrors,
+  },
+  // Vidu 保留四种原生操作，不能把有图、无图或首尾帧请求自动改成另一项生成。
+  ...([
+    { operation: 'img2video', title: '图生视频', images: ['https://media.example.com/first-frame.png'] },
+    { operation: 'reference2video', title: '参考生视频', images: ['https://media.example.com/reference.png'] },
+    { operation: 'text2video', title: '文生视频', images: [] },
+    { operation: 'start-end2video', title: '首尾帧视频', images: ['https://media.example.com/first-frame.png', 'https://media.example.com/last-frame.png'] },
+  ] as const).map((route): ApiDocEndpoint => ({
+    id: `vidu-${route.operation}`, category: 'video', videoProtocol: 'vidu', title: `Vidu · ${route.title}`, summary: '通过已配置可美视频适配的 Vidu 账号提交对应操作的异步任务。',
+    platforms: ['video'], method: 'POST', path: `/ent/v2/${route.operation}`, auth: 'bearer', contentType: 'application/json',
+    parameters: [
+      { name: 'model', type: 'string', required: true, description: 'Video 分组可用且已有定价的模型 ID；例如已配置的 viduq3-pro。Q4 仅支持 img2video 和 reference2video。' },
+      { name: 'prompt', type: 'string', required: route.operation === 'text2video', description: '视频内容描述，文生视频必须提供。' },
+      { name: 'images', type: 'string[]', required: route.operation !== 'text2video', description: '参考图片 URL 数组：img2video 恰好 1 张、reference2video 至少 1 张、start-end2video 恰好 2 张；text2video 不能带图。数量上限及文件限制遵循模型要求。' },
+      { name: 'duration / resolution / aspect_ratio', type: 'integer / string / string', required: false, description: '视频时长、分辨率与比例，默认 5 秒、540p、16:9；按模型支持范围填写，实际发送值参与价格与预算计算。' },
+      { name: 'sounds', type: 'string[]', required: false, description: '参考音频 URL 数组，是否支持由模型和操作决定。' },
+      { name: 'audio / off_peak / seed', type: 'boolean / boolean / integer', required: false, description: '是否生成音频、错峰模式及非负随机种子；具体能力由上游模型决定。' },
+      idempotency,
+    ],
+    requestExample: json({ model: 'viduq3-pro', prompt: '镜头缓缓向前，展现安静的海岸线', ...(route.images.length ? { images: route.images } : {}), duration: 5, resolution: '540p', aspect_ratio: '16:9' }),
+    responseExample: json({ task_id: 'vidu_task_example', type: route.operation, state: 'created', model: 'viduq3-pro', duration: 5, created_at: '2026-10-16T12:00:00Z' }),
+    notes: [...nativeNotes, 'Vidu 账号必须明确启用 Vidu 端点并选择“可美视频”协议。支持 image_urls→images、audios→sounds、ratio→aspect_ratio、generate_audio→audio 别名；同时传入同义字段时必须相同，否则请求被拒绝。', '使用原生查询路径 GET /ent/v2/tasks/{task_id}/creations。本站未提供 Vidu 原生取消接口，不会将查询或失败自动转换为再次创建。', ...billingNotes], errors: videoErrors,
+  })),
+  {
+    id: 'vidu-query', category: 'video', videoProtocol: 'vidu', title: 'Vidu · 查询视频任务', summary: '使用创建响应 task_id 查询状态和视频产物。',
+    platforms: ['video'], method: 'GET', path: '/ent/v2/tasks/{task_id}/creations', requestPath: '/ent/v2/tasks/vidu_task_example/creations', auth: 'bearer', parameters: [taskId],
+    responseExample: json({ id: 'vidu_task_example', type: 'img2video', state: 'success', err_code: '', err_msg: '', creations: [{ id: 'creation_example', url: 'https://media.example.com/output.mp4', cover_url: 'https://media.example.com/cover.jpg' }] }),
+    notes: ['状态由上游返回，例如 created、queueing、processing、success、failed。读取 err_code、err_msg 判断失败原因；HTTP 200 不能单独证明生成成功。', ...nativeNotes.slice(1), '查询使用创建任务时的账号和冻结适配配置，不能跨 Key 读取任务。'], errors: taskErrors,
   },
   {
     id: 'grok-video-create', category: 'video', videoProtocol: 'grok', title: 'Grok · 视频生成', summary: 'Grok / xAI 异步文生或图生视频，返回供应商任务 ID。',

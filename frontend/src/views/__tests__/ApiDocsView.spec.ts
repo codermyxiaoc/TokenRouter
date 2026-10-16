@@ -68,10 +68,14 @@ describe('API 文档页面', () => {
   it('搜索和自研平台选择框共同过滤目录，空结果可清除', async () => {
     const { wrapper } = await render('/docs/overview')
     const videoCatalog = wrapper.get('nav[aria-label="视频与异步任务"]')
+    // Vidu 原生端点已纳入视频文档目录，不能继续按新增前的六个协议计数。
     expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual([
-      'OpenAI Videos6', 'Seedance / 火山方舟3', 'Kling / 可灵6', 'Wan / 万相2', 'MiniMax2', 'Grok / xAI5',
+      'OpenAI Videos6', 'Seedance / 火山方舟3', 'Kling / 可灵6', 'Wan / 万相2', 'MiniMax2', 'Vidu5', 'Grok / xAI5',
     ])
-    expect(videoCatalog.findAll('a')).toHaveLength(24)
+    expect(videoCatalog.findAll('a')).toHaveLength(29)
+    await wrapper.get('input[placeholder="apiDocs.search"]').setValue('Vidu')
+    expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['Vidu5'])
+    expect(videoCatalog.findAll('a')).toHaveLength(5)
     await wrapper.get('input[placeholder="apiDocs.search"]').setValue('Kling')
     expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['Kling / 可灵6'])
     expect(wrapper.find('article').text()).toContain('/tasks')

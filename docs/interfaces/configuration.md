@@ -162,6 +162,8 @@ Vite 在构建/dev server 启动时读取 `VITE_API_BASE_URL`、`VITE_WS_BASE_UR
 
 `VITE_*` 会进入客户端 bundle，绝不能放 secret。生产内嵌前端的动态品牌、功能和公开认证配置通过后端设置注入或 API 获取；它们与 Vite 构建变量是不同通道。改变后端 public URL 时，还要核对 OAuth callback、邮件链接、CORS/CSP 和反向代理路径，不能只改前端 base。
 
+主站默认 CSP 与 `deploy/config.example.yaml` 显式设置 `media-src 'self' https: data: blob:`，用于账号测试和媒体预览已支持的 HTTPS 成品链接、站内播放接口及 data/blob 视频；不再让媒体继承仅同源的 `default-src`。这一默认值不加入旧自定义 CSP 的运行时补全，部署者的显式媒体来源或省略 `media-src` 的限制继续保留。脚本、iframe、表单策略，以及后端媒体下载的鉴权、SSRF 和重定向边界均不因浏览器媒体来源配置而变化。
+
 ## 新增配置检查
 
 - 判断它属于进程、bootstrap、数据库运行时、领域实体还是前端构建层，并选择唯一权威来源。

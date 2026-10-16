@@ -478,8 +478,35 @@ describe('EditAccountModal', () => {
     await flushPromises()
     expect(updateAccountMock).toHaveBeenCalledOnce()
     expect(updateAccountMock.mock.calls[0][1].credentials).toMatchObject({ video_endpoints: ['kling'], video_max_pending_tasks: 8,
-      video_max_duration_seconds: 15, video_model_paths: { 'kling-v3': '/text-to-video/{model}' } })
+      video_max_duration_seconds: 15, video_model_paths: { 'kling-v3': '/text-to-video/{model}' }, video_endpoint_adapters: {}, video_model_adapters: {} })
     expect(wrapper.findComponent({ name: 'UpstreamUsageConfigEditor' }).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // 新协议与模型覆盖通过真实编辑提交保留，未改动密钥时仍沿用已有凭据。
+  it('saves model protocol overrides without changing other endpoint adapters or the saved key', async () => {
+    const account = { ...buildAccount(), platform: 'video', credentials_status: { has_api_key: true }, credentials: {
+      base_url: 'https://video.example.test', video_endpoints: ['openai_videos', 'minimax'],
+      video_endpoint_adapters: { openai_videos: 'openai_v1', minimax: 'minimax_v2' },
+      video_model_bindings: { shared: ['openai_videos', 'minimax'] },
+      video_model_adapters: { shared: { openai_videos: 'metaso_h3_v1' }, inherited: { minimax: 'legacy_v1' } },
+    } }
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
+    const next = { ...fields.props('modelValue'), bindings: fields.props('modelValue').bindings.map((row: { endpoint: string }) => ({ ...row, ...(row.endpoint === 'minimax' ? { adapter: 'legacy_v1' } : {}) })) }
+    fields.vm.$emit('update:modelValue', next)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledOnce()
+    const credentials = updateAccountMock.mock.calls[0][1].credentials
+    expect(credentials).toMatchObject({
+      video_endpoints: account.credentials.video_endpoints,
+      video_endpoint_adapters: account.credentials.video_endpoint_adapters,
+      video_model_bindings: account.credentials.video_model_bindings,
+      video_model_adapters: { shared: { openai_videos: 'metaso_h3_v1', minimax: 'legacy_v1' }, inherited: { minimax: 'legacy_v1' } },
+    })
+    expect(credentials).not.toHaveProperty('api_key')
     wrapper.unmount()
   })
 

@@ -9,7 +9,7 @@ import (
 // OpenContent 只访问冻结的 OpenAI 视频内容路径，原账号鉴权请求禁止自动跟随重定向。
 func (s *VideoUpstreamService) OpenContent(ctx context.Context, account *Account, target VideoUpstreamTarget, taskID, byteRange string) (*http.Response, error) {
 	if s == nil || s.gateway == nil || s.gateway.httpUpstream == nil || account == nil || account.ID != target.AccountID ||
-		account.Platform != PlatformVideo || account.Type != AccountTypeAPIKey || target.Version != 1 || target.Endpoint != VideoEndpointOpenAIVideos {
+		account.Platform != PlatformVideo || account.Type != AccountTypeAPIKey || ValidateVideoProtocolTarget(target) != nil || target.Endpoint != VideoEndpointOpenAIVideos {
 		return nil, errVideoContentUnavailable
 	}
 	if byteRange != "" && (len(byteRange) > 100 || !mediaTaskPreviewRange.MatchString(byteRange)) {
@@ -19,7 +19,7 @@ func (s *VideoUpstreamService) OpenContent(ctx context.Context, account *Account
 	if err != nil {
 		return nil, errVideoContentUnavailable
 	}
-	path, err := videoTaskPath(target, taskID)
+	path, err := VideoProtocolTaskPath(target, taskID)
 	if err != nil {
 		return nil, err
 	}

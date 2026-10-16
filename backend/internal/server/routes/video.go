@@ -26,6 +26,9 @@ func registerVideoRoutes(r *gin.Engine, h *handler.Handlers, middlewares ...gin.
 		{http.MethodPost, "/v1/videos/text2video"}, {http.MethodPost, "/v1/videos/omni-video"}, {http.MethodGet, "/tasks"},
 		{http.MethodPost, "/api/v1/services/aigc/video-generation/video-synthesis"}, {http.MethodGet, "/api/v1/tasks/:task_id"},
 		{http.MethodPost, "/v2/video_generation"}, {http.MethodGet, "/v2/query/video_generation/:task_id"},
+		{http.MethodPost, "/ent/v2/img2video"}, {http.MethodPost, "/ent/v2/reference2video"},
+		{http.MethodPost, "/ent/v2/text2video"}, {http.MethodPost, "/ent/v2/start-end2video"},
+		{http.MethodGet, "/ent/v2/tasks/:task_id/creations"},
 	}
 	for _, route := range routes {
 		// 鉴权或请求体校验提前返回时，也禁止缓存任务入口响应。

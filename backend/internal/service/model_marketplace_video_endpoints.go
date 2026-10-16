@@ -25,6 +25,10 @@ var marketplaceVideoCreateEndpoints = []ModelMarketplaceVideoEndpoint{
 	{Method: http.MethodPost, Path: "/v1/videos/omni-video", Protocol: "kling"},
 	{Method: http.MethodPost, Path: "/api/v1/services/aigc/video-generation/video-synthesis", Protocol: "wan"},
 	{Method: http.MethodPost, Path: "/v2/video_generation", Protocol: "minimax"},
+	{Method: http.MethodPost, Path: "/ent/v2/img2video", Protocol: "vidu"},
+	{Method: http.MethodPost, Path: "/ent/v2/reference2video", Protocol: "vidu"},
+	{Method: http.MethodPost, Path: "/ent/v2/text2video", Protocol: "vidu"},
+	{Method: http.MethodPost, Path: "/ent/v2/start-end2video", Protocol: "vidu"},
 }
 
 func marketplaceSupportsVideoEndpoints(platform string) bool {

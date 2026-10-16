@@ -285,6 +285,7 @@ func ProvideAccountTestService(
 	tlsFPProfileService *TLSFingerprintProfileService,
 	settingService *SettingService,
 	pluginManager *PluginManager,
+	imageStorageSettings *ImageStorageSettingService,
 ) *AccountTestService {
 	service := NewAccountTestService(
 		accountRepo,
@@ -300,6 +301,7 @@ func ProvideAccountTestService(
 	service.agentIdentityWS = openAIGatewayService
 	service.SetPluginManager(pluginManager)
 	service.SetSettingService(settingService)
+	service.SetImageStorageResolver(imageStorageSettings.Resolver())
 	return service
 }
 

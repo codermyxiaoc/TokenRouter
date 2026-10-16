@@ -57,6 +57,27 @@ describe('公开网关文档契约', () => {
     expect(markdown).toContain('sk-your-api-key')
   })
 
+  it('MiniMax H3 示例保留原生首帧格式、分辨率大小写和创建查询任务 ID', () => {
+    // 参数模板与已确认的 H3 响应保持一致，不把供应商档位转成其他协议的配置。
+    const create = apiDocEndpoints.find(endpoint => endpoint.id === 'minimax-video-create')!
+    const query = apiDocEndpoints.find(endpoint => endpoint.id === 'minimax-video-query')!
+    const request = JSON.parse(create.requestExample!)
+    expect(request).toMatchObject({ model: 'MiniMax-H3', resolution: '2K', duration: 5, aigc_watermark: true })
+    expect(request.content).toEqual([
+      { type: 'text', text: expect.any(String) },
+      { type: 'image_url', image_url: { url: 'https://media.example.com/first-frame.png' }, role: 'first_frame' },
+    ])
+    expect(request).not.toHaveProperty('prompt')
+    expect(request).not.toHaveProperty('images')
+    const taskID = JSON.parse(create.responseExample).TaskId
+    expect(JSON.parse(query.responseExample).task).toMatchObject({ id: taskID, status: 'succeeded', usage: { output_seconds: 5 } })
+    expect(query.requestPath).toBe(`/v2/query/video_generation/${taskID}`)
+    expect(create.notes!.join(' ')).toContain('上游可访问的真实图片地址')
+    expect(create.notes!.join(' ')).toContain('H3-open 若返回 disallowed scheme data')
+    expect(create.notes!.join(' ')).toContain('创建 HTTP 200 只表示受理')
+    expect(create.parameters.find(parameter => parameter.name === 'resolution')!.description).toContain('保留大小写')
+  })
+
   it('示例根地址去除重复版本后缀、凭据和查询参数，并转义 shell 引号', () => {
     expect(apiDocBaseUrl('https://gateway.example.com/proxy/v1/', 'https://site.example.com')).toBe('https://gateway.example.com/proxy')
     expect(apiDocBaseUrl('https://gateway.example.com/v1?key=secret#fragment', 'https://site.example.com')).toBe('https://gateway.example.com')

@@ -77,6 +77,55 @@ func TestRedactAuditBody_BareSessionKeyRedacted(t *testing.T) {
 	}
 }
 
+// 素材在截断前整体脱敏，既不能保存签名或媒体正文，也不能挤掉后面的测试参数。
+func TestRedactAuditBody_AccountTestMediaRedactedBeforeTruncation(t *testing.T) {
+	for _, keys := range [][3]string{
+		{"reference_image_url", "image_data_url", "audio_data_url"},
+		{"referenceImageURL", "imageDataURL", "audioDataURL"},
+		{"REFERENCE_IMAGE_URL", "IMAGE_DATA_URL", "AUDIO_DATA_URL"},
+		{"reference-image-url", "image.data.url", "audio data url"},
+	} {
+		t.Run(keys[0], func(t *testing.T) {
+			body := map[string]any{
+				keys[0]:    "https://private-media.example/first-frame-canary.png?signature=signed-media-canary&token=media-token-canary",
+				keys[1]:    "data:image/png;base64," + strings.Repeat("a", 64*1024),
+				keys[2]:    "data:audio/wav;base64," + strings.Repeat("b", 64*1024),
+				"model_id": "MiniMax-H3", "video_endpoint": "minimax", "resolution": "2K", "duration": 5,
+			}
+			raw, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(raw) <= auditRequestBodyMaxBytes || len(raw) > AuditRequestBodyCaptureLimit {
+				t.Fatalf("fixture must exceed storage limit while remaining within capture limit: %d bytes", len(raw))
+			}
+			out := RedactAuditBody(raw, "application/json")
+			if len(out) > auditRequestBodyMaxBytes || strings.Contains(out, "<truncated>") {
+				t.Fatal("redacted media must not force audit truncation")
+			}
+			var parsed map[string]any
+			if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+				t.Fatalf("redacted audit must retain valid JSON: %v", err)
+			}
+			for _, key := range keys {
+				if parsed[key] != auditRedactedPlaceholder {
+					t.Errorf("media field %q was not completely redacted", key)
+				}
+			}
+			for _, sensitive := range []string{"private-media.example", "first-frame-canary", "signed-media-canary", "media-token-canary", "data:image/", "data:audio/"} {
+				if strings.Contains(out, sensitive) {
+					t.Errorf("redacted audit contains media content %q", sensitive)
+				}
+			}
+			for key, expected := range map[string]any{"model_id": "MiniMax-H3", "video_endpoint": "minimax", "resolution": "2K", "duration": float64(5)} {
+				if parsed[key] != expected {
+					t.Errorf("diagnostic field %q must survive media redaction: got %v", key, parsed[key])
+				}
+			}
+		})
+	}
+}
+
 // TestRedactAuditBody_AuthoritativeTablesSynced 覆盖曾经漏网的凭证字段：
 // 账号 credentials 敏感子键、支付渠道无分隔符密钥、字符串值内嵌凭证的 proxy_key / custom_key，
 // 以及 camelCase 等命名变体（归一化比对）。

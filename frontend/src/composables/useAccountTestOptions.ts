@@ -19,6 +19,16 @@ export function useAccountTestOptions(
   const videoResolution = ref('')
   const videoRatio = ref('16:9')
   const isVideoAccount = computed(() => account.value?.platform === 'video')
+  const isMiniMaxVideoTest = computed(() => isVideoAccount.value && videoEndpoint.value === 'minimax')
+  const videoReferenceImageURL = ref('')
+  const videoReferenceImageTransport = ref<'data_url' | 'https_url'>('data_url')
+  const videoReferenceImageTransportOptions = computed(() => (['data_url', 'https_url'] as const).map(value => ({
+    value, label: t(`admin.accounts.video.testReferenceImageTransportOptions.${value}`)
+  })))
+  const videoAigcWatermark = ref<'unset' | 'on' | 'off'>('unset')
+  const videoWatermarkOptions = computed(() => (['unset', 'on', 'off'] as const).map(value => ({
+    value, label: t(`admin.accounts.video.testWatermarkOptions.${value}`)
+  })))
   // 适配器必须由账号明确选择；同账号的其他端点仍保留供应商原参数。
   const isMetasoH3VideoTest = computed(() => isVideoAccount.value && videoEndpoint.value === 'openai_videos' && account.value?.credentials?.video_openai_profile === 'metaso_h3')
   const isGrokAccount = computed(() => account.value?.platform === 'grok')
@@ -59,6 +69,17 @@ export function useAccountTestOptions(
     if (isMetasoH3VideoTest.value) {
       if (!['768p', '2k'].includes(videoResolution.value.trim().toLowerCase())) return t('admin.accounts.video.testH3ResolutionInvalid')
       if (!['16:9', '9:16'].includes(videoRatio.value.trim())) return t('admin.accounts.video.testH3RatioInvalid')
+    }
+    if (isMiniMaxVideoTest.value && videoReferenceImageURL.value.trim()) {
+      // 前端只校验地址语法，不请求参考图；服务端仍会复验地址并拒绝私网字面地址。
+      try {
+        const url = new URL(videoReferenceImageURL.value.trim())
+        if (url.protocol !== 'https:' || url.username || url.password || url.hash || !url.hostname) {
+          return t('admin.accounts.video.testReferenceImageURLInvalid')
+        }
+      } catch {
+        return t('admin.accounts.video.testReferenceImageURLInvalid')
+      }
     }
     return ''
   })
@@ -137,6 +158,12 @@ export function useAccountTestOptions(
   watch(videoEndpointOptions, (options) => {
     if (!options.some(option => option.value === videoEndpoint.value)) videoEndpoint.value = options[0]?.value || ''
   })
+  // 原生专属参数不跟随端点或账号切换，避免下一次测试夹带上一家供应商的输入。
+  watch([videoEndpoint, account], () => {
+    videoReferenceImageURL.value = ''
+    videoReferenceImageTransport.value = 'data_url'
+    videoAigcWatermark.value = 'unset'
+  }, { flush: 'sync' })
   watch(endpointOptions, (options) => {
     if (!options.some((option) => option.value === testEndpoint.value)) testEndpoint.value = 'auto'
   })
@@ -146,7 +173,8 @@ export function useAccountTestOptions(
     }
   })
   return {
-    isVideoAccount, isMetasoH3VideoTest, videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
+    isVideoAccount, isMetasoH3VideoTest, isMiniMaxVideoTest, videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
+    videoReferenceImageURL, videoReferenceImageTransport, videoReferenceImageTransportOptions, videoAigcWatermark, videoWatermarkOptions,
     testEndpoint, isGrokAccount, testTypeOptions, endpointOptions, showEndpointSelect,
     showModelSelect, modelOptionsForMode, supportsImageUpload, supportsAudioUpload,
     supportsPromptInput, promptInputLabel, promptInputPlaceholder, promptInputHint,

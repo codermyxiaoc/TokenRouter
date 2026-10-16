@@ -194,6 +194,14 @@ type AccountTestService struct {
 	qoderOAuthClient          qoderAccountTestOAuthClient
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
+	imageStorageResolver      ImageStorageResolver
+}
+
+// SetImageStorageResolver 仅为管理员显式选择的参考图转存提供存储，不改变普通生成请求。
+func (s *AccountTestService) SetImageStorageResolver(resolver ImageStorageResolver) {
+	if s != nil {
+		s.imageStorageResolver = resolver
+	}
 }
 
 // SetSettingService 注入 Grok 系统级默认上游策略。

@@ -91,6 +91,8 @@ Claude Code 出站版本使用三个运行时键：`claude_code_client_version` 
 
 异步图片存储采用 `image_storage_config` 运行时设置，管理端备份页面单独维护；从未保存过时使用进程 `image_storage.*` 配置（`enabled` 默认关闭），后台保存后接管配置。本实例立即失效缓存，其它实例最多约 30 秒刷新；`reuse_backup_s3` 可复用备份连接与凭据，密钥加密存储且不明文返回。提交时固定存储快照，后续关闭只禁止新任务，不取消已接受任务或阻止结果查询。PostgreSQL 短期结果、Redis 镜像 TTL、签名 URL 与对象生命周期边界见[异步图片与任务记录](../domains/media_tasks.md)。
 
+[MiniMax 管理员视频测试](video_upstream.md#video_account_tests)显式选择“上传转 HTTPS”时也复用该存储开关及快照；未开启或不可用时在生成前拒绝。默认 Data URL 上传及手动填写 HTTPS 图片地址均不依赖对象存储，也不自动开启此配置。
+
 `plugin_management_enabled` 默认关闭，只控制管理员侧栏中的插件菜单，不能用来停止已启用的插件。安装运行的进程参数属于 `plugins.*` 启动配置，受信发布者、目录和上传上限变更需要重启；具体默认值及权限边界见[本地插件与宿主服务](local_plugins.md)。
 
 工单设置通过 `GET/PUT /api/v1/admin/tickets/settings` 单独维护，`ticket_*` 六个键保存到 `settings`，由 `TicketConfigService` 在所有业务操作及后台任务中读取，保存后无需重启。`ticket_enabled` 是整个模块的总开关，公开设置和 HTML 注入均暴露该值；关闭时隐藏用户与后台入口、阻止业务访问，保留设置读写和历史数据。独立设置保存成功后刷新已有页面注入缓存。其他设置包含每用户未关闭数量、每次附件数量及大小、客服操作邮件通知和用户未回复过期时间。客服操作邮件通知继续使用 `notify_on_staff_reply` 接口字段和 `ticket_notify_on_staff_reply` 存储键，开启后覆盖每条客服新回复、客服完成及撤销，不包含用户自助结单或自动过期；已退订用户仍尊重退订偏好。默认值和范围见[工单配置](../domains/support_tickets.md#ticket_configuration)。

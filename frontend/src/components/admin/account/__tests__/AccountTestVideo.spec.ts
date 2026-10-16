@@ -222,6 +222,203 @@ describe.each([
     wrapper.unmount()
   })
 
+  // MiniMax 的占位提示不替代输入值，大小写属于上游合同，两个管理入口都必须保真。
+  it.each(['2K', '768P'])('preserves MiniMax resolution %s exactly', async resolution => {
+    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_endpoints: ['minimax'] }])
+    const wrapper = await open()
+    const vm = wrapper.vm as any
+    const input = wrapper.find('[data-testid="account-test-video-resolution"]')
+    expect(input.attributes('placeholder')).toBe('2K')
+    expect(vm.videoResolution).toBe('')
+    await input.setValue(` ${resolution} `)
+    await vm.startTest()
+    expect(JSON.parse((fetch as any).mock.calls[0][1].body)).toMatchObject({
+      model_id: 'MiniMax-H3', video_endpoint: 'minimax', duration: 5, resolution,
+    })
+    wrapper.unmount()
+  })
+
+  it('does not submit the MiniMax resolution placeholder and restores the other endpoint hint', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_endpoints: ['minimax', 'compat'] }])
+    const wrapper = await open()
+    const vm = wrapper.vm as any
+    vm.videoEndpoint = 'minimax'
+    await flushPromises()
+    const input = wrapper.find('[data-testid="account-test-video-resolution"]')
+    expect(input.attributes('placeholder')).toBe('2K')
+    await input.setValue(' ')
+    await vm.startTest()
+    const request = JSON.parse((fetch as any).mock.calls[0][1].body)
+    expect(request).toMatchObject({ video_endpoint: 'minimax', duration: 5 })
+    expect(request).not.toHaveProperty('resolution')
+    vm.videoEndpoint = 'compat'
+    await flushPromises()
+    expect(input.attributes('placeholder')).toBe('768p')
+    expect(vm.videoResolution).toBe(' ')
+    wrapper.unmount()
+  })
+
+  // 公网 URL 只随测试 POST 传给后端，不在浏览器抓图；水印未设置时不替供应商猜默认值。
+  it.each(['unset', 'on', 'off'])('submits a MiniMax reference URL with watermark %s', async watermark => {
+    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_endpoints: ['minimax'] }])
+    const wrapper = await open()
+    const vm = wrapper.vm as any
+    expect(vm.videoAigcWatermark).toBe('unset')
+    expect(vm.videoWatermarkOptions.map((option: { value: string }) => option.value)).toEqual(['unset', 'on', 'off'])
+    expect(wrapper.find('[data-testid="account-test-watermark"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="account-test-reference-image-url"]').setValue(' https://media.example.com/first-frame.png?signature=test ')
+    vm.videoAigcWatermark = watermark
+    await vm.startTest()
+    expect(fetch).toHaveBeenCalledTimes(1)
+    const request = JSON.parse((fetch as any).mock.calls[0][1].body)
+    expect(request).toMatchObject({ video_endpoint: 'minimax', reference_image_url: 'https://media.example.com/first-frame.png?signature=test' })
+    expect(request).not.toHaveProperty('image_data_url')
+    expect(request).not.toHaveProperty('reference_image_transport')
+    if (watermark === 'unset') expect(request).not.toHaveProperty('aigc_watermark')
+    else expect(request.aigc_watermark).toBe(watermark === 'on')
+    expect(wrapper.find('img[src^="https://media.example.com"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // 转存是上传图片的显式选择，不能让默认测试、纯文本生成或手填 URL 触发存储写入。
+  it.each([
+    { transport: 'data_url', image: false }, { transport: 'data_url', image: true },
+    { transport: 'https_url', image: false }, { transport: 'https_url', image: true },
+  ])('submits uploaded reference transport=$transport only when image=$image requires it', async ({ transport, image }) => {
+    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3-open', display_name: 'H3-open', video_endpoints: ['minimax'] }])
+    const wrapper = await open()
+    const vm = wrapper.vm as any
+    expect(vm.videoReferenceImageTransport).toBe('data_url')
+    expect(vm.videoReferenceImageTransportOptions.map((option: { value: string }) => option.value)).toEqual(['data_url', 'https_url'])
+    expect(wrapper.find('[data-testid="account-test-reference-image-transport"]').exists()).toBe(true)
+    vm.videoReferenceImageTransport = transport
+    if (image) vm.uploadImageDataURL = 'data:image/png;base64,AAAA'
+    await vm.startTest()
+    const request = JSON.parse((fetch as any).mock.calls[0][1].body)
+    if (image && transport === 'https_url') expect(request.reference_image_transport).toBe('https_url')
+    else expect(request).not.toHaveProperty('reference_image_transport')
+    if (image) expect(request.image_data_url).toBe('data:image/png;base64,AAAA')
+    else expect(request).not.toHaveProperty('image_data_url')
+    expect(request).not.toHaveProperty('reference_image_url')
+    wrapper.unmount()
+  })
+
+  it.each(['http://media.example.com/a.png', 'javascript:alert(1)', 'not-a-url', 'https://user:secret@media.example.com/a.png', 'https://media.example.com/a.png#fragment'])('blocks invalid reference URL %s before submission', async url => {
+    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_endpoints: ['minimax'] }])
+    const wrapper = await open()
+    const vm = wrapper.vm as any
+    await wrapper.find('[data-testid="account-test-reference-image-url"]').setValue(url)
+    expect(vm.canStartTest).toBe(false)
+    expect(wrapper.text()).toContain('admin.accounts.video.testReferenceImageURLInvalid')
+    await vm.startTest()
+    expect(fetch).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps MiniMax image uploads available and mutually exclusive with the reference URL', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_endpoints: ['minimax'] }])
+    const wrapper = await open()
+    const vm = wrapper.vm as any
+    vm.videoReferenceImageTransport = 'https_url'
+    const urlInput = wrapper.find('[data-testid="account-test-reference-image-url"]')
+    await urlInput.setValue('https://media.example.com/first-frame.png')
+    const file = new File([new Uint8Array([137, 80, 78, 71])], 'reference.png', { type: 'image/png' })
+    await vm.onImageFileChange({ target: { files: [file], value: 'selected' } })
+    await flushPromises()
+    expect(vm.videoReferenceImageURL).toBe('')
+    expect(vm.uploadImageDataURL).toMatch(/^data:image\/png;base64,/)
+    await vm.startTest()
+    const uploaded = JSON.parse((fetch as any).mock.calls[0][1].body)
+    expect(uploaded.image_data_url).toBe(vm.uploadImageDataURL)
+    expect(uploaded.reference_image_transport).toBe('https_url')
+    expect(uploaded).not.toHaveProperty('reference_image_url')
+    await urlInput.setValue('https://media.example.com/replacement.png')
+    expect(vm.uploadImageDataURL).toBe('')
+    expect(vm.uploadImageName).toBe('')
+    await vm.startTest()
+    const linked = JSON.parse((fetch as any).mock.calls[1][1].body)
+    expect(linked.reference_image_url).toBe('https://media.example.com/replacement.png')
+    expect(linked).not.toHaveProperty('image_data_url')
+    expect(linked).not.toHaveProperty('reference_image_transport')
+    wrapper.unmount()
+  })
+
+  it('invalidates an unfinished MiniMax upload when a reference URL is entered', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_endpoints: ['minimax'] }])
+    let completeRead: (() => void) | undefined
+    vi.stubGlobal('FileReader', class {
+      result = 'data:image/png;base64,AAAA'
+      onload: (() => void) | null = null
+      readAsDataURL() { completeRead = () => this.onload?.() }
+    })
+    const wrapper = await open()
+    const vm = wrapper.vm as any
+    const loading = vm.onImageFileChange({ target: { files: [new File(['png'], 'reference.png', { type: 'image/png' })], value: 'selected' } })
+    expect(vm.loadingUpload).toBe(true)
+    await wrapper.find('[data-testid="account-test-reference-image-url"]').setValue('https://media.example.com/first-frame.png')
+    completeRead!()
+    await loading
+    expect(vm.uploadImageDataURL).toBe('')
+    expect(vm.loadingUpload).toBe(false)
+    await vm.startTest()
+    expect(JSON.parse((fetch as any).mock.calls[0][1].body)).not.toHaveProperty('image_data_url')
+    wrapper.unmount()
+  })
+
+  it.each(VIDEO_ENDPOINTS.filter(endpoint => endpoint !== 'minimax'))('clears and isolates MiniMax-only fields when switching to %s', async endpoint => {
+    getAvailableModels.mockResolvedValue([{ id: 'video-model', display_name: 'Video', video_endpoints: ['minimax', endpoint] }])
+    const wrapper = await open()
+    const vm = wrapper.vm as any
+    vm.videoEndpoint = 'minimax'
+    await flushPromises()
+    vm.videoReferenceImageURL = 'https://media.example.com/first-frame.png'
+    vm.videoReferenceImageTransport = 'https_url'
+    vm.videoAigcWatermark = 'on'
+    vm.videoEndpoint = endpoint
+    await flushPromises()
+    expect(vm.videoReferenceImageURL).toBe('')
+    expect(vm.videoReferenceImageTransport).toBe('data_url')
+    expect(vm.videoAigcWatermark).toBe('unset')
+    expect(wrapper.find('[data-testid="account-test-reference-image-url"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="account-test-watermark"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="account-test-reference-image-transport"]').exists()).toBe(false)
+    // 即使程序误写隐藏状态，正式发送仍必须按当前协议拦住专属字段。
+    vm.videoReferenceImageURL = 'https://media.example.com/stale.png'
+    vm.videoReferenceImageTransport = 'https_url'
+    vm.uploadImageDataURL = 'data:image/png;base64,AAAA'
+    vm.videoAigcWatermark = 'on'
+    await vm.startTest()
+    const request = JSON.parse((fetch as any).mock.calls[0][1].body)
+    expect(request).not.toHaveProperty('reference_image_url')
+    expect(request).not.toHaveProperty('aigc_watermark')
+    expect(request).not.toHaveProperty('reference_image_transport')
+    wrapper.unmount()
+  })
+
+  it('clears MiniMax-only fields when reopening or changing accounts', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_endpoints: ['minimax'] }])
+    const wrapper = await open()
+    const vm = wrapper.vm as any
+    vm.videoReferenceImageURL = 'https://media.example.com/first-frame.png'
+    vm.videoReferenceImageTransport = 'https_url'
+    vm.videoAigcWatermark = 'off'
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(vm.videoReferenceImageURL).toBe('')
+    expect(vm.videoReferenceImageTransport).toBe('data_url')
+    expect(vm.videoAigcWatermark).toBe('unset')
+    vm.videoReferenceImageURL = 'https://media.example.com/next.png'
+    vm.videoReferenceImageTransport = 'https_url'
+    vm.videoAigcWatermark = 'on'
+    await wrapper.setProps({ account: { id: 2, platform: 'video', type: 'apikey', credentials: { video_endpoints: ['minimax'] } } as Account })
+    await flushPromises()
+    expect(vm.videoReferenceImageURL).toBe('')
+    expect(vm.videoReferenceImageTransport).toBe('data_url')
+    expect(vm.videoAigcWatermark).toBe('unset')
+    wrapper.unmount()
+  })
+
   it.each([0, -1, 1.5, 61, '', Number.NaN, Number.POSITIVE_INFINITY])('rejects invalid test duration %s before submission', async duration => {
     const wrapper = await open()
     const vm = wrapper.vm as any

@@ -24,6 +24,11 @@ type AccountTestOptions struct {
 	Duration      *int   `json:"duration"`
 	Resolution    string `json:"resolution"`
 	Ratio         string `json:"ratio"`
+	// MiniMax 可显式使用公网参考图及水印；空值保留历史上传和省略参数的行为。
+	ReferenceImageURL string `json:"reference_image_url"`
+	AIGCWatermark     *bool  `json:"aigc_watermark"`
+	// 上传转 HTTPS 必须显式选择，不能改变已有上游接受 Data URL 的测试行为。
+	ReferenceImageTransport string `json:"reference_image_transport"`
 }
 
 // TestAccountConnectionWithOptions 在旧测试入口外提供显式端点和媒体模式。
@@ -74,7 +79,7 @@ func (s *AccountTestService) TestAccountConnectionWithOptions(c *gin.Context, ac
 		}
 		return s.testVideoAccountConnection(c, account, modelID, prompt, options)
 	}
-	if options.VideoEndpoint != "" || options.Duration != nil || options.Resolution != "" || options.Ratio != "" {
+	if options.VideoEndpoint != "" || options.Duration != nil || options.Resolution != "" || options.Ratio != "" || options.ReferenceImageURL != "" || options.AIGCWatermark != nil || options.ReferenceImageTransport != "" {
 		return s.sendErrorAndEnd(c, "Video test settings are only supported for Video accounts")
 	}
 	// Compact 是 OpenAI 账号的专项能力，不能在其它平台静默变成普通文字测试。

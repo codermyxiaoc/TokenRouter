@@ -302,9 +302,12 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	body []byte,
 	token string,
 ) (*http.Request, []byte, error) {
+	if err := checkAnthropicMessagesCredential(account); err != nil {
+		return nil, nil, err
+	}
 	body = stripDeferredToolCacheControl(body)
 	targetURL := claudeAPIURL
-	baseURL := account.GetBaseURL()
+	baseURL := getAnthropicGatewayBaseURL(account)
 	if baseURL != "" {
 		validatedURL, err := s.validateUpstreamBaseURL(baseURL)
 		if err != nil {

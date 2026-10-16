@@ -107,6 +107,52 @@ describe.each([
     wrapper.unmount()
   })
 
+  // 无图与有图都允许生成，旧账号及显式适配账号共用两个管理入口，图片始终为可选项。
+  it.each([
+    { profile: undefined, image: false },
+    { profile: undefined, image: true },
+    { profile: 'passthrough', image: false },
+    { profile: 'passthrough', image: true },
+    { profile: 'metaso_h3', image: false },
+    { profile: 'metaso_h3', image: true },
+  ])('submits optional reference image=$image with profile=$profile', async ({ profile, image }) => {
+    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_endpoints: ['openai_videos'] }])
+    const wrapper = await open(profile)
+    const vm = wrapper.vm as any
+    vm.testPrompt = 'A cat walks through a garden.'
+    vm.videoDuration = 5
+    vm.videoResolution = '768p'
+    vm.videoRatio = '16:9'
+    const referenceImage = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6Y20AAAAASUVORK5CYII='
+    if (image) {
+      // 沿用实际选图与 FileReader 流程，校验上传结果进入请求而非直接设置内部状态。
+      const bytes = Uint8Array.from(atob(referenceImage.split(',')[1]), char => char.charCodeAt(0))
+      await vm.onImageFileChange({ target: { files: [new File([bytes], 'reference.png', { type: 'image/png' })], value: 'selected' } })
+    }
+    await flushPromises()
+    expect(vm.canStartTest).toBe(true)
+    expect(wrapper.find('input[type="file"]').attributes('required')).toBeUndefined()
+    await vm.startTest()
+    expect(fetch).toHaveBeenCalledTimes(1)
+    const request = JSON.parse((fetch as any).mock.calls[0][1].body)
+    expect(request).toEqual({
+      model_id: 'MiniMax-H3', prompt: 'A cat walks through a garden.', test_type: 'video',
+      video_endpoint: 'openai_videos', duration: 5, resolution: '768p', ratio: '16:9',
+      ...(image ? { image_data_url: referenceImage } : {}),
+    })
+    expect(vm.status).toBe('success')
+    if (image) {
+      // 去掉参考图后再测，上一轮图像不能被夹带到纯文本生成请求中。
+      vm.clearMediaUploads()
+      await flushPromises()
+      expect(vm.canStartTest).toBe(true)
+      await vm.startTest()
+      expect(fetch).toHaveBeenCalledTimes(2)
+      expect(JSON.parse((fetch as any).mock.calls[1][1].body)).not.toHaveProperty('image_data_url')
+    }
+    wrapper.unmount()
+  })
+
   // 账号编辑后重开测试必须采用新配置，移除标准端点不能留下可发起的旧选项。
   it('refreshes profile validation and endpoint visibility when the same account configuration changes', async () => {
     getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_endpoints: ['openai_videos'] }])

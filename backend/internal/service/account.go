@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/url"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -697,26 +698,7 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 	}
 	if len(result) > 0 {
 		if a.Platform == domain.PlatformAntigravity {
-			ensureAntigravityDefaultPassthroughs(result, []string{
-				"gemini-3-flash",
-				"gemini-3.1-pro-high",
-				"gemini-3.1-pro-low",
-				"gemini-3.6-flash",
-				"gemini-3.6-flash-high",
-				"gemini-3.6-flash-low",
-				"gemini-3.6-flash-medium",
-				"gemini-3.6-flash-tiered",
-				"gemini-3.7-flash",
-				"gemini-3.7-flash-high",
-				"gemini-3.7-flash-low",
-				"gemini-3.7-flash-medium",
-				"gemini-3.7-flash-tiered",
-				"gemini-3.8-flash",
-				"gemini-3.8-flash-high",
-				"gemini-3.8-flash-low",
-				"gemini-3.8-flash-medium",
-				"gemini-3.8-flash-tiered",
-			})
+			ensureAntigravityDefaultPassthroughs(result, antigravityDefaultPassthroughModels)
 			applyAntigravityGemini31ProAliases(result)
 		}
 		return result
@@ -761,6 +743,51 @@ func modelMappingSignature(rawMapping map[string]any) uint64 {
 		_, _ = h.Write([]byte{0xff})
 	}
 	return h.Sum64()
+}
+
+// antigravityDefaultPassthroughModels 是 Antigravity 显式 model_mapping 运行时补齐的默认透传条目：
+// 让新模型发布前保存的映射也能调用这些模型。
+var antigravityDefaultPassthroughModels = []string{
+	"gemini-3-flash",
+	"gemini-3.1-pro-high",
+	"gemini-3.1-pro-low",
+	"gemini-3.6-flash",
+	"gemini-3.6-flash-high",
+	"gemini-3.6-flash-low",
+	"gemini-3.6-flash-medium",
+	"gemini-3.6-flash-tiered",
+	"gemini-3.7-flash",
+	"gemini-3.7-flash-high",
+	"gemini-3.7-flash-low",
+	"gemini-3.7-flash-medium",
+	"gemini-3.7-flash-tiered",
+	"gemini-3.8-flash",
+	"gemini-3.8-flash-high",
+	"gemini-3.8-flash-low",
+	"gemini-3.8-flash-medium",
+	"gemini-3.8-flash-tiered",
+}
+
+// isAntigravityInjectedDefaultPassthrough 判断 GetModelMapping 中的 key→target 是否仅由
+// resolveModelMapping 运行时补齐（管理员未写入 credentials.model_mapping）。
+func (a *Account) isAntigravityInjectedDefaultPassthrough(key, target string) bool {
+	if a == nil || a.Platform != domain.PlatformAntigravity || key != target || !slices.Contains(antigravityDefaultPassthroughModels, key) {
+		return false
+	}
+	rawMapping, _ := a.Credentials["model_mapping"].(map[string]any)
+	hasExplicitEntry := false
+	for _, v := range rawMapping {
+		if _, ok := v.(string); ok {
+			hasExplicitEntry = true
+			break
+		}
+	}
+	if !hasExplicitEntry {
+		// 空映射走默认目录，不做运行时补齐。
+		return false
+	}
+	_, configured := rawMapping[key].(string)
+	return !configured
 }
 
 func ensureAntigravityDefaultPassthrough(mapping map[string]string, model string) {
@@ -994,6 +1021,11 @@ func normalizeQoderModelForWhitelist(model string) string {
 // 5. 为兼容旧数据，非 Qoder 平台若未配置独立 model_whitelist，会继续把精确自映射条目视作最终白名单。
 // 6. OpenAI OAuth 非透传账号排除明确的其它厂商模型；DeepSeek 无有效映射/白名单时按平台目录校验。
 func (a *Account) IsModelSupported(requestedModel string) bool {
+	return supportsOpenAIRequestModel(a, requestedModel, false)
+}
+
+// 保留 fork 的最终白名单和各平台模型规则，不用上游映射语义覆盖。
+func (a *Account) isModelMappingSupported(requestedModel string) bool {
 	if a.IsTypeSafe() && !a.supportsSystemOneModel(a.GetMappedModel(requestedModel)) {
 		return false
 	}
@@ -2686,7 +2718,7 @@ const (
 // 三态：default（跟随渠道）/ enabled（强制开启）/ disabled（强制关闭）。
 // 兼容旧 bool 值：true→enabled, false→default（并记录 debug 日志）。
 func (a *Account) GetWebSearchEmulationMode() string {
-	if a == nil || a.Platform != PlatformAnthropic || a.Type != AccountTypeAPIKey || a.Extra == nil {
+	if a == nil || (a.Platform != PlatformAnthropic && a.Platform != PlatformOpenAI) || a.Type != AccountTypeAPIKey || a.Extra == nil {
 		return WebSearchModeDefault
 	}
 	raw := a.Extra[featureKeyWebSearchEmulation]

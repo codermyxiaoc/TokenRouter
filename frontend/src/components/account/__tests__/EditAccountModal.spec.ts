@@ -358,6 +358,40 @@ describe('EditAccountModal', () => {
     listTLSProfilesMock.mockResolvedValue([])
   })
 
+  // OpenAI API Key 可独立覆盖渠道搜索配置，订阅账号不能开启此模拟路径。
+  it.each(['enabled', 'disabled', true, undefined])('round-trips the OpenAI web search mode %s and restores channel default', async mode => {
+    getWebSearchEmulationConfigMock.mockResolvedValue({ enabled: true, providers: [{ type: 'tavily' }] })
+    const account = buildAccount()
+    account.extra.web_search_emulation = mode
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(wrapper.text()).toContain('admin.accounts.anthropic.webSearchEmulationDesc')
+    const vm = wrapper.vm as any
+    expect(vm.webSearchEmulationMode).toBe(mode === true ? 'enabled' : mode ?? 'default')
+    vm.webSearchEmulationMode = 'enabled'
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls.at(-1)?.[1]?.extra.web_search_emulation).toBe('enabled')
+    vm.webSearchEmulationMode = 'default'
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls.at(-1)?.[1]?.extra).not.toHaveProperty('web_search_emulation')
+    wrapper.unmount()
+  })
+
+  it('hides web search emulation for OpenAI OAuth and when globally disabled', async () => {
+    getWebSearchEmulationConfigMock.mockResolvedValue({ enabled: true, providers: [{ type: 'tavily' }] })
+    const oauth = mountModal(buildOpenAIOAuthAccount())
+    await flushPromises()
+    expect(oauth.text()).not.toContain('admin.accounts.anthropic.webSearchEmulationDesc')
+    oauth.unmount()
+    getWebSearchEmulationConfigMock.mockResolvedValue({ enabled: false, providers: [] })
+    const apiKey = mountModal(buildAccount())
+    await flushPromises()
+    expect(apiKey.text()).not.toContain('admin.accounts.anthropic.webSearchEmulationDesc')
+    apiKey.unmount()
+  })
+
   // 名称编辑不能把探测后台同步的新倍率回写成旧快照。
   it('enables upstream rate sync with probing and omits the stale account multiplier', async () => {
     const wrapper = mountModal(buildAccount())

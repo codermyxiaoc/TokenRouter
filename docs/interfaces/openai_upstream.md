@@ -11,6 +11,7 @@
 - [执行作用域](#openai_execution_scope)：修改线程、请求类型、抢占、续接和状态隔离时读取。
 - [大请求内存与语义](#responses_large_body)：修改 Responses 原始 JSON 片段和读体分配时读取。
 - [模型与能力](#模型与能力)：修改模型别名、endpoint capability 或推理参数时读取。
+- [订阅模型退役与别名](#openai_model_retirement)：修改订阅退役、目录投影或 Compact 模型资格时读取。
 - [额度与调度](#额度与调度)：修改窗口配额、评分、粘性或自动暂停时读取。
 - [管理员手动重置上游额度](#openai_quota_reset)：修改重置入口、消费结果判定及账号状态恢复时读取。
 - [失败与诊断](#失败与诊断)：修改错误分类、刷新、CAS 状态或 failover 时读取。
@@ -19,6 +20,8 @@
 ## 账号与凭据
 
 OpenAI 正式支持 `oauth` 与 `apikey`。OAuth 账号保存 access/refresh token、账号/组织上下文和 Codex 能力元数据，后台与请求路径都可触发刷新；API Key 账号保存 key、base URL、工作负载能力、文本协议路由和 Responses 探测事实。其它通用导入类型不构成 OpenAI 转发支持，详见[上游账号能力矩阵](upstream_account_matrix.md)。
+
+Codex 凭据导入的去重身份同时包含 workspace/account ID 与 user ID；同一用户在不同工作区的凭据是独立账号。只有缺少工作区 ID 时才按用户 ID 去重，不能用个人用户 ID 覆盖另一个工作区的账号凭据。
 
 OAuth 补全账号元数据时，ID token 中的个人 `chatgpt_plan_type` 是个人套餐的权威来源。`accounts/check` 可能按 access token 的 `poid` 命中另一个 workspace；仅当该记录的账号 ID 与个人 `chatgpt_account_id` 一致时，才能把它的 `entitlement.expires_at` 与个人套餐组合。账号不一致时，到期时间必须改从个人 `/backend-api/subscriptions` 的 `active_until` 获取；若套餐本身来自 `accounts/check`，套餐和到期时间仍保持来自同一条记录。
 
@@ -46,6 +49,10 @@ OpenAI 平台拥有以下正式协议族：
 | Embeddings | 仅 OpenAI 分组，账号工作负载能力必须包含 `embeddings` |
 | Images | OpenAI 图片生成/编辑；同步接口保留，另提供显式提交与轮询的异步图片接口，批量图片由 Gemini/Vertex 专题定义 |
 | Realtime/Live/sideband、Alpha Search | 仅 OpenAI 分组，并受分组开关、账号类型和 transport capability 限制 |
+
+Responses 普通转发在 HTTP JSON、SSE 和 WebSocket 输出中补齐缺少或为 `null` 的 `created_at`。同一条流共用首次确定的时间，已有上游值不覆盖；非 Response 对象不改写。显式透传流保留上游事件原文，只在必须合成 `response.failed` 时附带时间、序号和空 output，兼容需要完整终态的客户端。该兼容处理不改变用量提取、失败结算或流式重放边界。
+
+OpenAI API Key 的 Messages 入口可启用搜索模拟，复用现有全局搜索 provider 和渠道默认配置，账号可以显式启用、停用或继承。只处理单一搜索工具请求；OAuth、非 OpenAI 兼容平台及混合工具请求保持原转发路径。编辑界面只在全局已启用且配置 provider 时展示此项，搜索失败继续现有错误处理。
 
 <a id="codex_native_images"></a>
 ### OAuth 原生 Codex Images
@@ -213,6 +220,13 @@ Responses 的普通无改动路径优先检查必要顶层字段、复用原始�
 ## 模型与能力
 
 客户端模型先经过 Key、渠道和账号层映射。OpenAI 内置别名、reasoning effort 归一化、旧版 Compact 端点支持、图像/embedding 能力和传输能力会影响候选账号；模型列表只公开当前分组可请求的结果。
+
+<a id="openai_model_retirement"></a>
+### 订阅模型退役与别名
+
+OpenAI OAuth、Setup Token 和订阅影子账号不再调度最终上游目标为 `gpt-5.5` 或其快照、推理后缀的请求；API Key 账号继续支持原有模型。判断对象是账号映射后的真实上游模型，Compact 请求同时考虑专用映射和配置的回退目标；管理员把公开的 `gpt-5.5` 显式映射到可用新型号时继续可用。
+
+目录先执行现有白名单、能力及公开别名投影，再按最终上游模型移除退役候选，不能把最终模型再当作别名二次映射。混合分组中只要 API Key 或其它有效替代映射仍支持该公开名称，就不能因另一订阅账号退役而整体隐藏。最终白名单、渠道定价与用户计费模型来源继续沿用本项目原有规则。
 
 `gpt-6.1-sol` 保持独立模型身份，支持 `low/medium/high/xhigh/max`，在 HTTP 与 WS 现有参数校验路径拒绝显式 `none/minimal`（包括模型后缀及账号映射目标），不自动降低或提高档位。普通目录、价卡和客户端配置接入沿用 fork 现有架构；未引入上游 Codex manifest、远程目录或专属 descriptor。价格及长上下文阈值见[模型目录与市场](model_catalog_and_marketplace.md)。
 

@@ -18,6 +18,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/ent/paymentorder"
 	"github.com/TokenFlux/TokenRouter/internal/payment"
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/servertiming"
 )
 
 // ErrOrderNotFound 表示支付回调引用的 out_trade_no 在本地订单表中不存在。
@@ -85,6 +86,29 @@ func (s *PaymentService) findPaymentNotificationOrder(ctx context.Context, order
 		}
 	}
 	return nil, fmt.Errorf("%w: out_trade_no=%s", ErrOrderNotFound, orderID)
+}
+
+// ConfirmNotificationUpstream 让同一验签实例主动确认回调，失败审计后交给渠道重试。
+func (s *PaymentService) ConfirmNotificationUpstream(ctx context.Context, prov payment.Provider, n *payment.PaymentNotification) error {
+	confirmer, ok := prov.(payment.NotificationConfirmer)
+	if !ok || n == nil || n.Status != payment.NotificationStatusSuccess {
+		return nil
+	}
+	notifiedTradeNo := n.TradeNo
+	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
+	err := confirmer.ConfirmNotification(ctx, n)
+	finishProviderCall()
+	if err == nil {
+		return nil
+	}
+	if order, lookupErr := s.entClient.PaymentOrder.Query().Where(paymentorder.OutTradeNo(n.OrderID)).Only(ctx); lookupErr == nil {
+		s.writeAuditLog(ctx, order.ID, "PAYMENT_UPSTREAM_UNCONFIRMED", prov.ProviderKey(), map[string]any{
+			"detail":  err.Error(),
+			"tradeNo": notifiedTradeNo,
+			"amount":  n.Amount,
+		})
+	}
+	return err
 }
 
 func parseLegacyPaymentOrderID(orderID string, lookupErr error) (int64, bool) {
@@ -335,8 +359,32 @@ func (s *PaymentService) executeFulfillment(ctx context.Context, oid int64) erro
 	case payment.OrderTypeBalance:
 		return s.ExecuteBalanceFulfillment(ctx, oid)
 	default:
-		return validatePaymentOrderType(o.OrderType)
+		// 历史异常类型收敛为失败，不发放权益，避免合法回调被无限重试。
+		return s.rejectUnsupportedOrderType(ctx, o)
 	}
+}
+
+func isSupportedPaymentOrderType(orderType string) bool {
+	return orderType == payment.OrderTypeBalance || orderType == payment.OrderTypeSubscription
+}
+
+func (s *PaymentService) rejectUnsupportedOrderType(ctx context.Context, o *dbent.PaymentOrder) error {
+	reason := "unsupported order type: " + o.OrderType
+	c, err := s.entClient.PaymentOrder.Update().
+		Where(
+			paymentorder.IDEQ(o.ID),
+			paymentorder.StatusIn(OrderStatusPaid, OrderStatusRecharging),
+		).
+		SetStatus(OrderStatusFailed).SetFailedAt(time.Now()).SetFailedReason(reason).Save(ctx)
+	if err != nil {
+		slog.Error("mark unsupported order type FAILED", "orderID", o.ID, "error", err)
+		return fmt.Errorf("reject unsupported order: %w", err)
+	}
+	if c > 0 {
+		slog.Warn("payment order with unsupported order type not fulfilled", "orderID", o.ID, "orderType", o.OrderType)
+		s.writeAuditLog(ctx, o.ID, "FULFILLMENT_FAILED", "system", map[string]any{"reason": reason})
+	}
+	return nil
 }
 
 func (s *PaymentService) ExecuteBalanceFulfillment(ctx context.Context, oid int64) error {
@@ -882,6 +930,9 @@ func (s *PaymentService) RetryFulfillment(ctx context.Context, oid int64) error 
 	}
 	if o.Status != OrderStatusFailed && o.Status != OrderStatusPaid && o.Status != OrderStatusRecharging {
 		return infraerrors.BadRequest("INVALID_STATUS", "only paid, failed, and recoverable recharging orders can retry")
+	}
+	if !isSupportedPaymentOrderType(o.OrderType) {
+		return infraerrors.BadRequest("INVALID_ORDER_TYPE", "unsupported order type")
 	}
 	s.writeAuditLog(ctx, oid, "RECHARGE_RETRY", "admin", map[string]any{"detail": "admin manual retry"})
 	return s.executeFulfillment(ctx, oid)

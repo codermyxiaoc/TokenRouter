@@ -122,6 +122,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 		responsesLite = responsesLite || isOpenAIResponsesLiteWebSocketPayload(body)
 		normalizedBody, normalized, normalizeErr := normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{
+			Config:        s.cfg,
 			ResponsesLite: responsesLite,
 			Compact:       isOpenAIResponsesCompactPath(c),
 		})
@@ -1955,6 +1956,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	suppressCurrentEvent := false
 	responseFailedPending := false
 	var bareErrorPayload []byte
+	// 透传不改上游时间字段，只为本地合成的失败终态记录时间。
+	var createdAtTracker responsesCreatedAtStamper
 	bareErrorAccountSideEffectsPending := false
 	upstreamRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
 	// pendingLines 在首个可见输出前保留前导事件，确保无输出失败仍可安全 failover。
@@ -2031,7 +2034,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		if clientDisconnected || !writePendingLines() {
 			return
 		}
-		if _, err := fmt.Fprint(w, buildOpenAIResponseFailedSSE(responseID, originalModel, bareErrorPayload, failedMessage)); err != nil {
+		if _, err := fmt.Fprint(w, buildOpenAIResponseFailedSSE(responseID, originalModel, createdAtTracker.Value(), bareErrorPayload, failedMessage)); err != nil {
 			clientDisconnected = true
 			return
 		}
@@ -2115,6 +2118,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				}
 			}
 			eventType := effectiveOpenAISSEEventType(dataBytes, rawEventType)
+			createdAtTracker.Observe(dataBytes, eventType)
 			if codexFailureTerminal && sawBareError && !sawResponseFailed &&
 				(eventType == "response.completed" || eventType == "response.done") {
 				// 与原生流一致：后续成功终态可以恢复暂存裸错误，保留运维事实。

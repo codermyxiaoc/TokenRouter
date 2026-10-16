@@ -829,8 +829,21 @@ export async function getAvailableModels(id: number): Promise<ClaudeModel[]> {
   return data
 }
 
+// 上游目录能力只用于展示；保持旧版 models 字段和同步行为。
+export interface UpstreamModelMetadata {
+  display_name?: string
+  reasoning?: boolean
+  supported_reasoning_levels?: string[]
+  default_reasoning_level?: string
+  input_modalities?: string[]
+  context_window?: number
+  max_output_tokens?: number
+}
+
 export interface SyncUpstreamModelsResult {
   models: string[]
+  metadata?: Record<string, UpstreamModelMetadata>
+  warnings?: string[]
 }
 
 /**

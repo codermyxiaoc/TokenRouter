@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
@@ -332,7 +333,12 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseFailedCarriesUpstreamWarning(
 	require.True(t, result.OpenAIWSMode)
 	require.NotNil(t, result.UpstreamWarning)
 	require.Contains(t, result.UpstreamWarning.Message, "cybersecurity risk")
-	require.JSONEq(t, `{"id":"resp_cyber_failed","error":{"message":"This request may pose a cybersecurity risk."}}`, rec.Body.String())
+	// 普通非流式响应补齐时间，同时完整保留上游风控错误。
+	createdAt := gjson.Get(rec.Body.String(), "created_at").Int()
+	require.Positive(t, createdAt)
+	expected, err := sjson.Set(`{"id":"resp_cyber_failed","error":{"message":"This request may pose a cybersecurity risk."}}`, "created_at", createdAt)
+	require.NoError(t, err)
+	require.JSONEq(t, expected, rec.Body.String())
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_ResponseFailedTopLevelErrorCarriesUpstreamWarning(t *testing.T) {
@@ -588,7 +594,12 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseFailedTopLevelServerErrorStil
 	require.NotNil(t, result)
 	require.Equal(t, int32(2), attempts.Load())
 	require.Equal(t, "resp_retry_ok", result.RequestID)
-	require.JSONEq(t, `{"id":"resp_retry_ok","model":"gpt-5.1","usage":{"input_tokens":2,"output_tokens":1}}`, rec.Body.String())
+	// 重试成功后同样补齐时间，原模型、请求 ID 和用量仍须完整匹配。
+	createdAt := gjson.Get(rec.Body.String(), "created_at").Int()
+	require.Positive(t, createdAt)
+	expected, err := sjson.Set(`{"id":"resp_retry_ok","model":"gpt-5.1","usage":{"input_tokens":2,"output_tokens":1}}`, "created_at", createdAt)
+	require.NoError(t, err)
+	require.JSONEq(t, expected, rec.Body.String())
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_ImageGenerationCountsOutputs(t *testing.T) {

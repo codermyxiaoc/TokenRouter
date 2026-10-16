@@ -187,23 +187,31 @@ func TestZPaySignedNotificationRejectsWrongAmountOrMerchant(t *testing.T) {
 		action string
 	}{
 		{name: "wrong amount", pid: zpayNotificationTestPID, money: "87.00", err: "amount mismatch", action: "PAYMENT_AMOUNT_MISMATCH"},
-		{name: "wrong merchant", pid: "another-merchant", money: "88.00", err: "easypay pid mismatch", action: "PAYMENT_PROVIDER_METADATA_MISMATCH"},
+		{name: "wrong merchant", pid: "another-merchant", money: "88.00", err: "notify merchant mismatch"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			fixture := newZPayNotificationFixture(t)
 			params := signedZPayNotification(fixture.order, tt.pid, tt.money)
 			notification, err := fixture.provider.VerifyNotification(ctx, params.Encode(), nil)
-			require.NoError(t, err)
-			err = fixture.service.HandlePaymentNotification(ctx, notification, fixture.provider.ProviderKey())
-			require.ErrorContains(t, err, tt.err)
+			if tt.pid != zpayNotificationTestPID {
+				// 商户号不属于当前实例时在验签层直接拒绝，不进入订单履约或写支付成功审计。
+				require.ErrorContains(t, err, tt.err)
+				require.Nil(t, notification)
+			} else {
+				require.NoError(t, err)
+				err = fixture.service.HandlePaymentNotification(ctx, notification, fixture.provider.ProviderKey())
+				require.ErrorContains(t, err, tt.err)
+			}
 			reloaded, err := fixture.service.entClient.PaymentOrder.Get(ctx, fixture.order.ID)
 			require.NoError(t, err)
 			require.Equal(t, OrderStatusPending, reloaded.Status)
 			require.Nil(t, reloaded.PaidAt)
 			require.Zero(t, fixture.userRepo.getByIDUser.Balance)
 			require.Empty(t, fixture.redeemRepo.useCalls)
-			require.Equal(t, 1, zpayNotificationAuditCount(t, fixture, tt.action))
+			if tt.action != "" {
+				require.Equal(t, 1, zpayNotificationAuditCount(t, fixture, tt.action))
+			}
 			require.Zero(t, zpayNotificationAuditCount(t, fixture, "ORDER_PAID"))
 		})
 	}

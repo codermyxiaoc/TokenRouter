@@ -18,7 +18,38 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// anthropicMessagesForeignOAuthReason 区分本地凭据协议不匹配，避免误记上游鉴权失败。
+const anthropicMessagesForeignOAuthReason GatewayFailureReason = "anthropic_messages_foreign_oauth"
+
+// anthropicMessagesCredentialAllowed 不允许其他供应商的 OAuth 凭据进入 Anthropic 原生管线。
+// API Key 仍可由管理员配置兼容端点；Gemini/Antigravity 等平台使用各自专用转换与认证。
+func anthropicMessagesCredentialAllowed(account *Account) bool {
+	return account != nil && (!account.IsOAuth() || account.Platform == PlatformAnthropic)
+}
+
+// checkAnthropicMessagesCredential 在构建出站请求前拒绝不匹配的凭据，只允许现有调度换号。
+func checkAnthropicMessagesCredential(account *Account) error {
+	if anthropicMessagesCredentialAllowed(account) {
+		return nil
+	}
+	return &UpstreamFailoverError{StatusCode: http.StatusBadGateway, Reason: anthropicMessagesForeignOAuthReason}
+}
+
+// getAnthropicGatewayBaseURL 让自适应账号的消息与计数端点使用相同的 Anthropic 协议地址。
+func getAnthropicGatewayBaseURL(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	if baseURL := account.GetAnthropicProtocolBaseURL(); baseURL != "" {
+		return baseURL
+	}
+	return account.GetBaseURL()
+}
+
 func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, tokenType, modelID string, reqStream bool, mimicClaudeCode bool) (*http.Request, []byte, error) {
+	if err := checkAnthropicMessagesCredential(account); err != nil {
+		return nil, nil, err
+	}
 	body = stripDeferredToolCacheControl(body)
 	if account.Platform == PlatformAnthropic && account.Type == AccountTypeServiceAccount {
 		req, err := s.buildUpstreamRequestAnthropicVertex(ctx, c, account, body, token, modelID, reqStream)
@@ -28,7 +59,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// 确定目标URL
 	targetURL := claudeAPIURL
 	if account.Type == AccountTypeAPIKey {
-		baseURL := account.GetBaseURL()
+		baseURL := getAnthropicGatewayBaseURL(account)
 		if baseURL != "" {
 			validatedURL, err := s.validateUpstreamBaseURL(baseURL)
 			if err != nil {

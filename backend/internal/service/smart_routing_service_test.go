@@ -216,7 +216,7 @@ func TestSmartRoutingEndpointPlatformBoundaries(t *testing.T) {
 	}{
 		{PlatformAnthropic, "/v1beta/models/shared-model:generateContent", false},
 		{PlatformGemini, "/v1beta/models/shared-model:generateContent", true},
-		{PlatformAntigravity, "/v1beta/models/shared-model:generateContent", false},
+		{PlatformAntigravity, "/v1beta/models/shared-model:generateContent", true}, // 型号资格在账号映射后另行校验。
 		{PlatformAntigravity, "/antigravity/v1beta/models/shared-model:generateContent", true},
 		{PlatformGemini, "/v1/images/generations", false},
 		{PlatformAnthropic, "/v1/images/edits", false},

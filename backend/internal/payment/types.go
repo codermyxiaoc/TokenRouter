@@ -229,10 +229,12 @@ type RefundRequest struct {
 
 // RefundQueryRequest 保存查询历史退款状态所需的渠道侧标识。
 type RefundQueryRequest struct {
-	TradeNo  string
-	OrderID  string
-	RefundID string
-	Amount   string
+	// RequestedAt 用于渠道的短暂查无记录宽限期，历史未知时间不能提前判失败。
+	RequestedAt time.Time
+	TradeNo     string
+	OrderID     string
+	RefundID    string
+	Amount      string
 }
 
 // RefundResponse is returned after a refund request.
@@ -267,6 +269,12 @@ type Provider interface {
 	VerifyNotification(ctx context.Context, rawBody string, headers map[string]string) (*PaymentNotification, error)
 	// Refund requests a refund from the upstream provider.
 	Refund(ctx context.Context, req RefundRequest) (*RefundResponse, error)
+}
+
+// NotificationConfirmer 为需要额外确认的渠道提供同一验签实例的主动查单。
+type NotificationConfirmer interface {
+	Provider
+	ConfirmNotification(context.Context, *PaymentNotification) error
 }
 
 // RefundQueryProvider 表示支持主动查询退款状态的支付渠道。

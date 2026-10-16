@@ -1187,7 +1187,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 
 // compositeRequestableModels 按候选顺序聚合模型，只有复合 Key 添加展示前缀。
 // 严格指定订阅时，列表只能包含套餐覆盖的分组，避免将随后必然拒绝的模型暴露给客户端。
-func (h *GatewayHandler) compositeRequestableModels(c *gin.Context, apiKey *service.APIKey, requiredPlatform string) []string {
+func (h *GatewayHandler) compositeRequestableModels(c *gin.Context, apiKey *service.APIKey, requiredPlatform string, geminiNativeOnly ...bool) []string {
 	if h == nil || h.gatewayService == nil || c == nil || c.Request == nil || apiKey == nil {
 		return nil
 	}
@@ -1200,7 +1200,7 @@ func (h *GatewayHandler) compositeRequestableModels(c *gin.Context, apiKey *serv
 	seen := make(map[string]struct{})
 	for _, binding := range apiKey.CompositeGroups {
 		group := binding.Group
-		if !compositeGroupAvailableToUser(apiKey, preferredSubscription, group) || (requiredPlatform != "" && group.Platform != requiredPlatform) {
+		if !compositeGroupAvailableToUser(apiKey, preferredSubscription, group) || (requiredPlatform != "" && group.Platform != requiredPlatform && !(requiredPlatform == service.PlatformGemini && group.Platform == service.PlatformAntigravity)) {
 			continue
 		}
 		groupID := group.ID
@@ -1218,6 +1218,10 @@ func (h *GatewayHandler) compositeRequestableModels(c *gin.Context, apiKey *serv
 		}
 		if group.CustomModelsListEnabled() {
 			available = filterModelsByCustomList(available, nil, group.ModelsListConfig.Models)
+		}
+		// Gemini 目录只展示真实可转为 Gemini 的最终目标，账号或渠道别名仍可保留。
+		if (requiredPlatform == service.PlatformGemini || len(geminiNativeOnly) > 0 && geminiNativeOnly[0]) && group.Platform == service.PlatformAntigravity {
+			available = h.gatewayService.FilterAntigravityGeminiModels(ctx, &groupID, available)
 		}
 		available = service.AppendAPIKeyModelAliases(available, apiKey.ModelMapping)
 		for _, model := range available {

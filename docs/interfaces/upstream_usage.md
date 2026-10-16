@@ -59,6 +59,8 @@ Cline 和 Command Code 的官方 HTTPS 账号自动使用原生 `cline` / `comma
 
 Zhipu payg、MiniMax payg 可显式使用上述通用站点协议手动查询，但不具备原生周期监控资格；不能配置为其它供应商的原生适配器。DeepSeek coding 不是合法账号组合，查询仍返回不支持且不发送请求。Kimi/Zhipu/MiniMax 的 coding 周期把使用百分比归一化为上限 `100`、已用百分比和剩余百分比；DeepSeek 保留全部合法币种余额，任何一个币种仍高于监控阈值时都不会因另一个低余额币种停调。五个原生适配器只解析供应商固定 JSON 响应，不执行脚本、不接受自定义方法/路径，也不直接写数据库。MiniMax 使用 Bearer API Key，HTTP 200 中的业务错误、缺少窗口或无效百分比均不能写成成功快照，详情见 [MiniMax 上游](minimax_upstream.md#minimax_usage_and_limits)。
 
+Zhipu Coding 窗口优先解析 `TOKENS_LIMIT`；仅缺少该类型时使用 `CREDIT_LIMIT`。窗口按上游 `unit` 识别五小时（3）与每周（6），只有未知单位才根据期限排序兜底，避免周窗口先重置时被误标成五小时。两类额度不会重复相加。
+
 适配器拒绝 HTTP 非成功、认证失败、限流、超时、重定向、超大响应体、缺字段或不一致数值。选择的适配器失败时不会自动回退到另一个协议，也不会修改账号配置。
 
 ### OpenCode GO

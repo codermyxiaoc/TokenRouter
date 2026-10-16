@@ -75,7 +75,11 @@ func (s *GatewayService) resolveRequestableModelsWithAccounts(
 				"group_id", *groupID,
 				"platform", platform,
 				"error", err)
-			fallback := requestableModelsFallback(mergeRequestableModelCandidates(accountCandidateModels, accounts, nil, channelPlatform), platform)
+			fallbackModels := mergeRequestableModelCandidates(accountCandidateModels, accounts, nil, channelPlatform)
+			if platform == PlatformOpenAI {
+				fallbackModels = FilterRetiredOpenAIModelIDs(accounts, fallbackModels)
+			}
+			fallback := requestableModelsFallback(fallbackModels, platform)
 			fallback.HadExplicitAccountModels = hadExplicitAccountModels
 			return fallback
 		}
@@ -98,6 +102,10 @@ func (s *GatewayService) resolveRequestableModelsWithAccounts(
 		if resolved, ok := s.resolveRequestableModel(ctx, groupID, channel, accounts, requestedModel); ok {
 			result.Models = append(result.Models, resolved)
 		}
+	}
+	// 账号已明确排除全部候选时，未绑定分组的入口也不能复活平台默认型号。
+	if platform == PlatformOpenAI && len(candidates) > 0 && len(result.Models) == 0 {
+		result.Restricted = true
 	}
 	return result
 }
@@ -262,10 +270,14 @@ func accountHasUnrestrictedModelScope(account *Account) bool {
 }
 
 func requestableModelsFallback(models []string, platform string) RequestableModelsResult {
-	if len(models) == 0 {
+	// OpenAI 非 nil 空目录是账号过滤的权威结果，区别于未知目录的默认回退。
+	if len(models) == 0 && !(platform == PlatformOpenAI && models != nil) {
 		models = defaultRequestModelIDsForPlatform(platform)
 	}
-	result := RequestableModelsResult{Models: make([]RequestableModel, 0, len(models))}
+	result := RequestableModelsResult{
+		Models:     make([]RequestableModel, 0, len(models)),
+		Restricted: platform == PlatformOpenAI && models != nil && len(models) == 0,
+	}
 	seen := make(map[string]struct{}, len(models))
 	for _, model := range models {
 		model = strings.TrimSpace(model)
@@ -316,6 +328,10 @@ func (s *GatewayService) resolveRequestableModel(
 			continue
 		}
 		for _, upstreamModel := range s.resolveAccountUpstreamModelsForListing(ctx, account, channelMappedModel) {
+			// 渠道和账号映射均完成后过滤，不按客户端别名误伤有效替代型号。
+			if IsRetiredOpenAISubscriptionModel(account, upstreamModel) {
+				continue
+			}
 			if channel != nil && channel.RestrictModels && billingSource == BillingModelSourceUpstream &&
 				s.requestableModelRestricted(ctx, groupID, upstreamModel) {
 				continue

@@ -20,6 +20,8 @@ Antigravity 账号的 `platform` 为 `antigravity`。管理端通过 `/api/v1/ad
 
 原生兼容转发要求 `type=oauth` 的 Antigravity 账号。setup token、upstream 或 API-key 类型不能被当成原生 OAuth 兼容账号；服务应返回可操作错误而不是把不匹配凭据发送给上游。standard-tier 账号缺少必要 project ID 时也要显式拒绝。完整平台/账号分类和已知冲突见[上游账号能力矩阵](upstream_account_matrix.md)。
 
+默认上游 User-Agent 使用 `antigravity-hub/2.23.0` 形状，已有环境变量/系统配置覆盖仍生效。Google AI 付费 tier 同时识别既有计划和 `g1-ultra-*-tier`、`g1-pro-*-tier`；模型同步选择与生成相同的有效端点，不在目录失败时切换另一个端点伪造该账号能力。
+
 账号导入、凭据刷新和批量导入后会检查/设置适用的隐私状态。凭据、refresh token、project ID 和上游响应中的内部标识不得出现在客户端错误或模型列表中。
 
 通用账号刷新接口可能已成功更新 token，但后续账号元数据补全失败。此时仍返回刷新后的账号，并附带可选 `warning`；后台显示警告并照常失效上游用量缓存，不能把部分成功显示为完全成功或撤销已保存凭据。
@@ -61,6 +63,10 @@ Chat Completions / Responses
   -> original OpenAI protocol
 ```
 
+管理员显式图片测试支持原生 Antigravity 账号，按实际映射后的图片模型发送 TEXT/IMAGE 输出配置，并以现有图片事件展示内联结果。成功响应使用全局有界正文限额，不用错误摘要上限截断 base64；超过正文上限明确失败。文本测试及自定义提示词保持原合同，不因新功能自动触发图片生成。
+
+工具结果中的 base64 图片/文档保留为函数响应之后的多模态 parts。Gemini 非流聚合保留每一类 part，包括 functionCall 和 thoughtSignature；末尾空文本不能覆盖已有工具调用或签名。函数后续轮次补齐所需签名时仍保留函数响应中的图片。
+
 每次 failover attempt 都必须从原始请求重新转换，并刷新工具名回程映射。流开始后遵守共同不可切换边界。Gemini v1beta 专用入口保持 Google 错误/流形状，不经过 OpenAI envelope。
 
 Gemini 原生 SSE 转发会拆开上游包装并重新写出 data 帧分隔，因此不再重复转发上游空分隔行；LF 和 CRLF 输入都只生成一次帧分隔。普通客户端仍可收到网关的空闲注释心跳；`User-Agent` 或 `X-Goog-Api-Client` 识别为 `google-genai-sdk` 且使用 `gl-go` 或 `gl-python` 时，网关关闭本地产生的注释心跳，并过滤上游注释行，避免这类 SDK 将 `:` 判定为非法流块。该兼容处理不改写正常 data 事件，也不改变普通客户端的注释转发。
@@ -91,6 +97,10 @@ Gemini 混合分组的账号目录纳入开启混合调度的 Antigravity 账号
 Antigravity 同时提供 Claude 与 Gemini 模型族。Gemini 3.6、3.7、3.8 Flash 的基础、high、low、medium 与 tiered 五种模型 ID 均进入默认模型目录和身份映射；账号存在自定义映射时，只要没有覆盖它们的通配符，这些精确直通映射仍会自动保留。
 
 裸 Gemini 模型通过统一最终模型解析器处理：原生请求使用 `generationConfig.thinkingConfig.thinkingLevel` 或 `thinkingBudget` 选择账号映射中存在的思考变体；Messages/OpenAI 兼容请求根据转换后的 `thinking.budget_tokens` 使用同一档位规则，缺省配置按 `high` 选择。调度上下文和重试冷却键保存相同档位，避免实际请求与限流 scope 不一致。首选档位不可用时依次尝试 `high`、`medium`、`low`、`tiered`，不重复尝试首选项。管理员配置的精确映射和命中的通配符映射始终优先，包括显式原样透传；运行时自动补齐的裸名自映射不视为管理员的显式选择。请求已有思考后缀时保持常规模型映射，找不到任何变体也回到既有映射流程。
+
+Argon 及 Claude 5.5 high/medium/low 档位加入本地目录。Claude 5.5 档位价格先查精确型号，缺失才回退其准确的 Opus/Sonnet 基础型号，避免按旧家族模糊匹配；已有独立价卡不被覆盖。裸模型显式自映射继续作为本 fork 管理员合同保留，不采用上游 v0.2.17 把所有裸名自映射重新选档的行为。
+
+管理员同步目录在既有模型 ID 列表之外提供可选能力快照：仅存 `display_name`、`reasoning`、可选档位、输入模态、上下文与输出上限，按键更新 `extra.upstream_model_metadata`（source=upstream、UTC 更新时间）。能力只采用同一生成端点直接声明，不查询其它目录或从价格推断；未声明图片支持不添加图片能力。声明的 false 保留，固定档位只显示本档，动态档位按预算投影默认值。原始上游响应、凭据和额度不写入快照；快照仅供管理员展示，不能替代实时路由、授权或计费。已配置但上游目录不存在的型号以警告提示；运行时补齐项不当作管理员明确配置。快照写入失败返回同步失败，不影响旧列表接口。
 
 可见模型来自默认映射、分组/渠道限制、账号资格和当前可请求解析；API Key 精确别名可投影到列表，目标不可请求时不展示。模型能力不能只由名称前缀推断，thinking/image 等能力由适配器与账号详情共同约束。
 

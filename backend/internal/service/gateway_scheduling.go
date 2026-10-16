@@ -2840,6 +2840,10 @@ func (s *GatewayService) isRoutingModelSupportedByAccountWithContext(ctx context
 		return false
 	}
 	if account.Platform == PlatformAntigravity {
+		// 原生 Gemini 必须在候选、粘性和等槽前按最终上游模型过滤，不能先选中 Claude 再报错。
+		if requiresGeminiNativeAccountSelection(ctx) && !IsAntigravityGeminiAccountModel(ctx, account, routingModel) {
+			return false
+		}
 		if strings.TrimSpace(routingModel) == "" {
 			return true
 		}

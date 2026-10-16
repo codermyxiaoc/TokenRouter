@@ -149,25 +149,23 @@ let redirectTimer: ReturnType<typeof setTimeout> | null = null
 
 onMounted(async () => {
   const orderId = Number(route.query.order_id)
-  const clientSecret = String(route.query.client_secret || '')
   const method = String(route.query.method || '')
   const resumeToken = typeof route.query.resume_token === 'string' ? route.query.resume_token : undefined
-
-  if (!orderId || !clientSecret) {
-    loading.value = false
-    initError.value = t('payment.stripeMissingParams')
-    return
-  }
-
   try {
-    if (typeof window !== 'undefined') {
-      const restored = readPaymentRecoverySnapshot(
-        window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY),
-        { resumeToken },
-      )
-      if (restored?.orderId === orderId) {
-        currency.value = normalizePaymentCurrency(restored.currency)
-      }
+    // 浏览器禁用本地存储时也须结束加载并提供返回入口，不能退回使用 URL 中的密钥。
+    // 支付密钥只来自当前订单的本地恢复快照，不信任可被篡改的 URL 参数。
+    const restored = typeof window !== 'undefined'
+      ? readPaymentRecoverySnapshot(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY), { resumeToken })
+      : null
+    const clientSecret = restored?.orderId === orderId ? restored.clientSecret : ''
+
+    if (!orderId || !clientSecret) {
+      initError.value = t('payment.stripeMissingParams')
+      return
+    }
+
+    if (restored?.orderId === orderId) {
+      currency.value = normalizePaymentCurrency(restored.currency)
     }
     const res = await paymentAPI.getOrder(orderId)
     if (disposed) return

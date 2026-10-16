@@ -44,7 +44,7 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 		if forcePlatform, ok := middleware.GetForcePlatformFromContext(c); ok && forcePlatform == service.PlatformAntigravity {
 			requiredPlatform = service.PlatformAntigravity
 		}
-		models := h.compositeRequestableModels(c, apiKey, requiredPlatform)
+		models := h.compositeRequestableModels(c, apiKey, requiredPlatform, true)
 		out := make([]gemini.Model, 0, len(models))
 		for _, model := range models {
 			out = append(out, gemini.Model{
@@ -58,7 +58,7 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 	}
 	// 检查平台：优先使用强制平台（/antigravity 路由），否则要求 gemini 分组
 	forcePlatform, hasForcePlatform := middleware.GetForcePlatformFromContext(c)
-	if !hasForcePlatform && (apiKey.Group == nil || apiKey.Group.Platform != service.PlatformGemini) {
+	if !hasForcePlatform && (apiKey.Group == nil || apiKey.Group.Platform != service.PlatformGemini && apiKey.Group.Platform != service.PlatformAntigravity) {
 		googleError(c, http.StatusBadRequest, "API key group platform is not gemini")
 		return
 	}
@@ -69,6 +69,16 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 		return
 	}
 
+	// 独立 Antigravity 分组沿用当前账号/渠道目录，不依赖客户端使用专用路径。
+	if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformAntigravity {
+		models := h.antigravityGeminiModels(c, apiKey)
+		payload := gemini.ModelsListResponse{Models: make([]gemini.Model, 0, len(models))}
+		for _, model := range models {
+			payload.Models = append(payload.Models, gemini.FallbackModel(model))
+		}
+		writeGeminiModelsListWithAPIKeyAliases(c, payload, apiKey)
+		return
+	}
 	if models, ok := customGeminiModelsList(apiKey.Group); ok {
 		writeGeminiModelsListWithAPIKeyAliases(c, models, apiKey)
 		return
@@ -192,7 +202,7 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 	}
 	// 检查平台：优先使用强制平台（/antigravity 路由），否则要求 gemini 分组
 	forcePlatform, hasForcePlatform := middleware.GetForcePlatformFromContext(c)
-	if !hasForcePlatform && (apiKey.Group == nil || apiKey.Group.Platform != service.PlatformGemini) {
+	if !hasForcePlatform && (apiKey.Group == nil || apiKey.Group.Platform != service.PlatformGemini && apiKey.Group.Platform != service.PlatformAntigravity) {
 		googleError(c, http.StatusBadRequest, "API key group platform is not gemini")
 		return
 	}
@@ -209,6 +219,17 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 		return
 	}
 
+	if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformAntigravity {
+		models := service.AppendAPIKeyModelAliases(h.antigravityGeminiModels(c, apiKey), apiKey.ModelMapping)
+		for _, model := range models {
+			if model == modelName {
+				c.JSON(http.StatusOK, gemini.FallbackModel(modelName))
+				return
+			}
+		}
+		googleError(c, http.StatusNotFound, "Model not found")
+		return
+	}
 	// 强制 antigravity 模式：返回 antigravity 模型信息
 	if forcePlatform == service.PlatformAntigravity {
 		c.JSON(http.StatusOK, antigravity.FallbackGeminiModel(modelName))
@@ -266,7 +287,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 
 	// 检查平台：优先使用强制平台（/antigravity 路由，中间件已设置 request.Context），否则要求 gemini 分组
 	if !middleware.HasForcePlatform(c) {
-		if apiKey.Group == nil || apiKey.Group.Platform != service.PlatformGemini {
+		if apiKey.Group == nil || apiKey.Group.Platform != service.PlatformGemini && apiKey.Group.Platform != service.PlatformAntigravity {
 			googleError(c, http.StatusBadRequest, "API key group platform is not gemini")
 			return
 		}
@@ -306,7 +327,8 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 	// 用户提示词替换必须早于内容审计、会话 hash 和转发，避免审计与上游请求不一致。
 	body = h.gatewayService.ApplyUserPromptReplacement(c.Request.Context(), body, "gemini")
 	// 在选账号之前确定变体，避免限流查询与真正转发使用不同模型键。
-	c.Request = c.Request.WithContext(service.WithAntigravityThinkingLevelFromBody(c.Request.Context(), body))
+	selectionCtx := service.WithGeminiNativeAccountSelection(c.Request.Context())
+	c.Request = c.Request.WithContext(service.WithAntigravityThinkingLevelFromBody(selectionCtx, body))
 
 	if decision := h.checkContentModeration(c, reqLog, apiKey, authSubject, service.ContentModerationProtocolGemini, modelName, body); decision != nil && decision.Blocked {
 		googleError(c, contentModerationStatus(decision), decision.Message)
@@ -560,6 +582,13 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 			}
 		}
 		account := selection.Account
+		if account.Platform == service.PlatformAntigravity && !service.IsAntigravityGeminiAccountModel(c.Request.Context(), account, modelName) {
+			if selection.Acquired && selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			googleError(c, http.StatusBadRequest, "Requested model does not support the Gemini protocol")
+			return
+		}
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		// 检测账号切换：如果粘性会话绑定的账号与当前选择的账号不同，清除 thoughtSignature
@@ -1050,4 +1079,17 @@ func googleClientErrorType(status int) string {
 func googleConcurrencyError(c *gin.Context, err error, slotType string) {
 	status, errType, code, message := concurrencyErrorResponse(err, slotType)
 	googleErrorWithType(c, status, errType, code, message)
+}
+
+// antigravityGeminiModels 从当前分组可请求目录保留映射到 Gemini 的型号。
+func (h *GatewayHandler) antigravityGeminiModels(c *gin.Context, apiKey *service.APIKey) []string {
+	if h.gatewayService == nil || apiKey.Group == nil {
+		return nil
+	}
+	resolution := h.gatewayService.ResolveRequestableModels(c.Request.Context(), apiKey.GroupID, service.PlatformAntigravity)
+	models := service.RequestableModelIDs(resolution.Models)
+	if apiKey.Group.CustomModelsListEnabled() {
+		models = filterModelsByCustomList(models, nil, apiKey.Group.ModelsListConfig.Models)
+	}
+	return h.gatewayService.FilterAntigravityGeminiModels(c.Request.Context(), apiKey.GroupID, models)
 }

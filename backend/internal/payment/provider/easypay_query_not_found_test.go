@@ -33,7 +33,7 @@ func TestEasyPayQueryOrderNotFoundClassification(t *testing.T) {
 		{"HTTP server failure", 502, `{"code":0,"msg":"order not found"}`, false},
 		{"missing code", 200, `{"msg":"order not found"}`, false},
 		{"null code", 200, `{"code":null,"msg":"order not found"}`, false},
-		{"string code", 200, `{"code":"0","msg":"order not found"}`, false},
+		{"string code", 200, `{"code":"0","msg":"order not found"}`, true},
 		{"fractional code", 200, `{"code":0.5,"msg":"order not found"}`, false},
 		{"boolean code", 200, `{"code":false,"msg":"order not found"}`, false},
 		{"success code without state", 200, `{"code":1,"msg":"order not found"}`, false},

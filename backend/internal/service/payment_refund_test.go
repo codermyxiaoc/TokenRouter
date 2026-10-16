@@ -300,7 +300,7 @@ func TestValidateRefundProviderResponseAcceptsPending(t *testing.T) {
 	require.Error(t, validateRefundProviderResponse(nil))
 }
 
-func TestFinishRefundPendingMarksOrderPendingAndRollsBackDeduction(t *testing.T) {
+func TestFinishRefundPendingMarksOrderPendingAndHoldsDeduction(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
 
@@ -333,7 +333,7 @@ func TestFinishRefundPendingMarksOrderPendingAndRollsBackDeduction(t *testing.T)
 
 	var rolledBack float64
 	userRepo := &mockUserRepo{}
-	userRepo.updateBalanceFn = func(ctx context.Context, id int64, amount float64) error {
+	userRepo.addBalanceFn = func(ctx context.Context, id int64, amount float64) error {
 		require.Equal(t, user.ID, id)
 		rolledBack += amount
 		return nil
@@ -359,8 +359,8 @@ func TestFinishRefundPendingMarksOrderPendingAndRollsBackDeduction(t *testing.T)
 	require.NotNil(t, result)
 	require.False(t, result.Success)
 	require.Contains(t, result.Warning, "pending confirmation")
-	require.Equal(t, 40.0, rolledBack)
-	require.Zero(t, plan.BalanceToDeduct)
+	require.Zero(t, rolledBack)
+	require.Equal(t, 40.0, plan.BalanceToDeduct)
 
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
@@ -508,7 +508,8 @@ func TestFinalizePendingRefundSuccessRejectsStaleCallerBeforeSecondDeduction(t *
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
 	order := createPendingRefundOrderForTest(t, ctx, client, "finalize-stale", true)
-	pendingDetail := (&PaymentService{entClient: client}).latestRefundPendingDetail(ctx, order.ID)
+	pendingDetail, detailErr := (&PaymentService{entClient: client}).latestRefundPendingDetail(ctx, order.ID)
+	require.NoError(t, detailErr)
 
 	deductions := 0
 	svc := &PaymentService{
@@ -543,7 +544,8 @@ func TestFinalizePendingRefundSuccessRollsBackPostDeductionFailure(t *testing.T)
 	order := createPendingRefundOrderForTest(t, ctx, client, "finalize-rollback", true)
 	_, err := client.User.UpdateOneID(order.UserID).SetBalance(100).Save(ctx)
 	require.NoError(t, err)
-	pendingDetail := (&PaymentService{entClient: client}).latestRefundPendingDetail(ctx, order.ID)
+	pendingDetail, detailErr := (&PaymentService{entClient: client}).latestRefundPendingDetail(ctx, order.ID)
+	require.NoError(t, detailErr)
 
 	svc := &PaymentService{
 		entClient: client,

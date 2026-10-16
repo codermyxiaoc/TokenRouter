@@ -19,7 +19,7 @@ import (
 
 // 合成 WS 错误和失败终态都必须带序号；保留原错误、响应身份和失败语义。
 func TestResponsesSync_WSHTTPBridgeSyntheticSequence(t *testing.T) {
-	failed := buildOpenAIWSHTTPBridgeFailedEvent("resp_test", "gpt-test", []byte(`{"error":{"code":"server_error","message":"temporary"}}`), "fallback")
+	failed := buildOpenAIWSHTTPBridgeFailedEvent("resp_test", "gpt-test", 0, []byte(`{"error":{"code":"server_error","message":"temporary"}}`), "fallback")
 	for _, body := range [][]byte{buildOpenAIWSHTTPBridgeErrorEvent(503, "temporary"), failed} {
 		require.True(t, gjson.ValidBytes(body))
 		require.True(t, gjson.GetBytes(body, "sequence_number").Exists())

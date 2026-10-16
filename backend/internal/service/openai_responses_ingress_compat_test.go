@@ -1,11 +1,59 @@
 package service
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+// HTTP 与 WS 的旧 Messages 兼容入口共用输出预算，原生 input 和 API Key 透传不抬高用户参数。
+func TestNormalizeOpenAIResponsesLegacyIngressConfiguredOutputBudget(t *testing.T) {
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	for _, tc := range []struct {
+		name                         string
+		minimum, requested, expected int
+	}{
+		{name: "default", requested: 8, expected: 128},
+		{name: "lower", minimum: 16, requested: 8, expected: 16},
+		{name: "higher", minimum: 512, requested: 8, expected: 512},
+		{name: "user_higher", minimum: 512, requested: 2048, expected: 2048},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Gateway.MinOutputTokens = tc.minimum
+			body := []byte(fmt.Sprintf(`{"model":"gpt-6.1-sol","messages":[{"role":"user","content":"hello"}],"max_tokens":%d}`, tc.requested))
+			for _, ws := range []bool{false, true} {
+				var normalized []byte
+				var changed bool
+				var err error
+				if ws {
+					normalized, changed, err = normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfig(cfg, body, account, false)
+				} else {
+					normalized, changed, err = normalizeOpenAIResponsesLegacyIngressWithConfig(cfg, body)
+				}
+				require.NoError(t, err)
+				require.True(t, changed)
+				require.EqualValues(t, tc.expected, gjson.GetBytes(normalized, "max_output_tokens").Int())
+			}
+		})
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.MinOutputTokens = 512
+	native := []byte(`{"model":"gpt-6.1-sol","input":"keep","max_output_tokens":3}`)
+	actual, changed, err := normalizeOpenAIResponsesLegacyIngressWithConfig(cfg, native)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, native, actual)
+	api := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	legacy := []byte(`{"model":"custom","messages":[{"role":"user","content":"hello"}],"max_tokens":3}`)
+	actual, changed, err = normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfig(cfg, legacy, api, false)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, legacy, actual)
+}
 
 func TestNormalizeOpenAIResponsesLegacyIngressMessagesOnly(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.4","stream":false,"messages":[{"role":"system","content":"repo policy"},{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"hello\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"ok"}],"previous_response_id":"resp_stale"}`)

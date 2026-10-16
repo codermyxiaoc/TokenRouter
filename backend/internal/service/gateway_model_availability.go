@@ -16,6 +16,8 @@ type ModelAvailabilityDiagnosis struct {
 	HasAccountsInPool bool
 	// HasModelSupport 表示至少有一个账号的模型映射允许请求模型。
 	HasModelSupport bool
+	// HasRetiredSubscriptionModel 表示仅订阅上游退役，不影响 API Key 上游与有效替代映射。
+	HasRetiredSubscriptionModel bool
 }
 
 // ModelAvailabilityDiagnoser 由可诊断模型静态可用性的网关服务实现。
@@ -89,6 +91,10 @@ func (s *GatewayService) DiagnoseModelAvailabilityForPlatform(
 			continue
 		}
 		diag.HasAccountsInPool = true
+		if IsRetiredOpenAISubscriptionModel(&accounts[i], resolveAccountUpstreamModel(ctx, &accounts[i], routingModel)) {
+			diag.HasRetiredSubscriptionModel = true
+			continue
+		}
 		if s.isRoutingModelSupportedByAccountWithContext(ctx, &accounts[i], routingModel) {
 			diag.HasModelSupport = true
 			return diag

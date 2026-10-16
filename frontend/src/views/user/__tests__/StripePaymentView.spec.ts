@@ -62,6 +62,7 @@ vi.mock('@stripe/stripe-js/pure', () => ({
 
 import StripePaymentView from '../StripePaymentView.vue'
 import { formatPaymentAmount } from '@/components/payment/currency'
+import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import type { PaymentOrder } from '@/types/payment'
 
 function orderFactory(overrides: Partial<PaymentOrder> = {}): PaymentOrder {
@@ -116,13 +117,41 @@ describe('StripePaymentView', () => {
     stripeInstance.confirmAlipayPayment.mockReset()
     stripeInstance.confirmWechatPayPayment.mockReset()
     window.localStorage.clear()
+    window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({
+      orderId: 42, amount: 100, qrCode: '', expiresAt: '2099-01-01T00:00:00Z',
+      paymentType: 'stripe', payUrl: '', outTradeNo: 'sub2_stripe_42',
+      clientSecret: 'pi_secret_42', currency: 'CNY', payAmount: 103,
+      orderType: 'balance', paymentMode: '', resumeToken: 'resume-42', createdAt: Date.now(),
+    }))
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.useRealTimers()
   })
 
-  it('本地恢复快照缺失时使用订单接口返回的 Stripe 币种展示金额', async () => {
+  it.each(['getter', 'getItem'])('本地存储 %s 被浏览器禁止时结束加载且不使用 URL 密钥', async blockedOperation => {
+    // 两种浏览器限制均可能抛 SecurityError，页面必须保留返回充值入口。
+    const blocked = () => { throw new DOMException('Storage access denied', 'SecurityError') }
+    if (blockedOperation === 'getter') vi.spyOn(window, 'localStorage', 'get').mockImplementation(blocked)
+    else vi.spyOn(Storage.prototype, 'getItem').mockImplementation(blocked)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('payment.stripeLoadFailed')
+    expect(wrapper.find('.animate-spin').exists()).toBe(false)
+    expect(getOrder).not.toHaveBeenCalled()
+    expect(loadStripe).not.toHaveBeenCalled()
+    expect(stripeInstance.confirmPayment).not.toHaveBeenCalled()
+    const backButton = wrapper.findAll('button').find(button => button.text() === 'payment.result.backToRecharge')
+    expect(backButton).toBeDefined()
+    await backButton!.trigger('click')
+    expect(routerPush).toHaveBeenCalledWith('/purchase')
+    wrapper.unmount()
+  })
+
+  it('本地恢复快照存在时使用订单接口返回的 Stripe 币种展示金额', async () => {
     getOrder.mockResolvedValue({
       data: orderFactory({ currency: 'HKD', pay_amount: 103 }),
     })
@@ -134,6 +163,34 @@ describe('StripePaymentView', () => {
     expect(getOrder).toHaveBeenCalledWith(42)
     expect(loadStripe).toHaveBeenCalledWith('pk_test')
     expect(wrapper.text()).toContain(formatPaymentAmount(103, 'HKD', 'zh-CN'))
+  })
+
+  it.each(['missing', 'different-order', 'different-token', 'expired'])('拒绝无效恢复快照：%s', async reason => {
+    const snapshot = JSON.parse(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)!)
+    if (reason === 'missing') window.localStorage.clear()
+    else {
+      if (reason === 'different-order') snapshot.orderId = 43
+      if (reason === 'different-token') routeState.query.resume_token = 'other-token'
+      if (reason === 'expired') snapshot.expiresAt = '2000-01-01T00:00:00Z'
+      window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify(snapshot))
+    }
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('payment.stripeMissingParams')
+    expect(getOrder).not.toHaveBeenCalled()
+    expect(loadStripe).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('忽略伪造 URL 密钥，仅使用匹配订单的本地密钥', async () => {
+    routeState.query.client_secret = 'pi_attacker_secret'
+    routeState.query.method = 'alipay'
+    getOrder.mockResolvedValue({ data: orderFactory() })
+    stripeInstance.confirmAlipayPayment.mockResolvedValue({})
+    const wrapper = mountView()
+    await flushPromises()
+    expect(stripeInstance.confirmAlipayPayment).toHaveBeenCalledWith('pi_secret_42', expect.any(Object))
+    wrapper.unmount()
   })
 
   it('订单进入处理中后改为每 15 秒查询本地状态', async () => {

@@ -37,7 +37,7 @@ var (
 	openAIModelDatePattern = regexp.MustCompile(`-(?:\d{8}|\d{4}-\d{2}-\d{2})$`)
 	openAIModelBasePattern = regexp.MustCompile(`^(gpt-\d+(?:\.\d+)?)(?:-|$)`)
 	// 只移除已知档位，保留版本和产品名；Spark 的价格重定向仍由专用回退处理。
-	geminiThinkingTierPattern = regexp.MustCompile(`^(gemini-\d+(?:\.\d+)?-(?:pro|flash))-(?:high|low|medium|tiered)$`)
+	geminiThinkingTierPattern = regexp.MustCompile(`^(gemini-\d+(?:\.\d+)?-(?:pro|flash|argon))-(?:high|low|medium|tiered)$`)
 	openAIThinkingTierPattern = regexp.MustCompile(`^(gpt-\d+(?:\.\d+)?(?:-(?:mini|nano|pro|sol|terra|luna|astra|codex))?)-(none|minimal|low|medium|high|xhigh|max)$`)
 	// 次版本最多两位，避免把八位日期误认为版本号。
 	claudeVersionPatterns = []*regexp.Regexp{
@@ -1423,6 +1423,9 @@ func buildModelLookupCandidates(model string) []string {
 		model := normalizeModelNameForPricing(lastSegment(candidates[i]))
 		alias := normalizeGeminiThinkingTierAlias(model)
 		if alias == model {
+			alias = normalizeAntigravityClaudeTierAlias(model)
+		}
+		if alias == model {
 			alias = normalizeOpenAIThinkingTierAlias(model)
 		}
 		if xai.IsGrokTextResponsesModelID(model) {
@@ -1880,4 +1883,16 @@ func (s *PricingService) getIdentifiedCacheStoragePricing(model string) *LiteLLM
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.lookupModelCatalogEntryLocked(buildModelLookupCandidates(strings.ToLower(strings.TrimSpace(model))))
+}
+
+// normalizeAntigravityClaudeTierAlias 只为Claude 5.5精确思考档位增加同型号基名候选。
+func normalizeAntigravityClaudeTierAlias(model string) string {
+	for _, baseModel := range []string{"claude-opus-5-5", "claude-sonnet-5-5"} {
+		for _, tier := range []string{"-high", "-low", "-medium"} {
+			if model == baseModel+tier {
+				return baseModel
+			}
+		}
+	}
+	return model
 }

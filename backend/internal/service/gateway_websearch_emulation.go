@@ -52,13 +52,25 @@ func getWebSearchManager() *websearch.Manager {
 // Judgment chain: manager exists → only web_search tool → global enabled → account/channel enabled.
 // Account-level mode: "enabled" (force on), "disabled" (force off), "default" (follow channel).
 func (s *GatewayService) shouldEmulateWebSearch(ctx context.Context, account *Account, groupID *int64, body []byte) bool {
-	if getWebSearchManager() == nil {
+	return shouldEmulateWebSearchFor(ctx, s.settingService, s.channelService, account, groupID, body)
+}
+
+// Anthropic 和 OpenAI 的 Messages 入口共用模拟资格判断。
+func shouldEmulateWebSearchFor(
+	ctx context.Context, settingService *SettingService, channelService *ChannelService,
+	account *Account, groupID *int64, body []byte,
+) bool {
+	if getWebSearchManager() == nil || account == nil || settingService == nil {
+		return false
+	}
+	// OpenAI 订阅账号无论渠道配置如何都保留原生搜索，只有 API Key 可启用模拟。
+	if account.Platform == PlatformOpenAI && account.Type != AccountTypeAPIKey {
 		return false
 	}
 	if !isOnlyWebSearchToolInBody(body) {
 		return false
 	}
-	if !s.settingService.IsWebSearchEmulationEnabled(ctx) {
+	if !settingService.IsWebSearchEmulationEnabled(ctx) {
 		return false
 	}
 
@@ -69,10 +81,10 @@ func (s *GatewayService) shouldEmulateWebSearch(ctx context.Context, account *Ac
 	case WebSearchModeDisabled:
 		return false
 	default: // "default" → follow channel config
-		if groupID == nil || s.channelService == nil {
+		if groupID == nil || channelService == nil {
 			return false
 		}
-		ch, err := s.channelService.GetChannelForGroup(ctx, *groupID)
+		ch, err := channelService.GetChannelForGroup(ctx, *groupID)
 		if err != nil || ch == nil {
 			return false
 		}
@@ -143,14 +155,20 @@ func extractWebSearchTextFromContent(content gjson.Result) string {
 func (s *GatewayService) handleWebSearchEmulation(
 	ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest,
 ) (*ForwardResult, error) {
-	startTime := time.Now()
-
 	// Release the serial queue lock immediately — we don't need upstream.
 	if parsed.OnUpstreamAccepted != nil {
 		parsed.OnUpstreamAccepted()
 	}
+	return writeEmulatedWebSearch(ctx, c, account, parsed.Body.Bytes(), parsed.Model, parsed.Stream)
+}
 
-	query := extractSearchQueryFromBody(parsed.Body.Bytes())
+// 执行末条用户消息中的搜索，并按客户端 stream 参数返回 Messages 或 SSE。
+func writeEmulatedWebSearch(
+	ctx context.Context, c *gin.Context, account *Account, body []byte, model string, stream bool,
+) (*ForwardResult, error) {
+	startTime := time.Now()
+
+	query := extractSearchQueryFromBody(body)
 	if query == "" {
 		return nil, fmt.Errorf("web search emulation: no query found in messages")
 	}
@@ -173,12 +191,11 @@ func (s *GatewayService) handleWebSearchEmulation(
 	slog.Info("web search emulation: search completed",
 		"provider", providerName, "results_count", len(resp.Results))
 
-	model := parsed.Model
 	if model == "" {
 		model = defaultWebSearchModel
 	}
 
-	if parsed.Stream {
+	if stream {
 		return writeWebSearchStreamResponse(c, query, resp, model, startTime)
 	}
 	return writeWebSearchNonStreamResponse(c, query, resp, model, startTime)

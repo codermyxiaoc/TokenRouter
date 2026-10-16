@@ -70,6 +70,9 @@ func (s *OpenAIGatewayService) DiagnoseRoutingModelAvailabilityForPlatform(
 	diag := ModelAvailabilityDiagnosis{}
 	for i := range accounts {
 		diag.HasAccountsInPool = true
+		if isRetiredOpenAISubscriptionModel(&accounts[i], resolveOpenAIAccountUpstreamModelForRequest(&accounts[i], routingModel, false)) {
+			diag.HasRetiredSubscriptionModel = true
+		}
 		// 与账号选择时的候选过滤保持一致：空 model_mapping 表示允许全部模型；
 		// 否则必须命中显式映射或通配符映射。
 		if openAIAccountSupportsRoutingModel(ctx, &accounts[i], routingModel) {

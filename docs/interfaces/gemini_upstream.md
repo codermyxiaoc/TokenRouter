@@ -39,6 +39,8 @@ Responses 转换是正式分支：非流和 SSE 共用 Gemini 上游执行、重
 
 API Key、OAuth 和 Vertex Service Account 在认证头、base URL、project/location 和错误结构上不同；协议转换层必须保留这些传输差异。每次 failover attempt 都重新选择账号并重建 payload，流式输出开始后不再切换。
 
+普通 `/v1beta/models`、单模型查询及生成入口也允许复合或智能 Key 选择 Antigravity 分组。目录按渠道和账号映射后的最终上游型号过滤，仅保留 Gemini；自定义别名不会因名称缺少 `gemini-` 被隐藏，指向 Claude 的伪 Gemini 别名不会通过。生成入口在共享选号前声明原生协议资格，基础与高级候选、黏性和等待计划都先排除最终映射到 Claude 的账号，再申请并发槽；实际派发前再次校验最终型号，智能选组使用相同协议资格。显式缓存绑定不会因协议不匹配而切到其它账号；分组协议开关、Key 权限、订阅与余额准入保持不变。
+
 Antigravity 专用 `/antigravity/v1beta/*` 强制选择 Antigravity 账号，其契约由[Antigravity 上游](antigravity_upstream.md)拥有，不属于 Gemini 原生账号支持范围。
 
 ## 模型与会话
@@ -46,6 +48,10 @@ Antigravity 专用 `/antigravity/v1beta/*` 强制选择 Antigravity 账号，其
 可请求模型由分组、渠道和账号能力共同解析。客户端模型依次经过 Key 重定向、渠道映射和账号映射；Vertex 或 AI Studio 的最终模型标识与计费模型可以不同。模型列表不能仅回显默认常量，也不能展示没有可调度账号支持的目标。
 
 兼容层维护 thinking/推理字段、tool/schema、图片输入、usage、finish reason 和 Gemini thought signature。工具 schema 会递归移除 Gemini 不支持的字段；INTEGER 的整数 `exclusiveMinimum` 转换为加一后的包含式 `minimum`，且不覆盖更严格的既有下界，无法等价转换的独占下界只清理不伪造。需要跨轮次的 signature、session 和 cache 连续性时，粘性会话优先复用账号；切换账号必须重新评估可继续性，不能把另一个账号的内部状态当作通用上下文。
+
+Messages/Chat 兼容请求按模型代际转发思考意图：Gemini 2.5 使用 `thinkingBudget`，3 及后续适用模型使用 `thinkingLevel`；显式模型档位不被兼容字段覆盖，图片、音频等不支持思考参数的型号不强加配置。开启思考的流请求可返回摘要：Messages 使用独立 thinking block，Chat/Responses 沿用原有 reasoning 输出。历史 thinking/redacted_thinking 与 Chat reasoning 内容从历史剔除，不作为普通提示词重新发送；未知字段和工具参数整数精度保留。原生显式 thinkingLevel 和兼容入口实际转发的档位进入计费记录，预算值本身不猜测收费档位。
+
+Gemini 4 Argon 默认基础价为输入 2、输出 10、缓存读取 0.1 USD/M Token，Cyber 对应 4、20、0.2；精确档位自定义价优先，未配置时档位别名回退基础型号。Argon 使用隐式缓存，不累加显式缓存存储费用。既有渠道/分组自定义价与倍率保持优先，不依据日期自动改变模型价格。
 
 原生与 Claude 兼容生图响应按上游实际返回的 `inlineData`/`inline_data` 图片 part 数量计费，自定义模型别名也适用。流式响应按单个 payload 中观测到的最大图片数记录，避免累积式 SSE 重复计费；未观测到内联图片时才回退到请求模型名或映射后模型名的生图启发式。
 
@@ -96,3 +102,5 @@ OAuth refresh、Service Account token、project/tier 发现和上游请求错误
 Gemini 原生入口返回 Google 形状，Anthropic/OpenAI 入口返回对应客户端形状。最终错误可应用[网关错误响应策略](gateway_error_policy.md)，但 project、service account JSON、token、API key 和内部上游响应不能无条件透传。排障应核对 OAuth variant、project/location/tier、最终模型、thought/session 状态、quota reset 和 attempt 链。
 
 相关文档：[网关请求生命周期](../architecture/gateway_request_lifecycle.md)、[账号调度与缓存一致性](../architecture/account_scheduling_and_cache.md)、[账号维护](../operations/account_maintenance.md)。
+
+Vertex 共享容量型 429（RESOURCE_EXHAUSTED、无配额详情且提示稍后重试）仅沿用有界同号退避，不写配额耗尽冷却；带 QuotaFailure/RetryInfo、配额或 provisioned throughput 信息的错误保留原处理。每个实际 HTTP 错误响应的显式错误策略检查结果在重试循环和最终处理间复用，避免首次 401 暂停因重复检查误升级为永久 error。Vertex 服务账号换 token 明确返回 `invalid_grant` 且账号不存在时，停止该账号调度并记录 account_auth 事件，再请求换号；其它 OAuth、网络或取消错误不能按账号不存在处理。

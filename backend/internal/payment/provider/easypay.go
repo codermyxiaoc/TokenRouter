@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -305,25 +306,60 @@ func (e *EasyPay) upstreamPaymentType(paymentType string) string {
 	return paymentType
 }
 
+// easyPayQueryScalar 兼容 PHP 的数字/字符串字段，拒绝布尔值、对象和数组。
+type easyPayQueryScalar string
+
+func (s *easyPayQueryScalar) UnmarshalJSON(raw []byte) error {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		*s = easyPayQueryScalar(text)
+		return nil
+	}
+	var number json.Number
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	number, ok := value.(json.Number)
+	if !ok {
+		return fmt.Errorf("easypay query invalid scalar")
+	}
+	*s = easyPayQueryScalar(number.String())
+	return nil
+}
+
 type easyPayQueryData struct {
-	TradeStatus *string `json:"trade_status"`
-	Status      *int    `json:"status"`
-	Money       *string `json:"money"`
-	TradeNo     *string `json:"trade_no"`
+	OutTradeNo  *easyPayQueryScalar `json:"out_trade_no"`
+	TradeStatus *easyPayQueryScalar `json:"trade_status"`
+	Status      *easyPayQueryScalar `json:"status"`
+	Money       *easyPayQueryScalar `json:"money"`
+	TradeNo     *easyPayQueryScalar `json:"trade_no"`
 }
 
 type easyPayQueryResponse struct {
-	Code        *int             `json:"code"`
-	Msg         string           `json:"msg"`
-	TradeStatus *string          `json:"trade_status"`
-	Status      *int             `json:"status"`
-	Money       *string          `json:"money"`
-	TradeNo     *string          `json:"trade_no"`
-	Data        easyPayQueryData `json:"data"`
+	OutTradeNo  *easyPayQueryScalar `json:"out_trade_no"`
+	Code        *easyPayQueryScalar `json:"code"`
+	Msg         string              `json:"msg"`
+	TradeStatus *easyPayQueryScalar `json:"trade_status"`
+	Status      *easyPayQueryScalar `json:"status"`
+	Money       *easyPayQueryScalar `json:"money"`
+	TradeNo     *easyPayQueryScalar `json:"trade_no"`
+	Data        easyPayQueryData    `json:"data"`
 }
 
 // @project-doc docs/domains/payments_and_entitlements.md#easypay_order_query
 func (e *EasyPay) QueryOrder(ctx context.Context, tradeNo string) (*payment.QueryOrderResponse, error) {
+	result, err := e.queryOrder(ctx, tradeNo)
+	if err == nil && result.TradeNo == "" {
+		result.TradeNo = tradeNo
+	}
+	return result, err
+}
+
+// queryOrder 保留渠道交易号是否存在，回调确认不能把商户订单号误当渠道交易号。
+func (e *EasyPay) queryOrder(ctx context.Context, tradeNo string) (*payment.QueryOrderResponse, error) {
 	// 查单及兼容回退共用一个总超时；复制客户端，避免改变下单和退款的传输行为。
 	client := http.Client{}
 	if e.httpClient != nil {
@@ -357,7 +393,7 @@ func (e *EasyPay) QueryOrder(ctx context.Context, tradeNo string) (*payment.Quer
 			return nil, err
 		}
 	}
-	return parseEasyPayQueryResponse(statusCode, body, tradeNo, e.MerchantIdentityMetadata())
+	return parseEasyPayQueryResponseWithIdentity(statusCode, body, tradeNo, "", e.MerchantIdentityMetadata())
 }
 
 // Z-Pay 官方查单协议要求 GET；精确匹配已核实主机，其他易支付保留 POST 兼容流程。
@@ -380,11 +416,10 @@ func (e *EasyPay) queryRaw(ctx context.Context, client *http.Client, method stri
 	for key, value := range params {
 		values.Set(key, value)
 	}
-	endpoint := e.apiBase() + "/api.php"
+	// 易支付 PHP 常只读取 URL 参数；POST 同时保留表单，兼容既有实现。
+	endpoint := e.apiBase() + "/api.php?" + values.Encode()
 	var requestBody io.Reader
-	if method == http.MethodGet {
-		endpoint += "?" + values.Encode()
-	} else {
+	if method != http.MethodGet {
 		requestBody = strings.NewReader(values.Encode())
 	}
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, requestBody)
@@ -419,6 +454,11 @@ func (e *EasyPay) queryRaw(ctx context.Context, client *http.Client, method stri
 // parseEasyPayQueryResponse 只接受 HTTP 与业务查询均成功且支付状态明确的 JSON 对象。
 // 错误响应不携带原始 body，避免错误页回显敏感信息进入日志或客户端。
 func parseEasyPayQueryResponse(statusCode int, body []byte, fallbackTradeNo string, metadata map[string]string) (*payment.QueryOrderResponse, error) {
+	return parseEasyPayQueryResponseWithIdentity(statusCode, body, fallbackTradeNo, fallbackTradeNo, metadata)
+}
+
+// parseEasyPayQueryResponseWithIdentity 校验渠道回显的商户订单，阻止误查其他订单后入账。
+func parseEasyPayQueryResponseWithIdentity(statusCode int, body []byte, expectedOrder, fallbackTradeNo string, metadata map[string]string) (*payment.QueryOrderResponse, error) {
 	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("easypay query HTTP %d", statusCode)
 	}
@@ -440,15 +480,25 @@ func parseEasyPayQueryResponse(statusCode int, body []byte, fallbackTradeNo stri
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("easypay query non-JSON response (HTTP %d)", statusCode)
 	}
-	if resp.Code == nil || *resp.Code != easypayCodeSuccess {
+	// 宽容字符串形式，但小数、空值与未知结构不能被判成有效业务码。
+	code, codeErr := 0, fmt.Errorf("missing code")
+	if resp.Code != nil {
+		code, codeErr = strconv.Atoi(string(*resp.Code))
+	}
+	if codeErr != nil || code != easypayCodeSuccess {
 		// 草稿连通性探测可识别明确的不存在结果，普通查单仍返回错误且不推断未支付。
-		if resp.Code != nil && easyPayQueryOrderNotFoundMessage(resp.Msg) {
+		if codeErr == nil && easyPayQueryOrderNotFoundMessage(resp.Msg) {
 			return nil, fmt.Errorf("easypay query unsuccessful response (HTTP %d): %w", statusCode, ErrEasyPayOrderNotFound)
 		}
 		return nil, fmt.Errorf("easypay query unsuccessful response (HTTP %d)", statusCode)
 	}
-	var tradeStatus *string
-	var numericStatus *int
+	for _, orderID := range []*easyPayQueryScalar{resp.OutTradeNo, resp.Data.OutTradeNo} {
+		if orderID != nil && strings.TrimSpace(string(*orderID)) != "" && string(*orderID) != expectedOrder {
+			return nil, fmt.Errorf("easypay query order mismatch")
+		}
+	}
+	var tradeStatus *easyPayQueryScalar
+	var numericStatus *easyPayQueryScalar
 	// 保留已有字段优先级，但不再将未知或缺失状态当作未付款。
 	if resp.TradeStatus != nil {
 		tradeStatus = resp.TradeStatus
@@ -461,7 +511,7 @@ func parseEasyPayQueryResponse(statusCode int, body []byte, fallbackTradeNo stri
 	}
 	var status string
 	if tradeStatus != nil {
-		switch *tradeStatus {
+		switch string(*tradeStatus) {
 		case tradeStatusSuccess:
 			status = payment.ProviderStatusPaid
 		case "WAITING", "WAIT_BUYER_PAY":
@@ -470,10 +520,10 @@ func parseEasyPayQueryResponse(statusCode int, body []byte, fallbackTradeNo stri
 			return nil, fmt.Errorf("easypay query unknown payment status")
 		}
 	} else if numericStatus != nil {
-		switch *numericStatus {
-		case easypayStatusPaid:
+		switch string(*numericStatus) {
+		case "1":
 			status = payment.ProviderStatusPaid
-		case 0:
+		case "0":
 			status = payment.ProviderStatusPending
 		default:
 			return nil, fmt.Errorf("easypay query unknown payment status")
@@ -484,17 +534,17 @@ func parseEasyPayQueryResponse(statusCode int, body []byte, fallbackTradeNo stri
 
 	money := ""
 	if resp.Money != nil {
-		money = *resp.Money
+		money = string(*resp.Money)
 	} else if resp.Data.Money != nil {
-		money = *resp.Data.Money
+		money = string(*resp.Data.Money)
 	}
 	responseTradeNo := fallbackTradeNo
 	if resp.TradeNo != nil {
 		if *resp.TradeNo != "" {
-			responseTradeNo = *resp.TradeNo
+			responseTradeNo = string(*resp.TradeNo)
 		}
 	} else if resp.Data.TradeNo != nil && *resp.Data.TradeNo != "" {
-		responseTradeNo = *resp.Data.TradeNo
+		responseTradeNo = string(*resp.Data.TradeNo)
 	}
 
 	amount, _ := strconv.ParseFloat(money, 64)
@@ -528,7 +578,17 @@ func (e *EasyPay) VerifyNotification(_ context.Context, rawBody string, _ map[st
 		if !easyPayNotifyAllowedParams[k] {
 			return nil, fmt.Errorf("unexpected notify param: %s", k)
 		}
+		// 重复字段可能被网关、验签与业务层按不同顺序解释，直接拒绝。
+		if len(values[k]) != 1 {
+			return nil, fmt.Errorf("duplicate notify param: %s", k)
+		}
 		params[k] = values.Get(k)
+		if k != "name" && strings.ContainsAny(params[k], "&=") {
+			return nil, fmt.Errorf("invalid notify param: %s", k)
+		}
+	}
+	if params["pid"] == "" || params["pid"] != e.config["pid"] {
+		return nil, fmt.Errorf("notify merchant mismatch")
 	}
 	sign := params["sign"]
 	if sign == "" {
@@ -554,6 +614,33 @@ func (e *EasyPay) VerifyNotification(_ context.Context, rawBody string, _ map[st
 		TradeNo: params["trade_no"], OrderID: params["out_trade_no"],
 		Amount: amount, Status: status, RawData: rawBody, Metadata: metadata,
 	}, nil
+}
+
+// ConfirmNotification 使用当前验签实例主动查单，只有已支付、金额和交易号一致才可入账。
+func (e *EasyPay) ConfirmNotification(ctx context.Context, n *payment.PaymentNotification) error {
+	if n == nil || n.Status != payment.NotificationStatusSuccess {
+		return nil
+	}
+	if strings.TrimSpace(n.OrderID) == "" || n.Amount <= 0 || math.IsNaN(n.Amount) || math.IsInf(n.Amount, 0) {
+		return fmt.Errorf("easypay notify invalid order or amount")
+	}
+	result, err := e.queryOrder(ctx, n.OrderID)
+	if err != nil {
+		return fmt.Errorf("easypay notify confirmation: %w", err)
+	}
+	if result.Status != payment.ProviderStatusPaid {
+		return fmt.Errorf("easypay notify order is not paid")
+	}
+	if result.Amount <= 0 || math.IsNaN(result.Amount) || math.IsInf(result.Amount, 0) || math.Abs(result.Amount-n.Amount) > 0.005 {
+		return fmt.Errorf("easypay notify amount mismatch")
+	}
+	if result.TradeNo != "" {
+		if n.TradeNo != "" && n.TradeNo != result.TradeNo {
+			return fmt.Errorf("easypay notify trade number mismatch")
+		}
+		n.TradeNo = result.TradeNo
+	}
+	return nil
 }
 
 func (e *EasyPay) Refund(ctx context.Context, req payment.RefundRequest) (*payment.RefundResponse, error) {
@@ -768,3 +855,5 @@ var easyPayNotifyAllowedParams = map[string]bool{
 	"sign":         true,
 	"sign_type":    true,
 }
+
+var _ payment.NotificationConfirmer = (*EasyPay)(nil)

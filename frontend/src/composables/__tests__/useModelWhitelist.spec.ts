@@ -93,14 +93,27 @@ describe('useModelWhitelist', () => {
     }
     expect(getModelsByPlatform('anthropic')).toContain('claude-opus-5-5')
     expect(getModelsByPlatform('anthropic')).toContain('claude-sonnet-5-5')
-    expect(getModelsByPlatform('antigravity')).not.toContain('claude-sonnet-5-5')
+    expect(getModelsByPlatform('antigravity')).toContain('claude-sonnet-5-5-high')
     expect(getPresetMappingsByPlatform('anthropic')).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: 'Opus 5.5', from: 'claude-opus-5-5', to: 'claude-opus-5-5' })
     ]))
-    for (const platform of ['antigravity', 'opencode_go', 'qoder']) {
+    for (const platform of ['opencode_go', 'qoder']) {
       expect(getModelsByPlatform(platform)).not.toContain('claude-opus-5-5')
     }
     expect(getPresetMappingsByPlatform('bedrock').some(mapping => mapping.from === 'claude-opus-5-5')).toBe(false)
+  })
+
+  it('Antigravity 新能力包含精确档位且保留旧图片目录', () => {
+    // 默认候选和映射不等同于账号授权，仍由后端白名单检查。
+    const models = getModelsByPlatform('antigravity')
+    for (const family of ['gemini-4-argon', 'claude-opus-5-5', 'claude-sonnet-5-5']) {
+      for (const tier of ['low', 'medium', 'high']) expect(models).toContain(`${family}-${tier}`)
+    }
+    expect(new Set(models).size).toBe(models.length)
+    expect(getModelsByPlatform('gemini')).toContain('gemini-4-argon')
+    expect(getPresetMappingsByPlatform('antigravity')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'gemini-4-argon', to: 'gemini-4-argon-high' })
+    ]))
   })
 
   it('antigravity 模型列表包含图片模型兼容项', () => {

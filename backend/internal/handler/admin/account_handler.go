@@ -2752,20 +2752,18 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 
 	// Handle OpenAI accounts
 	if account.IsOpenAI() {
-		// OpenAI 自动透传会绕过常规模型改写，测试/模型列表也应回落到默认模型集。
-		if account.IsOpenAIPassthroughEnabled() {
-			response.Success(c, openai.DefaultModels)
-			return
-		}
-
 		requestModels := account.GetConfiguredRequestModels()
-		if len(requestModels) == 0 {
-			response.Success(c, openai.DefaultModels)
-			return
+		// 自动透传仍使用默认候选；退役判定使用公开名称映射后的真实目标。
+		if account.IsOpenAIPassthroughEnabled() || len(requestModels) == 0 {
+			requestModels = make([]string, 0, len(openai.DefaultModels))
+			for _, model := range openai.DefaultModels {
+				requestModels = append(requestModels, model.ID)
+			}
 		}
+		requestModels = service.FilterRetiredOpenAIModelIDs([]service.Account{*account}, requestModels)
 
 		// 返回当前账号显式允许请求的模型列表
-		var models []openai.Model
+		models := make([]openai.Model, 0, len(requestModels))
 		for _, requestedModel := range requestModels {
 			var found bool
 			for _, dm := range openai.DefaultModels {
@@ -2831,18 +2829,47 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
-	// Handle Antigravity accounts: return Claude + Gemini models
+	// Antigravity 能力只附加展示；保留配置目录和默认目录各自原有的响应字段。
 	if account.Platform == service.PlatformAntigravity {
-		// 测试模型列表尊重本站独立白名单，不恢复上游仅 mapping 的限制模式。
-		if configured := account.GetConfiguredRequestModels(); len(configured) > 0 {
-			models := make([]openai.Model, 0, len(configured))
-			for _, id := range configured {
-				models = append(models, openai.Model{ID: id, Object: "model", Type: "model", DisplayName: id})
+		snapshot := account.GetUpstreamModelMetadataSnapshot()
+		metadataFor := func(id string) *service.UpstreamModelMetadata {
+			if snapshot != nil {
+				if metadata, ok := snapshot.Models[account.GetMappedModel(id)]; ok {
+					return &metadata
+				}
+			}
+			return nil
+		}
+		if ids := account.GetConfiguredRequestModels(); len(ids) > 0 {
+			type configuredModel struct {
+				openai.Model
+				Metadata *service.UpstreamModelMetadata `json:"metadata,omitempty"`
+			}
+			models := make([]configuredModel, 0, len(ids))
+			for _, id := range ids {
+				item := configuredModel{Model: openai.Model{ID: id, Object: "model", Type: "model", DisplayName: id}, Metadata: metadataFor(id)}
+				if item.Metadata != nil && item.Metadata.DisplayName != "" {
+					item.DisplayName = item.Metadata.DisplayName
+				}
+				models = append(models, item)
 			}
 			response.Success(c, models)
 			return
 		}
-		response.Success(c, antigravity.DefaultModels())
+		type defaultModel struct {
+			antigravity.ClaudeModel
+			Metadata *service.UpstreamModelMetadata `json:"metadata,omitempty"`
+		}
+		defaults := antigravity.DefaultModels()
+		models := make([]defaultModel, 0, len(defaults))
+		for _, model := range defaults {
+			item := defaultModel{ClaudeModel: model, Metadata: metadataFor(model.ID)}
+			if item.Metadata != nil && item.Metadata.DisplayName != "" {
+				item.DisplayName = item.Metadata.DisplayName
+			}
+			models = append(models, item)
+		}
+		response.Success(c, models)
 		return
 	}
 	if account.IsTypeSafe() || account.IsCline() || account.IsCommandCode() {
@@ -3015,7 +3042,7 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 		return
 	}
 
-	models, err := h.accountTestService.FetchUpstreamSupportedModels(c.Request.Context(), account)
+	catalog, err := h.accountTestService.SyncUpstreamModelCatalog(c.Request.Context(), account)
 	if err != nil {
 		var syncErr *service.UpstreamModelSyncError
 		if errors.As(err, &syncErr) {
@@ -3034,7 +3061,7 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, gin.H{"models": models})
+	response.Success(c, catalog)
 }
 
 // SyncUpstreamModelsPreview 使用未保存账号的临时凭证同步上游实时支持模型列表。

@@ -22,6 +22,11 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return fmt.Errorf("parse request: empty request")
 	}
+	// 不支持的计数平台在取凭据前结束，避免把其它供应商 token 发给 Anthropic。
+	if account != nil && (account.Platform == PlatformAntigravity || account.Platform == PlatformQoder || !anthropicMessagesCredentialAllowed(account)) {
+		s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported for this platform")
+		return nil
+	}
 	// 计数入口也必须按最终模型校验，避免相同请求在两个端点呈现不同能力。
 	if account != nil && account.Platform == PlatformAnthropic {
 		if err := ValidateSonnet55Request(parsed.Body.Bytes(), resolveAccountUpstreamModel(ctx, account, parsed.Model)); err != nil {
@@ -49,13 +54,6 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	// Bedrock 不支持 count_tokens 端点
 	if account != nil && account.IsBedrock() {
 		s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported for Bedrock")
-		return nil
-	}
-
-	// Antigravity/Qoder 账户不支持 count_tokens，返回 404 让客户端 fallback 到本地估算。
-	// 返回 nil 避免 handler 层记录为错误，也不设置 ops 上游错误上下文。
-	if account.Platform == PlatformAntigravity || account.Platform == PlatformQoder {
-		s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported for this platform")
 		return nil
 	}
 
@@ -411,7 +409,7 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 ) (*http.Request, error) {
 	body = stripDeferredToolCacheControl(body)
 	targetURL := claudeAPICountTokensURL
-	baseURL := account.GetBaseURL()
+	baseURL := getAnthropicGatewayBaseURL(account)
 	if baseURL != "" {
 		validatedURL, err := s.validateUpstreamBaseURL(baseURL)
 		if err != nil {
@@ -481,7 +479,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// 确定目标 URL
 	targetURL := claudeAPICountTokensURL
 	if account.Type == AccountTypeAPIKey {
-		baseURL := account.GetBaseURL()
+		baseURL := getAnthropicGatewayBaseURL(account)
 		if baseURL != "" {
 			validatedURL, err := s.validateUpstreamBaseURL(baseURL)
 			if err != nil {

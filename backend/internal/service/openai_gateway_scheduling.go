@@ -357,15 +357,19 @@ func (e openAINoAvailableSelectionError) Unwrap() error {
 
 // openAIAccountSupportsRoutingModel 按当前入口的真实转发模式检查账号模型规则。
 // HTTP Responses 自动透传只替换认证，因此不会执行账号普通映射和最终白名单。
-func openAIAccountSupportsRoutingModel(ctx context.Context, account *Account, routingModel string) bool {
+func openAIAccountSupportsRoutingModel(ctx context.Context, account *Account, routingModel string, compact ...bool) bool {
+	requireCompact := len(compact) > 0 && compact[0]
 	routingModel = strings.TrimSpace(routingModel)
 	if routingModel == "" {
 		return true
 	}
+	if isRetiredOpenAISubscriptionModel(account, resolveOpenAIAccountUpstreamModelForRequest(account, routingModel, requireCompact)) {
+		return false
+	}
 	if openAIHTTPPassthroughRoutingFromContext(ctx) && account != nil && account.IsOpenAIPassthroughEnabled() {
 		return true
 	}
-	return account != nil && account.IsModelSupported(routingModel)
+	return account != nil && account.isModelMappingSupported(routingModel)
 }
 
 // openAICompactSupportTier 按 OpenAI 兼容账号的 compact 能力分级。
@@ -454,7 +458,7 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 			return "quota_auto_pause"
 		}
 	}
-	if !openAIAccountSupportsRoutingModel(ctx, account, requestedModel) {
+	if !openAIAccountSupportsRoutingModel(ctx, account, requestedModel, requireCompact) {
 		return "model_not_supported"
 	}
 	if !account.SupportsOpenAIEndpointCapability(requiredCapability) {

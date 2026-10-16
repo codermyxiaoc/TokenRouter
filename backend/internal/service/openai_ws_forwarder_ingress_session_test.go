@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 type openAIWSLeaseLossAfterReadConn struct {
@@ -287,12 +288,15 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 	require.Equal(t, "response.completed", gjson.GetBytes(firstTurnEvent, "type").String())
 	require.Equal(t, "resp_ingress_turn_1", gjson.GetBytes(firstTurnEvent, "response.id").String())
 	require.Equal(t, "client-turn-1", gjson.GetBytes(firstTurnEvent, "response.model").String())
+	// 每轮独立补齐时间，不能因连接池复用而遗漏终态必填字段。
+	require.Positive(t, gjson.GetBytes(firstTurnEvent, "response.created_at").Int())
 
 	writeMessage(`{"type":"response.create","model":"client-turn-2","stream":false,"previous_response_id":"resp_ingress_turn_1"}`)
 	secondTurnEvent := readMessage()
 	require.Equal(t, "response.completed", gjson.GetBytes(secondTurnEvent, "type").String())
 	require.Equal(t, "resp_ingress_turn_2", gjson.GetBytes(secondTurnEvent, "response.id").String())
 	require.Equal(t, "client-turn-2", gjson.GetBytes(secondTurnEvent, "response.model").String())
+	require.Positive(t, gjson.GetBytes(secondTurnEvent, "response.created_at").Int())
 	require.Equal(t, "response.completed", <-turnTerminalCh, "首轮 turn 应保留成功终态")
 	require.Equal(t, "response.completed", <-turnTerminalCh, "第二轮 turn 应保留成功终态")
 	require.Equal(t, "max", <-turnEffortCh, "WS v2 应记录第三方模型显式 max")
@@ -5198,7 +5202,12 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ReportsCyberFail
 	_, event, readErr := clientConn.Read(readCtx)
 	cancelRead()
 	require.NoError(t, readErr)
-	require.JSONEq(t, string(failedEvent), string(event))
+	// 下游普通 Responses 事件会补齐时间，风控回调仍保留上游原始错误证据。
+	createdAt := gjson.GetBytes(event, "response.created_at").Int()
+	require.Positive(t, createdAt)
+	expectedEvent, err := sjson.SetBytes(failedEvent, "response.created_at", createdAt)
+	require.NoError(t, err)
+	require.JSONEq(t, string(expectedEvent), string(event))
 	require.NoError(t, clientConn.Close(coderws.StatusNormalClosure, "done"))
 
 	select {

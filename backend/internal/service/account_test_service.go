@@ -420,11 +420,11 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	if account.Platform == PlatformVideo {
 		return s.sendErrorAndEnd(c, "Video accounts require an explicit video test with configured endpoint")
 	}
-	// 图片测试仅允许支持图像接口的平台，Antigravity 仅开放 API Key 账号。
+	// 图片测试仅允许支持图像接口的平台；Antigravity 原生账号复用已选择的图片模型。
 	if explicitTestType && testType == AccountTestTypeImage &&
 		!account.IsOpenAI() && !account.IsGemini() &&
 		account.Platform != PlatformGrok &&
-		(account.Platform != PlatformAntigravity || account.Type != AccountTypeAPIKey) {
+		account.Platform != PlatformAntigravity {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Image tests are not supported for platform %s", account.Platform))
 	}
 	if account.IsOpenCodeGo() || isAdditionalAPIKeyPlatform(account.Platform) {
@@ -1978,8 +1978,8 @@ func (s *AccountTestService) routeAntigravityTest(c *gin.Context, account *Accou
 		}
 		return s.testClaudeAccountConnection(c, account, modelID, prompt)
 	}
-	if explicitTestType && testType == AccountTestTypeImage {
-		return s.sendErrorAndEnd(c, "Image tests are not supported for this Antigravity account type")
+	if explicitTestType && testType == AccountTestTypeImage && !isImageGenerationModel(resolveFinalAntigravityModelKey(c.Request.Context(), account, modelID)) {
+		return s.sendErrorAndEnd(c, "Please select an image generation model for the image test")
 	}
 	return s.testAntigravityAccountConnection(c, account, modelID, prompt)
 }
@@ -2178,6 +2178,10 @@ func (s *AccountTestService) testAntigravityAccountConnection(c *gin.Context, ac
 		s.sendEvent(c, TestEvent{Type: "content", Text: result.Text})
 	}
 
+	// 图片测试复用现有安全图片展示事件。
+	for _, image := range result.Images {
+		s.sendEvent(c, TestEvent{Type: "image", ImageURL: image.ImageURL, MimeType: image.MimeType})
+	}
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 	return nil
 }
@@ -2268,7 +2272,9 @@ func (s *AccountTestService) buildGeminiServiceAccountRequest(ctx context.Contex
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if err := setVertexGeminiAuth(ctx, req, account, s.geminiTokenProvider); err != nil { return nil, err }
+	if err := setVertexGeminiAuth(ctx, req, account, s.geminiTokenProvider); err != nil {
+		return nil, err
+	}
 	applyAccountTestUserAgent(req)
 	return req, nil
 }

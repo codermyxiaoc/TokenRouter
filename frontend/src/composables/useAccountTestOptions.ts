@@ -25,7 +25,7 @@ export function useAccountTestOptions(
   const imageTestAvailable = computed(() => {
     const platform = account.value?.platform
     return platform === 'openai' || platform === 'gemini' || platform === 'grok' ||
-      (platform === 'antigravity' && account.value?.type === 'apikey')
+      platform === 'antigravity'
   })
   const testTypeOptions = computed(() => isVideoAccount.value
     ? [{ value: 'video', label: t('admin.accounts.video.testType') }]

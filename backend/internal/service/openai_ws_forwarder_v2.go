@@ -402,6 +402,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	responseAccumulator := apicompat.NewBufferedResponseAccumulator()
 	wroteDownstream := false
 	needModelReplace := originalModel != mappedModel
+	var createdAtStamper responsesCreatedAtStamper
 	var mappedModelBytes []byte
 	if needModelReplace && mappedModel != "" {
 		mappedModelBytes = []byte(mappedModel)
@@ -571,7 +572,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			message = normalized
 		}
 
-		eventType, eventResponseID, responseField := parseOpenAIWSEventEnvelope(message)
+		eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(message)
 		if eventType == "" {
 			continue
 		}
@@ -622,6 +623,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				}
 			}
 			message = restoreCodexToolNamesFromContext(c, message)
+			if !account.IsOpenAIPassthroughEnabled() {
+				if stamped, changed := createdAtStamper.Stamp(message, eventType); changed {
+					message = stamped
+				}
+			}
 		}
 		if openAIWSEventShouldParseUsage(eventType) {
 			parseOpenAIWSResponseUsageFromCompletedEvent(message, usage)
@@ -765,6 +771,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			return nil, fmt.Errorf("openai ws error event: %s", errMsg)
 		}
 
+		// 归一化会重建事件字节，最终响应必须读取新对象，避免非流式输出丢失补齐的时间或工具改写。
+		responseField := gjson.GetBytes(message, "response")
 		if reqStream {
 			if responseField.Exists() && responseField.Type == gjson.JSON {
 				finalResponse = []byte(responseField.Raw)

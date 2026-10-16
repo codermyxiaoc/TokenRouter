@@ -106,7 +106,7 @@ func logOpenAISuccessMissingUsage(ctx context.Context, c *gin.Context, account *
 }
 
 // buildOpenAIResponseFailedSSE 构造可被客户端解析的 Responses 失败事件。
-func buildOpenAIResponseFailedSSE(responseID, model string, source []byte, fallbackMessage string) string {
+func buildOpenAIResponseFailedSSE(responseID, model string, createdAt int64, source []byte, fallbackMessage string) string {
 	responseID = strings.TrimSpace(responseID)
 	if responseID == "" {
 		responseID = "resp_" + strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -129,20 +129,26 @@ func buildOpenAIResponseFailedSSE(responseID, model string, source []byte, fallb
 	if errorType := strings.TrimSpace(gjson.GetBytes(source, "error.type").String()); errorType != "" {
 		errorBody["type"] = errorType
 	}
-	response := map[string]any{
-		"id":     responseID,
-		"object": "response",
-		"model":  strings.TrimSpace(model),
-		"status": "failed",
-		"error":  errorBody,
+	if createdAt <= 0 {
+		createdAt = time.Now().Unix()
 	}
-	body, _ := json.Marshal(map[string]any{"type": "response.failed", "response": response})
+	response := map[string]any{
+		"created_at": createdAt,
+		"output":     []any{},
+		"id":         responseID,
+		"object":     "response",
+		"model":      strings.TrimSpace(model),
+		"status":     "failed",
+		"error":      errorBody,
+	}
+	body, _ := json.Marshal(map[string]any{"type": "response.failed", "sequence_number": openAIResponsesFailedSequenceNumber(source), "response": response})
 	return "data: " + string(body) + "\n\n"
 }
 
 // openAIStreamGenericFailedEventPayload 返回客户端可识别的通用失败事件。
 func openAIStreamGenericFailedEventPayload(_ ...[]byte) []byte {
-	return []byte(`{"type":"response.failed","response":{"error":{"message":"Upstream gateway error"}}}`)
+	body, _ := json.Marshal(map[string]any{"type": "response.failed", "sequence_number": 0, "response": map[string]any{"object": "response", "created_at": time.Now().Unix(), "status": "failed", "output": []any{}, "error": map[string]string{"message": "Upstream gateway error"}}})
+	return body
 }
 
 func openAIUsageHasTokens(usage *OpenAIUsage) bool {

@@ -301,3 +301,18 @@ func TestClassifySelectionFailureError_StillUpgradesNonModelNotFoundFallback(t *
 	require.Equal(t, "rate_limit_error", got.ErrType)
 	require.False(t, got.ModelNotFound)
 }
+
+// 已退役订阅给出明确诊断；同组还有正常 API Key 能力时保持容量错误语义。
+func TestClassifyNoAccountError_GPT55Retirement(t *testing.T) {
+	groupID := int64(1)
+	apiKey := &service.APIKey{GroupID: &groupID}
+	fd := &fakeDiagnoser{resp: service.ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasRetiredSubscriptionModel: true}}
+	cls := classifyNoAccountError(context.Background(), fd, apiKey, "gpt-5.5", "legacy", service.PlatformOpenAI)
+	require.Equal(t, http.StatusNotFound, cls.Status)
+	require.Equal(t, "model_not_found", cls.ErrType)
+	require.Contains(t, cls.Message, "no longer available through ChatGPT sign-in")
+	require.Contains(t, cls.Message, "API-key")
+	fd.resp.HasModelSupport = true
+	cls = classifyNoAccountError(context.Background(), fd, apiKey, "gpt-5.5", "legacy", service.PlatformOpenAI)
+	require.Equal(t, http.StatusServiceUnavailable, cls.Status)
+}

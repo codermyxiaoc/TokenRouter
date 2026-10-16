@@ -330,7 +330,7 @@ func smartRoutingGroupEndpointEligible(platform, endpoint string) bool {
 		if strings.HasPrefix(endpoint, "/antigravity/") {
 			return platform == PlatformAntigravity
 		}
-		return platform == PlatformGemini
+		return platform == PlatformGemini || platform == PlatformAntigravity
 	case strings.Contains(endpoint, "/images/batches"):
 		return platform == PlatformGemini
 	case strings.Contains(endpoint, "/images/"):
@@ -368,6 +368,11 @@ func smartRoutingAccountCatalogContains(account *Account, model string) bool {
 
 // smartRoutingAccountEndpointEligible 保留账号类型和端点能力边界；跨平台协议准入另由路由层检查。
 func smartRoutingAccountEndpointEligible(ctx context.Context, account *Account, model, endpoint string) bool {
+	// Antigravity 的 Gemini 原生入口只接收映射后的 Gemini，不能把同组 Claude 误路由过去。
+	if account.Platform == PlatformAntigravity && strings.Contains(endpoint, "/v1beta/models/") {
+		return IsAntigravityGeminiModel(resolveAccountUpstreamModel(ctx, account, model))
+	}
+
 	if route, ok := MatchVideoGatewayRoute("POST", endpoint); ok && account.Platform == PlatformVideo {
 		cfg, err := account.VideoConfiguration()
 		if err != nil || len(cfg.Endpoints) == 0 {

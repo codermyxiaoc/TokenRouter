@@ -97,7 +97,16 @@ func (s *GeminiMessagesCompatService) ForwardAsChatCompletions(
 	clientStream := ccReq.Stream
 	includeUsage := ccReq.StreamOptions != nil && ccReq.StreamOptions.IncludeUsage
 
-	responsesReq, err := apicompat.ChatCompletionsToResponses(&ccReq)
+	// 历史推理内容不回传给 Gemini：Gemini 的思考连续性由 thoughtSignature 承载。
+	for i := range ccReq.Messages {
+		ccReq.Messages[i].ReasoningContent = ""
+		ccReq.Messages[i].Reasoning = ""
+		if ccReq.Messages[i].Role == "assistant" {
+			ccReq.Messages[i].Content = dropChatReasoningContentParts(ccReq.Messages[i].Content)
+		}
+	}
+
+	responsesReq, err := chatCompletionsToResponses(s.cfg, &ccReq)
 	if err != nil {
 		return nil, s.writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 	}
@@ -160,6 +169,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 		return nil, s.writeGeminiOpenAICompatError(c, protocol, http.StatusBadRequest, "invalid_request_error", err.Error())
 	}
 	geminiReq = ensureGeminiFunctionCallThoughtSignatures(geminiReq)
+	geminiReq = applyGeminiCompatThinkingConfig(geminiReq, claudeBody, mappedModel, clientStream)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -180,11 +190,16 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 	)
 
 	var resp *http.Response
+	var checkedPolicy *ErrorPolicyResult // 每次响应单独检查，最终处理复用结果。
 	for attempt := 1; attempt <= geminiMaxRetries; attempt++ {
+		checkedPolicy = nil
 		upstreamReq, idHeader, err := buildReq(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return nil, err
+			}
+			if failoverErr := s.handleVertexServiceAccountNotFound(ctx, c, account, err); failoverErr != nil {
+				return nil, failoverErr
 			}
 			return nil, s.writeGeminiOpenAICompatError(c, protocol, http.StatusBadGateway, "upstream_error", err.Error())
 		}
@@ -195,11 +210,11 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 			return nil, s.handleUpstreamTransportError(ctx, c, account, err)
 		}
 
-		if matched, rebuilt := s.checkErrorPolicyInLoop(ctx, account, resp, mappedModel); matched {
-			resp = rebuilt
+		checked, rebuilt := s.checkErrorPolicyInLoop(ctx, account, resp, mappedModel)
+		resp = rebuilt
+		checkedPolicy = checked
+		if checked != nil && *checked != ErrorPolicyNone {
 			break
-		} else {
-			resp = rebuilt
 		}
 
 		if resp.StatusCode >= 400 && s.shouldRetryGeminiUpstreamError(account, resp.StatusCode) {
@@ -263,7 +278,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
-		decision := s.applyGeminiUpstreamErrorPolicy(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
+		decision := s.applyGeminiUpstreamErrorPolicy(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel, checkedPolicy)
 		evBody := unwrapIfNeeded(account.Type == AccountTypeOAuth, respBody)
 		if decision.Policy == ErrorPolicyCustomSkipped || decision.Policy == ErrorPolicyPoolBypassed {
 			if failoverErr := s.skippedErrorPolicyFailoverError(c, account, resp.StatusCode, respBody, requestID); failoverErr != nil {

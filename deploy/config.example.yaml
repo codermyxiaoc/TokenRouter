@@ -220,6 +220,8 @@ security:
 # 网关配置
 # =============================================================================
 gateway:
+  # 协议转换时显式输出预算的下限（最低 16，默认 128）；修改后需要重启。
+  min_output_tokens: 128
   # Timeout for waiting upstream response headers (seconds)
   # 等待上游响应头超时时间（秒）
   response_header_timeout: 600

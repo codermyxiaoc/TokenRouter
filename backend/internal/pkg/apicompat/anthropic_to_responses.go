@@ -12,6 +12,15 @@ import (
 // Chat Completions intermediary round-trip (e.g. thinking, cache_control,
 // structured system prompts).
 func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
+	return AnthropicToResponsesWithMinOutputTokens(req, DefaultMinMaxOutputTokens)
+}
+
+// AnthropicToResponsesWithMinOutputTokens 保留现有转换规则，只替换显式输出预算的下限。
+func AnthropicToResponsesWithMinOutputTokens(req *AnthropicRequest, minOutputTokens int) (*ResponsesRequest, error) {
+	if req == nil {
+		return nil, fmt.Errorf("anthropic request is nil")
+	}
+	minOutputTokens = normalizedMinOutputTokens(minOutputTokens)
 	input, err := convertAnthropicToResponsesInput(req.System, req.Messages)
 	if err != nil {
 		return nil, err
@@ -41,8 +50,8 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 
 	if req.MaxTokens > 0 {
 		v := req.MaxTokens
-		if v < minMaxOutputTokens {
-			v = minMaxOutputTokens
+		if v < minOutputTokens {
+			v = minOutputTokens
 		}
 		out.MaxOutputTokens = &v
 	}

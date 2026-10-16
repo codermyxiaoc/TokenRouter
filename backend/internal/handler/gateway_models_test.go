@@ -1176,3 +1176,27 @@ func modelIDsForTest(models []gatewayModelItemForTest) []string {
 	}
 	return ids
 }
+
+// 公开目录不得把订阅退役模型重新回填，API Key 的相同型号保持可见。
+func TestGatewayModelsRetiredSubscriptionAndAPIKey(t *testing.T) {
+	for _, typ := range []string{service.AccountTypeOAuth, service.AccountTypeAPIKey} {
+		t.Run(typ, func(t *testing.T) {
+			groupID := int64(217)
+			account := service.Account{ID: 217, Platform: service.PlatformOpenAI, Type: typ, Credentials: map[string]any{"model_whitelist": []any{"gpt-5.5"}}}
+			h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{byGroup: map[int64][]service.Account{groupID: {account}}})
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{GroupID: &groupID, Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI}})
+			h.Models(c)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var response gatewayModelsResponseForTest
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+			if typ == service.AccountTypeOAuth {
+				require.Empty(t, response.Data)
+			} else {
+				require.Contains(t, modelIDsForTest(response.Data), "gpt-5.5")
+			}
+		})
+	}
+}

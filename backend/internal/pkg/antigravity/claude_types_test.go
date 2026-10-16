@@ -36,6 +36,15 @@ func TestDefaultModels_ContainsNewAndLegacyImageModels(t *testing.T) {
 		"gemini-3.8-flash-low",
 		"gemini-3.8-flash-medium",
 		"gemini-3.8-flash-tiered",
+		"gemini-4-argon-high",
+		"gemini-4-argon-low",
+		"gemini-4-argon-medium",
+		"claude-opus-5-5-high",
+		"claude-opus-5-5-low",
+		"claude-opus-5-5-medium",
+		"claude-sonnet-5-5-high",
+		"claude-sonnet-5-5-low",
+		"claude-sonnet-5-5-medium",
 	}
 
 	for _, id := range requiredIDs {

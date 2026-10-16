@@ -50,11 +50,11 @@ func TestEasyPayZPayQueryMethod(t *testing.T) {
 				}
 				params := r.URL.Query()
 				if r.Method == http.MethodPost {
-					if r.URL.RawQuery != "" {
-						t.Error("POST exposes parameters in query")
-					}
 					if err := r.ParseForm(); err != nil {
 						t.Errorf("parse form: %v", err)
+					}
+					if r.URL.Query().Encode() != r.PostForm.Encode() {
+						t.Error("POST query must mirror form parameters")
 					}
 					params = r.PostForm
 				} else if r.Body != nil && r.Body != http.NoBody {
@@ -98,7 +98,7 @@ func TestEasyPayZPayQueryResponses(t *testing.T) {
 		{"malformed JSON", 200, `{"code":1,"status":`, ""},
 		{"business error", 200, `{"code":0,"status":0,"msg":"sensitive-response"}`, ""},
 		{"missing code", 200, `{"status":0}`, ""},
-		{"string code", 200, `{"code":"1","status":0}`, ""},
+		{"string code", 200, `{"code":"1","status":0,"money":"10.00","trade_no":"zpay-order"}`, payment.ProviderStatusPending},
 		{"fractional code", 200, `{"code":1.5,"status":0}`, ""},
 		{"missing status", 200, `{"code":1}`, ""},
 		{"null status", 200, `{"code":1,"status":null}`, ""},

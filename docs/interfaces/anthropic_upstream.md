@@ -2,6 +2,8 @@
 
 本文描述 Anthropic 平台账号、认证、协议转换、模型与缓存策略、额度限制和失败恢复边界。它不固化上游动态模型清单，也不替代公共网关请求生命周期或用户接入教程。
 
+自适应 API Key 账号的 `/v1/messages` 和 `/v1/messages/count_tokens` 统一选用 Anthropic 协议的 Base URL；没有协议覆盖时沿用平台默认或账号普通地址，仍执行既有 URL 安全检查。其它平台的 OAuth/Setup Token 不得进入 Anthropic 原生请求构建器：消息请求返回可换号的本地协议不匹配错误，不处罚凭据；计数请求在取 token 前返回不支持。Gemini、Antigravity 和 OpenAI 的专用兼容转换继续走各自认证链路。
+
 ## 章节导航
 
 - [账号与认证](#账号与认证)：修改 OAuth、Setup Token、API Key、Bedrock 或 Vertex 凭据时读取。

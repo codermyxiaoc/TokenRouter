@@ -16,6 +16,15 @@ type chatMessageContent struct {
 // true. store is always false and reasoning.encrypted_content is always
 // included so that the response translator has full context.
 func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest, error) {
+	return ChatCompletionsToResponsesWithMinOutputTokens(req, DefaultMinMaxOutputTokens)
+}
+
+// ChatCompletionsToResponsesWithMinOutputTokens 按配置提升显式输出预算，不给省略的预算添加默认值。
+func ChatCompletionsToResponsesWithMinOutputTokens(req *ChatCompletionsRequest, minOutputTokens int) (*ResponsesRequest, error) {
+	if req == nil {
+		return nil, fmt.Errorf("chat completions request is nil")
+	}
+	minOutputTokens = normalizedMinOutputTokens(minOutputTokens)
 	if isUltraReasoningEffort(req.ReasoningEffort) {
 		return nil, fmt.Errorf("reasoning effort %q is not supported", strings.TrimSpace(req.ReasoningEffort))
 	}
@@ -59,8 +68,8 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 	}
 	if maxTokens > 0 {
 		v := maxTokens
-		if v < minMaxOutputTokens {
-			v = minMaxOutputTokens
+		if v < minOutputTokens {
+			v = minOutputTokens
 		}
 		out.MaxOutputTokens = &v
 	}

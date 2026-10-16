@@ -885,6 +885,15 @@ func (d ChatDelta) ReasoningText() *string {
 // Shared constants
 // ---------------------------------------------------------------------------
 
-// minMaxOutputTokens is the floor for max_output_tokens in a Responses request.
-// Very small values may cause upstream API errors, so we enforce a minimum.
-const minMaxOutputTokens = 128
+// DefaultMinMaxOutputTokens 保留旧版输出预算下限，防止极小预算触发上游错误。
+const DefaultMinMaxOutputTokens = 128
+
+const minMaxOutputTokens = DefaultMinMaxOutputTokens
+
+// normalizedMinOutputTokens 为未经过启动配置校验的内部调用保留安全默认值。
+func normalizedMinOutputTokens(value int) int {
+	if value < 16 {
+		return DefaultMinMaxOutputTokens
+	}
+	return value
+}

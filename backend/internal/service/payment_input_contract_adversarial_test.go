@@ -46,12 +46,19 @@ func TestAdversarialPaymentFulfillmentRejectsWrongOrderTypes(t *testing.T) {
 	for _, orderType := range []string{"", "unknown", "BALANCE", "balance ", "subscription_typo"} {
 		_, err := client.PaymentOrder.UpdateOneID(order.ID).SetOrderType(orderType).Save(ctx)
 		require.NoError(t, err)
-		for _, fulfill := range []func(context.Context, int64) error{svc.executeFulfillment, svc.ExecuteBalanceFulfillment, svc.ExecuteSubscriptionFulfillment} {
+		for _, fulfill := range []func(context.Context, int64) error{svc.ExecuteBalanceFulfillment, svc.ExecuteSubscriptionFulfillment} {
 			require.Equal(t, "INVALID_ORDER_TYPE", infraerrors.Reason(fulfill(ctx, order.ID)))
 		}
 		stored, err := client.PaymentOrder.Get(ctx, order.ID)
 		require.NoError(t, err)
 		require.Equal(t, OrderStatusPaid, stored.Status)
+		// 异常历史订单在统一履约入口收敛为失败并确认回调，不发放任何权益。
+		require.NoError(t, svc.executeFulfillment(ctx, order.ID))
+		stored, err = client.PaymentOrder.Get(ctx, order.ID)
+		require.NoError(t, err)
+		require.Equal(t, OrderStatusFailed, stored.Status)
+		_, err = client.PaymentOrder.UpdateOneID(order.ID).SetStatus(OrderStatusPaid).Save(ctx)
+		require.NoError(t, err)
 	}
 	_, err := client.PaymentOrder.UpdateOneID(order.ID).SetOrderType(payment.OrderTypeSubscription).Save(ctx)
 	require.NoError(t, err)

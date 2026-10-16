@@ -455,7 +455,9 @@ func newPaymentConfigServiceTestClient(t *testing.T) *dbent.Client {
 	t.Helper()
 
 	dbName := fmt.Sprintf(
-		"file:%s?mode=memory&cache=shared",
+		// 默认 time.String() 会把单调时钟写入 SQLite，读取时又丢弃，导致时间版本 CAS 永不匹配。
+		// 使用驱动支持的持久化时间格式，保持与 PostgreSQL 时间字段相同的回读比较语义。
+		"file:%s?mode=memory&cache=shared&_time_format=sqlite",
 		strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()),
 	)
 	db, err := sql.Open("sqlite", dbName)

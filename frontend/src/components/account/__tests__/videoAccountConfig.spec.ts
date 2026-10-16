@@ -52,6 +52,30 @@ describe('Video account credentials', () => {
     expect(videoAccountCredentials(h3).video_openai_profile).toBe('passthrough')
   })
 
+  // 编辑旧账号时，域名或模型名称不能触发适配；空配置保存后仍使用原保真协议。
+  it.each([undefined, null, '', ' ', 'passthrough'])('keeps a legacy H3-named account passthrough after editing profile %s', profile => {
+    const credentials = {
+      base_url: 'https://metaso.cn/api/openai',
+      video_endpoints: ['compat', 'openai_videos'],
+      video_openai_profile: profile,
+      video_model_bindings: { 'MiniMax-H3': ['compat', 'openai_videos'] },
+      video_max_pending_tasks: 12,
+      video_max_duration_seconds: 20,
+    }
+    const form = createVideoAccountForm(credentials)
+    expect(form.openAIProfile).toBe('passthrough')
+    expect(validateVideoAccountForm(form, credentials.base_url)).toBeNull()
+    const saved = videoAccountCredentials(form)
+    expect(saved).toMatchObject({
+      video_openai_profile: 'passthrough',
+      video_endpoints: credentials.video_endpoints,
+      video_model_bindings: credentials.video_model_bindings,
+      video_max_pending_tasks: 12,
+      video_max_duration_seconds: 20,
+    })
+    expect(createVideoAccountForm(saved).openAIProfile).toBe('passthrough')
+  })
+
   it('rejects an unknown persisted profile instead of silently changing it', () => {
     const form = createVideoAccountForm({ video_endpoints: ['openai_videos'], video_openai_profile: 'future_profile' })
     expect(validateVideoAccountForm(form, 'https://video.test')).toBe('openAIProfileInvalid')

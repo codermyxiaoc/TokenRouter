@@ -6,6 +6,7 @@ import AdminOrdersView from '../AdminOrdersView.vue'
 const {
   mockGetOrders,
   mockRefundOrder,
+  mockQueryRefund,
   mockForceExpireOrder,
   mockShowError,
   mockShowSuccess,
@@ -13,6 +14,7 @@ const {
 } = vi.hoisted(() => ({
   mockGetOrders: vi.fn(),
   mockRefundOrder: vi.fn(),
+  mockQueryRefund: vi.fn(),
   mockForceExpireOrder: vi.fn(),
   mockShowError: vi.fn(),
   mockShowSuccess: vi.fn(),
@@ -23,6 +25,7 @@ vi.mock('@/api/admin/payment', () => {
   const paymentAPI = {
     getOrders: (...args: unknown[]) => mockGetOrders(...args),
     refundOrder: (...args: unknown[]) => mockRefundOrder(...args),
+    queryRefund: (...args: unknown[]) => mockQueryRefund(...args),
     forceExpireOrder: (...args: unknown[]) => mockForceExpireOrder(...args),
   }
   return {
@@ -41,10 +44,13 @@ vi.mock('@/stores/app', () => ({
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
+  const { default: messages } = await import('@/i18n/locales/zh/misc')
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key === 'payment.errors.ORDER_STATUS_CHANGED' ? '订单状态已变更，列表已刷新' : key,
+      t: (key: string) => key.startsWith('payment.errors.')
+        ? messages.payment.errors[key.slice('payment.errors.'.length) as keyof typeof messages.payment.errors] || key
+        : key,
     }),
   }
 })
@@ -116,6 +122,7 @@ describe('AdminOrdersView', () => {
   beforeEach(() => {
     mockGetOrders.mockReset()
     mockRefundOrder.mockReset()
+    mockQueryRefund.mockReset()
     mockForceExpireOrder.mockReset()
     mockShowError.mockReset()
     mockShowSuccess.mockReset()
@@ -123,6 +130,77 @@ describe('AdminOrdersView', () => {
     mockGetOrders.mockResolvedValue({
       data: { items: [order], total: 1, page: 1, page_size: 20 },
     })
+  })
+
+  it.each(['REFUNDING', 'REFUND_PENDING'] as const)('%s 仅提供状态查询且连续点击不会重复提交', async status => {
+    mockGetOrders.mockResolvedValue({ data: { items: [{ ...order, status }], total: 1 } })
+    let resolveQuery!: (value: { data: { success: boolean } }) => void
+    mockQueryRefund.mockReturnValue(new Promise(resolve => { resolveQuery = resolve }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    const queryButton = wrapper.findAll('button').find(button => button.text() === 'payment.admin.queryRefundStatus')
+    expect(queryButton).toBeDefined()
+    expect(findRefundAction(wrapper)).toBeUndefined()
+    expect(wrapper.text()).not.toContain('payment.admin.retryRefund')
+    expect(queryButton!.attributes('title')).toBe(status === 'REFUNDING' ? 'payment.admin.refundRecoveryHint' : undefined)
+
+    // 同一个事件循环内触发两次，检验函数级去重而非仅依赖 DOM 禁用。
+    queryButton!.element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    queryButton!.element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    expect(mockQueryRefund).toHaveBeenCalledTimes(1)
+    expect(mockQueryRefund).toHaveBeenCalledWith(42)
+    expect(queryButton!.attributes('disabled')).toBeDefined()
+    expect(mockRefundOrder).not.toHaveBeenCalled()
+    expect(wrapper.find('#refund-form').exists()).toBe(false)
+
+    resolveQuery({ data: { success: true } })
+    await flushPromises()
+    expect(mockShowSuccess).toHaveBeenCalledWith('payment.admin.refundSuccess')
+    expect(mockGetOrders).toHaveBeenCalledTimes(2)
+    expect(queryButton!.attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['REFUND_IN_PROGRESS', '退款正在提交，请在提交 15 分钟后再查询。', 'REFUNDING'],
+    ['REFUND_QUERY_UNSUPPORTED', '当前退款无法自动查询确认，请核对支付渠道记录后人工处理。', 'REFUND_PENDING'],
+    ['REFUND_MANUAL_REVIEW_REQUIRED', '之前的退款权益未能归还，请人工核实后再处理，勿重复发起退款。', 'REFUND_PENDING'],
+    ['REFUND_SUBSCRIPTION_CHANGED', '退款对应的订阅已发生变更，请人工核实，系统未覆盖现有权益。', 'REFUNDING'],
+  ])('退款查询遇到 %s 显示准确提示、刷新状态且不提交退款', async (reason, message, refreshedStatus) => {
+    mockGetOrders
+      .mockResolvedValueOnce({ data: { items: [{ ...order, status: 'REFUNDING' }], total: 1 } })
+      .mockResolvedValue({ data: { items: [{ ...order, status: refreshedStatus }], total: 1 } })
+    mockQueryRefund.mockRejectedValue({ reason, message: 'raw upstream detail' })
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'payment.admin.queryRefundStatus')!.trigger('click')
+    await flushPromises()
+
+    const notifier = ['REFUND_IN_PROGRESS', 'REFUND_QUERY_UNSUPPORTED'].includes(reason) ? mockShowWarning : mockShowError
+    expect(notifier).toHaveBeenCalledWith(message)
+    expect(mockGetOrders).toHaveBeenCalledTimes(2)
+    expect(mockRefundOrder).not.toHaveBeenCalled()
+    expect(wrapper.find('#refund-form').exists()).toBe(false)
+    const queryButton = wrapper.findAll('button').find(button => button.text() === 'payment.admin.queryRefundStatus')!
+    expect(queryButton.attributes('disabled')).toBeUndefined()
+    expect(queryButton.attributes('title')).toBe(refreshedStatus === 'REFUNDING' ? 'payment.admin.refundRecoveryHint' : undefined)
+    wrapper.unmount()
+  })
+
+  it('支持按退款处理中筛选，不将恢复操作作为重新退款', async () => {
+    const wrapper = mountView(false)
+    await flushPromises()
+    await wrapper.get('button[aria-label="common.filter"]').trigger('click')
+    await wrapper.findAll('.select-trigger')[0].trigger('click')
+    const refundingOption = wrapper.findAll('[role="option"]').find(option => option.text() === 'payment.status.refunding')
+    expect(refundingOption).toBeDefined()
+    await refundingOption!.trigger('click')
+    await flushPromises()
+    expect(mockGetOrders).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'REFUNDING' }))
+    expect(mockRefundOrder).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('站内余额筛选以支付方式请求订单，并可与订阅类型组合及重置', async () => {

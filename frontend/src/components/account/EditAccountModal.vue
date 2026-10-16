@@ -2083,9 +2083,9 @@
         </div>
       </div>
 
-      <!-- Anthropic API Key: Web Search Emulation (hidden when global disabled) -->
+      <!-- Anthropic/OpenAI API Key 的联网搜索模拟，仅在全局开启后展示。 -->
       <div
-        v-if="account?.platform === 'anthropic' && account?.type === 'apikey' && webSearchGlobalEnabled"
+        v-if="(account?.platform === 'anthropic' || account?.platform === 'openai') && account?.type === 'apikey' && webSearchGlobalEnabled"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -4224,6 +4224,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     anthropicAPIKeyAuthScheme.value = extra?.anthropic_apikey_auth_scheme === 'authorization_bearer'
       ? 'authorization_bearer'
       : 'x_api_key'
+  }
+  if ((newAccount.platform === 'anthropic' || newAccount.platform === 'openai') && newAccount.type === 'apikey') {
     // 三态：string "default"/"enabled"/"disabled"，向后兼容旧 bool
     const wsVal = extra?.web_search_emulation
     if (wsVal === 'enabled' || wsVal === 'disabled') {
@@ -5808,6 +5810,8 @@ const handleSubmit = async () => {
         delete newExtra.images_url_to_b64_json
       }
       if (props.account.type === 'apikey') {
+        if (webSearchEmulationMode.value === 'default') delete newExtra.web_search_emulation
+        else newExtra.web_search_emulation = webSearchEmulationMode.value
 		delete newExtra.openai_responses_mode
 		delete newExtra.openai_responses_supported
 		newExtra.openai_text_route_mode = openAITextRouteMode.value

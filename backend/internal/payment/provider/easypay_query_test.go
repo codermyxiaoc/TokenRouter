@@ -298,8 +298,8 @@ func TestEasyPayQueryOrderGETFallback(t *testing.T) {
 						t.Errorf("parse form: %v", err)
 					}
 					params = r.PostForm
-					if r.URL.RawQuery != "" {
-						t.Error("POST unexpectedly exposes credentials in query")
+					if r.URL.Query().Encode() != r.PostForm.Encode() {
+						t.Error("POST query must match form parameters for PHP compatibility")
 					}
 					w.WriteHeader(tt.postCode)
 					_, _ = io.WriteString(w, tt.postBody)

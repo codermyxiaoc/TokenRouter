@@ -73,7 +73,7 @@
               <Icon name="refresh" size="sm" />
               {{ t('payment.admin.retryRefund') }}
             </button>
-            <button v-else-if="row.status === 'REFUND_PENDING'" :disabled="refundQueryingIds.has(row.id)" @click="handleQueryRefund(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-orange-600 hover:bg-orange-50 disabled:opacity-60 dark:text-orange-400 dark:hover:bg-orange-900/20">
+            <button v-else-if="row.status === 'REFUND_PENDING' || row.status === 'REFUNDING'" :disabled="refundQueryingIds.has(row.id)" :title="row.status === 'REFUNDING' ? t('payment.admin.refundRecoveryHint') : undefined" @click="handleQueryRefund(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-orange-600 hover:bg-orange-50 disabled:opacity-60 dark:text-orange-400 dark:hover:bg-orange-900/20">
               <Icon name="refresh" size="sm" :class="refundQueryingIds.has(row.id) ? 'animate-spin' : ''" />
               {{ t('payment.admin.queryRefundStatus') }}
             </button>
@@ -307,6 +307,7 @@ const statusFilterOptions = computed(() => [
   { value: 'FAILED', label: t('payment.status.failed') },
   { value: 'REFUNDED', label: t('payment.status.refunded') },
   { value: 'REFUND_REQUESTED', label: t('payment.status.refund_requested') },
+  { value: 'REFUNDING', label: t('payment.status.refunding') },
   { value: 'REFUND_PENDING', label: t('payment.status.refund_pending') },
   { value: 'REFUND_FAILED', label: t('payment.status.refund_failed') },
 ])
@@ -423,7 +424,8 @@ function isRefundPendingWarning(warning: string | undefined): boolean {
 }
 
 async function handleRefund(data: { amount: number; reason: string; deduct_balance: boolean; force: boolean }) {
-  if (!selectedOrder.value) return
+  // 状态恢复查询与退款提交分离，处理中订单及尚未完成的提交不能重复退款。
+  if (!selectedOrder.value || refundSubmitting.value || ['REFUNDING', 'REFUND_PENDING'].includes(selectedOrder.value.status)) return
   refundSubmitting.value = true
   try {
     const res = await adminPaymentAPI.refundOrder(selectedOrder.value.id, { amount: data.amount, reason: data.reason, deduct_balance: data.deduct_balance, force: data.force })
@@ -451,6 +453,8 @@ async function handleRefund(data: { amount: number; reason: string; deduct_balan
 }
 
 async function handleQueryRefund(order: PaymentOrder) {
+  // 除按钮禁用外，同步检查正在执行的查询，避免快速重复点击发送多个恢复请求。
+  if (!['REFUNDING', 'REFUND_PENDING'].includes(order.status) || refundQueryingIds.value.has(order.id)) return
   refundQueryingIds.value = new Set(refundQueryingIds.value).add(order.id)
   try {
     const res = await adminPaymentAPI.queryRefund(order.id)
@@ -461,9 +465,16 @@ async function handleQueryRefund(order: PaymentOrder) {
     } else {
       appStore.showError(res.data.warning || t('common.error'))
     }
-    loadOrders()
+    await loadOrders()
   } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+    const message = extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))
+    if (['REFUND_IN_PROGRESS', 'REFUND_QUERY_UNSUPPORTED'].includes(extractApiErrorCode(err) || '')) {
+      appStore.showWarning(message)
+    } else {
+      appStore.showError(message)
+    }
+    // 后台可能已恢复为待确认但缺少退款号；即使查询返回提示也须刷新真实状态。
+    await loadOrders()
   } finally {
     const next = new Set(refundQueryingIds.value)
     next.delete(order.id)

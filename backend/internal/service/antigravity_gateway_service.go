@@ -335,10 +335,17 @@ func (s *AntigravityGatewayService) IsModelSupported(requestedModel string) bool
 		strings.HasPrefix(requestedModel, "gemini-")
 }
 
+// TestConnectionImage 保存管理员测试返回的内联图片。
+type TestConnectionImage struct {
+	ImageURL string
+	MimeType string
+}
+
 // TestConnectionResult 测试连接结果
 type TestConnectionResult struct {
-	Text        string // 响应文本
-	MappedModel string // 实际使用的模型
+	Text        string                // 响应文本
+	Images      []TestConnectionImage // 图片生成结果
+	MappedModel string                // 实际使用的模型
 }
 
 // TestConnection 测试 Antigravity 账号连接；prompt 为空时使用最小默认提示词。
@@ -368,11 +375,11 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 
 	// 构建请求体
 	var requestBody []byte
-	testPrompt := "."
+	testPrompt := ""
 	if len(prompts) > 0 && strings.TrimSpace(prompts[0]) != "" {
 		testPrompt = strings.TrimSpace(prompts[0])
 	}
-	if strings.HasPrefix(modelID, "gemini-") {
+	if shouldUseAntigravityGeminiTestRequest(modelID, mappedModel) {
 		requestBody, err = s.buildGeminiTestRequest(projectID, mappedModel, testPrompt)
 	} else {
 		requestBody, err = s.buildClaudeTestRequest(projectID, mappedModel, testPrompt)
@@ -420,7 +427,12 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 	}
 	defer func() { _ = result.resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(io.LimitReader(result.resp.Body, s.upstreamErrorBodyReadLimit()))
+	// 成功图片响应使用既有正文限额，不能沿用错误摘要上限而截断 base64。
+	readLimit := s.upstreamErrorBodyReadLimit()
+	if result.resp.StatusCode < 400 {
+		readLimit = resolveUpstreamResponseReadLimit(settingServiceConfig(s.settingService))
+	}
+	respBody, err := readUpstreamResponseBodyLimited(result.resp.Body, readLimit)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
@@ -429,8 +441,8 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 		return nil, fmt.Errorf("API 返回 %d: %s", result.resp.StatusCode, string(respBody))
 	}
 
-	text := extractTextFromSSEResponse(respBody)
-	return &TestConnectionResult{Text: text, MappedModel: mappedModel}, nil
+	text, images := extractContentFromSSEResponse(respBody)
+	return &TestConnectionResult{Text: text, Images: images, MappedModel: mappedModel}, nil
 }
 
 // testConnectionHandleError 是 TestConnection 使用的轻量 handleError 回调。
@@ -446,12 +458,48 @@ func testConnectionHandleError(
 	return nil
 }
 
-// buildGeminiTestRequest 构建 Gemini 格式测试请求
-// 使用最小 token 消耗：使用调用方提示词并限制 maxOutputTokens 为 1。
+// buildGeminiTestRequest 保留现有可选提示词接口，图片模型使用图片生成配置。
 func (s *AntigravityGatewayService) buildGeminiTestRequest(projectID, model string, prompts ...string) ([]byte, error) {
-	prompt := "."
-	if len(prompts) > 0 && strings.TrimSpace(prompts[0]) != "" {
-		prompt = strings.TrimSpace(prompts[0])
+	prompt := ""
+	if len(prompts) > 0 {
+		prompt = prompts[0]
+	}
+	return s.buildGeminiTestRequestWithPrompt(projectID, model, prompt)
+}
+
+func (s *AntigravityGatewayService) buildGeminiTestRequestWithPrompt(projectID, model, prompt string) ([]byte, error) {
+	if isImageGenerationModel(model) {
+		imagePrompt := strings.TrimSpace(prompt)
+		if imagePrompt == "" {
+			imagePrompt = defaultGeminiImageTestPrompt
+		}
+		payload := map[string]any{
+			"contents": []map[string]any{
+				{
+					"role": "user",
+					"parts": []map[string]any{
+						{"text": imagePrompt},
+					},
+				},
+			},
+			"systemInstruction": map[string]any{
+				"parts": []map[string]any{
+					{"text": antigravity.GetDefaultIdentityPatch()},
+				},
+			},
+			"generationConfig": map[string]any{
+				"responseModalities": []string{"TEXT", "IMAGE"},
+				"imageConfig": map[string]any{
+					"aspectRatio": "1:1",
+				},
+			},
+		}
+		payloadBytes, _ := json.Marshal(payload)
+		return s.wrapV1InternalRequest(projectID, model, payloadBytes)
+	}
+
+	if strings.TrimSpace(prompt) == "" {
+		prompt = "."
 	}
 	payload := map[string]any{
 		"contents": []map[string]any{
@@ -470,6 +518,11 @@ func (s *AntigravityGatewayService) buildGeminiTestRequest(projectID, model stri
 		},
 		"generationConfig": map[string]any{
 			"maxOutputTokens": 1,
+		},
+		"toolConfig": map[string]any{
+			"functionCallingConfig": map[string]any{
+				"mode": "VALIDATED",
+			},
 		},
 	}
 	payloadBytes, _ := json.Marshal(payload)
@@ -508,9 +561,10 @@ func (s *AntigravityGatewayService) getClaudeTransformOptions(ctx context.Contex
 	return opts
 }
 
-// extractTextFromSSEResponse 从 SSE 流式响应中提取文本
-func extractTextFromSSEResponse(respBody []byte) string {
+// extractContentFromSSEResponse 从 SSE 流式响应中提取文本和内联图片
+func extractContentFromSSEResponse(respBody []byte) (string, []TestConnectionImage) {
 	var texts []string
+	var images []TestConnectionImage
 	lines := bytes.Split(respBody, []byte("\n"))
 
 	for _, line := range lines {
@@ -536,7 +590,7 @@ func extractTextFromSSEResponse(respBody []byte) string {
 			continue
 		}
 
-		// 尝试从 response.candidates[0].content.parts[].text 提取
+		// 尝试从 response.candidates[0].content.parts[] 提取
 		response, ok := data["response"].(map[string]any)
 		if !ok {
 			// 尝试直接从 candidates 提取（某些响应格式）
@@ -568,11 +622,21 @@ func extractTextFromSSEResponse(respBody []byte) string {
 				if text, ok := partMap["text"].(string); ok && text != "" {
 					texts = append(texts, text)
 				}
+				if inlineData, ok := partMap["inlineData"].(map[string]any); ok {
+					mimeType, _ := inlineData["mimeType"].(string)
+					b64Data, _ := inlineData["data"].(string)
+					if strings.HasPrefix(strings.ToLower(mimeType), "image/") && b64Data != "" {
+						images = append(images, TestConnectionImage{
+							ImageURL: fmt.Sprintf("data:%s;base64,%s", mimeType, b64Data),
+							MimeType: mimeType,
+						})
+					}
+				}
 			}
 		}
 	}
 
-	return strings.Join(texts, "")
+	return strings.Join(texts, ""), images
 }
 
 // injectIdentityPatchToGeminiRequest 为 Gemini 格式请求注入身份提示词
@@ -653,4 +717,9 @@ func (s *AntigravityGatewayService) unwrapV1InternalResponse(body []byte) ([]byt
 		return []byte(result.Raw), nil
 	}
 	return body, nil
+}
+
+// shouldUseAntigravityGeminiTestRequest 按实际映射目标选择测试协议，别名不改变供应商参数。
+func shouldUseAntigravityGeminiTestRequest(_, mappedModel string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(mappedModel)), "gemini-")
 }

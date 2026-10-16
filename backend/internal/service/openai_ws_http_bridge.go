@@ -381,7 +381,7 @@ func buildOpenAIWSHTTPBridgeErrorEvent(statusCode int, message string) []byte {
 
 // buildOpenAIWSHTTPBridgeFailedEvent 将没有正式 response.failed 事件的上游错误
 // 封装成客户端可消费的 Responses 终止事件，并保留上游错误码和消息。
-func buildOpenAIWSHTTPBridgeFailedEvent(responseID, model string, source []byte, fallbackMessage string) []byte {
+func buildOpenAIWSHTTPBridgeFailedEvent(responseID, model string, createdAt int64, source []byte, fallbackMessage string) []byte {
 	errorType := strings.TrimSpace(gjson.GetBytes(source, "error.type").String())
 	if errorType == "" {
 		errorType = strings.TrimSpace(gjson.GetBytes(source, "response.error.type").String())
@@ -404,16 +404,20 @@ func buildOpenAIWSHTTPBridgeFailedEvent(responseID, model string, source []byte,
 	if errorType != "" {
 		errorBody["type"] = errorType
 	}
+	if createdAt <= 0 {
+		createdAt = time.Now().Unix()
+	}
 	response := map[string]any{
-		"id": responseID, "object": "response", "status": "failed",
+		"created_at": createdAt,
+		"id":         responseID, "object": "response", "status": "failed",
 		"output": []any{}, "error": errorBody,
 	}
 	if model = strings.TrimSpace(model); model != "" {
 		response["model"] = model
 	}
-	body, err := json.Marshal(map[string]any{"type": "response.failed", "sequence_number": 0, "response": response})
+	body, err := json.Marshal(map[string]any{"type": "response.failed", "sequence_number": openAIResponsesFailedSequenceNumber(source), "response": response})
 	if err != nil {
-		return []byte(`{"type":"response.failed","sequence_number":0,"response":{"status":"failed","output":[],"error":{"code":"upstream_error","message":"Upstream response failed"}}}`)
+		return []byte(fmt.Sprintf(`{"type":"response.failed","sequence_number":0,"response":{"object":"response","created_at":%d,"status":"failed","output":[],"error":{"code":"upstream_error","message":"Upstream response failed"}}}`, createdAt))
 	}
 	return body
 }
@@ -726,6 +730,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	officialOpenAIResponses := account != nil && account.Platform == PlatformOpenAI
 	bareErrorPending := false
 	var bareErrorPayload []byte
+	var createdAtStamper responsesCreatedAtStamper
 	bareErrorMessage := ""
 	failureAccountSideEffectsApplied := false
 	resultWithUsage := func() *OpenAIForwardResult {
@@ -793,7 +798,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if clientDisconnected {
 			return nil
 		}
-		clientMessage := buildOpenAIWSHTTPBridgeFailedEvent(responseID, originalModel, bareErrorPayload, bareErrorMessage)
+		clientMessage := buildOpenAIWSHTTPBridgeFailedEvent(responseID, originalModel, createdAtStamper.Value(), bareErrorPayload, bareErrorMessage)
 		if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 			clientMessage = rewritten
 		}
@@ -875,6 +880,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			if corrected, changed := s.toolCorrector.CorrectToolCallsInSSEBytes(upstreamMessage); changed {
 				upstreamMessage = corrected
 			}
+		}
+		if stamped, changed := createdAtStamper.Stamp(upstreamMessage, eventType); changed {
+			upstreamMessage = stamped
 		}
 		replayCollector.AddEvent(eventType, upstreamMessage)
 

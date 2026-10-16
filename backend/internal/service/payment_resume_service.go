@@ -244,8 +244,18 @@ func CanonicalizeReturnURL(raw string, srcHost string, srcURL string) (string, e
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return "", infraerrors.BadRequest("INVALID_RETURN_URL", "return_url must use http or https")
 	}
+	// 返回地址会原样交给支付渠道，只允许普通域名或 IP、规范路径，不携带用户凭据。
+	if parsed.User != nil {
+		return "", infraerrors.BadRequest("INVALID_RETURN_URL", "return_url must not contain user info")
+	}
+	if !isPlainReturnURLHost(parsed.Hostname()) {
+		return "", infraerrors.BadRequest("INVALID_RETURN_URL", "return_url host is invalid")
+	}
 	parsed.Fragment = ""
-	// 清除客户端查询参数，由服务端重建结果页参数，阻断下单签名复用攻击。
+	parsed.RawPath = ""
+	// 清除客户端查询参数，由 buildPaymentReturnURL 生成受控的签名参数。
+	// 易支付签名直接拼接未转义的值；若 return_url 混入 trade_status=TRADE_SUCCESS，
+	// 创建订单的签名可能被重放为伪造的支付成功回调，参见上游问题 #7881。
 	parsed.RawQuery = ""
 	if parsed.Path == "" {
 		parsed.Path = "/"
@@ -257,6 +267,24 @@ func CanonicalizeReturnURL(raw string, srcHost string, srcURL string) (string, e
 		return "", infraerrors.BadRequest("INVALID_RETURN_URL", "return_url must use the same host as the current site or browser origin")
 	}
 	return parsed.String(), nil
+}
+
+// isPlainReturnURLHost 仅允许 IP 地址或由字母、数字、点、横线和下划线构成的主机名。
+func isPlainReturnURLHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	for _, c := range host {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '.', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func allowedReturnURLHost(returnURLHost string, requestHost string, refererURL string) bool {

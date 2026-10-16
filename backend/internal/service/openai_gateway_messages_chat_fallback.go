@@ -55,7 +55,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	clientStream := anthropicReq.Stream
 
 	// 2. 将 Anthropic 请求直接转换为 Chat Completions。
-	chatReq, err := apicompat.AnthropicToChatCompletionsRequest(&anthropicReq)
+	chatReq, err := apicompat.AnthropicToChatCompletionsRequestWithMinOutputTokens(&anthropicReq, configuredMinOutputTokens(s.cfg))
 	if err != nil {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, fmt.Errorf("convert anthropic to chat completions: %w", err)

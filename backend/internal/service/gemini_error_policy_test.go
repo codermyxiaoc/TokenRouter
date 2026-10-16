@@ -718,7 +718,7 @@ func TestHandleGeminiUpstreamError_VertexFallbackUsesShortCooldown(t *testing.T)
 			"project_id": "my-vertex-project",
 		},
 	}
-	body := []byte(`{"error":{"code":429,"message":"Resource exhausted. Please try again later.","status":"RESOURCE_EXHAUSTED"}}`)
+	body := []byte(`{"error":{"code":429,"message":"Quota exhausted. Please try again later.","status":"RESOURCE_EXHAUSTED"}}`)
 
 	before := time.Now()
 	svc.handleGeminiUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, body)
@@ -748,4 +748,156 @@ func TestHandleGeminiUpstreamError_APIKeyFallbackStillPSTMidnight(t *testing.T) 
 	require.Equal(t, int64(603), repo.lastRateLimitID)
 	expected := time.Unix(*nextGeminiDailyResetUnix(), 0)
 	require.WithinDuration(t, expected, repo.lastRateLimitReset, 5*time.Second)
+}
+
+// 上游v0.2.17回归：区分Vertex共享容量和账号配额。
+func TestHandleGeminiUpstreamError_VertexSharedCapacityKeepsAccountSchedulable(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "object",
+			body: `{"error":{"code":429,"message":"Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.","status":"RESOURCE_EXHAUSTED"}}`,
+		},
+		{
+			name: "array_wrapped",
+			body: `[{"error":{"code":429,"message":"Resource exhausted. Please try again later.","status":"RESOURCE_EXHAUSTED"}}]`,
+		},
+		{
+			name: "empty_details",
+			body: `{"error":{"code":429,"message":"Resource exhausted. Please try again later.","status":"RESOURCE_EXHAUSTED","details":[]}}`,
+		},
+		{
+			name: "documented_comma_wording",
+			body: `{"error":{"code":429,"message":"Resource exhausted, please try again later.","status":"RESOURCE_EXHAUSTED"}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &rateLimit429AccountRepoStub{}
+			svc := &GeminiMessagesCompatService{accountRepo: repo}
+			account := &Account{
+				ID:       602,
+				Platform: PlatformGemini,
+				Type:     AccountTypeServiceAccount,
+				Credentials: map[string]any{
+					"project_id": "my-vertex-project",
+				},
+			}
+
+			svc.handleGeminiUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, []byte(tt.body))
+
+			require.Zero(t, repo.rateLimitCalls)
+		})
+	}
+}
+
+// 上游v0.2.17回归：区分Vertex共享容量和账号配额。
+func TestHandleGeminiUpstreamError_VertexAccountScoped429UsesShortCooldown(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "project_quota",
+			body: `{"error":{"code":429,"message":"Quota exceeded for aiplatform.googleapis.com/generate_content_requests_per_minute_per_project_per_base_model with base model: gemini-2.5-pro. Please submit a quota increase request.","status":"RESOURCE_EXHAUSTED"}}`,
+		},
+		{
+			name: "provisioned_throughput",
+			body: `{"error":{"code":429,"message":"Too many requests. Exceeded the Provisioned Throughput.","status":"RESOURCE_EXHAUSTED"}}`,
+		},
+		{
+			name: "quota_failure_details",
+			body: `{"error":{"code":429,"message":"Resource exhausted. Please try again later.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"project"}]}]}}`,
+		},
+		{
+			name: "other_status",
+			body: `{"error":{"code":429,"message":"Too many requests.","status":"UNAVAILABLE"}}`,
+		},
+		{
+			name: "unknown_wording",
+			body: `{"error":{"code":429,"message":"Rate limit exceeded for requests per minute per project.","status":"RESOURCE_EXHAUSTED"}}`,
+		},
+		{
+			name: "missing_message",
+			body: `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &rateLimit429AccountRepoStub{}
+			svc := &GeminiMessagesCompatService{accountRepo: repo}
+			account := &Account{
+				ID:       604,
+				Platform: PlatformGemini,
+				Type:     AccountTypeServiceAccount,
+				Credentials: map[string]any{
+					"project_id": "my-vertex-project",
+				},
+			}
+
+			before := time.Now()
+			svc.handleGeminiUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, []byte(tt.body))
+
+			require.Equal(t, 1, repo.rateLimitCalls)
+			require.Equal(t, int64(604), repo.lastRateLimitID)
+			require.WithinDuration(t, before.Add(geminiVertexFallbackCooldown), repo.lastRateLimitReset, 2*time.Second)
+			// 显式守护：不应被冷却超过 15 分钟（更不应到次日 PST 午夜）
+			require.True(t, repo.lastRateLimitReset.Before(before.Add(15*time.Minute)))
+		})
+	}
+}
+
+// 上游v0.2.17回归：区分Vertex共享容量和账号配额。
+func TestHandleGeminiUpstreamError_SharedCapacityBodyStillCoolsNonVertexAccounts(t *testing.T) {
+	body := []byte(`{"error":{"code":429,"message":"Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.","status":"RESOURCE_EXHAUSTED"}}`)
+	tests := []struct {
+		name    string
+		account *Account
+	}{
+		{
+			name:    "ai_studio_api_key",
+			account: &Account{ID: 605, Platform: PlatformGemini, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "k"}},
+		},
+		{
+			name: "code_assist_oauth",
+			account: &Account{ID: 606, Platform: PlatformGemini, Type: AccountTypeOAuth, Credentials: map[string]any{
+				"oauth_type": "code_assist", "project_id": "my-code-assist-project",
+			}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &rateLimit429AccountRepoStub{}
+			svc := &GeminiMessagesCompatService{accountRepo: repo}
+
+			svc.handleGeminiUpstreamError(context.Background(), tt.account, http.StatusTooManyRequests, http.Header{}, body)
+
+			require.Equal(t, 1, repo.rateLimitCalls)
+			require.Equal(t, tt.account.ID, repo.lastRateLimitID)
+		})
+	}
+}
+
+// 上游v0.2.17回归：区分Vertex共享容量和账号配额。
+func TestHandleGeminiUpstreamError_VertexMessageRetryHintUsesParsedDelay(t *testing.T) {
+	repo := &rateLimit429AccountRepoStub{}
+	svc := &GeminiMessagesCompatService{accountRepo: repo}
+	account := &Account{
+		ID:       607,
+		Platform: PlatformGemini,
+		Type:     AccountTypeServiceAccount,
+		Credentials: map[string]any{
+			"project_id": "my-vertex-project",
+		},
+	}
+	body := []byte(`{"error":{"code":429,"message":"Resource exhausted. Please retry in 5s","status":"RESOURCE_EXHAUSTED"}}`)
+
+	before := time.Now()
+	svc.handleGeminiUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{}, body)
+
+	require.Equal(t, 1, repo.rateLimitCalls)
+	require.Equal(t, int64(607), repo.lastRateLimitID)
+	require.WithinDuration(t, before.Add(5*time.Second), repo.lastRateLimitReset, 2*time.Second)
 }

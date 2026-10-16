@@ -23,6 +23,8 @@ import (
 // --- mock: UserRepository ---
 
 type mockUserRepo struct {
+	addBalanceFn            func(context.Context, int64, float64) error
+	adjustBalanceFn         func(context.Context, int64, float64) (BalanceChange, error)
 	updateBalanceErr        error
 	updateBalanceFn         func(ctx context.Context, id int64, amount float64) error
 	deductBalanceFn         func(ctx context.Context, id int64, amount float64) error
@@ -170,7 +172,12 @@ func (m *mockUserRepo) UpdateBalance(ctx context.Context, id int64, amount float
 	}
 	return m.updateBalanceErr
 }
-func (m *mockUserRepo) AddBalance(context.Context, int64, float64) error { return nil }
+func (m *mockUserRepo) AddBalance(ctx context.Context, id int64, amount float64) error {
+	if m.addBalanceFn != nil {
+		return m.addBalanceFn(ctx, id, amount)
+	}
+	return nil
+}
 func (m *mockUserRepo) DeductBalance(ctx context.Context, id int64, amount float64) (float64, error) {
 	if m.deductBalanceResultFn != nil {
 		return m.deductBalanceResultFn(ctx, id, amount)
@@ -182,6 +189,9 @@ func (m *mockUserRepo) DeductBalance(ctx context.Context, id int64, amount float
 }
 
 func (m *mockUserRepo) AdjustBalance(ctx context.Context, id int64, delta float64) (BalanceChange, error) {
+	if m.adjustBalanceFn != nil {
+		return m.adjustBalanceFn(ctx, id, delta)
+	}
 	panic("unexpected AdjustBalance call")
 }
 

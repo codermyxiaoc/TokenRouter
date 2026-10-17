@@ -9,6 +9,7 @@ export default {
       // Inpaint hint: select an image and paint the area to redraw with the brush
       maskHint: 'Select an image on the canvas first, then paint the area to redraw with the brush.',
       imageSize: 'Image size',
+      midjourneyResolutionHint: 'Actual resolution is determined by the provider. Billing uses the selected size tier.',
       aspectRatio: 'Aspect ratio',
       quality: 'Quality',
       background: 'Background',

@@ -227,10 +227,10 @@ func (s *CreativePublicService) ListModels(ctx context.Context, userID int64) (*
 				finalModel = model
 			}
 			operations, configured := creativeOperationsForModel(modelSettings, group.ID, model, creativeOperationsForResolvedModel(group.Platform, finalModel))
-			if !configured || len(operations) == 0 || !s.creativeHasRequiredModelPricing(ctx, group, finalModel, "1K") {
+			if !configured || len(operations) == 0 {
 				continue
 			}
-			imageSizes := creativeImageSizesForGroupModel(group, finalModel)
+			imageSizes := s.creativeAvailableImageSizes(ctx, group, finalModel)
 			if len(imageSizes) == 0 {
 				continue
 			}
@@ -289,7 +289,7 @@ func (s *CreativePublicService) ListCreativeModelCandidates(ctx context.Context)
 			if finalModel == "" {
 				finalModel = model
 			}
-			if len(creativeImageSizesForGroupModel(group, finalModel)) == 0 || !s.creativeHasRequiredModelPricing(ctx, group, finalModel, "1K") {
+			if len(s.creativeAvailableImageSizes(ctx, group, finalModel)) == 0 {
 				continue
 			}
 			modelNames = append(modelNames, model)
@@ -364,6 +364,22 @@ func (s *CreativePublicService) creativeHasRequiredModelPricing(ctx context.Cont
 	}
 	_, ok := s.creativeExplicitImageUnitPrice(ctx, group, model, imageSize)
 	return ok
+}
+
+// creativeAvailableImageSizes 仅把有明确报价的 MJ 档位交给前端，缺价不能显示为免费。
+// 按档位检查而不是固定要求 1K，让只配置 2K/4K 的模型也能出现在目录中。
+func (s *CreativePublicService) creativeAvailableImageSizes(ctx context.Context, group *Group, model string) []string {
+	sizes := creativeImageSizesForGroupModel(group, model)
+	if !IsMidjourneyImageGenerationModel(model) {
+		return sizes
+	}
+	priced := make([]string, 0, len(sizes))
+	for _, size := range sizes {
+		if s.creativeHasRequiredModelPricing(ctx, group, model, size) {
+			priced = append(priced, size)
+		}
+	}
+	return priced
 }
 
 // creativeExplicitImageUnitPrice 原子地取得一次价格解析结果，避免校验后配置变化时掉入未知模型默认价。
@@ -462,8 +478,8 @@ func creativeCapabilitiesForModel(platform, model string) creativeModelCapabilit
 	switch normalizedPlatform {
 	case PlatformOpenAI:
 		if IsMidjourneyImageGenerationModel(normalizedModel) {
-			// 目前只承诺已验证的文生图参数，不继承 GPT 的参考图、质量和背景选项。
-			capabilities.aspectRatios = []string{"1:1"}
+			// 仅开放文生图参数，不继承 GPT 的参考图、质量和背景选项。
+			capabilities.aspectRatios = []string{"1:1", "4:3", "3:4", "16:9", "9:16"}
 			capabilities.maxOutputCount = 4
 			capabilities.maxReferenceImages = 0
 			return capabilities
@@ -531,6 +547,10 @@ func creativeGeminiMaxReferenceImages(model string) int {
 // creativeImageSizesForGroupModel 返回分组内某模型可用的尺寸档位。
 // 分组显式配置了图片价时按配置返回；最终结果会按已知模型能力过滤。
 func creativeImageSizesForGroupModel(group *Group, model string) []string {
+	if group != nil && group.Platform == PlatformOpenAI && IsMidjourneyImageGenerationModel(model) {
+		// MJ 可请求三档，实际像素由上游决定；是否可选由逐档显式报价决定。
+		return []string{ImageBillingSize1K, ImageBillingSize2K, ImageBillingSize4K}
+	}
 	if explicitSizes := creativeImageSizesForGroup(group); len(explicitSizes) > 0 {
 		if group != nil && group.Platform == PlatformOpenAI && isCreativeGPTImage2Model(model) && !containsCreativeImageSize(explicitSizes, "4K") {
 			// GPT Image 2 支持 4K；分组未填写 4K 价格时沿用模型默认价，不因缺少覆盖值隐藏能力。
@@ -553,7 +573,7 @@ func creativeImageSizesForGroupModel(group *Group, model string) []string {
 func creativeFilterImageSizesForModel(platform, model string, sizes []string) []string {
 	platform = strings.TrimSpace(platform)
 	if platform == PlatformOpenAI && IsMidjourneyImageGenerationModel(model) {
-		return creativeFilterImageSizes(sizes, ImageBillingSize1K)
+		return creativeFilterImageSizes(sizes, ImageBillingSize1K, ImageBillingSize2K, ImageBillingSize4K)
 	}
 	if platform == PlatformGrok && isGrokImageGenerationModel(model) {
 		return creativeFilterImageSizes(sizes, ImageBillingSize1K, ImageBillingSize2K)

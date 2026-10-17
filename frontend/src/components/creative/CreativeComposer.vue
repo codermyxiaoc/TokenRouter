@@ -103,6 +103,9 @@
                   </button>
                   <span v-if="!studio.imageSizeOptions.value.length" class="text-[11px] text-gray-400 dark:text-dark-400">—</span>
                 </div>
+                <p v-if="showMidjourneyResolutionHint" class="mt-1.5 text-[11px] leading-relaxed text-gray-500 dark:text-dark-400">
+                  {{ t('creative.panel.midjourneyResolutionHint') }}
+                </p>
               </div>
               <div>
                 <p class="param-label">{{ t('creative.panel.aspectRatio') }}</p>
@@ -255,6 +258,7 @@ import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 import type { useCreativeStudio } from '@/composables/useCreativeStudio'
 import { creativeOptionKey } from '@/composables/useCreativeStudio'
 import type { CreativeModelOption, CreativeOperation } from '@/api/creative'
+import { isMidjourneyImageModel } from '@/utils/midjourney'
 
 type Studio = ReturnType<typeof useCreativeStudio>
 
@@ -316,6 +320,16 @@ const modelsEmptyHintText = computed(() =>
 
 // 模型 chip 行首图标：已选模型名（供 ProviderIcon 解析厂家 logo，未知品牌回落首字母），未选中为 null 显示 sparkles
 const modelBrandName = computed(() => studio.selectedOption.value?.model ?? null)
+
+// 当前服务端仅 MJ 固定输出四张，按此合同识别别名；明确单张的模型不按名称误判。
+// 旧服务缺少该字段时才按既有 MJ 名称规则兜底；未来新增多张模型须同步此能力契约。
+const showMidjourneyResolutionHint = computed(() => {
+  const option = studio.selectedOption.value
+  if (!option) return false
+  return option.output_count === undefined
+    ? isMidjourneyImageModel(option.model)
+    : option.output_count === 4
+})
 
 // 三个 chip 的当前值标签
 const modelChipLabel = computed(() => {

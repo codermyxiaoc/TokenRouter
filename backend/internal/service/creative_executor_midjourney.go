@@ -3,8 +3,11 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"image"
+	"io"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -12,6 +15,22 @@ import (
 
 // 复用仅访问公网的下载器及连接池，不携带上游账号凭据，也不持久化图片或素材地址。
 var creativeMidjourneyImageDownloader = NewImageResultUploader(nil, "", creativeMaxOutputBytes, nil)
+
+// MJ 最多四张、每张 32 MiB；总包允许相应 base64 开销和有界 JSON 余量。
+// 单图与像素限制仍由解析器逐张检查，不能因开放 4K 而允许无界响应。
+var creativeMidjourneyMaxResponseBytes = int64(creativeMidjourneyOutputCount*base64.StdEncoding.EncodedLen(creativeMaxOutputBytes)) + 1<<20
+
+// readCreativeMidjourneyBody 多读一个字节确认越界，不能把截断后的半份图片响应当成有效结果。
+func readCreativeMidjourneyBody(body io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 || limit > creativeMidjourneyMaxResponseBytes {
+		return nil, creativeResultUnconfirmedError()
+	}
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil || int64(len(data)) > limit {
+		return nil, creativeResultUnconfirmedError()
+	}
+	return data, nil
+}
 
 // buildCreativeMidjourneyRequestBody 使用已验证的 Images 兼容协议；一次上游任务返回四张。
 // n 是上游任务数量，不能把站内预占的四张写成 n=4 而生成十六张。
@@ -23,17 +42,53 @@ func buildCreativeMidjourneyRequestBody(run CreativeRun, payload CreativeRunPayl
 	if strings.TrimSpace(payload.Prompt) == "" || strings.TrimSpace(payload.Quality) != "" || strings.TrimSpace(payload.Background) != "" || strings.TrimSpace(payload.ThinkingLevel) != "" {
 		return nil, "", creativeNonRetryableError("unsupported Midjourney generation parameters")
 	}
-	if size := strings.TrimSpace(run.ImageSize); size != "" && !strings.EqualFold(size, "1K") {
-		return nil, "", creativeNonRetryableError("unsupported Midjourney image size")
+	size, ratio, err := creativeMidjourneyImageSize(run.ImageSize, run.AspectRatio)
+	if err != nil {
+		return nil, "", err
 	}
-	if ratio := strings.TrimSpace(run.AspectRatio); ratio != "" && ratio != "1:1" {
-		return nil, "", creativeNonRetryableError("unsupported Midjourney aspect ratio")
-	}
-	body, err := json.Marshal(map[string]any{
+	request := map[string]any{
 		"model": model, "prompt": payload.Prompt, "n": 1,
-		"size": "1024x1024", "response_format": "b64_json",
-	})
+		"size": size, "response_format": "b64_json",
+	}
+	if ratio != "1:1" {
+		// 非正方形同时声明精确比例；不发送与 size 互斥的 resolution，旧正方形请求保持原状。
+		request["ratio"] = ratio
+	}
+	body, err := json.Marshal(request)
 	return body, "application/json", err
+}
+
+// creativeMidjourneyImageSize 按长边映射 MJ 的三档尺寸，不借用 GPT 的尺寸或比例限制。
+// 空值只用于兼容已排队旧任务；其它未知值一律在调用上游之前拒绝。
+func creativeMidjourneyImageSize(imageSize, aspectRatio string) (string, string, error) {
+	longEdge := 0
+	switch strings.ToUpper(strings.TrimSpace(imageSize)) {
+	case "", ImageBillingSize1K:
+		longEdge = 1024
+	case ImageBillingSize2K:
+		longEdge = 2048
+	case ImageBillingSize4K:
+		longEdge = 4096
+	default:
+		return "", "", creativeNonRetryableError("unsupported Midjourney image size")
+	}
+	ratio := strings.TrimSpace(aspectRatio)
+	width, height := longEdge, longEdge
+	switch ratio {
+	case "", "1:1":
+		ratio = "1:1"
+	case "4:3":
+		height = longEdge * 3 / 4
+	case "3:4":
+		width = longEdge * 3 / 4
+	case "16:9":
+		height = longEdge * 9 / 16
+	case "9:16":
+		width = longEdge * 9 / 16
+	default:
+		return "", "", creativeNonRetryableError("unsupported Midjourney aspect ratio")
+	}
+	return fmt.Sprintf("%dx%d", width, height), ratio, nil
 }
 
 // parseCreativeMidjourneyImageOutputs 完整保留最多四张真实图片，交给现有逐张结算与交付流程。

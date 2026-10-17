@@ -77,8 +77,8 @@ func TestCreativeMidjourneyCatalogCapabilities(t *testing.T) {
 	require.Len(t, models.Data, 2)
 	for _, model := range models.Data {
 		require.Equal(t, []string{CreativeOperationGenerate}, model.Operations)
-		require.Equal(t, []string{"1K"}, model.ImageSizes)
-		require.Equal(t, []string{"1:1"}, model.AspectRatios)
+		require.Equal(t, []string{"1K", "2K"}, model.ImageSizes)
+		require.Equal(t, []string{"1:1", "4:3", "3:4", "16:9", "9:16"}, model.AspectRatios)
 		require.Empty(t, model.Qualities)
 		require.Empty(t, model.BackgroundOptions)
 		require.Empty(t, model.ThinkingLevels)
@@ -122,9 +122,9 @@ func TestCreativeMidjourneyCreateRejectsUnsupportedParams(t *testing.T) {
 		{name: "质量", edit: func(p *CreateCreativeRunParamsPublic) { p.Quality = "medium" }, err: ErrCreativeInvalidParams},
 		{name: "背景", edit: func(p *CreateCreativeRunParamsPublic) { p.Background = "auto" }, err: ErrCreativeInvalidParams},
 		{name: "推理", edit: func(p *CreateCreativeRunParamsPublic) { p.ThinkingLevel = "minimal" }, err: ErrCreativeInvalidParams},
-		{name: "2K", edit: func(p *CreateCreativeRunParamsPublic) { p.ImageSize = "2K" }, err: ErrCreativeInvalidParams},
-		{name: "4K", edit: func(p *CreateCreativeRunParamsPublic) { p.ImageSize = "4K" }, err: ErrCreativeInvalidParams},
-		{name: "比例", edit: func(p *CreateCreativeRunParamsPublic) { p.AspectRatio = "16:9" }, err: ErrCreativeInvalidParams},
+		{name: "未知尺寸", edit: func(p *CreateCreativeRunParamsPublic) { p.ImageSize = "8K" }, err: ErrCreativeInvalidParams},
+		{name: "像素尺寸不绕过档位", edit: func(p *CreateCreativeRunParamsPublic) { p.ImageSize = "2048x1152" }, err: ErrCreativeInvalidParams},
+		{name: "未知比例", edit: func(p *CreateCreativeRunParamsPublic) { p.AspectRatio = "3:2" }, err: ErrCreativeInvalidParams},
 		{name: "多张", edit: func(p *CreateCreativeRunParamsPublic) { p.OutputCount = 2 }, err: ErrCreativeInvalidParams},
 	}
 	for _, tt := range tests {
@@ -264,4 +264,98 @@ func TestCreativeMidjourneyFourImageHoldAndReplay(t *testing.T) {
 		require.ErrorIs(t, err, ErrCreativeInvalidParams)
 	}
 	require.Equal(t, 1, svc.BillingRepo.(*creativeFakeBillingRepo).reserveN)
+}
+
+// TestCreativeMidjourneyPricedSizeCatalog 按各档显式价格发布能力，不能借其它档位的价格免费生成。
+func TestCreativeMidjourneyPricedSizeCatalog(t *testing.T) {
+	tests := []struct {
+		name       string
+		prices     map[string]float64
+		modelPrice *ChannelModelPricing
+		want       []string
+	}{
+		{name: "仅2K", prices: map[string]float64{"2K": 0.2}, want: []string{"2K"}},
+		{name: "仅4K零价", prices: map[string]float64{"4K": 0}, want: []string{"4K"}},
+		{name: "全部档位", prices: map[string]float64{"1K": 0.1, "2K": 0.2, "4K": 0.4}, want: []string{"1K", "2K", "4K"}},
+		{name: "默认单价覆盖三档", modelPrice: &ChannelModelPricing{BillingMode: BillingModeImage, PerRequestPrice: testPtrFloat64(0.27)}, want: []string{"1K", "2K", "4K"}},
+		{name: "模型仅4K", modelPrice: &ChannelModelPricing{BillingMode: BillingModeImage, Intervals: []PricingInterval{{TierLabel: "4K", PerRequestPrice: testPtrFloat64(0.4)}}}, want: []string{"4K"}},
+		{name: "分组1K加模型2K", prices: map[string]float64{"1K": 0.1}, modelPrice: &ChannelModelPricing{BillingMode: BillingModeImage, Intervals: []PricingInterval{{TierLabel: "2K", PerRequestPrice: testPtrFloat64(0.2)}}}, want: []string{"1K", "2K"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newCreativeMidjourneyTestService()
+			groups := svc.GroupRepo.(*creativeFakeGroupRepo)
+			group := groups.byID[12]
+			group.ImagePrice1K, group.ImagePrice2K, group.ImagePrice4K = nil, nil, nil
+			for tier, price := range tt.prices {
+				switch tier {
+				case "1K":
+					group.ImagePrice1K = testPtrFloat64(price)
+				case "2K":
+					group.ImagePrice2K = testPtrFloat64(price)
+				case "4K":
+					group.ImagePrice4K = testPtrFloat64(price)
+				}
+			}
+			if tt.modelPrice != nil {
+				configured := *tt.modelPrice
+				configured.Models = []string{"MJ-v7"}
+				group.ModelPricing = []ChannelModelPricing{configured}
+			}
+			groups.active = []Group{*group}
+			svc.PricingResolver = NewModelPricingResolver(nil, newTestBillingServiceForResolver())
+			catalog, err := svc.ListModels(context.Background(), 7)
+			require.NoError(t, err)
+			require.Len(t, catalog.Data, 2)
+			for _, model := range catalog.Data {
+				require.Equal(t, tt.want, model.ImageSizes)
+			}
+			candidates, err := svc.ListCreativeModelCandidates(context.Background())
+			require.NoError(t, err)
+			require.Len(t, candidates, 2)
+			for _, tier := range []string{"1K", "2K", "4K"} {
+				params := validCreateParams()
+				params.Model, params.ImageSize = "studio-image", tier
+				_, err := svc.validateCreateParams(context.Background(), 7, &params)
+				if containsCreativeImageSize(tt.want, tier) {
+					require.NoError(t, err)
+				} else {
+					require.ErrorIs(t, err, ErrCreativeInvalidModel)
+				}
+			}
+		})
+	}
+}
+
+// TestCreativeMidjourneySizeRatioReservation 对每个尺寸比例验证四张预占与持久价格快照。
+func TestCreativeMidjourneySizeRatioReservation(t *testing.T) {
+	for _, tier := range []string{"1K", "2K", "4K"} {
+		for _, ratio := range []string{"1:1", "4:3", "3:4", "16:9", "9:16"} {
+			t.Run(tier+"/"+ratio, func(t *testing.T) {
+				svc := newCreativeMidjourneyTestService()
+				groups := svc.GroupRepo.(*creativeFakeGroupRepo)
+				group := groups.byID[12]
+				group.ImagePrice4K = testPtrFloat64(0.08)
+				groups.active = []Group{*group}
+				params := validCreateParams()
+				params.Model, params.ImageSize, params.AspectRatio = "studio-image", tier, ratio
+				run, err := svc.CreateRun(context.Background(), testCreativeScope(7), params, "mj-sized-contract")
+				require.NoError(t, err)
+				require.Equal(t, 4, run.RequestedOutputCount)
+				unit := *group.GetImagePrice(tier)
+				require.InDelta(t, unit*4, run.EstimatedCost, 1e-12)
+				require.InDelta(t, unit*4, run.HoldAmount, 1e-12)
+				stored := svc.Repo.(*creativeFakeRunRepo).runs[run.ID]
+				require.Equal(t, tier, stored.ImageSize)
+				require.Equal(t, ratio, stored.AspectRatio)
+				require.InDelta(t, unit, stored.BaseUnitPrice, 1e-12)
+				// 排队后改价不能修改原任务合同；部分产出仍按原档位单价结算。
+				group.ImagePrice1K, group.ImagePrice2K, group.ImagePrice4K = testPtrFloat64(100), testPtrFloat64(100), testPtrFloat64(100)
+				capture, err := captureCreativeBalanceHold(context.Background(), svc.BillingRepo, stored, 2)
+				require.NoError(t, err)
+				require.InDelta(t, unit*2, capture.ActualAmountUSD, 1e-12)
+				require.Equal(t, 1, svc.BillingRepo.(*creativeFakeBillingRepo).reserveN)
+			})
+		}
+	}
 }

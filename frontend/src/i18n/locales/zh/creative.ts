@@ -9,6 +9,7 @@ export default {
       // 局部重绘提示：选中图片后用画笔涂抹要重绘的区域
       maskHint: '请先在画布中选中一张图片，然后用画笔涂抹要重绘的区域。',
       imageSize: '图片尺寸',
+      midjourneyResolutionHint: '实际分辨率由上游决定，按所选档位计费。',
       aspectRatio: '画面比例',
       quality: '画质',
       background: '背景',

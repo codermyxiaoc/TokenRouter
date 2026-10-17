@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/stretchr/testify/require"
@@ -50,8 +51,10 @@ func TestCreativeMidjourneyRequestContract(t *testing.T) {
 		func(r *CreativeRun, p *CreativeRunPayload) { r.RequestedOutputCount = 1 },
 		func(r *CreativeRun, p *CreativeRunPayload) { r.RequestedOutputCount = 16 },
 		func(r *CreativeRun, p *CreativeRunPayload) { r.Operation = CreativeOperationEdit },
-		func(r *CreativeRun, p *CreativeRunPayload) { r.ImageSize = "4K" },
-		func(r *CreativeRun, p *CreativeRunPayload) { r.AspectRatio = "16:9" },
+		func(r *CreativeRun, p *CreativeRunPayload) { r.ImageSize = "8K" },
+		func(r *CreativeRun, p *CreativeRunPayload) { r.ImageSize = "4096x4096" },
+		func(r *CreativeRun, p *CreativeRunPayload) { r.AspectRatio = "3:2" },
+		func(r *CreativeRun, p *CreativeRunPayload) { r.AspectRatio = "auto" },
 		func(r *CreativeRun, p *CreativeRunPayload) { p.Quality = "high" },
 		func(r *CreativeRun, p *CreativeRunPayload) { p.Background = "transparent" },
 		func(r *CreativeRun, p *CreativeRunPayload) { p.ThinkingLevel = "high" },
@@ -63,6 +66,88 @@ func TestCreativeMidjourneyRequestContract(t *testing.T) {
 		_, _, err := buildCreativeMidjourneyRequestBody(run, payload, "MJ-v7")
 		require.Error(t, err)
 		require.False(t, IsRetryableCreativeError(err))
+	}
+}
+
+// TestCreativeMidjourneySizeAndRatioContract 覆盖全部档位与常见比例，保留旧正方形请求形状。
+func TestCreativeMidjourneySizeAndRatioContract(t *testing.T) {
+	sizes := []struct {
+		tier   string
+		pixels []string
+	}{
+		{"1K", []string{"1024x1024", "1024x768", "768x1024", "1024x576", "576x1024"}},
+		{"2K", []string{"2048x2048", "2048x1536", "1536x2048", "2048x1152", "1152x2048"}},
+		{"4K", []string{"4096x4096", "4096x3072", "3072x4096", "4096x2304", "2304x4096"}},
+	}
+	for _, size := range sizes {
+		for index, ratio := range []string{"1:1", "4:3", "3:4", "16:9", "9:16"} {
+			t.Run(size.tier+"/"+ratio, func(t *testing.T) {
+				run := creativeMJTestRun()
+				run.ImageSize, run.AspectRatio = size.tier, ratio
+				body, contentType, err := buildCreativeOpenAIRequestBody(run, CreativeRunPayload{Prompt: "a teapot"}, "MJ-v8.2")
+				require.NoError(t, err)
+				require.Equal(t, "application/json", contentType)
+				var got map[string]any
+				require.NoError(t, json.Unmarshal(body, &got))
+				require.Equal(t, size.pixels[index], got["size"])
+				require.Equal(t, float64(1), got["n"])
+				require.Equal(t, "MJ-v8.2", got["model"])
+				require.NotContains(t, got, "resolution")
+				if ratio == "1:1" {
+					require.NotContains(t, got, "ratio")
+				} else {
+					require.Equal(t, ratio, got["ratio"])
+				}
+			})
+		}
+	}
+	for _, size := range []string{"", " 1k "} {
+		run := creativeMJTestRun()
+		run.ImageSize, run.AspectRatio = size, " "
+		body, _, err := buildCreativeMidjourneyRequestBody(run, CreativeRunPayload{Prompt: "a teapot"}, "MJ-v7")
+		require.NoError(t, err)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(body, &got))
+		require.Equal(t, "1024x1024", got["size"])
+		require.NotContains(t, got, "ratio")
+	}
+}
+
+// TestCreativeMidjourneyResponseReadBudget 保证四张合法图片有足够预算，同时保留读取上界。
+func TestCreativeMidjourneyResponseReadBudget(t *testing.T) {
+	encodedFourImages := int64(4 * base64.StdEncoding.EncodedLen(32<<20))
+	require.Greater(t, creativeMidjourneyMaxResponseBytes, encodedFourImages)
+	require.LessOrEqual(t, creativeMidjourneyMaxResponseBytes, int64(192<<20))
+	for _, size := range []int{16, 17} {
+		body, err := readCreativeMidjourneyBody(strings.NewReader(strings.Repeat("x", size)), 16)
+		if size == 16 {
+			require.NoError(t, err)
+			require.Len(t, body, 16)
+		} else {
+			require.Error(t, err)
+			require.Empty(t, body)
+			var unconfirmed *CreativeProviderResultUnconfirmedError
+			require.ErrorAs(t, err, &unconfirmed)
+			require.False(t, IsRetryableCreativeError(err))
+		}
+	}
+	// 无效上界与读取中断都不能降级成可再次付费生成的错误。
+	for _, test := range []struct {
+		name   string
+		limit  int64
+		reader io.Reader
+	}{
+		{"零上限", 0, strings.NewReader("x")},
+		{"超过最大上限", creativeMidjourneyMaxResponseBytes + 1, strings.NewReader("x")},
+		{"中途读取失败", 16, io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(errors.New("read interrupted")))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := readCreativeMidjourneyBody(test.reader, test.limit)
+			require.Empty(t, body)
+			var unconfirmed *CreativeProviderResultUnconfirmedError
+			require.ErrorAs(t, err, &unconfirmed)
+			require.False(t, IsRetryableCreativeError(err))
+		})
 	}
 }
 

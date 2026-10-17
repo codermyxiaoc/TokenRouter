@@ -72,7 +72,13 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 		return nil, creativeHTTPStatusError(0, err.Error())
 	}
 	defer func() { _ = resp.Body.Close() }()
-	respBody, err := readCreativeUpstreamBody(resp.Body, 64<<20)
+	var respBody []byte
+	if midjourney {
+		// MJ 一次返回四张图片，总包预算包含各张 base64 开销；其它模型维持原上限。
+		respBody, err = readCreativeMidjourneyBody(resp.Body, creativeMidjourneyMaxResponseBytes)
+	} else {
+		respBody, err = readCreativeUpstreamBody(resp.Body, 64<<20)
+	}
 	if err != nil {
 		if midjourney {
 			return nil, creativeResultUnconfirmedError()

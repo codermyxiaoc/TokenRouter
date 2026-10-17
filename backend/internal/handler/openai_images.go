@@ -234,6 +234,21 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		}
 
 		// 最终账号与渠道模型确定后冻结报价；后续同组账号重试沿用本次快照。
+		// 账号映射也可能切到 MJ，必须在冻结资金与发送请求前核验 n 和已冻结的张数上限。
+		expectedOutputCount, validationErr := parsed.ExpectedOutputCountForAccount(account, routingModel)
+		if validationErr != nil || (imageBilling.reservation != nil && expectedOutputCount > imageBilling.reservation.Quote.RequestedCount) {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			status, errorType := http.StatusServiceUnavailable, "service_unavailable"
+			message := "Selected account output count exceeds the reserved image budget"
+			if validationErr != nil {
+				status, errorType = http.StatusBadRequest, "invalid_request_error"
+				message = validationErr.Error()
+			}
+			h.handleStreamingAwareError(c, status, errorType, message, streamStarted)
+			return
+		}
 		if err := imageBilling.prepare(requestCtx, apiKey, account, subscription, requestModel, parsed.N, parsed.SizeTier, channelMapping); err != nil {
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()

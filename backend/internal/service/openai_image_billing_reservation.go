@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -67,22 +68,33 @@ func (q *OpenAIImageBillingQuote) settledCost(size string, count int, hold *Imag
 }
 
 // PrepareAsyncImageBilling 在最终选组和账号并发等待之后、调用上游之前原子预占资金。
+// MJ 同步入口也预占四张预算，避免只够一张的余额发起已知四张的生成任务。
 // @project-doc docs/domains/media_tasks.md#async_image_billing
 func (s *OpenAIGatewayService) PrepareAsyncImageBilling(ctx context.Context, key *APIKey, account *Account, _ *UserSubscription, model string, count int, size string, mapping ChannelMappingResult) (*OpenAIImageBillingReservation, error) {
-	if async, _ := ctx.Value(asyncImageExecutionContextKey{}).(bool); !async {
-		return nil, nil
-	}
 	if s != nil && s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		return nil, nil
-	}
-	if s == nil || s.billingService == nil || key == nil || key.User == nil || key.GroupID == nil || key.Group == nil || account == nil || count <= 0 {
-		return nil, ErrImageBillingReservationInvalid
 	}
 	mapped := strings.TrimSpace(mapping.MappedModel)
 	if mapped == "" {
 		mapped = model
 	}
-	upstream := resolveOpenAIAccountUpstreamModelForRequest(account, mapped, false)
+	upstream := mapped
+	if account != nil {
+		upstream = resolveOpenAIAccountUpstreamModelForRequest(account, mapped, false)
+	}
+	midjourney := IsMidjourneyImageGenerationModel(upstream)
+	if async, _ := ctx.Value(asyncImageExecutionContextKey{}).(bool); !async && !midjourney {
+		return nil, nil
+	}
+	if s == nil || s.billingService == nil || key == nil || key.User == nil || key.GroupID == nil || key.Group == nil || account == nil || count <= 0 {
+		return nil, ErrImageBillingReservationInvalid
+	}
+	if midjourney {
+		if count != 1 {
+			return nil, fmt.Errorf("Midjourney images currently require n=1")
+		}
+		count = 4
+	}
 	result := &OpenAIForwardResult{Model: mapped, UpstreamModel: upstream, ImageCount: 1}
 	if account.Platform == PlatformGrok {
 		// Grok 媒体在端点别名归一化、账号映射后保留计费 SKU，与真实转发结果一致。
@@ -94,7 +106,13 @@ func (s *OpenAIGatewayService) PrepareAsyncImageBilling(ctx context.Context, key
 		result.UpstreamModel = normalizeOpenAIModelForUpstream(account, result.BillingModel)
 	}
 	billingModel := openAIUsageBillingModel(result, mapping.ToUsageFields(model, result.UpstreamModel))
-	if resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, key); resolved != nil && resolved.Mode == BillingModeToken {
+	resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, key)
+	explicitImagePricing := resolved != nil && resolved.HasEffectiveOverridePricing() && (resolved.Mode == BillingModeImage || resolved.Mode == BillingModePerRequest)
+	if midjourney && !explicitImagePricing && !apiKeyHasConfiguredImagePrice(key, NormalizeImageBillingTierOrDefault(size)) {
+		// MJ 的零 Token 响应不能走文字计费或借其它图片模型的默认价。
+		return nil, fmt.Errorf("Midjourney requires configured per-image or per-request pricing: %w", ErrModelPricingUnavailable)
+	}
+	if !midjourney && resolved != nil && resolved.Mode == BillingModeToken {
 		// Token 图片的实际用量未知，继续走原有后结算；不伪造固定价预占。
 		return nil, nil
 	}
@@ -105,13 +123,31 @@ func (s *OpenAIGatewayService) PrepareAsyncImageBilling(ctx context.Context, key
 	quote := &OpenAIImageBillingQuote{BillingModel: billingModel, RequestedCount: count, RequestedSize: NormalizeImageBillingTierOrDefault(size), UnitPrices: make(map[string]float64, 3)}
 	for _, tier := range []string{"1K", "2K", "4K"} {
 		result.ImageSize = tier
-		cost := s.calculateOpenAIImageCost(ctx, billingModel, key, result, 1)
+		var cost *CostBreakdown
+		if midjourney {
+			// 三种尺寸只使用同一已解析价卡与当前分组快照，禁止删价时二次解析回落默认价。
+			var err error
+			cost, err = s.midjourneyImageCostFromSnapshot(ctx, billingModel, key, resolved, tier)
+			if err != nil {
+				return nil, err
+			}
+			if cost == nil {
+				continue
+			}
+		} else {
+			cost = s.calculateOpenAIImageCost(ctx, billingModel, key, result, 1)
+		}
 		if cost == nil || cost.TotalCost < 0 || math.IsNaN(cost.TotalCost) || math.IsInf(cost.TotalCost, 0) {
 			return nil, ErrImageBillingReservationInvalid
 		}
 		quote.UnitPrices[tier] = cost.TotalCost
 		if tier == quote.RequestedSize {
 			quote.BillingMode = cost.BillingMode
+		}
+	}
+	if midjourney {
+		if _, priced := quote.UnitPrices[quote.RequestedSize]; !priced {
+			return nil, fmt.Errorf("Midjourney requested size requires an explicit price: %w", ErrModelPricingUnavailable)
 		}
 	}
 	quotedCost, err := quote.cost(quote.RequestedSize, count, 1)
@@ -159,6 +195,24 @@ func (s *OpenAIGatewayService) PrepareAsyncImageBilling(ctx context.Context, key
 	}
 	s.invalidateAsyncImageBalance(ctx, key.User.ID)
 	return &OpenAIImageBillingReservation{Reservation: reservation, Quote: quote}, nil
+}
+
+// midjourneyImageCostFromSnapshot 不读取渠道仓储、不刷新分组、不使用默认价，防止一次报价混合多个版本。
+func (s *OpenAIGatewayService) midjourneyImageCostFromSnapshot(ctx context.Context, model string, key *APIKey, resolved *ResolvedPricing, tier string) (*CostBreakdown, error) {
+	explicit := resolved != nil && resolved.HasEffectiveOverridePricing() && (resolved.Mode == BillingModeImage || resolved.Mode == BillingModePerRequest)
+	if explicit && (resolved.Source == PricingSourceGroup || !apiKeyHasConfiguredImagePrice(key, tier)) {
+		// 其它尺寸有价不代表当前尺寸免费；只有命中档位或显式默认价（可为零）才可报价。
+		_, tierPriced := s.resolver.GetRequestTierPriceValue(resolved, tier)
+		if !tierPriced && (resolved.channelPricing == nil || resolved.channelPricing.PerRequestPrice == nil) {
+			return nil, nil
+		}
+		return s.billingService.CalculateCostUnified(CostInput{Ctx: ctx, Model: model, Group: key.Group,
+			GroupID: key.GroupID, RequestCount: 1, SizeTier: tier, RateMultiplier: 1, Resolver: s.resolver, Resolved: resolved})
+	}
+	if price := key.Group.GetImagePrice(tier); price != nil {
+		return &CostBreakdown{TotalCost: *price, ActualCost: *price, BillingMode: string(BillingModeImage)}, nil
+	}
+	return nil, nil
 }
 
 // ReleaseAsyncImageBilling 只用于明确未产生图片的失败；重复释放由账本保证幂等。

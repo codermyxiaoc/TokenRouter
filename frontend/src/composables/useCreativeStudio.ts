@@ -157,7 +157,10 @@ export function useCreativeStudio() {
 
   const thinkingLevelOptions = computed(() => selectedOption.value?.thinking_levels ?? [])
 
-  const maxReferenceImages = computed(() => Math.max(1, selectedOption.value?.max_reference_images ?? 1))
+  const maxReferenceImages = computed(() => Math.max(0, selectedOption.value?.max_reference_images ?? 1))
+
+  // 数量来自服务端能力，MJ 一次四张；不依赖显示名称猜测，也不由客户端改变预占数量。
+  const outputCount = computed(() => selectedOption.value?.output_count === 4 ? 4 : 1)
 
   // 估算费用直接使用模型目录返回的档位价格，避免创作台与模型广场价格口径不一致。
   const estimatedCost = computed(() => {
@@ -177,7 +180,7 @@ export function useCreativeStudio() {
       default:
         unitPrice = option.price_1k
     }
-    return unitPrice
+    return unitPrice * outputCount.value
   })
 
   const canGenerate = computed(() => {
@@ -891,6 +894,7 @@ export function useCreativeStudio() {
     backgroundOptions,
     thinkingLevelOptions,
     maxReferenceImages,
+    outputCount,
     estimatedCost,
     canGenerate,
     // 方法

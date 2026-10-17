@@ -19,6 +19,11 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 	if e.gateway == nil {
 		return nil, errors.New("creative openai gateway is not configured")
 	}
+	midjourney := IsMidjourneyImageGenerationModel(upstreamModel)
+	// MJ 是第三方 Images 兼容模型，不能使用 OAuth 或误入 GPT Image 参数通道。
+	if midjourney && (account == nil || account.Type != AccountTypeAPIKey) {
+		return nil, creativeNonRetryableError("Midjourney requires an API key account")
+	}
 	endpoint := openAIImagesGenerationsEndpoint
 	if run.Operation != CreativeOperationGenerate {
 		endpoint = openAIImagesEditsEndpoint
@@ -60,15 +65,28 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 
 	resp, err := e.gateway.httpUpstream.DoWithTLS(req, accountProxyURL(account), account.ID, account.Concurrency, e.gateway.resolveOpenAITLSProfile(account))
 	if err != nil {
+		if midjourney {
+			// POST 发送后断连不能证明未生图，必须保留预占，禁止重复生成。
+			return nil, creativeResultUnconfirmedError()
+		}
 		return nil, creativeHTTPStatusError(0, err.Error())
 	}
 	defer func() { _ = resp.Body.Close() }()
 	respBody, err := readCreativeUpstreamBody(resp.Body, 64<<20)
 	if err != nil {
+		if midjourney {
+			return nil, creativeResultUnconfirmedError()
+		}
 		return nil, creativeHTTPStatusError(0, err.Error())
+	}
+	if midjourney && (resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode >= 500 || resp.StatusCode < 200 || resp.StatusCode >= 300 && resp.StatusCode < 400) {
+		return nil, creativeResultUnconfirmedError()
 	}
 	if resp.StatusCode >= 400 {
 		return nil, creativeHTTPStatusError(resp.StatusCode, extractUpstreamErrorMessage(respBody))
+	}
+	if midjourney {
+		return parseCreativeMidjourneyImageOutputs(ctx, respBody, creativeMidjourneyImageDownloader)
 	}
 	return parseCreativeOpenAIImageOutputs(respBody)
 }
@@ -94,6 +112,9 @@ func (e *CreativeExecutor) creativeOpenAIURL(account *Account, endpoint string) 
 // generate 为 JSON；edit/inpaint 为 multipart（image 多文件、mask、model、prompt）。
 // 输出格式固定为 PNG；其余可选参数已经过模型能力校验，生成与编辑请求保持同一语义。
 func buildCreativeOpenAIRequestBody(run CreativeRun, payload CreativeRunPayload, upstreamModel string) ([]byte, string, error) {
+	if IsMidjourneyImageGenerationModel(upstreamModel) {
+		return buildCreativeMidjourneyRequestBody(run, payload, upstreamModel)
+	}
 	if run.Operation == CreativeOperationGenerate {
 		bodyMap := map[string]any{
 			"model":         upstreamModel,

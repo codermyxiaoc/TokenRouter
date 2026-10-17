@@ -1,3 +1,5 @@
+import { isMidjourneyImageModel } from '@/utils/midjourney'
+
 export type ProviderBrandKey =
   | 'anthropic'
   | 'deepseek'
@@ -118,7 +120,8 @@ const providerBrands: Record<ProviderBrandKey, ProviderBrand> = {
     key: 'midjourney',
     label: 'Midjourney',
     iconKey: 'midjourney',
-    iconColor: '#111827',
+    // 与模型帆船图标一致，兼容深色主题。
+    iconColor: 'currentColor',
     badgeClass: 'bg-gray-100 text-gray-900 ring-gray-200 dark:bg-gray-500/20 dark:text-gray-50 dark:ring-gray-400/30',
     iconWrapClass: 'bg-gray-50 text-gray-800 ring-gray-200 dark:bg-gray-500/15 dark:text-gray-200 dark:ring-gray-400/30',
   },
@@ -417,6 +420,11 @@ export function resolveProviderBrandKey(value?: string | null): ProviderBrandKey
   const normalized = normalizeProviderBrand(value ?? '')
   if (!normalized) {
     return null
+  }
+
+  // MJ 前缀可直接作为模型品牌，不要求连字符或固定版本号。
+  if (isMidjourneyImageModel(value ?? '')) {
+    return 'midjourney'
   }
 
   const exactKey = providerBrandAliasMap.get(normalized)

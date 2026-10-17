@@ -36,17 +36,37 @@ func (s *CreativePublicService) NormalizeCreativeModelSettingsForSave(ctx contex
 		return normalized, nil
 	}
 	out := make([]CreativeModelSetting, 0, len(normalized))
+	resolvedModels := make(map[int64]map[string]string)
 	for _, item := range normalized {
 		group, lookupErr := s.GroupRepo.GetByIDLite(ctx, item.GroupID)
-		if lookupErr != nil || group == nil || strings.TrimSpace(group.Platform) != PlatformGemini {
+		if lookupErr != nil || group == nil {
 			out = append(out, item)
 			continue
 		}
+		finalModel := item.Model
+		if strings.TrimSpace(group.Platform) == PlatformOpenAI {
+			// 配置页的请求别名也必须按最终模型收窄，不能给 MJ 保存编辑与局部重绘能力。
+			models, loaded := resolvedModels[group.ID]
+			if !loaded {
+				var modelErr error
+				models, modelErr = s.creativeModelsForGroup(ctx, group)
+				if modelErr != nil {
+					return nil, modelErr
+				}
+				resolvedModels[group.ID] = models
+			}
+			if resolved := models[item.Model]; resolved != "" {
+				finalModel = resolved
+			}
+		}
+		midjourney := strings.TrimSpace(group.Platform) == PlatformOpenAI && IsMidjourneyImageGenerationModel(finalModel)
 		operations := make([]string, 0, len(item.Operations))
 		for _, operation := range item.Operations {
-			if operation != CreativeOperationInpaint {
-				operations = append(operations, operation)
+			if (strings.TrimSpace(group.Platform) == PlatformGemini && operation == CreativeOperationInpaint) ||
+				(midjourney && operation != CreativeOperationGenerate) {
+				continue
 			}
+			operations = append(operations, operation)
 		}
 		if len(operations) == 0 {
 			continue

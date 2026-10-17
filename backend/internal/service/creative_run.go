@@ -449,6 +449,7 @@ type CreativeModelPublic struct {
 	OutputCompression  *CreativeNumericRange `json:"output_compression"`
 	BackgroundOptions  []string              `json:"background_options"`
 	ThinkingLevels     []string              `json:"thinking_levels"`
+	OutputCount        int                   `json:"output_count"` // 每次任务固定的输出及预占张数：MJ 四张，其余模型保持单张。
 	MaxOutputCount     int                   `json:"max_output_count"`
 	MaxReferenceImages int                   `json:"max_reference_images"`
 	Price512           float64               `json:"price_512"`

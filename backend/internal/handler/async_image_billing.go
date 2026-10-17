@@ -24,9 +24,10 @@ type asyncImageBillingState struct {
 }
 
 func (s *asyncImageBillingState) prepare(ctx context.Context, key *service.APIKey, account *service.Account, subscription *service.UserSubscription, model string, count int, sizeTier string, mapping service.ChannelMappingResult) error {
-	if s.prepared {
+	if s.prepared && s.reservation != nil {
 		return nil
 	}
+	// 无预占的同步候选切到 MJ 时必须重新检查；已有预占继续只复用一次。
 	s.prepared = true
 	reservation, err := s.gateway.PrepareAsyncImageBilling(ctx, key, account, subscription, model, count, sizeTier, mapping)
 	if err != nil {

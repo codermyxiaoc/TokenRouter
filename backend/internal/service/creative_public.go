@@ -12,6 +12,7 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -220,14 +221,14 @@ func (s *CreativePublicService) ListModels(ctx context.Context, userID int64) (*
 		}
 		sort.Strings(modelNames)
 		for _, model := range modelNames {
-			operations, configured := creativeOperationsForModel(modelSettings, group.ID, model, platformOperations)
-			if !configured || len(operations) == 0 {
-				continue
-			}
 			// 尺寸按“分组+模型”解析：渠道/分组未配置覆盖价时回退平台默认档位。
 			finalModel := models[model]
 			if finalModel == "" {
 				finalModel = model
+			}
+			operations, configured := creativeOperationsForModel(modelSettings, group.ID, model, creativeOperationsForResolvedModel(group.Platform, finalModel))
+			if !configured || len(operations) == 0 || !s.creativeHasRequiredModelPricing(ctx, group, finalModel, "1K") {
+				continue
 			}
 			imageSizes := creativeImageSizesForGroupModel(group, finalModel)
 			if len(imageSizes) == 0 {
@@ -246,6 +247,7 @@ func (s *CreativePublicService) ListModels(ctx context.Context, userID int64) (*
 				OutputCompression:  capabilities.outputCompression,
 				BackgroundOptions:  capabilities.backgroundOptions,
 				ThinkingLevels:     capabilities.thinkingLevels,
+				OutputCount:        capabilities.maxOutputCount,
 				MaxOutputCount:     capabilities.maxOutputCount,
 				MaxReferenceImages: capabilities.maxReferenceImages,
 				Price512:           s.creativePrice(ctx, group, finalModel, "512"),
@@ -287,7 +289,7 @@ func (s *CreativePublicService) ListCreativeModelCandidates(ctx context.Context)
 			if finalModel == "" {
 				finalModel = model
 			}
-			if len(creativeImageSizesForGroupModel(group, finalModel)) == 0 {
+			if len(creativeImageSizesForGroupModel(group, finalModel)) == 0 || !s.creativeHasRequiredModelPricing(ctx, group, finalModel, "1K") {
 				continue
 			}
 			modelNames = append(modelNames, model)
@@ -299,7 +301,7 @@ func (s *CreativePublicService) ListCreativeModelCandidates(ctx context.Context)
 				GroupName:  group.Name,
 				Platform:   group.Platform,
 				Model:      model,
-				Operations: append([]string(nil), operations...),
+				Operations: creativeOperationsForResolvedModel(group.Platform, models[model]),
 			})
 		}
 	}
@@ -323,6 +325,10 @@ func (s *CreativePublicService) creativePrice(ctx context.Context, group *Group,
 			return *price * marketplaceImageRateMultiplier(group)
 		}
 	}
+	if IsMidjourneyImageGenerationModel(model) {
+		// 第三方 MJ 没有可借用的 OpenAI 默认价，未知价不能冒充免费。
+		return 0
+	}
 	if s.Pricing == nil {
 		return 0
 	}
@@ -339,6 +345,9 @@ func (s *CreativePublicService) creativeResolvedImageUnitPrice(ctx context.Conte
 	if resolved == nil || (resolved.Mode != BillingModeImage && resolved.Mode != BillingModePerRequest) {
 		return 0, false
 	}
+	if IsMidjourneyImageGenerationModel(model) && resolved.Source != PricingSourceGroup && resolved.Source != PricingSourceChannel {
+		return 0, false
+	}
 	if price, ok := s.PricingResolver.GetRequestTierPriceValue(resolved, imageSize); ok {
 		return price, true
 	}
@@ -346,6 +355,36 @@ func (s *CreativePublicService) creativeResolvedImageUnitPrice(ctx context.Conte
 		return resolved.DefaultPerRequestPrice, true
 	}
 	return 0, false
+}
+
+// creativeHasRequiredModelPricing 对没有官方基础价的 MJ 强制要求显式图片或按次价格，零价合法。
+func (s *CreativePublicService) creativeHasRequiredModelPricing(ctx context.Context, group *Group, model, imageSize string) bool {
+	if !IsMidjourneyImageGenerationModel(model) {
+		return true
+	}
+	_, ok := s.creativeExplicitImageUnitPrice(ctx, group, model, imageSize)
+	return ok
+}
+
+// creativeExplicitImageUnitPrice 原子地取得一次价格解析结果，避免校验后配置变化时掉入未知模型默认价。
+func (s *CreativePublicService) creativeExplicitImageUnitPrice(ctx context.Context, group *Group, model, imageSize string) (float64, bool) {
+	if price, ok := s.creativeResolvedImageUnitPrice(ctx, group, model, imageSize); ok {
+		return price, price >= 0 && !math.IsNaN(price) && !math.IsInf(price, 0)
+	}
+	if group != nil {
+		if price := group.GetImagePrice(imageSize); price != nil {
+			return *price, *price >= 0 && !math.IsNaN(*price) && !math.IsInf(*price, 0)
+		}
+	}
+	return 0, false
+}
+
+// creativeOperationsForResolvedModel 按最终上游模型收窄能力，避免 MJ 别名继承 GPT 的编辑能力。
+func creativeOperationsForResolvedModel(platform, model string) []string {
+	if strings.TrimSpace(platform) == PlatformOpenAI && IsMidjourneyImageGenerationModel(model) {
+		return []string{CreativeOperationGenerate}
+	}
+	return creativeOperationsForPlatform(platform)
 }
 
 // creativeOperationsForPlatform 返回分组平台支持的操作集合。
@@ -422,6 +461,13 @@ func creativeCapabilitiesForModel(platform, model string) creativeModelCapabilit
 	normalizedModel := creativeNormalizedModelID(model)
 	switch normalizedPlatform {
 	case PlatformOpenAI:
+		if IsMidjourneyImageGenerationModel(normalizedModel) {
+			// 目前只承诺已验证的文生图参数，不继承 GPT 的参考图、质量和背景选项。
+			capabilities.aspectRatios = []string{"1:1"}
+			capabilities.maxOutputCount = 4
+			capabilities.maxReferenceImages = 0
+			return capabilities
+		}
 		if !IsGPTImageGenerationModel(normalizedModel) {
 			return capabilities
 		}
@@ -506,6 +552,9 @@ func creativeImageSizesForGroupModel(group *Group, model string) []string {
 // 未知模型保留平台/分组配置，避免误伤供应商自定义模型；已知固定 1K 模型永远不开放高分辨率。
 func creativeFilterImageSizesForModel(platform, model string, sizes []string) []string {
 	platform = strings.TrimSpace(platform)
+	if platform == PlatformOpenAI && IsMidjourneyImageGenerationModel(model) {
+		return creativeFilterImageSizes(sizes, ImageBillingSize1K)
+	}
 	if platform == PlatformGrok && isGrokImageGenerationModel(model) {
 		return creativeFilterImageSizes(sizes, ImageBillingSize1K, ImageBillingSize2K)
 	}
@@ -642,6 +691,12 @@ func (s *CreativePublicService) creativeModelsForGroup(ctx context.Context, grou
 			}
 		case PlatformOpenAI:
 			for _, model := range creativeExpandAccountModels(account, defaultCreativeOpenAIModelCandidates(), IsGPTImageGenerationModel) {
+				// 同名请求在多个账号映射到不同模型时，以 MJ 的较窄能力为准。
+				if !IsMidjourneyImageGenerationModel(out[model]) {
+					out[model] = resolveAccountMappedModelForForward(account, model)
+				}
+			}
+			for _, model := range creativeMidjourneyModelsForAccount(account) {
 				out[model] = resolveAccountMappedModelForForward(account, model)
 			}
 		case PlatformGrok:
@@ -651,6 +706,46 @@ func (s *CreativePublicService) creativeModelsForGroup(ctx context.Context, grou
 		}
 	}
 	return out, nil
+}
+
+// creativeMidjourneyModelsForAccount 只展开 API Key 账号显式声明的 MJ 模型与别名。
+// 默认 OpenAI 账号没有 MJ 能力；通配符仅在已知版本集合上展开，不伪造任意模型。
+func creativeMidjourneyModelsForAccount(account *Account) []string {
+	if account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeAPIKey {
+		return nil
+	}
+	mapping := account.GetModelMapping()
+	whitelist, _ := resolveFinalModelWhitelist(account.Platform, account.Credentials, mapping)
+	patterns := make(map[string]struct{}, len(mapping)+len(whitelist))
+	for model := range mapping {
+		patterns[model] = struct{}{}
+	}
+	for model := range whitelist {
+		patterns[model] = struct{}{}
+	}
+	models := make(map[string]struct{})
+	for pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		candidates := []string{pattern}
+		if strings.ContainsAny(pattern, "*?") {
+			candidates = []string{"MJ-v7", "MJ-v8.1", "MJ-v8.2"}
+		}
+		for _, candidate := range candidates {
+			if candidate == "" || !matchWildcard(pattern, candidate) {
+				continue
+			}
+			finalModel := resolveAccountMappedModelForForward(account, candidate)
+			if IsMidjourneyImageGenerationModel(finalModel) && account.IsModelSupported(candidate) {
+				models[candidate] = struct{}{}
+			}
+		}
+	}
+	out := make([]string, 0, len(models))
+	for model := range models {
+		out = append(out, model)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // creativeGeminiModelsForAccount 展开 Gemini 账号的创作台图片模型候选。
@@ -1048,6 +1143,8 @@ func (s *CreativePublicService) validateCreateParams(ctx context.Context, userID
 	if finalModel == "" {
 		finalModel = model
 	}
+	// 操作白名单必须和映射后的模型取交集，不能仅按 OpenAI 平台放行编辑。
+	operations, _ = creativeOperationsForModel(modelSettings, group.ID, model, creativeOperationsForResolvedModel(group.Platform, finalModel))
 	operation := strings.TrimSpace(params.Operation)
 	operationAllowed := false
 	for _, candidate := range operations {
@@ -1060,7 +1157,10 @@ func (s *CreativePublicService) validateCreateParams(ctx context.Context, userID
 		return nil, ErrCreativeOperationUnsupported
 	}
 	capabilities := creativeCapabilitiesForModel(group.Platform, finalModel)
-	if capabilities.maxReferenceImages > 0 && len(params.SourceImages) > capabilities.maxReferenceImages {
+	if len(params.SourceImages) > capabilities.maxReferenceImages {
+		return nil, ErrCreativeInvalidParams
+	}
+	if IsMidjourneyImageGenerationModel(finalModel) && params.Mask != nil {
 		return nil, ErrCreativeInvalidParams
 	}
 
@@ -1073,7 +1173,13 @@ func (s *CreativePublicService) validateCreateParams(ctx context.Context, userID
 	}
 
 	outputCount := params.OutputCount
-	if outputCount == 0 {
+	if IsMidjourneyImageGenerationModel(finalModel) {
+		// MJ 一次生成四张并逐张计价。兼容旧客户端的默认单张字段，但绝不按一张预占。
+		if outputCount != 0 && outputCount != 1 && outputCount != 4 {
+			return nil, ErrCreativeInvalidParams
+		}
+		outputCount = 4
+	} else if outputCount == 0 {
 		outputCount = 1
 	}
 	if outputCount < 1 || outputCount > capabilities.maxOutputCount {
@@ -1087,6 +1193,9 @@ func (s *CreativePublicService) validateCreateParams(ctx context.Context, userID
 	imageSize, supported := creativeCanonicalOption(imageSize, creativeImageSizesForGroupModel(group, finalModel))
 	if !supported {
 		return nil, ErrCreativeInvalidParams
+	}
+	if !s.creativeHasRequiredModelPricing(ctx, group, finalModel, imageSize) {
+		return nil, ErrCreativeInvalidModel
 	}
 	aspectRatio := strings.TrimSpace(params.AspectRatio)
 	if aspectRatio == "" {
@@ -1443,7 +1552,15 @@ func (s *CreativePublicService) resolveCreativePricing(ctx context.Context, user
 	if pricingModel == "" {
 		pricingModel = validated.model
 	}
-	if resolvedUnitPrice, ok := s.creativeResolvedImageUnitPrice(ctx, group, pricingModel, validated.imageSize); ok {
+	if IsMidjourneyImageGenerationModel(pricingModel) {
+		// 单次解析得到的显式单价直接写入快照，不能在并发配置更新后回退到 GPT 默认价。
+		unitPrice, ok := s.creativeExplicitImageUnitPrice(ctx, group, pricingModel, validated.imageSize)
+		if !ok {
+			return nil, ErrCreativeInvalidModel
+		}
+		baseUnitPrice = unitPrice
+		estimatedCost = unitPrice * float64(validated.outputCount) * effective
+	} else if resolvedUnitPrice, ok := s.creativeResolvedImageUnitPrice(ctx, group, pricingModel, validated.imageSize); ok {
 		baseUnitPrice = resolvedUnitPrice
 		estimatedCost = resolvedUnitPrice * float64(validated.outputCount) * effective
 	} else if unit := group.GetImagePrice(validated.imageSize); unit != nil && *unit >= 0 {

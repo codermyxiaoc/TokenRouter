@@ -19,6 +19,8 @@ const (
 	defaultCreativeMaxAttempts    = 3
 	// creativeMaxOutputBytes 限制单张输出图片大小（32 MiB）。
 	creativeMaxOutputBytes = 32 << 20
+	// creativeMidjourneyOutputCount 是 MJ 每次调用固定的四张产物，也是预占数量合同。
+	creativeMidjourneyOutputCount = 4
 )
 
 // CreativeUpstreamError 是执行器向上抛出的上游调用错误，携带可重试判定。
@@ -26,6 +28,24 @@ type CreativeUpstreamError struct {
 	StatusCode int
 	Message    string
 	Retryable  bool
+}
+
+// CreativeProviderResultUnconfirmedError 表示上游可能已经生成，但尚未取得可交付产物。
+// 此类错误既不能重发生成，也不能推断失败并退款；具体响应和素材地址不写入错误文本。
+type CreativeProviderResultUnconfirmedError struct{}
+
+func (*CreativeProviderResultUnconfirmedError) Error() string {
+	return "creative provider result is unconfirmed"
+}
+
+// creativeResultUnconfirmedError 为产物解析、下载等已受理后的不确定结果生成安全错误。
+func creativeResultUnconfirmedError() error {
+	return &CreativeProviderResultUnconfirmedError{}
+}
+
+func isCreativeResultUnconfirmedError(err error) bool {
+	var unconfirmed *CreativeProviderResultUnconfirmedError
+	return errors.As(err, &unconfirmed)
 }
 
 func (e *CreativeUpstreamError) Error() string {
@@ -60,6 +80,9 @@ func creativeHTTPStatusError(statusCode int, message string) *CreativeUpstreamEr
 
 // IsRetryableCreativeError 判断错误是否值得 worker 有限重试。
 func IsRetryableCreativeError(err error) bool {
+	if isCreativeResultUnconfirmedError(err) {
+		return false
+	}
 	var upstreamErr *CreativeUpstreamError
 	if errors.As(err, &upstreamErr) {
 		return upstreamErr.Retryable
@@ -117,14 +140,7 @@ func (e *CreativeExecutor) Prepare(ctx context.Context, run CreativeRun) (*Creat
 		if e.gateway == nil {
 			return nil, errors.New("creative OpenAI gateway is not configured")
 		}
-		selection, _, err = e.gateway.SelectAccountWithSchedulerForImages(
-			ctx,
-			&groupID,
-			"",
-			run.Model,
-			nil,
-			OpenAIImagesCapabilityNative,
-		)
+		selection, err = e.prepareOpenAIImageSelection(ctx, groupID, run.Model)
 	case PlatformGrok:
 		if e.gateway == nil {
 			return nil, errors.New("creative OpenAI gateway is not configured")
@@ -177,6 +193,12 @@ func (e *CreativeExecutor) Prepare(ctx context.Context, run CreativeRun) (*Creat
 		}
 		return nil, creativeNonRetryableError("creative mapped model %s is not an image model", upstreamModel)
 	}
+	if IsMidjourneyImageGenerationModel(upstreamModel) && selection.Account.Type != AccountTypeAPIKey {
+		if selection.ReleaseFunc != nil {
+			selection.ReleaseFunc()
+		}
+		return nil, creativeNonRetryableError("creative Midjourney requires an API key account")
+	}
 	return &CreativeExecution{
 		Account:       selection.Account,
 		UpstreamModel: upstreamModel,
@@ -185,10 +207,37 @@ func (e *CreativeExecutor) Prepare(ctx context.Context, run CreativeRun) (*Creat
 	}, nil
 }
 
+// prepareOpenAIImageSelection 只把 Midjourney 交给 API Key 账号，不改变 GPT Image 的原生能力。
+// 请求别名可能在账号层才映射到 MJ；若首次选中 OAuth，先释放槽位，再按 API Key 能力选一次。
+func (e *CreativeExecutor) prepareOpenAIImageSelection(ctx context.Context, groupID int64, model string) (*AccountSelectionResult, error) {
+	capability := OpenAIImagesCapabilityNative
+	if IsMidjourneyImageGenerationModel(model) || IsMidjourneyImageGenerationModel(e.gateway.resolveChannelRoutingModel(ctx, &groupID, model)) {
+		capability = OpenAIImagesCapabilityAPIKey
+	}
+	for range 2 {
+		selection, _, err := e.gateway.SelectAccountWithSchedulerForImages(ctx, &groupID, "", model, nil, capability)
+		if err != nil || selection == nil || selection.Account == nil {
+			return selection, err
+		}
+		upstreamModel := resolveAccountUpstreamModel(ctx, selection.Account, model)
+		if !IsMidjourneyImageGenerationModel(upstreamModel) || selection.Account.Type == AccountTypeAPIKey {
+			return selection, nil
+		}
+		if selection.ReleaseFunc != nil {
+			selection.ReleaseFunc()
+		}
+		if capability == OpenAIImagesCapabilityAPIKey {
+			return nil, creativeNonRetryableError("creative Midjourney requires an API key account")
+		}
+		capability = OpenAIImagesCapabilityAPIKey
+	}
+	return nil, creativeNonRetryableError("no compatible creative Midjourney account available")
+}
+
 func creativePlatformImageModel(platform, model string) bool {
 	switch platform {
 	case PlatformOpenAI:
-		return IsGPTImageGenerationModel(model)
+		return IsGPTImageGenerationModel(model) || IsMidjourneyImageGenerationModel(model)
 	case PlatformGrok:
 		return isGrokImageGenerationModel(model)
 	case PlatformGemini:
@@ -207,11 +256,25 @@ func (e *CreativeExecutor) Execute(ctx context.Context, run CreativeRun, payload
 		return nil, errors.New("creative execution context is not configured")
 	}
 	account := execution.Account
-	// 创作台固定每次只生成一张，避免历史载荷或内部调用携带多图数量。
-	run.RequestedOutputCount = 1
 	upstreamModel := strings.TrimSpace(execution.UpstreamModel)
 	if upstreamModel == "" {
 		return nil, errors.New("creative execution upstream model is not configured")
+	}
+	if IsMidjourneyImageGenerationModel(upstreamModel) && (account.Platform != PlatformOpenAI || account.Type != AccountTypeAPIKey) {
+		return nil, creativeNonRetryableError("creative Midjourney requires an OpenAI API key account")
+	}
+	if IsMidjourneyImageGenerationModel(upstreamModel) {
+		// 排队后账号映射可能变化；只有持久预占明确覆盖四张才允许调用 MJ。
+		if run.RequestedOutputCount != creativeMidjourneyOutputCount {
+			return nil, creativeNonRetryableError("creative Midjourney requires a four-image reservation")
+		}
+	} else {
+		if run.RequestedOutputCount == creativeMidjourneyOutputCount {
+			// 四张报价属于 MJ 合同，执行时映射成其它模型也不能沿用该报价生成。
+			return nil, creativeNonRetryableError("creative four-image reservation requires a Midjourney model")
+		}
+		// 其它模型保持原有单张输出合同，不受 MJ 固定四张影响。
+		run.RequestedOutputCount = 1
 	}
 	execCtx, cancel := context.WithTimeout(ctx, e.executeTimeout())
 	defer cancel()
@@ -232,9 +295,13 @@ func (e *CreativeExecutor) Execute(ctx context.Context, run CreativeRun, payload
 		e.reportScheduleResult(execution, account.ID, false)
 		return nil, err
 	}
-	outputs, err = normalizeCreativeOutputs(outputs)
+	outputs, err = normalizeCreativeOutputsForModel(outputs, upstreamModel)
 	if err != nil {
 		e.reportScheduleResult(execution, account.ID, false)
+		if IsMidjourneyImageGenerationModel(upstreamModel) {
+			// MJ 已返回生成结果，输出校验失败不能触发再次付费生成或无依据释放预占。
+			return nil, creativeResultUnconfirmedError()
+		}
 		return nil, err
 	}
 	e.reportScheduleResult(execution, account.ID, true)
@@ -306,11 +373,23 @@ func readCreativeUpstreamBody(body io.Reader, limit int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(body, limit))
 }
 
-// normalizeCreativeOutputs 对执行器输出做后处理：
-// 单张大小上限、固定取一张、sha256 去重。
+// normalizeCreativeOutputs 保持旧执行器单张输出行为。
 func normalizeCreativeOutputs(outputs []CreativeOutput) ([]CreativeOutput, error) {
+	return normalizeCreativeOutputsForModel(outputs, "")
+}
+
+// normalizeCreativeOutputsForModel 校验输出大小、去重并保留模型允许的产物数量。
+// MJ 最多交付四张并按有效去重数量计费，其它模型继续固定交付一张。
+func normalizeCreativeOutputsForModel(outputs []CreativeOutput, model string) ([]CreativeOutput, error) {
 	if len(outputs) == 0 {
 		return nil, creativeNonRetryableError("provider returned no image output")
+	}
+	maxOutputs := 1
+	if IsMidjourneyImageGenerationModel(model) {
+		maxOutputs = creativeMidjourneyOutputCount
+		if len(outputs) > maxOutputs {
+			return nil, creativeResultUnconfirmedError()
+		}
 	}
 	seen := make(map[string]struct{}, len(outputs))
 	out := make([]CreativeOutput, 0, len(outputs))
@@ -331,8 +410,8 @@ func normalizeCreativeOutputs(outputs []CreativeOutput) ([]CreativeOutput, error
 	if len(out) == 0 {
 		return nil, creativeNonRetryableError("provider returned no usable image output")
 	}
-	if len(out) > 1 {
-		out = out[:1]
+	if len(out) > maxOutputs {
+		out = out[:maxOutputs]
 	}
 	for index := range out {
 		out[index].Index = index

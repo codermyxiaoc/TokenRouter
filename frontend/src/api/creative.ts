@@ -31,6 +31,8 @@ export interface CreativeModelOption {
   background_options?: string[]
   thinking_levels?: string[]
   max_output_count?: number
+  // 一次任务固定生成的张数，缺失时兼容旧服务的单张合同。
+  output_count?: number
   max_reference_images?: number
   // 图片展示单价，直接使用服务端统一定价结果；512 仅供支持该档位的 Gemini 模型使用
   price_512?: number

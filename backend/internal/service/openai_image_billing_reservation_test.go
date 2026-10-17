@@ -84,6 +84,99 @@ func TestAsyncImageQuoteFreezesPriceAndBalanceRate(t *testing.T) {
 	require.Equal(t, "client:image-quote", repo.capture.RequestID)
 }
 
+// MJ 预占四张后可按少于四张的真实产出捕获，额外第五张不能突破冻结合同。
+func TestMidjourneyImageQuoteReservesFourAndKeepsSettlementBounded(t *testing.T) {
+	for _, async := range []bool{false, true} {
+		for _, count := range []int{1, 4} {
+			svc, repo, key, account, ctx := newImageQuoteTestService(t)
+			if !async {
+				ctx = context.WithValue(context.Background(), ctxkey.ClientRequestID, "sync-mj-quote")
+			}
+			handle, err := svc.PrepareAsyncImageBilling(ctx, key, account, nil, "MJ-v8.2", 1, "1K", ChannelMappingResult{})
+			require.NoError(t, err)
+			require.Equal(t, 4, handle.Quote.RequestedCount)
+			require.InDelta(t, 0.48, repo.reserve.Hold.BaseAmountUSD, 1e-10)
+			cost, err := handle.Quote.settledCost("1K", count, handle.Reservation)
+			require.NoError(t, err)
+			require.InDelta(t, 0.12*float64(count), cost.TotalCost, 1e-10)
+			_, err = handle.Quote.settledCost("1K", 5, handle.Reservation)
+			require.ErrorIs(t, err, ErrImageBillingReservationInvalid)
+		}
+	}
+}
+
+// MJ 不允许 n>1、未定价或只配 Token 价时发起生成；GPT 的同步旁路保持原样。
+func TestMidjourneyImageQuoteRejectsUnsupportedCountAndPricing(t *testing.T) {
+	svc, repo, key, account, ctx := newImageQuoteTestService(t)
+	_, err := svc.PrepareAsyncImageBilling(ctx, key, account, nil, "MJ-v8.2", 2, "1K", ChannelMappingResult{})
+	require.ErrorContains(t, err, "n=1")
+	require.Nil(t, repo.reserve)
+	key.Group.ImagePrice1K, key.Group.ImagePrice2K, key.Group.ImagePrice4K = nil, nil, nil
+	_, err = svc.PrepareAsyncImageBilling(ctx, key, account, nil, "MJ-v8.2", 1, "1K", ChannelMappingResult{})
+	require.ErrorIs(t, err, ErrModelPricingUnavailable)
+	require.Nil(t, repo.reserve)
+	svc.resolver = newOpenAITokenImageChannelPricingResolverForTest(t, key.Group.ID, "MJ-v8.2")
+	_, err = svc.PrepareAsyncImageBilling(ctx, key, account, nil, "MJ-v8.2", 1, "1K", ChannelMappingResult{})
+	require.ErrorIs(t, err, ErrModelPricingUnavailable)
+	require.Nil(t, repo.reserve)
+	handle, err := svc.PrepareAsyncImageBilling(context.Background(), key, account, nil, "gpt-image-2", 1, "1K", ChannelMappingResult{})
+	require.NoError(t, err)
+	require.Nil(t, handle)
+}
+
+// 已解析报价后模拟管理员删除价卡并让缓存失效；逐尺寸计算不得再次访问定价仓储。
+type midjourneyUnexpectedPricingRead struct {
+	ChannelRepository
+	reads int
+}
+
+func (r *midjourneyUnexpectedPricingRead) ListAll(context.Context) ([]Channel, error) {
+	r.reads++
+	return nil, errors.New("unexpected pricing re-read")
+}
+
+func TestMidjourneyImageQuoteUsesOneResolvedSnapshot(t *testing.T) {
+	svc, _, key, _, ctx := newImageQuoteTestService(t)
+	key.Group.ImagePrice1K, key.Group.ImagePrice2K, key.Group.ImagePrice4K = nil, nil, nil
+	svc.resolver = newOpenAIImageChannelPricingResolverForTest(t, key.Group.ID, "mj-v8.2", 0.4)
+	resolved := svc.resolveOpenAIChannelPricing(ctx, "MJ-v8.2", key)
+	require.NotNil(t, resolved)
+	repo := &midjourneyUnexpectedPricingRead{}
+	svc.resolver.channelService.repo = repo
+	svc.resolver.channelService.cache.Store(newEmptyChannelCache())
+	for _, tier := range []string{"1K", "2K", "4K"} {
+		cost, err := svc.midjourneyImageCostFromSnapshot(ctx, "MJ-v8.2", key, resolved, tier)
+		require.NoError(t, err)
+		require.NotNil(t, cost)
+		require.InDelta(t, 0.4, cost.TotalCost, 1e-10)
+	}
+	require.Zero(t, repo.reads, "同一 MJ 报价不能重新解析已经删除的价卡")
+}
+
+// 缺省档位与显式零价必须区分，避免只配 2K 时把 1K 当作免费。
+func TestMidjourneyImageQuoteRequiresRequestedTierPrice(t *testing.T) {
+	for _, freeFirstTier := range []bool{false, true} {
+		svc, repo, key, account, ctx := newImageQuoteTestService(t)
+		key.Group.ImagePrice1K, key.Group.ImagePrice2K, key.Group.ImagePrice4K = nil, nil, nil
+		price, zero := 0.4, 0.0
+		intervals := []PricingInterval{{TierLabel: "2K", PerRequestPrice: &price}}
+		if freeFirstTier {
+			intervals = append(intervals, PricingInterval{TierLabel: "1K", PerRequestPrice: &zero})
+		}
+		key.Group.ModelPricing = []ChannelModelPricing{{Models: []string{"MJ-v8.2"}, BillingMode: BillingModeImage, Intervals: intervals}}
+		handle, err := svc.PrepareAsyncImageBilling(ctx, key, account, nil, "MJ-v8.2", 1, "1K", ChannelMappingResult{})
+		if !freeFirstTier {
+			require.ErrorIs(t, err, ErrModelPricingUnavailable)
+			require.Nil(t, repo.reserve)
+			continue
+		}
+		require.NoError(t, err)
+		require.NotNil(t, handle)
+		require.Zero(t, repo.reserve.Hold.BaseAmountUSD)
+		require.NotContains(t, handle.Quote.UnitPrices, "4K")
+	}
+}
+
 func TestAsyncImageQuoteBypassAndDuplicateProtection(t *testing.T) {
 	for _, name := range []string{"sync", "simple", "token", "missing_repository", "duplicate"} {
 		t.Run(name, func(t *testing.T) {

@@ -214,6 +214,9 @@
       </span>
 
       <div class="ml-auto flex items-center gap-2">
+        <span v-if="studio.outputCount.value > 1" class="whitespace-nowrap text-xs text-gray-500 dark:text-dark-300">
+          {{ t('creative.panel.outputCount', { count: studio.outputCount.value }) }}
+        </span>
         <span v-if="studio.estimatedCost.value !== null" class="max-sm:hidden whitespace-nowrap text-sm text-black dark:text-white">
           {{ t('creative.panel.estimatedCost', { cost: formatBalanceAmount(studio.estimatedCost.value, { fractionDigits: 3 }) }) }}
         </span>

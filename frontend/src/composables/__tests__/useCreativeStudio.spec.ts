@@ -260,6 +260,28 @@ describe('useCreativeStudio', () => {
   })
 
   describe('estimatedCost 定价', () => {
+    it('四张任务按服务端固定数量估价，切回旧模型恢复单张', async () => {
+      mockedApi.getCreativeModels.mockResolvedValue([
+        { ...MODEL, model: 'MJ-v7', operations: ['generate'], image_sizes: ['1K'], aspect_ratios: ['1:1'], qualities: [], background_options: [], thinking_levels: [], output_count: 4, max_output_count: 4, max_reference_images: 0 },
+        { ...MODEL },
+      ])
+      const { studio } = await setupStudio()
+      studio.selectOption(creativeOptionKey(studio.models.value[0]))
+      expect(studio.outputCount.value).toBe(4)
+      expect(studio.estimatedCost.value).toBe(8)
+      expect(studio.operationOptions.value).toEqual(['generate'])
+      expect(studio.maxReferenceImages.value).toBe(0)
+      expect(studio.quality.value).toBe('')
+      expect(studio.background.value).toBe('')
+      expect(studio.thinkingLevel.value).toBe('')
+      studio.prompt.value = 'teapot'
+      expect(await studio.createRun({ sourceBlobs: [new Blob(['x'], { type: 'image/png' })], maskBlob: null })).toBe(false)
+      expect(mockedApi.createCreativeRun).not.toHaveBeenCalled()
+      studio.selectOption(creativeOptionKey(studio.models.value[1]))
+      expect(studio.outputCount.value).toBe(1)
+      expect(studio.estimatedCost.value).toBe(2)
+    })
+
     it('按所选尺寸读取模型目录的实际档位价格', async () => {
       const { studio } = await setupStudio()
 
@@ -614,6 +636,32 @@ describe('useCreativeStudio', () => {
   })
 
   describe('画布桥接', () => {
+    it('MJ 四张输出分别保存、确认并上板，不重复生成', async () => {
+      const { studio } = await setupStudio()
+      mockedApi.getCreativeRuns.mockResolvedValue({
+        items: [makeRun({ id: 'run-1', status: 'succeeded', model: 'MJ-v8.2', requested_output_count: 4,
+          outputs: Array.from({ length: 4 }, (_, output_index) => ({ output_index, status: 'succeeded' })),
+        })], total: 1,
+      })
+      const blobs = Array.from({ length: 4 }, (_, i) => new Blob([`image-${i}`], { type: 'image/png' }))
+      mockedApi.getCreativeRunOutputContent.mockImplementation((_id, index) => Promise.resolve(blobs[index]))
+      const bridge = { placeOutput: vi.fn(), importToCanvas: vi.fn() }
+      studio.registerCanvasBridge(bridge)
+      await studio.createRun({ sourceBlobs: [], maskBlob: null })
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(mockedApi.createCreativeRun).toHaveBeenCalledTimes(1)
+      expect(mockedStore.saveAsset).toHaveBeenCalledTimes(4)
+      expect(mockedApi.ackCreativeRunOutput).toHaveBeenCalledTimes(4)
+      expect(bridge.placeOutput).toHaveBeenCalledTimes(4)
+      for (let i = 0; i < 4; i++) {
+        expect(bridge.placeOutput).toHaveBeenNthCalledWith(i + 1, { blob: blobs[i], runId: 'run-1', outputIndex: i })
+      }
+      await studio.refreshHistory()
+      expect(mockedApi.createCreativeRun).toHaveBeenCalledTimes(1)
+      expect(mockedApi.getCreativeRunOutputContent).toHaveBeenCalledTimes(4)
+      expect(studio.missingOutputKeys.value.size).toBe(0)
+    })
+
     function succeededRunWithTwoOutputs() {
       return makeRun({
         id: 'run-1',

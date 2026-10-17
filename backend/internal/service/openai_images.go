@@ -14,6 +14,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -246,13 +247,70 @@ func (r *OpenAIImagesRequest) ValidateRoutingModel(routingModel string) error {
 	if r == nil {
 		return nil
 	}
+	if err := r.validateMidjourneyRequest(routingModel); err != nil {
+		return err
+	}
 	routed := *r
 	routed.Model = strings.TrimSpace(routingModel)
 	r.RequiredCapability = classifyOpenAIImagesCapability(&routed)
 	return nil
 }
 
+// validateMidjourneyRequest 只开放已验证的非流式 JSON MJ 创建；不推断批量、编辑及流式语义。
+func (r *OpenAIImagesRequest) validateMidjourneyRequest(model string) error {
+	if r == nil || !IsMidjourneyImageGenerationModel(model) {
+		return nil
+	}
+	if r.IsEdits() || r.Multipart || r.Stream {
+		return fmt.Errorf("Midjourney currently supports non-streaming JSON image generation only")
+	}
+	if r.N != 1 {
+		return fmt.Errorf("Midjourney images currently require n=1; one generation may return four images billed individually")
+	}
+	// 通用解析器的整数投影不能把 1.5 静默变成 1 后透传给 MJ。
+	if !r.Multipart {
+		if n := gjson.GetBytes(r.Body, "n"); n.Exists() && (n.Type != gjson.Number || n.Float() != 1) {
+			return fmt.Errorf("Midjourney images currently require n=1")
+		}
+	}
+	return nil
+}
+
+// ExpectedOutputCountForAccount 在最终账号映射后验证 MJ 参数，并给出保守预占上限。
+// 只改资金预算，不把出站 n=1 改成四次生成。
+func (r *OpenAIImagesRequest) ExpectedOutputCountForAccount(account *Account, routingModel string) (int, error) {
+	if r == nil || account == nil {
+		return 0, fmt.Errorf("missing images request or account")
+	}
+	upstreamModel := resolveOpenAIAccountUpstreamModelForRequest(account, routingModel, false, false)
+	if err := r.validateMidjourneyRequest(upstreamModel); err != nil {
+		return 0, err
+	}
+	if IsMidjourneyImageGenerationModel(upstreamModel) {
+		return 4, nil
+	}
+	return r.N, nil
+}
+
 func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
+	// 资金预占与上游必须看到同一个型号和张数；拒绝不同 JSON 解析器可能解释不同的重复键。
+	seen := map[string]bool{}
+	duplicateField := ""
+	gjson.ParseBytes(body).ForEach(func(key, _ gjson.Result) bool {
+		field := key.String()
+		if field != "model" && field != "n" && field != "stream" {
+			return true
+		}
+		if seen[field] {
+			duplicateField = field
+			return false
+		}
+		seen[field] = true
+		return true
+	})
+	if duplicateField != "" {
+		return fmt.Errorf("duplicate %s field is not allowed", duplicateField)
+	}
 	if modelResult := gjson.GetBytes(body, "model"); modelResult.Exists() {
 		req.Model = strings.TrimSpace(modelResult.String())
 		req.ExplicitModel = req.Model != ""
@@ -506,8 +564,17 @@ func isGeminiCompatibleImageModel(model string) bool {
 	return strings.HasPrefix(model, "gemini-") && (strings.HasSuffix(model, "-image") || strings.Contains(model, "-image-"))
 }
 
+var midjourneyImageModelPattern = regexp.MustCompile(`^midjourney[-_]v[0-9]+(?:\.[0-9]+)*$`)
+
+// IsMidjourneyImageGenerationModel 将 mj 开头的型号统一识别为图片模型，兼容原有完整品牌版本名。
+// 识别忽略大小写和首尾空白；第三方能力保持隔离，真实模型名不在此改写。
+func IsMidjourneyImageGenerationModel(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(normalized, "mj") || midjourneyImageModelPattern.MatchString(normalized)
+}
+
 func validateCompatibleImagesModel(model string) error {
-	if isGeminiCompatibleImageModel(model) {
+	if isGeminiCompatibleImageModel(model) || IsMidjourneyImageGenerationModel(model) {
 		return nil
 	}
 	return validateOpenAIImagesModel(model)
@@ -540,7 +607,7 @@ func classifyOpenAIImagesCapability(req *OpenAIImagesRequest) OpenAIImagesCapabi
 	if req == nil {
 		return OpenAIImagesCapabilityNative
 	}
-	if isGeminiCompatibleImageModel(req.Model) {
+	if isGeminiCompatibleImageModel(req.Model) || IsMidjourneyImageGenerationModel(req.Model) {
 		return OpenAIImagesCapabilityAPIKey
 	}
 	if req.ExplicitModel || req.ExplicitSize {
@@ -637,6 +704,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	if err := validateCompatibleImagesModel(upstreamModel); err != nil {
 		return nil, err
 	}
+	if err := parsed.validateMidjourneyRequest(upstreamModel); err != nil {
+		return nil, err
+	}
 	SetOpsUpstreamModel(c, upstreamModel)
 	logger.LegacyPrintf(
 		"service.openai_gateway",
@@ -696,6 +766,14 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+		if IsMidjourneyImageGenerationModel(upstreamModel) && (resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode >= http.StatusInternalServerError) {
+			// 代理超时或服务端错误不能证明 MJ 未开始生成；保留冻结资金，禁止换号重复创建。
+			setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, "")
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Platform: account.Platform, AccountID: account.ID,
+				AccountName: account.Name, UpstreamStatusCode: resp.StatusCode, UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
+				Kind: "request_error", Message: upstreamMsg})
+			return nil, fmt.Errorf("Midjourney generation result is unknown after upstream HTTP %d; request will not be resubmitted", resp.StatusCode)
+		}
 		// 余额不足保留原始错误并尝试下一个账号，由现有路由决定最终响应。
 		if isOpenAIImagesInsufficientBalance(respBody) {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{

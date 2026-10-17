@@ -436,16 +436,22 @@ func (s *ModelMarketplaceService) buildPublicModelsForGroup(ctx context.Context,
 	return models
 }
 
-// marketplaceModelModalities 用共享定价服务解析模型能力元数据；解析不到时返回 nil。
+// marketplaceModelModalities 优先使用共享目录能力；已知 MJ 型号补充图片输出，不能借此生成价格。
 func (s *ModelMarketplaceService) marketplaceModelModalities(modelDef marketplaceModelDef) ([]string, []string) {
-	if s.billingService == nil || s.billingService.pricingService == nil {
-		return nil, nil
-	}
 	pricingModel := strings.TrimSpace(modelDef.PricingModel)
 	if pricingModel == "" {
 		pricingModel = modelDef.ID
 	}
-	return s.billingService.pricingService.GetModelModalities(pricingModel)
+	if s.billingService != nil && s.billingService.pricingService != nil {
+		input, output := s.billingService.pricingService.GetModelModalities(pricingModel)
+		if len(input) > 0 && len(output) > 0 {
+			return input, output
+		}
+	}
+	if IsMidjourneyImageGenerationModel(pricingModel) {
+		return []string{"text"}, []string{"image"}
+	}
+	return nil, nil
 }
 
 // getRequestableModelDisplayPricing 使用共享解析器确定的定价模型，避免展示层再次推导映射链。

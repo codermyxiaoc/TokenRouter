@@ -136,6 +136,10 @@ func captureCreativeBalanceHold(ctx context.Context, repo UsageBillingRepository
 	if repo == nil {
 		return nil, ErrCreativeSettlementBillingFail.WithCause(errors.New("creative billing repository is not configured"))
 	}
+	// 捕获只能覆盖原任务已预占的输出数量，不能因异常产物额外透支用户资金。
+	if run == nil || successCount < 0 || successCount > run.RequestedOutputCount {
+		return nil, ErrCreativeSettlementBillingFail.WithCause(errors.New("creative output count exceeds its reservation"))
+	}
 	actualBase := math.Max(run.BaseUnitPrice, 0) * float64(max(successCount, 0))
 	cmd, err := buildCreativeHoldCommand(run, CreativeCaptureRequestID(run.RunID), actualBase)
 	if err != nil {

@@ -229,6 +229,30 @@ describe('CreativeCanvas 本地恢复与快照持久化', () => {
     wrapper.unmount()
   })
 
+  it('MJ 四张并发上板分别排布并保存独立输出索引', async () => {
+    const wrapper = mountCanvas()
+    await flushPromises()
+    // 模拟同一任务同时完成四张，真实上板队列必须串行分配位置，不能互相覆盖。
+    await Promise.all(Array.from({ length: 4 }, (_, outputIndex) => (wrapper.vm as any).placeOutput({
+      blob: new Blob([`image-${outputIndex}`], { type: 'image/png' }),
+      runId: 'crun_midjourney_four_outputs',
+      outputIndex,
+    })))
+    await flushPromises()
+
+    expect(fabricState.images).toHaveLength(4)
+    expect(fabricState.images.map(image => image.data.outputIndex)).toEqual([0, 1, 2, 3])
+    expect(new Set(fabricState.images.map(image => image.data.assetKey)).size).toBe(4)
+    for (let i = 1; i < fabricState.images.length; i++) {
+      const previous = fabricState.images[i - 1].getBoundingRect()
+      const current = fabricState.images[i].getBoundingRect()
+      expect(current.left >= previous.left + previous.width || current.top >= previous.top + previous.height).toBe(true)
+    }
+    const saved = JSON.parse(storeMocks.saveSceneJson.mock.calls.at(-1)?.[1] as string)
+    expect(saved.objects.filter((object: { data?: { kind?: string } }) => object.data?.kind === 'image')).toHaveLength(4)
+    wrapper.unmount()
+  })
+
   it('从 IndexedDB 恢复图片占位符并保留画布变换', async () => {
     const assetKey = outputAssetKey('crun_0123456789abcdef', 0)
     const asset: LocalAsset = {

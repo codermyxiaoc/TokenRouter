@@ -2210,7 +2210,8 @@ func displayPricingFromResolved(model string, rateMultiplier float64, imageRateM
 		if resolved.Source != PricingSourceGroup && resolved.Source != PricingSourceChannel {
 			return ModelDisplayPricing{}, false
 		}
-		if resolved.Mode == BillingModePerRequest && !looksLikeImageModel(model) {
+		// MJ 只借助显式图片/按次价投影，不能落入其它图片模型的默认价格。
+		if resolved.Mode == BillingModePerRequest && !looksLikeImageModel(model) && !IsMidjourneyImageGenerationModel(model) {
 			return ModelDisplayPricing{}, false
 		}
 		price1K, price2K, price4K := resolvedImageTierPrices(resolved)

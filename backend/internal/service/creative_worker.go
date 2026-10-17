@@ -476,6 +476,10 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 		return CreativeProcessResult{}, ErrCreativeLeaseLost
 	}
 	if err != nil {
+		if isCreativeResultUnconfirmedError(err) {
+			// 上游可能已生成但产物尚未确认：保持执行栅栏和预占，禁止重发或自动退款。
+			return w.deferUnconfirmedExecution(ctx, current)
+		}
 		if w.executor.IsRetryable(err) {
 			// 只有执行器明确返回既有可重试错误时，才授权下一次上游执行。
 			if resetErr := w.repo.SetCreativeRunProvisioningPhase(ctx, runID, CreativeProvisioningPhaseProviderRetry); resetErr != nil {

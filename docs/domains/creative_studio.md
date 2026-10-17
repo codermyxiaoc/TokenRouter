@@ -23,6 +23,7 @@ TokenRouter 创作台（Creative Studio）提供面向个人用户的图片生�
 - [Redis 临时数据](#redis-临时数据)：说明临时键、TTL、ack 即删和队列协调。
 - [审核无留存](#审核无留存)：说明创作台送审的无媒体留存模式。
 - [提供商说明](#提供商说明)：说明 openai/grok/gemini 三个平台的执行契约。
+- [Midjourney](#midjourney_images)：说明 MJ 四张预占、逐张展示和图片校验。
 - [前端本地存储边界](#前端本地存储边界)：说明 IndexedDB、收割流程和丢失边界。
 - [配置](#配置)、[运维检查清单](#运维检查清单)和[安全检查清单](#安全检查清单)：说明运行时启用条件与验证要求。
 
@@ -43,7 +44,7 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 
 除 `GET /creative/models` 与 `GET /creative/capabilities` 外，以上任务创建、历史、活动、详情、输出读取和 ack 路由都必须携带 `X-Creative-Workspace-ID` 请求头。请求头必须是非空 UUID；服务端会规范化为小写，缺失返回 `400 CREATIVE_WORKSPACE_REQUIRED`，格式非法返回 `400 CREATIVE_WORKSPACE_INVALID`。工作区 ID 是浏览器数据分区标识，不替代 JWT 用户权限校验；同源标签页共享同一个值，不同浏览器、无痕窗口或清除站点数据后会使用不同值。
 
-`GET /creative/models` 返回当前用户可用分组与图片模型的组合。每项除分组、模型、操作、尺寸和图片单价（`price_512`、`price_1k`、`price_2k`、`price_4k`）外，还按具体模型返回 `aspect_ratios`、`qualities`、`output_formats`、`output_compression`、`background_options`、`thinking_levels`、`max_output_count` 与 `max_reference_images`；不支持的集合返回空数组，压缩范围返回对象或 `null`。创作台不提供输出格式选择，因此 `output_formats` 对所有模型为空数组、`output_compression` 为 `null`，这两个字段仅作为能力协议保留；输出格式由供应商实际返回决定，任务输出 metadata 的 `mime_type` 保留真实 MIME（例如 `image/png` 或 `image/jpeg`），前端按该 MIME 保存和下载。`max_output_count` 固定为 1，创作台每次任务只生成一张图片。`price_512` 仅用于支持 Gemini 512 档位的模型：若渠道配置了 `512` 分层价格则优先使用，否则使用渠道默认价格。前端只按这些服务端能力渲染参数，不根据模型名自行猜测。列表只包含用户可绑定、已启用图片生成、平台支持创作台操作且能解析图片价格的分组。OpenAI 分组支持 `generate`/`edit`/`inpaint`，Gemini（含 Vertex 账号）与 Grok 分组支持 `generate`/`edit`。功能关闭（进程配置 `creative.enabled` 或数据库运行时开关 `creative_enabled` 关闭）时，该接口返回空数组而非错误，前端据此展示"已停用"空态；其余写/读接口返回 404 `CREATIVE_DISABLED`。
+`GET /creative/models` 返回当前用户可用分组与图片模型的组合。每项除分组、模型、操作、尺寸和图片单价（`price_512`、`price_1k`、`price_2k`、`price_4k`）外，还按具体模型返回 `aspect_ratios`、`qualities`、`output_formats`、`output_compression`、`background_options`、`thinking_levels`、`output_count`、`max_output_count` 与 `max_reference_images`；不支持的集合返回空数组，压缩范围返回对象或 `null`。创作台不提供输出格式选择，因此 `output_formats` 对所有模型为空数组、`output_compression` 为 `null`，这两个字段仅作为能力协议保留；输出格式由供应商实际返回决定，任务输出 metadata 的 `mime_type` 保留真实 MIME（例如 `image/png` 或 `image/jpeg`），前端按该 MIME 保存和下载。`output_count` 表示一次任务的固定张数，MJ 为 4，其余模型为 1；`max_output_count` 同值。旧服务未返回 `output_count` 时，前端按 1 兼容。`price_512` 仅用于支持 Gemini 512 档位的模型：若渠道配置了 `512` 分层价格则优先使用，否则使用渠道默认价格。前端只按这些服务端能力渲染参数，不根据模型名自行猜测。列表只包含用户可绑定、已启用图片生成、平台支持创作台操作且能解析图片价格的分组。OpenAI GPT Image 支持 `generate`/`edit`/`inpaint`，OpenAI 平台的 MJ 仅支持 `generate`，Gemini（含 Vertex 账号）与 Grok 分组支持 `generate`/`edit`。功能关闭（进程配置 `creative.enabled` 或数据库运行时开关 `creative_enabled` 关闭）时，该接口返回空数组而非错误，前端据此展示"已停用"空态；其余写/读接口返回 404 `CREATIVE_DISABLED`。
 
 管理员还可以在系统设置中配置全局生图模型白名单。`creative_model_settings` 是 `settings` 表中的 JSON 数组，每项精确绑定一个分组和模型，并声明允许的能力：
 
@@ -53,7 +54,7 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 ]
 ```
 
-`generate`、`edit`、`inpaint` 分别表示文生图、图生图和局部重绘。空数组（新安装和升级后的默认值）表示创作台没有任何可用生图模型；目录请求和新任务创建都 fail-closed。目录中的能力是管理员配置与平台执行器能力的交集：Gemini/Grok 不会暴露 `inpaint`，管理员保存时也会移除已解析为 Gemini 的旧 `inpaint`，而 OpenAI 的 `inpaint` 保留。配置不绑定外键，分组或账号暂时下线时保留设置，恢复后自动重新生效；已经排队的任务不因后续配置变更取消。
+`generate`、`edit`、`inpaint` 分别表示文生图、图生图和局部重绘。空数组（新安装和升级后的默认值）表示创作台没有任何可用生图模型；目录请求和新任务创建都 fail-closed。目录中的能力是管理员配置与平台执行器能力的交集：Gemini/Grok 不会暴露 `inpaint`，管理员保存时也会移除已解析为 Gemini 的旧 `inpaint`，而 OpenAI GPT Image 的 `inpaint` 保留；最终解析为 MJ 的配置只保留 `generate`。配置不绑定外键，分组或账号暂时下线时保留设置，恢复后自动重新生效；已经排队的任务不因后续配置变更取消。
 
 `POST /creative/runs` 接受 `multipart/form-data`，只接受上传文件，不接受远程 URL：
 
@@ -68,7 +69,7 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 | `image_size` | 文本 | 可选，默认 `1K`；Gemini 3.1 Flash Image 可包含 `512`，其余实际档位以模型目录为准 |
 | `aspect_ratio` | 文本 | 可选，须位于模型目录返回的 `aspect_ratios`；缺失时优先使用 `auto`，不支持 `auto` 时使用模型能力第一项 |
 | `quality` | 文本 | 可选，OpenAI GPT Image 支持 `low`/`medium`/`high`/`auto`，Grok 仅 `grok-imagine-image-2.0` 支持 `low`/`medium`；支持质量参数时缺失默认 `medium` |
-| `background` | 文本 | 可选，OpenAI 支持 `auto`/`opaque`/`transparent`；支持背景参数时缺失默认 `auto` |
+| `background` | 文本 | 可选，OpenAI GPT Image 支持 `auto`/`opaque`/`transparent`；支持背景参数时缺失默认 `auto` |
 | `thinking_level` | 文本 | 可选，Gemini 3.1 图片模型按目录能力支持 `minimal`/`high`；支持思考强度时缺失默认 `minimal` |
 
 请求限制（默认值来自 `creative.*` 配置，可通过 `/creative/capabilities` 获取）：
@@ -115,7 +116,7 @@ provider 返回成功后，真实输出的索引、状态、MIME、长度、过�
 
 - 客户端可对 `POST /creative/runs` 携带 `Idempotency-Key` 头；同一用户同一工作区同一键重放时，若请求指纹一致则直接返回原任务（`idempotent_replay=true`），不重复建单、不重复计费。
 - 同一用户同一工作区同一键但请求体不同（指纹不一致）返回 `409 CREATIVE_IDEMPOTENCY_CONFLICT`；不同工作区即使使用相同键也会创建独立任务。
-- 请求指纹是规范化 JSON（分组、模型、操作、prompt sha256、各源图 sha256、mask sha256、尺寸、比例、质量、背景、思考强度和固定单张输出）的 sha256；输出格式不是用户输入，不参与指纹，实际输出 MIME 由供应商决定并写入输出 metadata；`creative_runs.request_fingerprint` 只用于比较同一幂等键的请求体，不设置全局唯一约束。
+- 请求指纹是规范化 JSON（分组、模型、操作、prompt sha256、各源图 sha256、mask sha256、尺寸、比例、质量、背景、思考强度和规范化输出张数）的 sha256；输出格式不是用户输入，不参与指纹，实际输出 MIME 由供应商决定并写入输出 metadata；`creative_runs.request_fingerprint` 只用于比较同一幂等键的请求体，不设置全局唯一约束。
 - `(user_id, workspace_id, idempotency_key)` 部分唯一索引只约束带工作区的非空键；迁移前 `workspace_id IS NULL` 的旧任务不参与新的幂等查询，键本身最长 255 字符。
 - 计费与结算请求 ID 全部经由 `usage_billing_dedup` 幂等表去重，worker 重试、重复回调不会产生重复资金动作。
 
@@ -129,7 +130,7 @@ provider 返回成功后，真实输出的索引、状态、MIME、长度、过�
 
 ## 计费
 
-创作台复用批量图片的 UsageBillingRepository hold/capture/release 路径（`ReserveBatchImageBalance`/`CaptureBatchImageBalance`/`ReleaseBatchImageBalance`），按所选尺寸基础单价估价，快照订阅/余额倍率；没有批量折扣与账号倍率。质量、背景和思考强度不参与创作台价格计算，输出格式不参与价格计算且不由客户端指定，实际 MIME 以供应商返回为准。每次任务固定只生成一张图片。资金动作的请求 ID 前缀固定，全部经 `usage_billing_dedup` 幂等：
+创作台复用批量图片的 UsageBillingRepository hold/capture/release 路径（`ReserveBatchImageBalance`/`CaptureBatchImageBalance`/`ReleaseBatchImageBalance`），按所选尺寸基础单价估价，快照订阅/余额倍率；没有批量折扣与账号倍率。质量、背景和思考强度不参与创作台价格计算，输出格式不参与价格计算且不由客户端指定，实际 MIME 以供应商返回为准。MJ 每次按四张单价预占、按实际成功交付张数捕获，未使用的差额释放；其余模型仍为单张。资金动作的请求 ID 前缀固定，全部经 `usage_billing_dedup` 幂等：
 
 ```text
 creative_hold:{run_id}      创建任务时预占
@@ -181,15 +182,28 @@ creative_settle:{run_id}    写 usage_logs 的结算记录 ID
 
 执行器按分组平台直接构造上游 HTTP 请求，不经过本地 HTTP 回环；执行超时为 `creative.execute_timeout_seconds`（默认 300 秒）。单张输出不超过 32 MiB，同一任务内按 sha256 去重重复输出：
 
-- `openai`：`generate` 走 `/v1/images/generations`（JSON）；`edit`/`inpaint` 走 `/v1/images/edits`（multipart，多源图 + mask）。内部固定 `output_format: "png"`、单张 `n=1`；仅 DALL-E 路径发送 `response_format: "b64_json"`，GPT Image 路径省略该字段。
+- `openai`（GPT Image）：`generate` 走 `/v1/images/generations`（JSON）；`edit`/`inpaint` 走 `/v1/images/edits`（multipart，多源图 + mask）。内部固定 `output_format: "png"`、单张 `n=1`；仅 DALL-E 路径发送 `response_format: "b64_json"`，GPT Image 路径省略该字段。
 - `grok`：`generate` 走 `/v1/images/generations`；`edit` 走 `/v1/images/edits` 的 JSON 契约，单张源图放入 `image: {type: "image_url", url: "data:image/...;base64,..."}`，多张放入 `images` 数组，最多 3 张；两条路径都透传分辨率、比例和 `grok-imagine-image-2.0` 的质量，并固定请求单张 `n=1` 与 `response_format: "b64_json"`；`inpaint` 直接拒绝。
 - `gemini`：`generate` 与普通参考图 `edit` 统一使用原生 `generateContent`，prompt 与源图以 inlineData 放入 parts，不发送独立 mask；图片尺寸与比例位于 `generationConfig.imageConfig`，支持的 3.1 图片模型可附加 `generationConfig.thinkingConfig`，`includeThoughts` 固定为 false；执行器取最后一个图片 part 作为最终输出。凭据按账号类型选择：API Key 账号用 `x-goog-api-key`，Vertex 服务账号与 OAuth 用 Bearer token。
 
 当前不暴露无法与异步任务、存储或计费边界稳定对应的上游参数：OpenAI `moderation`、`input_fidelity`、`stream`、`partial_images`，Gemini `includeThoughts`、`temperature`、`topP`、`topK`、`seed`、Google Search grounding 和通用 `candidateCount`，以及任意自定义 OpenAI `WxH` 尺寸。审核策略由服务端统一控制，`gpt-image-2` 固定高保真，Gemini 中间 thought image 固定不返回。
 
-模型候选：Gemini 复用批量图片的账号模型映射展开（含 Vertex），并额外内置 `nano-banana-pro`/`nano-banana-2` 两个代理别名；`nano-banana-*` 别名族按 Gemini 图片模型处理；OpenAI 候选为 `gpt-image-1`/`gpt-image-2`；Grok 候选为 `grok-imagine` 系列。账号未配置模型映射时等价于网关全量透传语义，按平台默认候选回退，并额外纳入账号显式 `model_whitelist` 中匹配图片模型谓词的变体，再执行账号最终模型白名单过滤。尺寸档位：分组显式配置 `image_price_*` 时按配置返回并按已知模型能力收窄；GPT Image 2 即使分组未填写 4K 覆盖价也会开放 `4K` 并沿用默认价；Gemini 3.1 Flash Image 额外开放 `512`，该档位优先使用渠道自定义 `512` 分层价格，未配置时回退渠道默认价格；`gemini-2.5-flash-image` 与 `gemini-3.1-flash-lite-image` 固定为 `1K`。接口同时返回按模型广场分组倍率计算的各尺寸展示单价，创作台预估费用按所选尺寸单价计算，每次任务固定单张输出。
+模型候选：Gemini 复用批量图片的账号模型映射展开（含 Vertex），并额外内置 `nano-banana-pro`/`nano-banana-2` 两个代理别名；`nano-banana-*` 别名族按 Gemini 图片模型处理；OpenAI 候选为 `gpt-image-1`/`gpt-image-2`；Grok 候选为 `grok-imagine` 系列。账号未配置模型映射时等价于网关全量透传语义，按平台默认候选回退，并额外纳入账号显式 `model_whitelist` 中匹配图片模型谓词的变体，再执行账号最终模型白名单过滤。尺寸档位：分组显式配置 `image_price_*` 时按配置返回并按已知模型能力收窄；GPT Image 2 即使分组未填写 4K 覆盖价也会开放 `4K` 并沿用默认价；Gemini 3.1 Flash Image 额外开放 `512`，该档位优先使用渠道自定义 `512` 分层价格，未配置时回退渠道默认价格；`gemini-2.5-flash-image` 与 `gemini-3.1-flash-lite-image` 固定为 `1K`。接口同时返回按模型广场分组倍率计算的各尺寸展示单价，创作台预估费用按所选尺寸单价乘以目录的 `output_count` 计算。MJ 的候选、价卡与四张合同见下节。
 
-管理员候选接口 `GET /api/v1/admin/settings/creative-model-candidates` 返回当前 active、启用图片生成且存在可调度图片模型的全部分组和模型，不按管理员用户分组权限过滤，因此可以配置 exclusive 分组。OpenAI 候选返回 `generate`/`edit`/`inpaint`，Gemini/Grok 候选返回 `generate`/`edit`。
+管理员候选接口 `GET /api/v1/admin/settings/creative-model-candidates` 返回当前 active、启用图片生成且存在可调度图片模型的全部分组和模型，不按管理员用户分组权限过滤，因此可以配置 exclusive 分组。OpenAI GPT Image 候选返回 `generate`/`edit`/`inpaint`，MJ 候选仅返回 `generate`，Gemini/Grok 候选返回 `generate`/`edit`。
+
+<a id="midjourney_images"></a>
+### Midjourney Images 兼容模型
+
+Midjourney 是展示品牌和图片模型族，复用 OpenAI API Key 平台，不新增平台账本。模型 ID 去除首尾空白后，凡以 `mj` 开头均按图片模型识别（忽略大小写），包括 `MJ-v7`、`mj_custom`、`MjFast` 和 `MJ`；继续兼容 `midjourney-v7` 等完整品牌数字版本名，真实请求保留管理员配置的原始大小写。仅账号显式白名单或模型映射提供 MJ 候选，不向未配置的普通 OpenAI 账号补充 MJ。OAuth/Setup Token 不可调度；渠道/账号映射后的最终型号仍须满足同一准入规则。
+
+创作台当前只开放已确认的文生图、`1K`、`1:1`，不接收源图、mask、GPT 质量、背景或思考参数。MJ 只接受显式图片/按次价卡或分组图片单价，显式零价有效，缺价隐藏且创建拒绝，不能借用 GPT/Gemini 默认价。管理员在系统设置的创作台模型配置中启用对应分组、模型后，用户才可选择。
+
+上游调用 `/v1/images/generations`，请求 `model`、`prompt`、`size=1024x1024`、`response_format=b64_json`、`n=1`。这里 `n=1` 表示一次上游任务，实测响应为四个 `data[]` 图片项，不能发送 `n=4` 误生成更多任务。站内把固定四张写入任务数量与幂等指纹，创建时预占四张费用；客户端不能通过传少张数降低预占。前端显示每次四张、四张总预估费用，四个结果分别取回、保存在 IndexedDB、确认和上画布，可分别下载。
+
+执行器支持 `data[].b64_json` 和 `data[].url`，每张最多 32 MiB，最多四个结果。图片链接通过仅公网的下载器读取，不携带上游 Authorization/Cookie；禁止私网、DNS 重绑定、非法重定向和非 HTTP(S) 地址。图片每边最多 8192 像素、总计最多 16 Mi 像素，先检查尺寸再完整解码，拒绝 HTML/SVG 伪装及截断图片。重复字节按现有规则去重；部分有效产物只按实际有效张数捕获并释放余款。响应没有 token usage 不影响按张计费。
+
+MJ 请求发送后连接中断、408/5xx、成功响应无法读取或完全没有可确认图片时，保持 `provider_inflight` 和预占并进入既有待核对恢复路径，不自动重发生成、不凭未知结果退款。除 408 外的确定性 4xx 沿用失败释放，429 沿用有限重试。已保存成功输出的结算、用量写入及崩溃恢复继续使用既有幂等 outbox；捕获数量不得超过任务持久预占数量。排队后配置若从单张 GPT 改成 MJ，因原任务没有四张预占而在调用前拒绝，避免超额扣款。
 
 ## 前端本地存储边界
 
@@ -235,7 +249,7 @@ creative:
   max_execute_attempts: 3             # provider 瞬时错误最大执行次数（含首次）
 ```
 
-校验约束：`max_total_input_bytes` 不得小于 `max_asset_bytes`；启用队列时所有队列键非空。创作台每次任务固定生成一张图片，按所选尺寸单价预占。与批量图片不同，创作台的 `enabled` 与 `queue_enabled` 默认开启，但缺少 Redis 时任务创建会失败。
+校验约束：`max_total_input_bytes` 不得小于 `max_asset_bytes`；启用队列时所有队列键非空。创作台按持久化的固定输出张数乘以所选尺寸单价预占（MJ 四张，其余单张）。与批量图片不同，创作台的 `enabled` 与 `queue_enabled` 默认开启，但缺少 Redis 时任务创建会失败。
 
 除进程配置外，创作台还有数据库运行时开关 `creative_enabled`（默认 true，管理端"功能特性"页可切换，经公开设置下发给前端）以及 `creative_worker_count`（默认 128，要求为正整数，管理端保存后热更新当前 worker 池）：仅当进程配置 `creative.enabled` 与运行时开关同时开启时创作台才可用，管理服务 `enabled()` 判定在请求期读取该开关。创作台不使用 HTTP 网关的进程级图片 limiter；实际执行并发由 worker 池、用户 Redis 并发槽位和账号调度器的账号槽位共同约束。
 

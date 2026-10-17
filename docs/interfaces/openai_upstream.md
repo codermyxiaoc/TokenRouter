@@ -67,6 +67,8 @@ OAuth/Codex 凭据的 Images 请求在最终账号模型映射之后选择通道
 
 API Key Images 兼容接口还接受 `gemini-*` 且含完整 `-image` 型号段的生图模型。渠道映射后的模型先决定 `images-apikey` 能力，账号映射后的最终模型再次校验；OAuth/Setup Token 不能被调度到这类第三方兼容模型。不会把 Gemini 文本型号开放为图片，也不改变 Gemini 原生生图或当前 Token/张计费选择。明确的结构化 `insufficient_balance` 错误保留原始运维信息并继续故障转移；非池模式且允许自动处理的账号仅对图片能力短暂冷却，不禁用文字模型。全部候选失败后返回明确的图片余额不足原因，管理员显式错误透传规则仍优先。
 
+所有去除首尾空白后以 `mj` 开头的型号（忽略大小写，如 `MJ-v7`、`mj_custom`、`MjFast`、`MJ`）均识别为 Midjourney 图片模型，复用第三方 API Key Images 能力；原有 `midjourney-v7` 等完整品牌数字版本名继续兼容，模型名保持原样传递，不加入 GPT/Codex 原生图片模型族。渠道映射与账号映射后都重新校验，OAuth/Setup Token 在出站前拒绝这类型号。只开放已验证的非流式 JSON `/v1/images/generations`，`n=1`（省略也为 1）；拒绝 MJ 编辑、multipart、流式及多组批量。小数 `n`、重复 `n`、`model` 或 `stream` 在出站前拒绝。标准响应 `data` 数组中的多张 `url` 或 `b64_json` 图片按实际张数记录和结算；请求 `n=1` 不将返回的四张缩减为一张，Token 用量为零也不会跳过已配置的按图或按次收费。标准模式的同步与异步 MJ 请求都要求显式图片价格，并在生成前按四张预占，真实少于四张则退回差额；没有定价或资金不足时不发起生成，不确定结果不自动重发，详见[图片资金预占](../domains/media_tasks.md#async_image_billing)。品牌及公开价卡边界见[模型目录与市场](model_catalog_and_marketplace.md)。
+
 Responses WebSocket 的每轮与聚合用量都保留 `image_input_tokens`。图片输入优先使用标准 usage 的 image_tokens，缺少时才读取 `tool_usage.image_gen`；工具输出图片 token 同样只补齐缺失值，不能覆盖标准用量的显式零值或跨轮沿用上一轮图片计数。所有已知 token 字段按精确非负整数验证，单项上限为 `2^40`；字符串、小数、越界数、重复计量键与汇总加法溢出会终止当前转发，不能交付成功终态或按成功结算。已完成回合的合法用量保持不变，失败回合只把此前已经验证的计量交给现有失败结算路径，不重放生成。该补全复用当前图片计价与结算链路。
 
 <a id="images_url_backfill"></a>
@@ -76,7 +78,7 @@ OpenAI API Key 账号可通过 `extra.images_url_to_b64_json=true` 启用图片�
 
 ### 创作台 Images 契约
 
-创作台异步执行器的 `generate` 使用 `/v1/images/generations` JSON，`edit`/`inpaint` 使用 `/v1/images/edits` multipart；固定发送 PNG、单张 `n=1`，并按最终模型能力透传尺寸、质量和背景。GPT Image 模型不发送 `response_format`（其响应固定包含 base64），只有 DALL-E 模型保留 `response_format=b64_json`。inpaint 的 mask 必须是与源图同尺寸、4 MiB 以内的 PNG，透明像素表示需要重绘区域。
+创作台异步执行器的 `generate` 使用 `/v1/images/generations` JSON，`edit`/`inpaint` 使用 `/v1/images/edits` multipart；GPT Image 固定发送 PNG、单张 `n=1`，并按最终模型能力透传尺寸、质量和背景。GPT Image 模型不发送 `response_format`（其响应固定包含 base64），DALL-E 保留 `response_format=b64_json`。第三方 MJ 也使用该响应格式，但一次 `n=1` 返回最多四张，分别计费并完整展示；其参数、四张预占和安全下载契约见 [Midjourney 创作台](../domains/creative_studio.md#midjourney_images)。inpaint 的 mask 必须是与源图同尺寸、4 MiB 以内的 PNG，透明像素表示需要重绘区域。
 
 创作台 OAuth 账号同样使用上述 Codex 原生通道及明确的 404/405 回退；API Key 仍走原 Images 端点。generate/edit/inpaint 保留异步预占、最终结算和附件校验。网络或成功响应后的结果不确定错误不能让 worker 再次生成，避免重复扣取上游成本。
 

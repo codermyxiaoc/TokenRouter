@@ -29,6 +29,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { modelIconData } from '@/utils/modelIconData'
+import { isMidjourneyImageModel } from '@/utils/midjourney'
 
 const props = withDefaults(defineProps<{
   model: string
@@ -41,6 +42,9 @@ const fallbackText = computed(() => props.model.charAt(0).toUpperCase())
 
 const iconKey = computed(() => {
   const modelLower = props.model.toLowerCase()
+
+  // MJ 前缀优先于其它供应商关键字，防止自定义型号误用别的图标。
+  if (isMidjourneyImageModel(props.model)) return 'midjourney'
 
   // 支持供应商品牌标识和可灵视频模型名称。
   if (modelLower === 'volcengine' || modelLower === '火山引擎' || modelLower === '火山方舟') return 'volcengine'

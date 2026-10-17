@@ -1,4 +1,5 @@
 import type { MarketplaceModelPricing, ModelModality } from '@/types'
+import { isMidjourneyImageModel } from '@/utils/midjourney'
 
 // 模型能力（输入/输出模态）解析：模型广场卡片右上角能力标签的数据源。
 // 优先使用后端从定价元数据下发的 input_modalities/output_modalities；
@@ -80,6 +81,11 @@ export function resolveModelCapabilities(
   const apiOutput = sanitizeApiModalities(apiCapabilities?.output)
   if (apiInput.length > 0 && apiOutput.length > 0) {
     return { input: apiInput, output: apiOutput }
+  }
+
+  // MJ 自定义型号统一归为生图，不因名称中其它平台的关键词叠加音视频能力。
+  if (isMidjourneyImageModel(modelId)) {
+    return { input: ['text'], output: ['image'] }
   }
 
   const id = modelId.toLowerCase()

@@ -1,0 +1,11 @@
+/* 预览弹层挂在文档根部，保持原缩略图尺寸，不随画布缩放或被生成面板裁切。 */
+.reference-image-trigger{padding:0;cursor:zoom-in}
+.reference-image-trigger:hover,.reference-image-trigger:focus-visible{border-color:var(--brand);outline:2px solid var(--brand);outline-offset:-2px}
+.reference-image-trigger:disabled{cursor:default}
+.canvas-reference-preview .ant-modal{max-width:calc(100vw - 32px)}
+.canvas-reference-preview .ant-modal-content,.canvas-reference-preview .ant-modal-header{background:var(--panel);color:var(--text)}
+.canvas-reference-preview .ant-modal-title,.canvas-reference-preview .ant-modal-close{color:var(--text)}
+.reference-preview-media{display:flex;align-items:center;justify-content:center;min-height:180px;max-height:70vh;overflow:auto;border-radius:12px;background:var(--bg)}
+.reference-preview-media>img{display:block;max-width:100%;max-height:65vh;width:auto;height:auto;object-fit:contain}
+.reference-preview-media>[role=status]{display:flex;align-items:center;gap:8px;padding:24px;color:var(--muted)}
+.reference-preview-media>[role=alert]{padding:24px;color:var(--muted)}

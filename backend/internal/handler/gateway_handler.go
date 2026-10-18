@@ -2743,6 +2743,9 @@ func (h *GatewayHandler) submitUsageRecordTask(c *gin.Context, task service.Usag
 	if task == nil {
 		return
 	}
+	if runCreativeTextUsageRecordTask(c, task) {
+		return
+	}
 	task = wrapUsageRecordTaskContext(c, task)
 	if h.usageRecordWorkerPool != nil {
 		if mode := h.usageRecordWorkerPool.Submit(task); mode != service.UsageRecordSubmitModeDroppedStopped {
@@ -2771,6 +2774,9 @@ func (h *GatewayHandler) submitUsageRecordTask(c *gin.Context, task service.Usag
 // submitMandatoryUsageRecordTask 在工作池溢出时同步回退，不能静默丢弃结算任务。
 func (h *GatewayHandler) submitMandatoryUsageRecordTask(c *gin.Context, task service.UsageRecordTask) {
 	if task == nil {
+		return
+	}
+	if runCreativeTextUsageRecordTask(c, task) {
 		return
 	}
 	task = wrapUsageRecordTaskContext(c, task)

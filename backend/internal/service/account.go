@@ -71,22 +71,6 @@ type Account struct {
 	AccountGroups []AccountGroup
 	GroupIDs      []int64
 	Groups        []*Group
-
-	// model_mapping 热路径缓存（非持久化字段）
-	modelMappingCache               map[string]string
-	modelMappingCacheReady          bool
-	modelMappingCacheCredentialsPtr uintptr
-	modelMappingCacheRawPtr         uintptr
-	modelMappingCacheRawLen         int
-	modelMappingCacheRawSig         uint64
-
-	// header_overrides 热路径缓存（非持久化字段，同 model_mapping 缓存先例）
-	headerOverrideCache               map[string]string
-	headerOverrideCacheReady          bool
-	headerOverrideCacheCredentialsPtr uintptr
-	headerOverrideCacheRawPtr         uintptr
-	headerOverrideCacheRawLen         int
-	headerOverrideCacheRawSig         uint64
 }
 
 type OpenAIEndpointCapability string
@@ -638,36 +622,9 @@ func stringMappingFromRaw(raw any) map[string]string {
 }
 
 func (a *Account) GetModelMapping() map[string]string {
-	credentialsPtr := mapPtr(a.Credentials)
 	rawMapping, _ := a.Credentials["model_mapping"].(map[string]any)
-	rawPtr := mapPtr(rawMapping)
-	rawLen := len(rawMapping)
-	rawSig := uint64(0)
-	rawSigReady := false
-
-	if a.modelMappingCacheReady &&
-		a.modelMappingCacheCredentialsPtr == credentialsPtr &&
-		a.modelMappingCacheRawPtr == rawPtr &&
-		a.modelMappingCacheRawLen == rawLen {
-		rawSig = modelMappingSignature(rawMapping)
-		rawSigReady = true
-		if a.modelMappingCacheRawSig == rawSig {
-			return a.modelMappingCache
-		}
-	}
-
-	mapping := a.resolveModelMapping(rawMapping)
-	if !rawSigReady {
-		rawSig = modelMappingSignature(rawMapping)
-	}
-
-	a.modelMappingCache = mapping
-	a.modelMappingCacheReady = true
-	a.modelMappingCacheCredentialsPtr = credentialsPtr
-	a.modelMappingCacheRawPtr = rawPtr
-	a.modelMappingCacheRawLen = rawLen
-	a.modelMappingCacheRawSig = rawSig
-	return mapping
+	// 账号对象会被调度与画布目录并发共享；每次按当前凭据解析，避免懒缓存的共享写入竞态。
+	return a.resolveModelMapping(rawMapping)
 }
 
 func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]string {

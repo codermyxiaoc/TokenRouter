@@ -172,9 +172,9 @@
         </div>
 
         <!-- Tab Content -->
-        <form id="channel-form" @submit.prevent="handleSubmit" class="flex-1 overflow-y-auto pt-4">
+        <form id="channel-form" ref="channelFormRef" novalidate @submit.prevent="handleSubmit" class="flex-1 overflow-y-auto pt-4">
           <!-- Basic Settings Tab -->
-          <div v-show="activeTab === 'basic'" class="space-y-5">
+          <div v-show="activeTab === 'basic'" data-channel-tab="basic" class="space-y-5">
             <!-- Name -->
             <div>
               <label class="input-label">{{ t('admin.channels.form.name', 'Name') }} <span class="text-red-500">*</span></label>
@@ -272,11 +272,13 @@
           </div>
 
           <!-- Platform Tab Content -->
-          <div
+          <fieldset
             v-for="(section, sIdx) in form.platforms"
             :key="'tab-' + section.platform"
             v-show="section.enabled && activeTab === section.platform"
-            class="space-y-4"
+            :data-channel-tab="section.platform"
+            :disabled="!section.enabled"
+            class="min-w-0 space-y-4"
           >
             <!-- Groups -->
             <div>
@@ -591,7 +593,7 @@
                 </div>
               </div>
             </div>
-          </div>
+          </fieldset>
         </form>
       </div>
 
@@ -634,7 +636,7 @@
 <script setup lang="ts">
 import { supportsChannelModelSync } from '@/constants/platforms'
 import { validVideoPrices, videoPricesFromAPI, videoPricesToAPI, validVideoImageInputPricing, videoImageInputPricingToAPI, videoImageInputPricingFromAPI, validVideoFallbackPrice, videoFallbackPriceToAPI, validVideoTokenPrepay, videoTokenPrepayToAPI, videoTokenPrepayFromAPI } from "@/components/admin/channel/videoPricing"
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -664,6 +666,7 @@ import { useKeyedDebouncedSearch } from '@/composables/useKeyedDebouncedSearch'
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const channelFormRef = ref<HTMLFormElement | null>(null)
 
 // Web Search global enabled state (loaded once on mount)
 const webSearchGlobalEnabled = ref(false)
@@ -1556,8 +1559,22 @@ function closeDialog() {
 
 async function handleSubmit() {
   if (submitting.value) return
+  // 隐藏页签及折叠价卡仍保留草稿，先展示无效字段，再执行原生校验提示，避免浏览器无法聚焦而静默阻止保存。
+  const controls = channelFormRef.value?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select')
+  const invalidControl = controls && Array.from(controls).find(control => control.willValidate && !control.validity.valid)
+  if (invalidControl) {
+    const tab = invalidControl.closest<HTMLElement>('[data-channel-tab]')?.dataset.channelTab
+    if (tab) activeTab.value = tab
+    invalidControl.dispatchEvent(new Event('form-field-reveal', { bubbles: true }))
+    await nextTick()
+    invalidControl.scrollIntoView?.({ block: 'center', inline: 'nearest' })
+    invalidControl.focus({ preventScroll: true })
+    invalidControl.reportValidity()
+    return
+  }
   if (!form.name.trim()) {
     appStore.showError(t('admin.channels.nameRequired', 'Please enter a channel name'))
+    activeTab.value = 'basic'
     return
   }
 

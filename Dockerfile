@@ -29,9 +29,11 @@ RUN corepack enable && corepack prepare pnpm@9 --activate
 
 # Install dependencies first (better caching)
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
+COPY frontend/canvas-app/package.json frontend/canvas-app/pnpm-lock.yaml ./canvas-app/
 RUN --mount=type=cache,id=sub2api-pnpm-store,target=/root/.local/share/pnpm/store \
     if [ -n "${NPM_CONFIG_REGISTRY}" ]; then pnpm config set registry "${NPM_CONFIG_REGISTRY}"; fi && \
-    pnpm install --frozen-lockfile --prefer-offline
+    pnpm install --frozen-lockfile --prefer-offline && \
+    pnpm --dir canvas-app install --frozen-lockfile --prefer-offline
 
 # 复制前端源码并构建。
 # LegalDocumentView.vue 构建时会通过 ../../../../docs/legal/*.md?raw

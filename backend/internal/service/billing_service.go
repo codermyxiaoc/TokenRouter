@@ -2102,6 +2102,15 @@ type ModelDisplayPricing struct {
 	VideoFallbackPrice            *float64
 	VideoFallbackPricing          *ModelDisplayVideoPrice
 	VideoTokenPrepay              *VideoTokenPrepayConfig
+	// AudioPrice 是 Voice 连续计量单价，不与聊天音频 token 价格混用。
+	AudioPrice *ModelDisplayAudioPrice
+}
+
+// ModelDisplayAudioPrice 的单价已经应用基础分组倍率，零值表示已确认的免费。
+type ModelDisplayAudioPrice struct {
+	Mode  string
+	Price float64
+	Unit  string
 }
 
 // ModelDisplayVideoPrice 保留视频分辨率和计费单位，兼容按秒及历史按次渠道价格。

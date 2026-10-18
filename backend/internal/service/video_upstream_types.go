@@ -27,6 +27,12 @@ type VideoTaskSubmitRequest struct {
 	NativePath      string
 	Native          bool
 	IdempotencyKey  string
+	// 仅画布桥接在校验私有参考素材后设置；不接收客户端字段，也不写入上游正文。
+	// 自动比例在真实账号协议确定后才解释，普通 API 和其它协议保持原行为。
+	canvasAdaptiveRatio string
+	// 仅云画布从已鉴权、已校验的原图字节计算；在实际账号协议确定后检查发送上限。
+	// 不读取客户端同名 JSON，不保存到任务快照，也不改变普通 API 请求合同。
+	canvasMaxReferenceImageBytes int64
 	// ExcludedAccountIDs 用于容量拒绝及明确未受理后的重选，不接收客户端 JSON 或参与幂等摘要。
 	ExcludedAccountIDs map[int64]struct{} `json:"-"`
 }

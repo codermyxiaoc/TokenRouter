@@ -105,6 +105,7 @@ func provideCleanup(
 	batchImageCleanup *service.BatchImageCleanupService,
 	batchImageWorker *service.BatchImageWorkerRuntime,
 	creativeWorker *service.CreativeWorkerRuntime,
+	creativeCanvas *service.CreativeCanvasService,
 	imageTasks *service.ImageTaskService,
 	videoTasks *service.VideoTaskService,
 	legacyVideoTasks *service.LegacyVideoRuntime,
@@ -296,6 +297,12 @@ func provideCleanup(
 			{"CreativeWorkerRuntime", func() error {
 				if creativeWorker != nil {
 					creativeWorker.Stop()
+				}
+				return nil
+			}},
+			{"CreativeCanvasService", func() error {
+				if creativeCanvas != nil {
+					creativeCanvas.Stop()
 				}
 				return nil
 			}},

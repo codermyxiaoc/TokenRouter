@@ -83,6 +83,15 @@ export function resolveModelCapabilities(
     return { input: apiInput, output: apiOutput }
   }
 
+  // Voice 价卡已经由服务端识别具体能力，比模型名称兜底可靠；普通音频 token 对话不进入这里。
+  if (pricing?.pricing_mode === 'audio') {
+    switch (pricing.audio_price?.mode) {
+      case 'tts': return { input: ['text'], output: ['audio'] }
+      case 'stt': return { input: ['audio'], output: ['text'] }
+      case 'realtime': return { input: ['text', 'audio'], output: ['text', 'audio'] }
+    }
+  }
+
   // MJ 自定义型号统一归为生图，不因名称中其它平台的关键词叠加音视频能力。
   if (isMidjourneyImageModel(modelId)) {
     return { input: ['text'], output: ['image'] }

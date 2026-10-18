@@ -80,6 +80,10 @@ OpenAI API Key 账号可通过 `extra.images_url_to_b64_json=true` 启用图片�
 
 创作台异步执行器的 `generate` 使用 `/v1/images/generations` JSON，`edit`/`inpaint` 使用 `/v1/images/edits` multipart；GPT Image 固定发送 PNG、单张 `n=1`，并按最终模型能力透传尺寸、质量和背景。GPT Image 模型不发送 `response_format`（其响应固定包含 base64），DALL-E 保留 `response_format=b64_json`。第三方 MJ 也使用该响应格式，但一次 `n=1` 返回最多四张，分别计费并完整展示；其参数、四张预占和安全下载契约见 [Midjourney 创作台](../domains/creative_studio.md#midjourney_images)。inpaint 的 mask 必须是与源图同尺寸、4 MiB 以内的 PNG，透明像素表示需要重绘区域。
 
+编辑 multipart 中的每个 `image` 与 `mask` 文件部分使用已经校验的 `image/png`、`image/jpeg` 或 `image/webp` 类型与对应扩展名，不以通用 `application/octet-stream` 替代。该媒体头修正不修改原图字节、文件字段名、生成参数或失败重试策略。
+
+API Key 图片执行失败的后台事件 `creative.openai_image_failed` 仅记录任务、账号、真实上游 HTTP 状态与固定阶段：`http_status` 表示上游 HTTP 拒绝，`response_parse` 表示成功响应中的产物无法按原协议解析。事件不保存供应商消息、原包、素材地址或提示词；用户安全错误与原重试策略不因诊断记录变化。
+
 创作台 OAuth 账号同样使用上述 Codex 原生通道及明确的 404/405 回退；API Key 仍走原 Images 端点。generate/edit/inpaint 保留异步预占、最终结算和附件校验。网络或成功响应后的结果不确定错误不能让 worker 再次生成，避免重复扣取上游成本。
 
 Responses 回退已经收到并成功解码的完整图片不会因随后 `response.failed`、`response.incomplete` 或读流中断被丢弃；继续交付单张结果并执行原保存/结算，记录 `creative.openai_oauth_error_recovered` 后台事件。日志只含任务、账号、端点和错误分类，不写提示词、图片或原始响应。预览片段不等于完整图片，没有完整产出时保留原失败与安全重试策略。

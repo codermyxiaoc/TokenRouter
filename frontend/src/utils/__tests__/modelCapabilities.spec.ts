@@ -20,6 +20,16 @@ const imagePricing: MarketplaceModelPricing = {
 }
 
 describe('resolveModelCapabilities', () => {
+  it('显式 Voice 价卡提供三类音频能力，但接口模态仍优先', () => {
+    const tts: MarketplaceModelPricing = { pricing_mode: 'audio', price_status: 'priced', audio_price: { mode: 'tts', price: 0, unit: 'million_characters' } }
+    expect(resolveModelCapabilities('custom-voice', tts)).toEqual({ input: ['text'], output: ['audio'] })
+    expect(resolveModelCapabilities('grok-stt', { ...tts, audio_price: { mode: 'stt', price: .36, unit: 'hour' } })).toEqual({ input: ['audio'], output: ['text'] })
+    expect(resolveModelCapabilities('grok-voice-latest', { ...tts, audio_price: { mode: 'realtime', price: .05, unit: 'minute' } })).toEqual({ input: ['text', 'audio'], output: ['text', 'audio'] })
+    expect(resolveModelCapabilities('custom-voice', tts, { input: ['audio'], output: ['audio'] })).toEqual({ input: ['audio'], output: ['audio'] })
+    expect(resolveModelCapabilities('gpt-4o-audio-preview', { ...textPricing, audio_price: tts.audio_price })).toEqual({ input: ['text', 'audio'], output: ['text', 'audio'] })
+    expect(resolveModelCapabilities('grok-stt', textPricing)).toEqual({ input: ['text'], output: ['text'] })
+  })
+
   it('优先使用后端下发的能力元数据，忽略本地规则', () => {
     // gpt-image-2 按本地规则会解析为 text+image 输入，接口数据应直接覆盖。
     expect(

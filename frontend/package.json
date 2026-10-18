@@ -4,14 +4,17 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vue-tsc -b && vite build",
+    "dev": "node scripts/dev-with-canvas.mjs",
+    "dev:host": "vite",
+    "build": "vue-tsc -b && vite build && pnpm --dir canvas-app run build",
+    "build:canvas": "pnpm --dir canvas-app run build",
+    "install:canvas": "pnpm --dir canvas-app install --frozen-lockfile",
     "preview": "vite preview",
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix",
     "lint:check": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts",
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest",
-    "test:run": "vitest run",
+    "test:run": "vitest run && pnpm --dir canvas-app run test:run",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {

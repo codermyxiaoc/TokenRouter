@@ -8,10 +8,26 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"net/url"
 	"strings"
 
 	"github.com/tidwall/gjson"
 )
+
+// isDedicatedMidjourneyEndpoint 识别可美 MJ 专用兼容端点。
+// 该端点不会返回通用 OpenAI 模型目录，因此在没有账号白名单时允许创作台
+// 使用已验证的 MJ 版本候选；其它 OpenAI 账号仍必须显式配置模型白名单或映射。
+func isDedicatedMidjourneyEndpoint(account *Account) bool {
+	if account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeAPIKey {
+		return false
+	}
+	baseURL := strings.TrimSpace(account.GetCredential("base_url"))
+	parsed, err := url.Parse(baseURL)
+	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSuffix(parsed.Hostname(), "."), "token.xinhankr.com-mj")
+}
 
 // 复用仅访问公网的下载器及连接池，不携带上游账号凭据，也不持久化图片或素材地址。
 var creativeMidjourneyImageDownloader = NewImageResultUploader(nil, "", creativeMaxOutputBytes, nil)

@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/tidwall/gjson"
+	"go.uber.org/zap"
 )
 
 // executeOpenAI 执行 OpenAI 平台任务：generate 走 /v1/images/generations（JSON），
@@ -89,12 +92,19 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 		return nil, creativeResultUnconfirmedError()
 	}
 	if resp.StatusCode >= 400 {
+		// 只记状态与固定阶段，区分真实 HTTP 拒绝和成功响应后的解析失败，不落原包或供应商消息。
+		logger.L().Warn("creative.openai_image_failed", zap.String("run_id", run.RunID), zap.Int64("account_id", account.ID), zap.String("stage", "http_status"), zap.Int("upstream_status", resp.StatusCode))
 		return nil, creativeHTTPStatusError(resp.StatusCode, extractUpstreamErrorMessage(respBody))
 	}
 	if midjourney {
 		return parseCreativeMidjourneyImageOutputs(ctx, respBody, creativeMidjourneyImageDownloader)
 	}
-	return parseCreativeOpenAIImageOutputs(respBody)
+	outputs, err := parseCreativeOpenAIImageOutputs(respBody)
+	if err != nil {
+		// 对外继续沿用原安全错误；后台保留真实 HTTP 状态，不能将本地解码失败误诊为上游502。
+		logger.L().Warn("creative.openai_image_failed", zap.String("run_id", run.RunID), zap.Int64("account_id", account.ID), zap.String("stage", "response_parse"), zap.Int("upstream_status", resp.StatusCode))
+	}
+	return outputs, err
 }
 
 // creativeOpenAIURL 推导 OpenAI images 上游 URL：账号自定义 base_url 优先，否则官方端点。
@@ -148,20 +158,12 @@ func buildCreativeOpenAIRequestBody(run CreativeRun, payload CreativeRunPayload,
 	var buffer bytes.Buffer
 	writer := multipart.NewWriter(&buffer)
 	for i, image := range payload.Sources {
-		part, err := writer.CreateFormFile("image", fmt.Sprintf("source_%d.%s", i, creativeFileExtension(image.Mime)))
-		if err != nil {
-			return nil, "", err
-		}
-		if _, err := part.Write(image.Bytes); err != nil {
+		if err := writeCreativeOpenAIImagePart(writer, "image", fmt.Sprintf("source_%d.%s", i, creativeFileExtension(image.Mime)), image); err != nil {
 			return nil, "", err
 		}
 	}
 	if payload.Mask != nil {
-		part, err := writer.CreateFormFile("mask", "mask."+creativeFileExtension(payload.Mask.Mime))
-		if err != nil {
-			return nil, "", err
-		}
-		if _, err := part.Write(payload.Mask.Bytes); err != nil {
+		if err := writeCreativeOpenAIImagePart(writer, "mask", "mask."+creativeFileExtension(payload.Mask.Mime), *payload.Mask); err != nil {
 			return nil, "", err
 		}
 	}
@@ -199,6 +201,26 @@ func buildCreativeOpenAIRequestBody(run CreativeRun, payload CreativeRunPayload,
 		return nil, "", err
 	}
 	return buffer.Bytes(), writer.FormDataContentType(), nil
+}
+
+// 图片与蒙版必须保留已校验的媒体类型；CreateFormFile 默认的 octet-stream 会被严格图片端点拒绝。
+func writeCreativeOpenAIImagePart(writer *multipart.Writer, field, filename string, image CreativeInputImage) error {
+	mediaType := strings.ToLower(strings.TrimSpace(image.Mime))
+	switch mediaType {
+	case "image/png", "image/jpeg", "image/webp":
+	default:
+		return creativeNonRetryableError("unsupported creative image MIME type")
+	}
+	header := make(textproto.MIMEHeader)
+	// 字段和文件名由调用方固定生成，保留原 multipart 带引号的序列化以兼容代理解析器。
+	header.Set("Content-Disposition", fmt.Sprintf("form-data; name=%q; filename=%q", field, filename))
+	header.Set("Content-Type", mediaType)
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return err
+	}
+	_, err = part.Write(image.Bytes)
+	return err
 }
 
 // creativeOpenAIUsesResponseFormat 仅对 DALL-E 保留旧版 response_format 参数；GPT Image 固定返回 base64。

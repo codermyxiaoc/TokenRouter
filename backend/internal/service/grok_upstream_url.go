@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
@@ -151,23 +150,8 @@ func buildGrokVoiceURL(account *Account, cfg *config.Config, endpoint string) (s
 	if strings.TrimSpace(base) == "" || isGrokCLIProxyBaseURL(base) {
 		base = xai.DefaultBaseURL
 	}
-	validated, err := validator(base)
-	if err != nil {
-		return "", err
-	}
-	ep := strings.Trim(strings.TrimSpace(endpoint), "/")
-	if ep == "" {
-		return "", fmt.Errorf("voice endpoint is required")
-	}
-	parts := strings.Split(ep, "/")
-	encoded := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if strings.TrimSpace(part) == "" || part == "." || part == ".." {
-			return "", fmt.Errorf("invalid voice endpoint path")
-		}
-		encoded = append(encoded, url.PathEscape(part))
-	}
-	return strings.TrimRight(validated, "/") + "/" + strings.Join(encoded, "/"), nil
+	// 调用方的安全策略只负责准入；与其它 xAI 端点相同，之后还需规范化空路径。
+	return xai.BuildVoiceURLWithValidator(base, endpoint, validator)
 }
 
 func isGrokCLIProxyBaseURL(raw string) bool {

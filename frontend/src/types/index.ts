@@ -606,7 +606,7 @@ export type GroupClientProtocol =
   | 'openai_responses'
   | 'openai_chat_completions'
   | 'gemini_generate_content'
-export type MarketplacePricingMode = 'token' | 'image' | 'video' | 'video_token' | 'video_per_request' | 'unknown'
+export type MarketplacePricingMode = 'token' | 'image' | 'video' | 'video_token' | 'video_per_request' | 'audio' | 'unknown'
 export type MarketplacePriceStatus = 'priced' | 'unpriced'
 
 export interface MarketplacePricingInterval {
@@ -650,11 +650,19 @@ export interface MarketplaceModelPricing {
   image_price_1k?: number
   image_price_2k?: number
   image_price_4k?: number
+  audio_price?: MarketplaceAudioPrice | null
   video_prices?: MarketplaceVideoPrice[]
   video_image_input_pricing?: VideoImageInputPricing | null
   video_fallback_price?: number | null
   video_fallback_pricing?: MarketplaceVideoPrice | null
   video_token_prepay?: VideoTokenPrepay | null
+}
+
+// 音频金额已经按分组倍率计算，单位不能沿用 token 或按次价的格式化逻辑。
+export interface MarketplaceAudioPrice {
+  mode: 'tts' | 'stt' | 'realtime'
+  price: number
+  unit: 'million_characters' | 'hour' | 'minute'
 }
 
 // 视频价卡使用显式单位，避免把历史按次渠道价格误标成每秒价格。

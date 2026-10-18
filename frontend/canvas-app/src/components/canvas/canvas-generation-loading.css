@@ -1,0 +1,8 @@
+/* 加载层以媒体节点为边界居中，保留旧结果且不拦截节点拖动、连线或播放控制。 */
+.canvas-generation-loading { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; border-radius: inherit; background: var(--panel); pointer-events: none; }
+.canvas-generation-loading.has-media { background: color-mix(in srgb, var(--panel) 38%, transparent); }
+.canvas-generation-loading-indicator { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text); font-size: 11px; font-weight: 500; }
+.canvas-generation-loading.has-media .canvas-generation-loading-indicator { padding: 14px 20px; border-radius: 16px; background: color-mix(in srgb, var(--panel) 90%, transparent); }
+.canvas-generation-loading-indicator svg { color: var(--brand); }
+.canvas-generation-status-details { max-width: 280px; padding: 0 12px; line-height: 1.6; text-align: center; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .canvas-generation-loading-indicator .animate-spin { animation: none; } }

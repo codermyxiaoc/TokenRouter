@@ -1,0 +1,63 @@
+/* 参数弹层沿用原画布的 356px 面板、18px 内边距和胶囊控件；不参与画布缩放。 */
+.generation-settings-popover {
+  position: fixed;
+  z-index: 1200;
+  padding: 18px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  border-radius: 18px;
+  background: var(--generation-settings-panel);
+  color: var(--generation-settings-text);
+  box-shadow: 0 18px 54px rgba(28, 25, 23, .16);
+  scrollbar-width: thin;
+  scrollbar-color: var(--generation-settings-stroke) transparent;
+}
+.generation-settings-popover::-webkit-scrollbar { width: 5px; }
+.generation-settings-popover::-webkit-scrollbar-thumb { background: var(--generation-settings-stroke); border-radius: 5px; }
+.generation-settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.generation-settings-heading h2 { margin: 0; font-size: 18px; font-weight: 600; line-height: 28px; }
+.generation-settings-heading button { border: 0; padding: 5px; border-radius: 50%; color: var(--generation-settings-muted); }
+.generation-settings-group + .generation-settings-group { margin-top: 16px; }
+.generation-settings-group h3 { margin: 0 0 10px; color: var(--generation-settings-muted); font-size: 12px; font-weight: 500; line-height: 18px; }
+.generation-settings-options { display: grid; gap: 10px; }
+.generation-settings-popover .generation-settings-pill { height: 36px; min-width: 0; padding: 0 8px; border: 1px solid var(--generation-settings-stroke); border-radius: 999px; background: transparent; color: var(--generation-settings-text); font-size: 14px; font-weight: 400; line-height: 20px; }
+.generation-settings-popover button[aria-pressed=true] { border-color: var(--generation-settings-text); }
+.generation-settings-popover .generation-settings-pill:hover, .generation-settings-popover .generation-settings-ratio:hover { background: transparent; opacity: .8; }
+.generation-settings-popover button:focus-visible, .generation-settings-popover input:focus-visible { outline: 2px solid var(--generation-settings-focus); outline-offset: 3px; }
+.generation-settings-ratios { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.generation-settings-popover .generation-settings-ratio { display: flex; height: 72px; min-width: 0; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 6px 2px; border: 1px solid var(--generation-settings-stroke); border-radius: 12px; background: transparent; color: var(--generation-settings-text); font-size: 14px; font-weight: 400; line-height: 20px; }
+.generation-settings-ratio-icon { display: grid; width: 36px; height: 28px; place-items: center; }
+.generation-settings-ratio-icon > span { display: block; border: 2px solid currentColor; border-radius: 2px; }
+.generation-settings-dimensions { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 10px; }
+.generation-settings-dimensions > span { opacity: .45; font-size: 18px; }
+.generation-settings-dimension { display: flex; height: 36px; min-width: 0; overflow: hidden; align-items: center; border-radius: 12px; background: var(--generation-settings-fill); font-size: 14px; }
+.generation-settings-dimension > span { display: grid; width: 36px; flex: 0 0 36px; place-items: center; color: var(--generation-settings-muted); }
+.generation-settings-dimension input { width: 0; min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; padding: 0 8px; color: var(--generation-settings-text); cursor: default; }
+.generation-settings-hint { margin: 7px 0 0; color: var(--generation-settings-muted); opacity: .75; font-size: 11px; line-height: 17px; }
+.generation-settings-duration { display: flex; align-items: center; gap: 12px; }
+.generation-settings-duration input[type=range] { min-width: 0; flex: 1; height: 4px; margin: 0; accent-color: var(--generation-settings-text); cursor: pointer; }
+.generation-settings-duration input[type=number] { width: 68px; height: 36px; flex: 0 0 68px; border: 0; border-radius: 12px; outline: 0; background: var(--generation-settings-fill); padding: 0 8px; text-align: center; font-size: 14px; color: var(--generation-settings-text); appearance: textfield; }
+.generation-settings-duration input::-webkit-inner-spin-button, .generation-settings-duration input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.generation-settings-duration input:disabled { opacity: .55; cursor: default; }
+.generation-settings-duration > span { color: var(--generation-settings-muted); font-size: 14px; }
+.generation-settings-error { margin: 7px 0 0; color: #e88277; font-size: 11px; line-height: 17px; }
+/* 三个常见档位与自定义 p 输入同行，原生 2K/4K 等独立价档保留在下一行。 */
+.generation-settings-resolution { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.generation-settings-custom-resolution { display: flex; align-items: center; min-width: 0; height: 36px; border: 1px solid var(--generation-settings-stroke); border-radius: 999px; padding: 0 8px; gap: 2px; font-size: 14px; }
+.generation-settings-custom-resolution[data-selected=true] { border-color: var(--generation-settings-text); }
+/* 输入时只高亮整个胶囊，避免浏览器在内部数字上叠加黑色矩形焦点框。 */
+.generation-settings-custom-resolution:focus-within { border-color: var(--generation-settings-focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--generation-settings-focus) 22%, transparent); }
+.generation-settings-popover .generation-settings-custom-resolution input:focus,
+.generation-settings-popover .generation-settings-custom-resolution input:focus-visible { outline: none; box-shadow: none; }
+.generation-settings-custom-resolution input { min-width: 0; width: 100%; border: 0; padding: 0; background: transparent; color: inherit; text-align: center; appearance: textfield; font-size: 14px; }
+.generation-settings-custom-resolution input::placeholder { font-size: 11px; color: var(--generation-settings-muted); }
+.generation-settings-custom-resolution input::-webkit-inner-spin-button, .generation-settings-custom-resolution input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.generation-settings-custom-resolution:has(input:disabled), .generation-settings-popover button:disabled { opacity: .4; cursor: not-allowed; }
+.generation-settings-extra-resolutions { margin-top: 10px; }
+/* 连续语速输入沿用胶囊焦点，避免原生数字输入边框覆盖主题。 */
+.generation-settings-audio-speed { display:flex; align-items:center; gap:8px; height:36px; margin-top:10px; padding:0 16px; border:1px solid var(--generation-settings-stroke); border-radius:999px; }
+.generation-settings-audio-speed:focus-within { border-color:var(--generation-settings-focus); box-shadow:0 0 0 2px color-mix(in srgb,var(--generation-settings-focus) 22%,transparent); }
+.generation-settings-audio-speed input { width:100%; min-width:0; border:0; padding:0; background:transparent; color:inherit; text-align:center; appearance:textfield; }
+.generation-settings-popover .generation-settings-audio-speed input:focus-visible { outline:none; }
+.generation-settings-audio-speed input::-webkit-inner-spin-button,.generation-settings-audio-speed input::-webkit-outer-spin-button { appearance:none; margin:0; }

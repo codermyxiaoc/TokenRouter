@@ -156,10 +156,10 @@ func RegisterUserRoutes(
 			usage.GET("/:id", h.Usage.GetByID)
 		}
 
-		// 创作台（Creative Studio）：图片生成/编辑/局部重绘异步任务。
-		// 服务端只保存任务元数据，图片与 prompt 明文只存于临时 Redis 存储。
+		// 云端画布与旧图片任务入口共享 JWT；旧任务仍可独立完成结算。
 		creative := authenticated.Group("/creative")
 		{
+			registerCreativeCanvasRoutes(creative, h.CreativeCanvas, panelRateLimiter.Heavy())
 			creative.GET("/capabilities", h.Creative.ListCapabilities)
 			creative.GET("/models", h.Creative.ListModels)
 			creative.POST("/runs", panelRateLimiter.Heavy(), h.Creative.CreateRun)

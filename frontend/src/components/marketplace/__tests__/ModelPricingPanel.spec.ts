@@ -96,6 +96,37 @@ const unpricedPricing: MarketplaceModelPricing = {
 }
 
 describe('ModelPricingPanel', () => {
+  it.each([
+    ['tts', 'million_characters', 'perMillionCharacters', 15],
+    ['tts', 'million_characters', 'perMillionCharacters', 0],
+    ['stt', 'hour', 'perAudioHour', .36],
+    ['realtime', 'minute', 'perAudioMinute', .05],
+  ] as const)('完整音频价卡展示 %s 的真实单位及价格 %s', async (mode, unit, unitLabel, price) => {
+    const wrapper = mountPanel(marketplaceModel('grok-voice-tts-1.0', { pricing_mode: 'audio', price_status: 'priced', audio_price: { mode, unit, price } }))
+    await wrapper.get('[data-testid="model-pricing-toggle"]').trigger('click')
+    const rows = wrapper.get('[data-testid="pricing-rows"]')
+    expect(rows.element.children).toHaveLength(1)
+    expect(rows.text()).toContain(`marketplace.${unitLabel}`)
+    expect(rows.text()).toContain(price === 15 ? '15.00 点' : price === 0 ? '0.0000 点' : `${price.toFixed(4)} 点`)
+    expect(rows.text()).not.toContain('perMillionTokens')
+    expect(rows.text()).not.toContain('marketplace.perRequest')
+    expect(wrapper.find('[data-testid="pricing-fast-switch"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pricing-interval-switch"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('缺失或错误音频单位不制造免费完整价卡', () => {
+    for (const pricing of [
+      { pricing_mode: 'audio', price_status: 'priced' },
+      { pricing_mode: 'audio', price_status: 'unpriced', audio_price: { mode: 'tts', unit: 'million_characters', price: 0 } },
+      { pricing_mode: 'audio', price_status: 'priced', audio_price: { mode: 'tts', unit: 'request', price: 1 } },
+    ] as MarketplaceModelPricing[]) {
+      const wrapper = mountPanel(marketplaceModel('grok-tts', pricing))
+      expect(wrapper.find('[data-testid="model-pricing-toggle"]').exists()).toBe(false)
+      wrapper.unmount()
+    }
+  })
+
   // 首档来源变化不能改变其它档位的单位、预扣或固定图片费说明。
   it.each(['video', 'video_token'] as const)('keeps mixed pricing scoped when the first mode is %s', async (mode) => {
     const rows: NonNullable<MarketplaceModelPricing['video_prices']> = [

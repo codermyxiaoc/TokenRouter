@@ -7666,7 +7666,7 @@
                       <!-- 能力开关：胶囊按钮替代原生复选框，选中态带对勾，禁用态沿用“至少保留一项能力”等约束。 -->
                       <div class="flex flex-wrap items-center gap-2">
                         <button
-                          v-for="operation in creativeOperationChoices"
+                          v-for="operation in item.media_type && item.media_type !== 'image' ? ['generate'] : creativeOperationChoices"
                           :key="operation"
                           type="button"
                           class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
@@ -7681,7 +7681,7 @@
                           @click="toggleCreativeOperation(index, operation, !item.operations.includes(operation))"
                         >
                           <Icon v-if="item.operations.includes(operation)" name="check" size="xs" />
-                          {{ t(`admin.settings.features.creative.modelSettings.operations.${operation}`) }}
+                          {{ t(`admin.settings.features.creative.modelSettings.operations.${item.media_type && item.media_type !== 'image' ? item.media_type : operation}`) }}
                         </button>
                       </div>
                       <button
@@ -7693,6 +7693,28 @@
                       >
                         <Icon name="trash" size="sm" />
                       </button>
+                      <div v-if="item.media_type === 'video'" class="grid grid-cols-1 gap-3 sm:col-span-3 sm:grid-cols-2">
+                        <label class="text-xs text-gray-600 dark:text-dark-300">
+                          {{ t('admin.settings.features.creative.modelSettings.videoEndpoint') }}
+                          <Select v-model="item.video_endpoint" :options="creativeVideoEndpointOptions(item)" class="mt-1" />
+                        </label>
+                        <label class="text-xs text-gray-600 dark:text-dark-300">
+                          {{ t('admin.settings.features.creative.modelSettings.videoDurations') }}
+                          <input :value="item.video_capabilities?.durations.join(', ')" class="input mt-1" placeholder="5, 10" @change="setCreativeVideoCapability(item, 'durations', ($event.target as HTMLInputElement).value)" />
+                        </label>
+                        <label class="text-xs text-gray-600 dark:text-dark-300">
+                          {{ t('admin.settings.features.creative.modelSettings.videoResolutions') }}
+                          <input :value="item.video_capabilities?.resolutions.join(', ')" class="input mt-1" placeholder="720p, 1080p" @change="setCreativeVideoCapability(item, 'resolutions', ($event.target as HTMLInputElement).value)" />
+                        </label>
+                        <label class="text-xs text-gray-600 dark:text-dark-300">
+                          {{ t('admin.settings.features.creative.modelSettings.videoRatios') }}
+                          <input :value="item.video_capabilities?.aspect_ratios.join(', ')" class="input mt-1" placeholder="16:9, 9:16" @change="setCreativeVideoCapability(item, 'aspect_ratios', ($event.target as HTMLInputElement).value)" />
+                        </label>
+                        <label class="text-xs text-gray-600 dark:text-dark-300">
+                          {{ t('admin.settings.features.creative.modelSettings.videoReferences') }}
+                          <input :value="item.video_capabilities?.max_reference_images ?? 0" type="number" min="0" max="16" step="1" class="input mt-1" @input="setCreativeVideoReferenceLimit(item, ($event.target as HTMLInputElement).value)" />
+                        </label>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -9071,7 +9093,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch, toRaw } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
 import { adminAPI } from "@/api";
@@ -10243,7 +10265,7 @@ const creativeModelCandidateOptions = computed(() => {
     for (const candidate of candidates) {
       options.push({
         value: creativeModelSettingKey(candidate),
-        label: `${candidate.model} / ${candidate.platform}`,
+        label: `${candidate.model} / ${candidate.media_type === 'video' ? 'Video' : candidate.media_type === 'audio' ? 'Grok TTS' : candidate.media_type === 'text' ? t('admin.settings.features.creative.modelSettings.operations.text') : candidate.platform}`,
         candidate,
       });
     }
@@ -10278,6 +10300,39 @@ function creativeCandidateForSetting(item: CreativeModelSetting): CreativeModelC
   return creativeModelCandidates.value.find((candidate) => creativeModelSettingKey(candidate) === key);
 }
 
+// 媒体能力只从服务端候选复制；切换类型时清除其他媒体的专用参数。
+function assignCreativeMediaSettings(row: CreativeModelSetting, candidate: CreativeModelCandidate) {
+  row.media_type = candidate.media_type || 'image';
+  row.video_endpoint = row.media_type === 'video' ? candidate.video_endpoint || candidate.video_endpoints?.[0] : undefined;
+  row.video_capabilities = row.media_type === 'video' && candidate.video_capabilities
+    ? structuredClone(toRaw(candidate.video_capabilities)) : undefined;
+  row.audio_capabilities = undefined;
+}
+
+function creativeVideoEndpointOptions(item: CreativeModelSetting) {
+  const endpoints = creativeCandidateForSetting(item)?.video_endpoints ?? (item.video_endpoint ? [item.video_endpoint] : []);
+  const labels: Record<string, string> = {
+    compat: 'OpenAI Videos (/v1/video/generations)', openai_videos: 'OpenAI Videos (/v1/videos)',
+    seedance: 'Seedance', kling: 'Kling', wan: 'Wan', minimax: 'MiniMax', vidu: 'Vidu',
+  };
+  return endpoints.map((value) => ({ value, label: labels[value] || value }));
+}
+
+function ensureCreativeVideoCapabilities(item: CreativeModelSetting) {
+  return item.video_capabilities ??= { durations: [], resolutions: [], aspect_ratios: [], max_reference_images: 0 };
+}
+
+function setCreativeVideoCapability(item: CreativeModelSetting, key: 'durations' | 'resolutions' | 'aspect_ratios', value: string) {
+  const parts = [...new Set(value.split(/[,，]/).map((part) => part.trim()).filter(Boolean))];
+  const caps = ensureCreativeVideoCapabilities(item);
+  if (key === 'durations') caps.durations = parts.map(Number);
+  else caps[key] = parts;
+}
+
+function setCreativeVideoReferenceLimit(item: CreativeModelSetting, value: string) {
+  ensureCreativeVideoCapabilities(item).max_reference_images = Number(value);
+}
+
 function creativeOperationSupported(index: number, operation: CreativeOperation): boolean {
   const item = form.creative_model_settings[index];
   if (!item) return false;
@@ -10301,6 +10356,7 @@ function onCreativeModelSelected(index: number, value: string | number | boolean
   row.group_id = candidate.group_id;
   row.model = candidate.model;
   row.operations = [...candidate.operations];
+  assignCreativeMediaSettings(row, candidate);
 }
 
 function addCreativeModelSetting() {
@@ -10312,6 +10368,10 @@ function addCreativeModelSetting() {
     group_id: candidate.group_id,
     model: candidate.model,
     operations: [...candidate.operations],
+    media_type: candidate.media_type || 'image',
+    video_endpoint: candidate.video_endpoint || candidate.video_endpoints?.[0],
+    // 候选来自响应式列表，先解包 Proxy 再克隆，避免新增视频模型抛出 DataCloneError。
+    video_capabilities: candidate.video_capabilities ? structuredClone(toRaw(candidate.video_capabilities)) : undefined,
   });
 }
 
@@ -10339,10 +10399,17 @@ function normalizeCreativeModelSettingsForSave(): CreativeModelSetting[] | null 
     );
     // 候选已知时只提交平台实际支持的能力，避免旧 Gemini inpaint 被重新写回。
     const operations = creativeOperationChoices.filter(
-      (operation) => item.operations.includes(operation) && (candidate?.operations.includes(operation) ?? true),
+      (operation) => item.operations.includes(operation) && (candidate?.operations.includes(operation) ?? true) &&
+        ((item.media_type !== 'audio' && item.media_type !== 'text') || operation === 'generate'),
     );
     if (!Number.isSafeInteger(groupID) || groupID <= 0 || !model) {
       return null;
+    }
+    if (item.media_type === 'video') {
+      const caps = item.video_capabilities;
+      if (!item.video_endpoint || (candidate?.video_endpoints && !candidate.video_endpoints.includes(item.video_endpoint))) return null;
+      if (caps && (caps.durations.some((value) => !Number.isSafeInteger(value) || value <= 0 || value > 60) ||
+        !Number.isSafeInteger(caps.max_reference_images) || caps.max_reference_images < 0 || caps.max_reference_images > 16)) return null;
     }
     if (operations.length === 0) {
       // 已知候选但没有任何可用能力时删除该条目；未知历史分组仍按 fail-closed 保留原值。
@@ -10352,7 +10419,20 @@ function normalizeCreativeModelSettingsForSave(): CreativeModelSetting[] | null 
     const key = creativeModelSettingKey({ group_id: groupID, model });
     if (seen.has(key)) return null;
     seen.add(key);
-    normalized.push({ group_id: groupID, model, operations });
+    // 图片配置沿用历史序列化，不写入冗余 media_type，避免无关字段改变旧设置和审计指纹。
+    normalized.push(item.media_type === 'video'
+      ? {
+        group_id: groupID,
+        model,
+        operations,
+        media_type: 'video',
+        video_endpoint: item.video_endpoint,
+        video_capabilities: item.video_capabilities,
+      }
+      : item.media_type === 'audio' || item.media_type === 'text'
+        // 文本和音频能力由服务端派生；保存白名单不覆盖上游能力或现有分组价格。
+        ? { group_id: groupID, model, operations, media_type: item.media_type }
+        : { group_id: groupID, model, operations });
   }
   return normalized;
 }

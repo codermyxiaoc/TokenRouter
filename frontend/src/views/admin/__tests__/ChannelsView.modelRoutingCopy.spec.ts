@@ -91,8 +91,9 @@ const SelectStub = defineComponent({
   `
 })
 
-function mountView() {
+function mountView(realPricing = false) {
   return mount(ChannelsView, {
+    attachTo: realPricing ? document.body : undefined,
     global: {
       stubs: {
         AppLayout: { template: '<div><slot /></div>' },
@@ -106,7 +107,7 @@ function mountView() {
         Icon: true,
         PlatformIcon: true,
         Toggle: true,
-        PricingEntryCard: true
+        PricingEntryCard: !realPricing
       }
     }
   })
@@ -151,6 +152,104 @@ describe('ChannelsView model routing copy', () => {
     listChannels.mockResolvedValue({ items: [], total: 0 })
     getGroups.mockResolvedValue([])
     getWebSearchEmulationConfig.mockResolvedValue({ enabled: false, providers: [] })
+  })
+
+  it('保存时先展示隐藏的必填名称，修正后仍可保存渠道', async () => {
+    getGroups.mockResolvedValue([{ id: 77, name: 'VideoGroup', platform: 'video', rate_multiplier: 1 }])
+    const wrapper = mountView(true)
+    try {
+      await flushPromises()
+      await wrapper.findAll('button').find(button => button.text().includes('admin.channels.createChannel'))!.trigger('click')
+      await flushPromises()
+      await wrapper.findAll('label').find(label => label.text().includes('admin.groups.platforms.video'))!.get('input').setValue(true)
+      await wrapper.findAll('button').find(button => button.text().includes('admin.groups.platforms.video'))!.trigger('click')
+      await wrapper.findAll('label').find(label => label.text().includes('VideoGroup'))!.get('input').setValue(true)
+      const field = wrapper.get('#channel-form input[required]').element as HTMLInputElement
+      const report = vi.spyOn(field, 'reportValidity')
+      expect(wrapper.get('[data-channel-tab="basic"]').isVisible()).toBe(false)
+      expect(wrapper.get('form').attributes('novalidate')).toBeDefined()
+
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      expect(wrapper.get('[data-channel-tab="basic"]').isVisible()).toBe(true)
+      expect(document.activeElement).toBe(field)
+      expect(report).toHaveBeenCalledOnce()
+      expect(createChannel).not.toHaveBeenCalled()
+
+      await wrapper.get('#channel-form input[required]').setValue('Video channel')
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      expect(createChannel).toHaveBeenCalledOnce()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('保存前切换到隐藏平台并展开价卡，保留非法价格校验', async () => {
+    listChannels.mockResolvedValue({ items: [{ id: 9, name: 'Video channel', status: 'active', group_ids: [77],
+      model_pricing: [{ platform: 'video', models: ['MiniMax-H3'], billing_mode: 'video',
+        video_prices: [{ resolution: '768p', price: -1 }] }] }], total: 1 })
+    getGroups.mockResolvedValue([{ id: 77, name: 'VideoGroup', platform: 'video', rate_multiplier: 1 }])
+    const wrapper = mountView(true)
+    try {
+      await flushPromises()
+      await wrapper.findAll('button').find(button => button.text() === 'common.edit')!.trigger('click')
+      await flushPromises()
+      const input = wrapper.get('[data-testid="video-price-768p"]')
+      const field = input.element as HTMLInputElement
+      const report = vi.spyOn(field, 'reportValidity')
+      const card = wrapper.getComponent({ name: 'PricingEntryCard' })
+      expect(wrapper.get('[data-channel-tab="video"]').isVisible()).toBe(false)
+      expect(card.find('.collapsible-content--collapsed').exists()).toBe(true)
+
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      expect(wrapper.get('[data-channel-tab="video"]').isVisible()).toBe(true)
+      expect(card.find('.collapsible-content--collapsed').exists()).toBe(false)
+      expect(document.activeElement).toBe(field)
+      expect(report).toHaveBeenCalledOnce()
+      expect(updateChannel).not.toHaveBeenCalled()
+
+      await input.setValue('0.15')
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      expect(updateChannel).toHaveBeenCalledOnce()
+      expect(updateChannel.mock.calls[0][1].model_pricing[0].video_prices).toEqual([{ resolution: '768p', price: 0.15 }])
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('停用平台的无效草稿不阻断其它平台保存，重新启用后继续校验', async () => {
+    listChannels.mockResolvedValue({ items: [{ id: 9, name: 'Mixed channel', status: 'active', group_ids: [77, 88],
+      model_pricing: [{ platform: 'video', models: ['MiniMax-H3'], billing_mode: 'video',
+        video_prices: [{ resolution: '768p', price: -1 }] }] }], total: 1 })
+    getGroups.mockResolvedValue([
+      { id: 77, name: 'VideoGroup', platform: 'video', rate_multiplier: 1 },
+      { id: 88, name: 'OpenAIGroup', platform: 'openai', rate_multiplier: 1 },
+    ])
+    const wrapper = mountView(true)
+    try {
+      await flushPromises()
+      await wrapper.findAll('button').find(button => button.text() === 'common.edit')!.trigger('click')
+      await flushPromises()
+      const toggle = wrapper.findAll('label').find(label => label.text().includes('admin.groups.platforms.video'))!.get('input')
+      const field = wrapper.get('[data-testid="video-price-768p"]').element as HTMLInputElement
+      await toggle.setValue(false)
+      expect(field.willValidate).toBe(false)
+      await toggle.setValue(true)
+      expect(field.willValidate).toBe(true)
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      expect(updateChannel).not.toHaveBeenCalled()
+      await toggle.setValue(false)
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      expect(updateChannel).toHaveBeenCalledOnce()
+      expect(updateChannel.mock.calls[0][1]).toMatchObject({ group_ids: [88], model_pricing: [] })
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it.each([['video', false], ['video', true], ['video_token', false], ['video_token', true], ['video_per_request', false], ['video_per_request', true]] as const)('submits Video %s pricing, fallback-only=%s', async (billingMode, fallbackOnly) => {

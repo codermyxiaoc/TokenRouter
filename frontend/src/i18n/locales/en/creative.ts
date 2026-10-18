@@ -1,7 +1,8 @@
 export default {
   creative: {
     title: 'Creative Studio',
-    description: 'Generate and edit images with AI models; assets stay in this browser only.',
+    sessionExpired: 'Your session has expired. Sign in again. Existing tasks continue in the background.',
+    description: 'Create images and videos on your private cloud canvases. Assets are retained for 7 days.',
     panel: {
       model: 'Model',
       // Edit / inpaint prerequisite hint (also shown as the form error when generating without a selection)

@@ -1,5 +1,7 @@
 # 创作台
 
+> 当前 `/creative` 界面已由[云端无限画布](cloud_canvas.md)替换。本文继续定义原图片任务引擎及其临时数据、账务契约；下文浏览器本地保存描述仅适用于旧客户端。新画布将提示词和图结构保存到数据库，并由后台把输出归档为保留七天的私有素材，原任务结算完成后关联执行结果，不再使用旧本地画布。云画布 Grok TTS 以内部 `tts` 操作复用此任务引擎、输出持久化和预扣/捕获/释放账本，其参数、字符报价与媒体边界见[云端画布生成与计费](cloud_canvas.md#execution)；不改变正式 `/tts` API 的后扣行为。
+
 TokenRouter 创作台（Creative Studio）提供面向个人用户的图片生成、编辑与局部重绘异步任务：浏览器上传素材并创建任务，服务端只保存任务元数据，worker 从 Redis 队列消费任务并调用上游图片模型，结果在 Redis 中短暂留存，由前端取回并保存到浏览器本地。
 
 本文覆盖创作台 API、任务生命周期、幂等、隐藏执行 Key、计费、Redis 临时数据、审核无留存、前端本地存储边界、配置和检查清单。它不定义批量图片作业（见[批量图片作业](batch_image_jobs.md)），不承诺生产价格数值，也不描述上游供应商自己的内容政策。
@@ -88,6 +90,7 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 
 `POST .../outputs/{index}/ack` 用于客户端确认输出已保存到本地：先把输出标记为 `acked`，再删除对应临时输出键，删除失败由 transient reconciler 重试，重复 ack 幂等成功。只有结算完成并进入可交付终态的 run 才能读取/ack 输出。
 
+<a id="task_lifecycle"></a>
 ## 生命周期
 
 任务状态机（`creative_run_outbox` 持久化 provisioning、settle、release 动作）：
@@ -99,6 +102,10 @@ queued -> running -> cancelled/release_pending -> cancelled
 queued -> running -> result_lost/release_pending -> result_lost
 succeeded -> result_lost
 ```
+
+创建者在写入任务行之前取得与执行 worker、provision/settle/release 补偿共用的任务锁。任务和 provision outbox 在同一 PostgreSQL 事务出现，但恢复器不能在创建者仍预扣、保存输入或入队时把任务判为准备中断。持锁操作使用短于锁有效期的 context 预算，并在心跳和关键阶段验证所有权；锁丢失或请求取消后停止后续状态、资金和队列写入，留给持久 outbox 接管，解锁必须校验原 token。
+
+provision 恢复在拿到锁后重新读取任务状态，不使用等锁前的阶段快照。正常完成、已进入执行阶段或已有 provider 栅栏的任务按最新状态处理；只有确定已中断且没有完整输入的准备流程才进入失败释放。Redis 暂时不可用只退避重试，不等同于输入丢失，也不能因此退款。这个协调边界同时覆盖图片和画布 TTS，价格快照、幂等键及原资金事务保持不变。
 
 `succeeded`、`failed`、`cancelled`、`result_lost` 均为终态。`result_lost` 的语义必须按丢失处理，不能当作成功：
 

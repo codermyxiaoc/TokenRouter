@@ -19,6 +19,8 @@ const (
 	CreativeOperationGenerate = "generate"
 	CreativeOperationEdit     = "edit"
 	CreativeOperationInpaint  = "inpaint"
+	// TTS 是内部音频执行类型，对外目录仍统一显示 generate。
+	CreativeOperationTTS = "tts"
 )
 
 // 创作台创建 saga 阶段，按顺序持久化推进，便于进程崩溃后继续执行。
@@ -355,21 +357,24 @@ type CreativeRunRepository interface {
 // 只有这里和 worker 执行期间允许出现 prompt 明文与图片字节。
 // Sources/Mask 仅存在于 worker 内存态（json:"-"），不落 Redis：字节已由 input/mask 键单独保存。
 type CreativeRunPayload struct {
-	RunID              string `json:"run_id"`
-	UserID             int64  `json:"user_id"`
-	GroupID            int64  `json:"group_id"`
-	APIKeyID           int64  `json:"api_key_id"`
-	Model              string `json:"model"`
-	Operation          string `json:"operation"`
-	Prompt             string `json:"prompt"`
-	ImageSize          string `json:"image_size"`
-	AspectRatio        string `json:"aspect_ratio"`
-	Background         string `json:"background,omitempty"`
-	ThinkingLevel      string `json:"thinking_level,omitempty"`
-	Quality            string `json:"quality,omitempty"`
-	SourceCount        int    `json:"source_count"`
-	HasMask            bool   `json:"has_mask"`
-	RequestFingerprint string `json:"request_fingerprint"`
+	RunID              string  `json:"run_id"`
+	UserID             int64   `json:"user_id"`
+	GroupID            int64   `json:"group_id"`
+	APIKeyID           int64   `json:"api_key_id"`
+	Model              string  `json:"model"`
+	Operation          string  `json:"operation"`
+	Prompt             string  `json:"prompt"`
+	ImageSize          string  `json:"image_size"`
+	AspectRatio        string  `json:"aspect_ratio"`
+	Background         string  `json:"background,omitempty"`
+	ThinkingLevel      string  `json:"thinking_level,omitempty"`
+	Quality            string  `json:"quality,omitempty"`
+	Voice              string  `json:"voice,omitempty"`
+	AudioFormat        string  `json:"audio_format,omitempty"`
+	Speed              float64 `json:"speed,omitempty"`
+	SourceCount        int     `json:"source_count"`
+	HasMask            bool    `json:"has_mask"`
+	RequestFingerprint string  `json:"request_fingerprint"`
 
 	// Sources/Mask 由 worker 从临时存储加载后填充，仅存在于进程内。
 	Sources []CreativeInputImage `json:"-"`
@@ -396,6 +401,14 @@ type CreateCreativeRunParamsPublic struct {
 	Background    string
 	ThinkingLevel string
 	OutputCount   int
+	// 音频参数仅供显式 TTS 操作使用，不改变已有图片请求指纹。
+	Voice       string
+	AudioFormat string
+	Speed       float64
+	// 只能由云画布适配器设置，旧图片 multipart 入口不能暗中开启 TTS。
+	canvasAudio bool
+	// ExpectedOutputCount 仅由云画布批次设置，阻止排队期间模型映射变化扩大已确认的生成张数。
+	ExpectedOutputCount int
 }
 
 // CreativeRunPublic 是任务对客户端的展示结构。
@@ -438,24 +451,30 @@ type CreativeRunOutputPublic struct {
 
 // CreativeModelPublic 是 ListModels 返回的可用模型条目。
 type CreativeModelPublic struct {
-	GroupID            int64                 `json:"group_id"`
-	GroupName          string                `json:"group_name"`
-	Model              string                `json:"model"`
-	Operations         []string              `json:"operations"`
-	ImageSizes         []string              `json:"image_sizes"`
-	AspectRatios       []string              `json:"aspect_ratios"`
-	Qualities          []string              `json:"qualities"`
-	OutputFormats      []string              `json:"output_formats"`
-	OutputCompression  *CreativeNumericRange `json:"output_compression"`
-	BackgroundOptions  []string              `json:"background_options"`
-	ThinkingLevels     []string              `json:"thinking_levels"`
-	OutputCount        int                   `json:"output_count"` // 每次任务固定的输出及预占张数：MJ 四张，其余模型保持单张。
-	MaxOutputCount     int                   `json:"max_output_count"`
-	MaxReferenceImages int                   `json:"max_reference_images"`
-	Price512           float64               `json:"price_512"`
-	Price1K            float64               `json:"price_1k"`
-	Price2K            float64               `json:"price_2k"`
-	Price4K            float64               `json:"price_4k"`
+	MediaType          string                     `json:"media_type"`
+	VideoEndpoint      VideoEndpoint              `json:"video_endpoint,omitempty"`
+	VideoCapabilities  *CreativeVideoCapabilities `json:"video_capabilities,omitempty"`
+	AudioCapabilities  *CreativeAudioCapabilities `json:"audio_capabilities,omitempty"`
+	TextCapabilities   *CreativeTextCapabilities  `json:"text_capabilities,omitempty"`
+	GroupID            int64                      `json:"group_id"`
+	GroupName          string                     `json:"group_name"`
+	Model              string                     `json:"model"`
+	Operations         []string                   `json:"operations"`
+	ImageSizes         []string                   `json:"image_sizes"`
+	AspectRatios       []string                   `json:"aspect_ratios"`
+	Qualities          []string                   `json:"qualities"`
+	OutputFormats      []string                   `json:"output_formats"`
+	OutputCompression  *CreativeNumericRange      `json:"output_compression"`
+	BackgroundOptions  []string                   `json:"background_options"`
+	ThinkingLevels     []string                   `json:"thinking_levels"`
+	OutputCount        int                        `json:"output_count"`  // 每次任务固定的输出及预占张数：MJ 四张，其余模型保持单张。
+	OutputCounts       []int                      `json:"output_counts"` // 云画布批次允许的总张数，不改变单个任务的预占合同。
+	MaxOutputCount     int                        `json:"max_output_count"`
+	MaxReferenceImages int                        `json:"max_reference_images"`
+	Price512           float64                    `json:"price_512"`
+	Price1K            float64                    `json:"price_1k"`
+	Price2K            float64                    `json:"price_2k"`
+	Price4K            float64                    `json:"price_4k"`
 }
 
 // CreativeNumericRange 描述创作台数值参数的闭区间和步长。

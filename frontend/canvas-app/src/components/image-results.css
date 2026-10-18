@@ -1,0 +1,20 @@
+/* 同节点多图采用原画布的叠卡与四列展开布局，全部尺寸跟随所属节点缩放。 */
+.image-results { position: relative; isolation: isolate; width: 100%; height: 100%; min-height: 0; flex: 1; overflow: hidden; border-radius: inherit; }
+.image-results[data-expanded] { overflow: visible; }
+.image-results-primary { position: relative; width: 100%; height: 100%; min-height: 0; overflow: hidden; border-radius: inherit; background: var(--image-results-panel); z-index: 1; }
+.image-results-card { position: absolute; z-index: 2; overflow: hidden; border: 1px solid var(--image-results-stroke); border-radius: 24px; background: var(--image-results-panel); animation: image-results-expand 320ms cubic-bezier(.2, .85, .18, 1) both; }
+.image-results-primary-actions, .image-results-card-actions { position: absolute; top: 8px; display: flex; align-items: center; gap: 4px; z-index: 3; opacity: 0; pointer-events: none; transition: opacity 150ms; }
+.image-results-primary-actions { left: 8px; max-width: calc(100% - 100px); }
+.image-results-card-actions { left: 8px; right: 8px; }
+.image-results-card-actions button { flex: 1; }
+.image-results:hover > .image-results-primary-actions, .image-results:focus-within > .image-results-primary-actions, .image-results-card:hover .image-results-card-actions, .image-results-card:focus-within .image-results-card-actions { opacity: 1; pointer-events: auto; }
+.image-results .image-results-primary-actions button, .image-results .image-results-card-actions button { display: flex; height: 32px; min-width: 0; align-items: center; justify-content: center; gap: 4px; padding: 0 6px; border: 1px solid var(--image-results-stroke); border-radius: 8px; background: var(--image-results-toolbar); color: var(--image-results-text); box-shadow: 0 6px 18px #0f172a29; font-size: 10px; line-height: 14px; backdrop-filter: blur(8px); cursor: pointer; }
+.image-results-primary-actions button span, .image-results-card-actions button span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.image-results-primary-actions svg, .image-results-card-actions svg { flex-shrink: 0; }
+.image-results .image-results-toggle { position: absolute; right: 10px; top: 10px; z-index: 4; display: flex; height: 32px; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; border: 1px solid var(--image-results-stroke); border-radius: 999px; background: var(--image-results-toolbar); color: var(--image-results-text); box-shadow: 0 6px 18px #1c191729; font-size: 12px; font-weight: 600; backdrop-filter: blur(8px); cursor: pointer; }
+.image-results-toggle svg { transition: transform 150ms; }
+.image-results-toggle[aria-expanded=true] svg { transform: rotate(90deg); }
+.image-results button:focus-visible { outline: 2px solid var(--image-results-active); outline-offset: 2px; }
+@keyframes image-results-expand { from { opacity: 0; transform: translate(var(--image-results-from-x), var(--image-results-from-y)) rotate(4deg); } to { opacity: 1; transform: none; } }
+@media (hover: none) { .image-results-primary-actions, .image-results-card-actions { opacity: 1; pointer-events: auto; } }
+@media (prefers-reduced-motion: reduce) { .image-results-card { animation: none; } .image-results-toggle svg { transition: none; } }

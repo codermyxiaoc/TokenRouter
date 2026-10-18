@@ -11,6 +11,7 @@
 - [视频模型详情](#marketplace_video_model_details)：修改分组/渠道逐模型说明、开关及公开展示时读取。
 - [目录元数据查询](#目录元数据查询)：修改名称写法、档位别名及能力来源时读取。
 - [价格展示](#价格展示)：修改渠道价格、倍率或未知价格时读取。
+- [语音价格展示](#marketplace_audio_pricing)：修改 Grok TTS/STT/Realtime 分组价格、计费单位和模型卡片时读取。
 - [容量与可用性](#容量与可用性)：修改公开容量或探测时间序列时读取。
 - [一致性边界](#一致性边界)：核对目录、市场和真实调度是否一致。
 
@@ -118,6 +119,15 @@ GPT 6.1 Sol 标准输入/输出/缓存写入/缓存读取为每百万 token 2/10
 GPT 6 Astra 的 `ultrafast` 对最终普通 token 价应用固定 6 倍，包括缓存；普通 Fast 的渠道倍率不改变此倍率。分组/渠道/区间基础价和显式零价继续有效，不用官方价覆盖已配置价卡。服务档排名区分 Ultrafast 与 Fast，明确降档只按降后的档位结算；Codex OAuth 的 `default` 回显仍按原有非权威规则处理。
 
 未知或歧义价格使用 `unpriced`/unknown 状态，不填 0。显式价格指针为 0 才表示免费。Qoder 内置别名和路由键要求手工渠道价格，不能回退通用模型价；具体优先级见[Qoder 原生上游](qoder_upstream.md)。
+
+<a id="marketplace_audio_pricing"></a>
+### 语音价格展示
+
+Grok 分组内明确识别的 TTS、STT、Realtime 型号使用 `pricing_mode=audio`，附带 `audio_price={mode,price,unit}`。`mode` 为 `tts`、`stt` 或 `realtime`，单位分别为 `million_characters`（每百万字符）、`hour`（每小时）、`minute`（每分钟）。卡片预览与展开价卡使用同一投影；不能把语音价格当作每次、每百万 Token 或图片价格展示。
+
+TTS 名称（包括 `grok-tts`、`grok-voice-tts` 和 `grok-voice-tts-1.0`）使用正式语音端点的计费键 `tts`，STT 使用 `stt`；Realtime 使用实际语音模型身份查价。先复用正式 Voice 的连续单位 `per_request` 价格解析，未命中有效覆盖时读取分组对应语音专项价格，分组空值再沿用原计费默认值。`price` 已应用基础分组倍率，不使用图片独立倍率、峰值倍率或客户端再次加价。显式单价零、基础倍率零均展示为零价；无效价格及无法明确识别的模型保持未知，不为所有带音频能力的聊天模型套用 Voice 单价。
+
+这是现有计费规则的只读展示，不新增价格配置或迁移，不改写用户已经设置的分组/渠道价格，也不改变正式 Voice 后扣和云端 TTS 的预扣、结算、退款账本。搜索保持原有展示和附加费规则，不将搜索工具费误标为整次请求总价。
 
 <a id="marketplace_video_pricing"></a>
 ### 视频价格展示

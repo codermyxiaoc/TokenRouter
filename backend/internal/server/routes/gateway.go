@@ -177,6 +177,22 @@ func RegisterGatewayRoutes(
 			return false
 		}
 	}
+	// 公网两个别名与画布私有桥复用同一分派，平台准入、调度和计费仍由原处理器负责。
+	chatCompletionsHandler := func(c *gin.Context) {
+		if isOpenAIResponsesCompatibleGatewayPlatform(c) {
+			h.OpenAIGateway.ChatCompletions(c)
+			return
+		}
+		if getGroupPlatform(c) == service.PlatformQoder {
+			h.QoderGateway.ChatCompletions(c)
+			return
+		}
+		h.Gateway.ChatCompletions(c)
+	}
+	if h.CreativeCanvas != nil {
+		h.CreativeCanvas.ConfigureTextGateway(newCreativeTextGatewayAdapter(bodyLimit, clientRequestID, opsErrorLogger, endpointNorm,
+			gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, chatCompletionsProtocolGate, chatCompletionsHandler))
+	}
 	responsesInputTokensHandler := func(c *gin.Context) {
 		if isOpenAIResponsesCompatibleGatewayPlatform(c) {
 			h.OpenAIGateway.ResponsesInputTokens(c)
@@ -442,17 +458,7 @@ func RegisterGatewayRoutes(
 		gateway.POST("/systemone", textBodyLimit, h.OpenAIGateway.SystemOne)
 		gateway.GET("/responses", responsesWebSocketHandler)
 		// OpenAI Chat Completions API: auto-route based on group platform
-		gateway.POST("/chat/completions", chatCompletionsProtocolGate, func(c *gin.Context) {
-			if isOpenAIResponsesCompatibleGatewayPlatform(c) {
-				h.OpenAIGateway.ChatCompletions(c)
-				return
-			}
-			if getGroupPlatform(c) == service.PlatformQoder {
-				h.QoderGateway.ChatCompletions(c)
-				return
-			}
-			h.Gateway.ChatCompletions(c)
-		})
+		gateway.POST("/chat/completions", chatCompletionsProtocolGate, chatCompletionsHandler)
 		gateway.POST("/embeddings", textBodyLimit, func(c *gin.Context) {
 			if getGroupPlatform(c) != service.PlatformOpenAI {
 				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
@@ -635,17 +641,7 @@ func RegisterGatewayRoutes(
 		codexDirect.GET("/responses", responsesWebSocketHandler)
 	}
 	// OpenAI Chat Completions API（不带v1前缀的别名）— auto-route based on group platform
-	r.POST("/chat/completions", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, chatCompletionsProtocolGate, func(c *gin.Context) {
-		if isOpenAIResponsesCompatibleGatewayPlatform(c) {
-			h.OpenAIGateway.ChatCompletions(c)
-			return
-		}
-		if getGroupPlatform(c) == service.PlatformQoder {
-			h.QoderGateway.ChatCompletions(c)
-			return
-		}
-		h.Gateway.ChatCompletions(c)
-	})
+	r.POST("/chat/completions", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, chatCompletionsProtocolGate, chatCompletionsHandler)
 	r.POST("/embeddings", textBodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, func(c *gin.Context) {
 		if getGroupPlatform(c) != service.PlatformOpenAI {
 			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)

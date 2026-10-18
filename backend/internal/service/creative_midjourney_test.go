@@ -38,6 +38,12 @@ func TestCreativeMidjourneyExplicitCandidates(t *testing.T) {
 		want        []string
 	}{
 		{name: "普通账号不附送MJ", platform: PlatformOpenAI, accountType: AccountTypeAPIKey},
+		{name: "可美MJ专用端点无白名单自动使用已验证版本", platform: PlatformOpenAI, accountType: AccountTypeAPIKey,
+			credentials: map[string]any{"base_url": "https://token.xinhankr.com-mj"}, want: []string{"MJ-v7", "MJ-v8.1", "MJ-v8.2"}},
+		{name: "可美MJ专用端点大小写和结尾点兼容", platform: PlatformOpenAI, accountType: AccountTypeAPIKey,
+			credentials: map[string]any{"base_url": "HTTPS://TOKEN.XINHANKR.COM-MJ."}, want: []string{"MJ-v7", "MJ-v8.1", "MJ-v8.2"}},
+		{name: "相似但非专用端点不自动附送MJ", platform: PlatformOpenAI, accountType: AccountTypeAPIKey,
+			credentials: map[string]any{"base_url": "https://token.xinhankr.com"}, want: nil},
 		{name: "显式白名单", platform: PlatformOpenAI, accountType: AccountTypeAPIKey,
 			credentials: map[string]any{"model_whitelist": []string{"MJ-v7", "MJ-v8.1", "MJ-v8.2", "gpt-image-2"}}, want: []string{"MJ-v7", "MJ-v8.1", "MJ-v8.2"}},
 		{name: "非版本MJ前缀白名单", platform: PlatformOpenAI, accountType: AccountTypeAPIKey,
@@ -67,6 +73,25 @@ func TestCreativeMidjourneyExplicitCandidates(t *testing.T) {
 	}
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	require.Equal(t, []string{"gpt-image-1", "gpt-image-2"}, creativeExpandAccountModels(account, defaultCreativeOpenAIModelCandidates(), IsGPTImageGenerationModel))
+}
+
+func TestDedicatedMidjourneyEndpointURLAndCapability(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"base_url": "https://token.xinhankr.com-mj",
+		},
+	}
+	require.True(t, isDedicatedMidjourneyEndpoint(account))
+	require.Equal(t,
+		"https://token.xinhankr.com-mj/v1/images/generations",
+		buildOpenAIImagesURL(account.GetOpenAIBaseURL(), openAIImagesGenerationsEndpoint),
+	)
+	for _, model := range creativeMidjourneyModelsForAccount(account) {
+		require.True(t, account.IsModelSupported(model))
+		require.True(t, IsMidjourneyImageGenerationModel(model))
+	}
 }
 
 // TestCreativeMidjourneyCatalogCapabilities 检查公开和管理候选均按最终 MJ 模型返回保守能力。

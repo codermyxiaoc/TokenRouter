@@ -10,9 +10,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/servertiming"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -150,8 +152,16 @@ func (s *VideoUpstreamService) SelectAccount(ctx context.Context, key *APIKey, r
 			configErr = targetErr
 			continue
 		}
+		// 云画布的发送限制只约束实际 H3 候选；其他方案可继续原资格检查，失败时尚未报价或预扣。
+		if referenceErr := validateCreativeVideoReferenceImageSize(target, request.canvasMaxReferenceImageBytes); referenceErr != nil {
+			configErr = referenceErr
+			continue
+		}
 		body := append([]byte(nil), request.Body...)
-		body, metadata, err = PrepareVideoProtocolRequest(body, request.ModelPath, target)
+		body, err = prepareCreativeVideoAdaptiveRatio(body, target, request.canvasAdaptiveRatio)
+		if err == nil {
+			body, metadata, err = PrepareVideoProtocolRequest(body, request.ModelPath, target)
+		}
 		if err != nil {
 			// 各账号可选择不同协议；当前候选不支持参数时，允许其它候选在发送前验证。
 			// 所有候选均失败才返回错误，此阶段尚未预扣或创建任何上游任务。
@@ -235,7 +245,7 @@ func (s *VideoUpstreamService) resolveTarget(a *Account, model string, request V
 		}
 	case VideoEndpointKling:
 		path = cfg.ModelPaths[model]
-		if request.Native {
+		if request.Native && request.NativePath != "" {
 			path = request.NativePath
 		}
 		if !validKlingVideoPath(path) {
@@ -266,9 +276,15 @@ func (s *VideoUpstreamService) Submit(ctx context.Context, selected *VideoUpstre
 	if selected == nil {
 		return nil, fmt.Errorf("video selection is required")
 	}
+	// 仅追加脱敏观测；共享 trace 保留原 context 的取消、超时及传输行为。
+	started := time.Now()
+	diagnostic := &videoSubmitTransportDiagnostic{}
+	ctx = context.WithValue(servertiming.WithHTTPTrace(ctx), videoSubmitTransportDiagnosticKey{}, diagnostic)
 	// 创建是不可安全重放的付费请求，禁止共享客户端因 307/308 跳转再次发送 POST。
 	// 保留原始 3xx 响应交给任务状态机核对受理结果，不自动换地址或释放未知预算。
-	return s.forward(WithHTTPUpstreamRedirectsDisabled(ctx), selected.Account, selected.Target, http.MethodPost, selected.Target.CreatePath, selected.Body, "")
+	response, err := s.forward(WithHTTPUpstreamRedirectsDisabled(ctx), selected.Account, selected.Target, http.MethodPost, selected.Target.CreatePath, selected.Body, "")
+	logVideoSubmitTransport(ctx, selected, diagnostic, started, err)
+	return response, err
 }
 
 func videoTaskPath(target VideoUpstreamTarget, taskID string) (string, error) {
@@ -371,7 +387,15 @@ func (s *VideoUpstreamService) forward(ctx context.Context, account *Account, ta
 	}
 	observation := VideoUpstreamObservation{AccountID: account.ID, AccountName: account.Name, Model: target.Model, Endpoint: req.URL.Path}
 	observeVideoUpstream(ctx, observation)
+	diagnostic, _ := ctx.Value(videoSubmitTransportDiagnosticKey{}).(*videoSubmitTransportDiagnostic)
+	if diagnostic != nil {
+		diagnostic.hostname = req.URL.Hostname()
+		diagnostic.dispatched = true
+	}
 	resp, err := s.gateway.httpUpstream.DoWithTLS(req, accountProxyURL(account), account.ID, account.Concurrency, s.gateway.resolveOpenAITLSProfile(account))
+	if diagnostic != nil && resp != nil {
+		diagnostic.statusCode = resp.StatusCode
+	}
 	if err != nil {
 		observation.StatusCode, observation.ErrorMessage = http.StatusBadGateway, "Video upstream transport failed; acceptance is unknown"
 		observeVideoUpstream(ctx, observation)
@@ -386,6 +410,9 @@ func (s *VideoUpstreamService) forward(ctx context.Context, account *Account, ta
 	}
 	defer resp.Body.Close()
 	responseBody, err := readUpstreamResponseBodyLimited(resp.Body, resolveUpstreamResponseReadLimit(s.gateway.cfg))
+	if diagnostic != nil {
+		diagnostic.responseBytes = len(responseBody)
+	}
 	if err != nil {
 		observation.StatusCode, observation.ErrorMessage = http.StatusBadGateway, "Video upstream response could not be read; acceptance is unknown"
 		observeVideoUpstream(ctx, observation)

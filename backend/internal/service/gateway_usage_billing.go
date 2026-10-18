@@ -328,6 +328,10 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 	if cmd == nil || cmd.RequestID == "" {
 		return false, fmt.Errorf("usage billing command is invalid")
 	}
+	// 云画布文本在原资金事务前冻结安全证据；普通请求没有内部捕获器，行为完全不变。
+	if err := prepareCreativeTextUsage(ctx, cmd, usageLog); err != nil {
+		return false, err
+	}
 
 	billingCtx, cancel := detachedBillingContext(ctx)
 	defer cancel()
@@ -349,7 +353,7 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 	}
 
 	if result == nil || !result.Applied {
-		if p.ImageReservation != nil && result != nil {
+		if (p.ImageReservation != nil || cmd.CreativeTextExecutionID != "") && result != nil {
 			// 捕获重放不再扣款，但用量记录仍须还原账本中的实际资金分配，不能沿用预估订阅价。
 			applyUsageBillingResultToUsageLog(usageLog, result)
 		}
@@ -498,6 +502,9 @@ func detachUpstreamContext(ctx context.Context) (context.Context, context.Cancel
 	}
 	// 异步图片已在入口脱离客户端取消；保留后台任务自身截止时间，普通请求继续原有语义。
 	if backgroundImage, _ := ctx.Value(asyncImageExecutionContextKey{}).(bool); backgroundImage {
+		return ctx, func() {}
+	}
+	if HasCreativeTextUsageSink(ctx) {
 		return ctx, func() {}
 	}
 	return context.WithoutCancel(ctx), func() {}
@@ -667,6 +674,11 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	if opts == nil {
 		opts = &recordUsageOpts{}
 	}
+	if HasCreativeTextUsageSink(ctx) {
+		copied := *opts
+		copied.RequirePricing = true
+		opts = &copied
+	}
 	result := input.Result
 	apiKey := input.APIKey
 	user := input.User
@@ -744,6 +756,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// 计算费用
 	cost := s.calculateRecordUsageCost(ctx, result, apiKey, account, billingModel, requestedModel, input.BillingModelSource, input.ChannelMappedModel, multiplier, imageMultiplier, opts)
+	if cost == nil && HasCreativeTextUsageSink(ctx) {
+		return ErrModelPricingUnavailable
+	}
 	if input.ImageReservation != nil && input.FrozenCost != nil {
 		frozen := *input.FrozenCost
 		cost = &frozen
@@ -828,6 +843,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}, s.billingDeps(), s.usageBillingRepo)
 
 	if billingErr != nil {
+		if HasCreativeTextUsageSink(ctx) {
+			return billingErr
+		}
 		// 结算事务失败时仍保留已计算的用量与成本明细；ActualCost 置零明确表示本次未成功结算。
 		usageLog.ActualCost = 0
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")

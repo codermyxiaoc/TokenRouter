@@ -13,15 +13,22 @@ type CreativeModelSetting struct {
 	GroupID    int64    `json:"group_id"`
 	Model      string   `json:"model"`
 	Operations []string `json:"operations"`
+	// 未填写类型的历史配置继续表示图片；视频必须显式选择端点。
+	MediaType         string                     `json:"media_type,omitempty"`
+	VideoEndpoint     VideoEndpoint              `json:"video_endpoint,omitempty"`
+	VideoCapabilities *CreativeVideoCapabilities `json:"video_capabilities,omitempty"`
 }
 
-// CreativeModelCandidate 是管理端可选择的当前生图模型候选。
+// CreativeModelCandidate 是管理端可选择的图片、视频和音频模型候选。
 type CreativeModelCandidate struct {
-	GroupID    int64    `json:"group_id"`
-	GroupName  string   `json:"group_name"`
-	Platform   string   `json:"platform"`
-	Model      string   `json:"model"`
-	Operations []string `json:"operations"`
+	GroupID           int64                      `json:"group_id"`
+	GroupName         string                     `json:"group_name"`
+	Platform          string                     `json:"platform"`
+	Model             string                     `json:"model"`
+	Operations        []string                   `json:"operations"`
+	MediaType         string                     `json:"media_type,omitempty"`
+	VideoEndpoints    []VideoEndpoint            `json:"video_endpoints,omitempty"`
+	AudioCapabilities *CreativeAudioCapabilities `json:"audio_capabilities,omitempty"`
 }
 
 // NormalizeCreativeModelSettingsForSave 按实际分组平台清理即将保存的能力白名单。
@@ -44,6 +51,30 @@ func (s *CreativePublicService) NormalizeCreativeModelSettingsForSave(ctx contex
 			continue
 		}
 		finalModel := item.Model
+		if item.MediaType == "text" {
+			if !creativeTextPlatformSupported(group.Platform) {
+				return nil, fmt.Errorf("creative text requires a supported chat group")
+			}
+			out = append(out, item)
+			continue
+		}
+		if item.MediaType == "audio" {
+			if group.Platform != PlatformGrok {
+				return nil, fmt.Errorf("creative audio model requires a grok group")
+			}
+			out = append(out, item)
+			continue
+		}
+		if item.MediaType == "video" {
+			if group.Platform != PlatformVideo {
+				return nil, fmt.Errorf("creative video model requires a video group")
+			}
+			out = append(out, item)
+			continue
+		}
+		if group.Platform == PlatformVideo {
+			return nil, fmt.Errorf("creative video group requires media_type video")
+		}
 		if strings.TrimSpace(group.Platform) == PlatformOpenAI {
 			// 配置页的请求别名也必须按最终模型收窄，不能给 MJ 保存编辑与局部重绘能力。
 			models, loaded := resolvedModels[group.ID]
@@ -96,10 +127,38 @@ func NormalizeCreativeModelSettings(input []CreativeModelSetting) ([]CreativeMod
 		if model == "" {
 			return nil, fmt.Errorf("creative model setting %d model is required", index)
 		}
+		mediaType := strings.ToLower(strings.TrimSpace(item.MediaType))
+		if mediaType != "" && mediaType != "image" && mediaType != "video" && mediaType != "audio" && mediaType != "text" {
+			return nil, fmt.Errorf("creative model setting %d media_type is invalid", index)
+		}
+		// 图片维持历史序列化，避免旧设置及任务指纹发生无关变化。
+		if mediaType == "image" {
+			mediaType = ""
+		}
+		// TTS 是固定音频能力，不能通过图片白名单或任意模型别名扩展上游能力。
+		if (mediaType == "audio" && model != CreativeGrokTTSModel) || (mediaType != "audio" && model == CreativeGrokTTSModel) {
+			return nil, fmt.Errorf("creative audio model must use grok-voice-tts and media_type audio")
+		}
+		var videoCapabilities *CreativeVideoCapabilities
+		if mediaType == "video" {
+			if !validVideoEndpoint(item.VideoEndpoint) {
+				return nil, fmt.Errorf("creative video endpoint is required")
+			}
+			var capabilityErr error
+			videoCapabilities, capabilityErr = normalizeCreativeVideoCapabilities(item.VideoEndpoint, item.VideoCapabilities)
+			if capabilityErr != nil {
+				return nil, capabilityErr
+			}
+		} else if item.VideoEndpoint != "" || item.VideoCapabilities != nil {
+			return nil, fmt.Errorf("creative non-video setting cannot configure video parameters")
+		}
 
 		configured := make(map[string]struct{}, len(item.Operations))
 		for _, operation := range item.Operations {
 			operation = strings.ToLower(strings.TrimSpace(operation))
+			if (mediaType == "video" || mediaType == "audio" || mediaType == "text") && operation != CreativeOperationGenerate {
+				return nil, fmt.Errorf("creative %s only supports generate", mediaType)
+			}
 			switch operation {
 			case CreativeOperationGenerate, CreativeOperationEdit, CreativeOperationInpaint:
 				configured[operation] = struct{}{}
@@ -124,9 +183,12 @@ func NormalizeCreativeModelSettings(input []CreativeModelSetting) ([]CreativeMod
 			}
 		}
 		out = append(out, CreativeModelSetting{
-			GroupID:    item.GroupID,
-			Model:      model,
-			Operations: operations,
+			GroupID:           item.GroupID,
+			Model:             model,
+			Operations:        operations,
+			MediaType:         mediaType,
+			VideoEndpoint:     item.VideoEndpoint,
+			VideoCapabilities: videoCapabilities,
 		})
 	}
 	return out, nil
@@ -167,6 +229,10 @@ func marshalCreativeModelSettings(input []CreativeModelSetting) (string, []Creat
 func creativeModelSettingsIndex(settings []CreativeModelSetting) map[string][]string {
 	index := make(map[string][]string, len(settings))
 	for _, setting := range settings {
+		// 图片入口不能借用音视频白名单绕过各自的准入及账本。
+		if setting.MediaType == "video" || setting.MediaType == "audio" || setting.MediaType == "text" {
+			continue
+		}
 		key := fmt.Sprintf("%d:%s", setting.GroupID, strings.TrimSpace(setting.Model))
 		index[key] = append([]string(nil), setting.Operations...)
 	}

@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"log/slog"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
 	"github.com/TokenFlux/TokenRouter/internal/service"
@@ -24,6 +26,7 @@ func usageRecordContextFromGin(c *gin.Context) context.Context {
 		}
 	}
 	dst = service.PropagateAPIKeyModelRedirectTrace(dst, src)
+	dst = service.PropagateCreativeTextUsageSink(dst, src)
 	return dst
 }
 
@@ -51,6 +54,26 @@ func wrapUsageRecordTaskContext(c *gin.Context, task func(context.Context)) func
 			}
 		}
 		base = service.PropagateAPIKeyModelRedirectTrace(base, requestCtx)
+		base = service.PropagateCreativeTextUsageSink(base, requestCtx)
 		task(base)
 	}
+}
+
+// 画布文本先保存响应和账务证据再结算，不能交给可能丢弃任务的普通异步记录池。
+// 仅服务端创建的 sink 启用此路径，普通 HTTP 请求保持原调度方式。
+func runCreativeTextUsageRecordTask(c *gin.Context, task service.UsageRecordTask) (handled bool) {
+	if task == nil || c == nil || c.Request == nil || !service.HasCreativeTextUsageSink(c.Request.Context()) {
+		return false
+	}
+	handled = true
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 10*time.Second)
+	defer cancel()
+	defer func() {
+		if recover() != nil {
+			// 缺少成功回执时画布保持待核对，不能再次调用模型；日志不写入原始异常载荷。
+			slog.Error("creative text usage record task panicked")
+		}
+	}()
+	wrapUsageRecordTaskContext(c, task)(ctx)
+	return handled
 }

@@ -2449,6 +2449,108 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
+  it("preserves audio model type without serializing image or video capabilities", async () => {
+    // 音频白名单必须保留类型，避免保存后按旧图片项解释；已有图片配置仍原样提交。
+    const audio = { group_id: 15, model: 'grok-voice-tts', media_type: 'audio', operations: ['generate'] };
+    const image = { group_id: 12, model: 'gpt-image-2', operations: ['generate', 'edit'] };
+    getSettings.mockResolvedValue({
+      ...baseSettingsResponse,
+      creative_model_settings: [
+        { ...audio, operations: ['generate', 'edit'], video_endpoint: 'compat', audio_capabilities: { voices: ['alloy'] } },
+        image,
+      ],
+    });
+    getCreativeModelCandidates.mockResolvedValue([
+      { ...audio, group_name: 'Grok', platform: 'grok' },
+      { ...image, group_name: 'Images', platform: 'openai' },
+    ]);
+    const wrapper = mountView();
+    await flushPromises();
+    expect(wrapper.text()).toContain('admin.settings.features.creative.modelSettings.operations.audio');
+    expect(wrapper.text()).not.toContain('admin.settings.features.creative.modelSettings.audioHint');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ creative_model_settings: [audio, image] }));
+  });
+
+  it("retains unavailable audio settings while candidates are temporarily absent", async () => {
+    // 候选暂时不可用不能把管理员的音频白名单降成图片或静默删除。
+    const audio = { group_id: 15, model: 'grok-voice-tts', media_type: 'audio', operations: ['generate'] };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [audio] });
+    getCreativeModelCandidates.mockResolvedValue([]);
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ creative_model_settings: [audio] }));
+  });
+
+  it("saves text model settings with only generate and preserves their media type", async () => {
+    // 文本候选与图片能力互斥；保存时不能携带上一次视频配置或退回旧图片类型。
+    const text = { group_id: 15, model: 'grok-4.5', media_type: 'text', operations: ['generate'] };
+    getSettings.mockResolvedValue({
+      ...baseSettingsResponse,
+      creative_model_settings: [{ ...text, operations: ['generate', 'edit'], video_endpoint: 'compat' }],
+    });
+    getCreativeModelCandidates.mockResolvedValue([{ ...text, group_name: 'Grok', platform: 'grok' }]);
+    const wrapper = mountView();
+    await flushPromises();
+    expect(wrapper.text()).toContain('admin.settings.features.creative.modelSettings.operations.text');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ creative_model_settings: [text] }));
+  });
+
+  it.each(['add', 'switch'])("%s video candidate copies reactive capabilities and preserves values when saving", async (action) => {
+    // 候选列表进入 Vue ref 后会成为 Proxy；新增和切换模型都必须复制嵌套能力而不能抛出克隆异常。
+    const image = { group_id: 12, model: 'gpt-image-2', operations: ['generate', 'edit'] };
+    const video = {
+      group_id: 3, model: 'MiniMax-H3', group_name: 'Video', platform: 'video',
+      media_type: 'video', operations: ['generate'], video_endpoint: 'openai_videos',
+      video_endpoints: ['openai_videos'],
+      video_capabilities: { durations: [5, 10], resolutions: ['720p', '1080p'], aspect_ratios: ['16:9', '9:16'], max_reference_images: 1 },
+    };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: action === 'switch' ? [image] : [] });
+    getCreativeModelCandidates.mockResolvedValue([video, { ...image, group_name: 'Images', platform: 'openai' }]);
+    const wrapper = mountView();
+    await flushPromises();
+    if (action === 'add') {
+      const add = wrapper.findAll('button').find((node) => node.text().includes('admin.settings.features.creative.modelSettings.add'));
+      expect(add).toBeDefined();
+      await add!.trigger('click');
+    } else {
+      await wrapper.get('[data-placeholder="admin.settings.features.creative.modelSettings.selectModel"]').setValue('3::MiniMax-H3');
+    }
+    await flushPromises();
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      creative_model_settings: [{
+        group_id: 3, model: 'MiniMax-H3', media_type: 'video', operations: ['generate'],
+        video_endpoint: 'openai_videos', video_capabilities: video.video_capabilities,
+      }],
+    }));
+    wrapper.unmount();
+  });
+
+  it.each(['0', '61', '1.5', 'invalid'])("rejects invalid creative video duration %s before submitting settings", async (duration) => {
+    const video = {
+      group_id: 3, model: 'MiniMax-H3', media_type: 'video', operations: ['generate'], video_endpoint: 'openai_videos',
+      video_capabilities: { durations: [5], resolutions: ['720p'], aspect_ratios: ['16:9'], max_reference_images: 1 },
+    };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [video] });
+    getCreativeModelCandidates.mockResolvedValue([{ ...video, group_name: 'Video', platform: 'video', video_endpoints: ['openai_videos'] }]);
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('input[placeholder="5, 10"]').setValue(duration);
+    await wrapper.get('input[placeholder="5, 10"]').trigger('change');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it("drops a Gemini setting that only contains stale inpaint", async () => {
     getSettings.mockResolvedValue({
       ...baseSettingsResponse,

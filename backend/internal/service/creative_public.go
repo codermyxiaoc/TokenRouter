@@ -59,10 +59,19 @@ type CreativePublicService struct {
 	AuthCache         APIKeyAuthCacheInvalidator
 	Settings          CreativeSettingReader
 	Config            *config.Config
+	// 文本目录复用正式网关的可请求模型解析，不从图片白名单推测。
+	TextCatalog *GatewayService
+	// CloudOutputSink 仅接收已确认的画布关联输出，普通创作台任务保持 Redis 临时存储。
+	CloudOutputSink CreativeCloudOutputSink
 	// 日志补偿使用固定回溯窗口与主键游标，避免坏记录饿死后续任务。
 	usageRecoveryMu    sync.Mutex
 	usageRecoveryAfter int64
 	usageRecoverySince time.Time
+}
+
+// CreativeCloudOutputSink 让云画布在 Redis TTL 前持久化自己的产物，不改变原账务流程。
+type CreativeCloudOutputSink interface {
+	PersistCreativeOutput(context.Context, string, int, []byte, string) error
 }
 
 // CreativeSettingReader 是创作台运行时开关的读取接口，由 SettingService 实现。
@@ -180,7 +189,7 @@ func (s *CreativePublicService) GetCapabilities(ctx context.Context) *CreativeCa
 	}
 }
 
-// ListModels 返回当前用户可用的分组与图片模型组合。
+// ListModels 返回当前用户可用的分组与图片、视频、音频模型组合。
 func (s *CreativePublicService) ListModels(ctx context.Context, userID int64) (*CreativeModelsResponse, error) {
 	if !s.enabled(ctx) {
 		// 开关关闭时返回空列表而非错误：前端据此展示"已停用"空态，而不是报错。
@@ -190,8 +199,9 @@ func (s *CreativePublicService) ListModels(ctx context.Context, userID int64) (*
 	if err != nil || user == nil {
 		return nil, ErrUserNotFound
 	}
-	modelSettings := creativeModelSettingsIndex(s.creativeModelSettings(ctx))
-	if len(modelSettings) == 0 {
+	settings := s.creativeModelSettings(ctx)
+	modelSettings := creativeModelSettingsIndex(settings)
+	if len(settings) == 0 {
 		return &CreativeModelsResponse{Data: make([]CreativeModelPublic, 0)}, nil
 	}
 	groups, err := s.GroupRepo.ListActive(ctx)
@@ -202,6 +212,26 @@ func (s *CreativePublicService) ListModels(ctx context.Context, userID int64) (*
 	for i := range groups {
 		group := &groups[i]
 		if !user.CanBindGroup(group.ID, group.IsExclusive) {
+			continue
+		}
+		texts, textErr := s.creativeTextModelsForGroup(ctx, group, settings)
+		if textErr != nil {
+			return nil, textErr
+		}
+		out.Data = append(out.Data, texts...)
+		if group.Platform == PlatformGrok && group.IsActive() {
+			audio, audioErr := s.creativeAudioModelsForGroup(ctx, group, settings)
+			if audioErr != nil {
+				return nil, audioErr
+			}
+			out.Data = append(out.Data, audio...)
+		}
+		if group.Platform == PlatformVideo && group.IsActive() {
+			videos, videoErr := s.creativeVideoModelsForGroup(ctx, group, settings)
+			if videoErr != nil {
+				return nil, videoErr
+			}
+			out.Data = append(out.Data, videos...)
 			continue
 		}
 		if !group.AllowImageGeneration || !group.IsActive() {
@@ -236,6 +266,7 @@ func (s *CreativePublicService) ListModels(ctx context.Context, userID int64) (*
 			}
 			capabilities := creativeCapabilitiesForModel(group.Platform, finalModel)
 			out.Data = append(out.Data, CreativeModelPublic{
+				MediaType:          "image",
 				GroupID:            group.ID,
 				GroupName:          group.Name,
 				Model:              model,
@@ -248,6 +279,7 @@ func (s *CreativePublicService) ListModels(ctx context.Context, userID int64) (*
 				BackgroundOptions:  capabilities.backgroundOptions,
 				ThinkingLevels:     capabilities.thinkingLevels,
 				OutputCount:        capabilities.maxOutputCount,
+				OutputCounts:       creativeCanvasOutputCounts(capabilities.maxOutputCount),
 				MaxOutputCount:     capabilities.maxOutputCount,
 				MaxReferenceImages: capabilities.maxReferenceImages,
 				Price512:           s.creativePrice(ctx, group, finalModel, "512"),
@@ -273,6 +305,26 @@ func (s *CreativePublicService) ListCreativeModelCandidates(ctx context.Context)
 	out := make([]CreativeModelCandidate, 0)
 	for i := range groups {
 		group := &groups[i]
+		texts, textErr := s.creativeTextCandidatesForGroup(ctx, group)
+		if textErr != nil {
+			return nil, textErr
+		}
+		out = append(out, texts...)
+		if group.Platform == PlatformGrok && group.IsActive() {
+			audio, audioErr := s.creativeAudioCandidatesForGroup(ctx, group)
+			if audioErr != nil {
+				return nil, audioErr
+			}
+			out = append(out, audio...)
+		}
+		if group.Platform == PlatformVideo && group.IsActive() {
+			videos, videoErr := s.creativeVideoCandidatesForGroup(ctx, group)
+			if videoErr != nil {
+				return nil, videoErr
+			}
+			out = append(out, videos...)
+			continue
+		}
 		if !group.IsActive() || !group.AllowImageGeneration {
 			continue
 		}
@@ -297,6 +349,7 @@ func (s *CreativePublicService) ListCreativeModelCandidates(ctx context.Context)
 		sort.Strings(modelNames)
 		for _, model := range modelNames {
 			out = append(out, CreativeModelCandidate{
+				MediaType:  "image",
 				GroupID:    group.ID,
 				GroupName:  group.Name,
 				Platform:   group.Platform,
@@ -743,6 +796,11 @@ func creativeMidjourneyModelsForAccount(account *Account) []string {
 	for model := range whitelist {
 		patterns[model] = struct{}{}
 	}
+	// 可美 MJ 专用端点不提供通用模型目录。没有任何显式模型限制时，
+	// 使用与通配映射相同的三个已验证版本，避免管理员必须手工伪造白名单。
+	if len(patterns) == 0 && isDedicatedMidjourneyEndpoint(account) {
+		patterns["MJ-*"] = struct{}{}
+	}
 	models := make(map[string]struct{})
 	for pattern := range patterns {
 		pattern = strings.TrimSpace(pattern)
@@ -863,7 +921,26 @@ func creativeExpandAccountModels(account *Account, candidates []string, matches 
 		return out
 	}
 	models := make(map[string]struct{})
+	// 映射和显式白名单可以同时存在；合并两者的请求模型集合，避免白名单中的
+	// 额外图片型号被 mapping 分支遗漏。通配映射仍只按已知候选展开。
+	requestModels := make(map[string]struct{}, len(mapping))
+	mappedTargets := make(map[string]struct{}, len(mapping))
 	for model := range mapping {
+		requestModels[model] = struct{}{}
+	}
+	for _, mapped := range mapping {
+		if mapped = strings.TrimSpace(mapped); mapped != "" {
+			mappedTargets[mapped] = struct{}{}
+		}
+	}
+	for _, model := range account.GetConfiguredRequestModels() {
+		// 映射目标已经由其公开别名表示，避免新增一个重复的直连条目。
+		if _, mapped := mappedTargets[model]; mapped {
+			continue
+		}
+		requestModels[model] = struct{}{}
+	}
+	for model := range requestModels {
 		model = strings.TrimSpace(model)
 		if model == "" {
 			continue
@@ -929,6 +1006,9 @@ type validatedCreativeParams struct {
 	sources       []CreativeInputImage
 	mask          *CreativeInputImage
 	fingerprint   string
+	voice         string
+	audioFormat   string
+	speed         float64
 }
 
 // CreateRun 创建创作台任务：校验 → 审核 → 幂等 → 估价 → 供应隐藏 Key → 建行 → 预占 → 暂存 → 入队。
@@ -979,6 +1059,16 @@ func (s *CreativePublicService) CreateRun(ctx context.Context, scope CreativeRun
 	if err != nil {
 		return nil, err
 	}
+	// 建行事务会同时发布 provision outbox，必须在事务之前取得共享任务锁。
+	lease, err := s.acquireCreativeProvisionLease(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.close()
+	ctx = lease.ctx
+	if err := lease.check(); err != nil {
+		return nil, err
+	}
 	holdAmount := pricing.EstimatedCost
 	run, err := s.Repo.CreateCreativeRun(ctx, CreateCreativeRunParams{
 		RunID:                      runID,
@@ -993,7 +1083,7 @@ func (s *CreativePublicService) CreateRun(ctx context.Context, scope CreativeRun
 		RequestedOutputCount:       validated.outputCount,
 		ImageSize:                  validated.imageSize,
 		AspectRatio:                validated.aspectRatio,
-		ResponseMIMEType:           defaultCreativeResponseMime,
+		ResponseMIMEType:           creativeValidatedResponseMIME(validated),
 		PromptHash:                 validated.promptHash,
 		RequestFingerprint:         validated.fingerprint,
 		IdempotencyKey:             creativeStringPtr(idempotencyKey),
@@ -1007,19 +1097,36 @@ func (s *CreativePublicService) CreateRun(ctx context.Context, scope CreativeRun
 	if err != nil {
 		return nil, err
 	}
+	if err := lease.check(); err != nil {
+		return nil, ErrCreativeTransientFailed.WithCause(err)
+	}
 	if err := s.ensureCreativeOutbox(ctx, run.RunID, CreativeRunOutboxProvision); err != nil {
 		return nil, err
 	}
+	if err := lease.check(); err != nil {
+		return nil, ErrCreativeTransientFailed.WithCause(err)
+	}
 	// 以下步骤按相反序回滚：释放预占 → 清理暂存 → 标记失败。
 	if err := reserveCreativeBalanceHold(ctx, s.BillingRepo, run); err != nil {
-		s.failRunAfterCreateError(ctx, run, "BILLING_HOLD_FAILED", err)
+		code := "BILLING_HOLD_FAILED"
+		if errors.Is(err, ErrCreativeInsufficientBalance) {
+			// 预扣失败事实先持久化明确原因，画布崩溃恢复后也不能把余额不足误报为素材错误。
+			code = "CREATIVE_INSUFFICIENT_BALANCE"
+		}
+		s.failRunAfterCreateError(ctx, run, code, err)
 		return nil, err
+	}
+	if err := lease.check(); err != nil {
+		return nil, ErrCreativeTransientFailed.WithCause(err)
 	}
 	if marker, ok := s.Repo.(CreativeRunAllowanceMarker); ok {
 		if err := marker.SetCreativeRunAllowanceReserved(ctx, run.RunID, run.AllowanceReserved); err != nil {
 			// 预占请求本身带幂等键；保留 provisioning outbox，重启后可继续落库事实。
 			return nil, err
 		}
+	}
+	if err := lease.check(); err != nil {
+		return nil, ErrCreativeTransientFailed.WithCause(err)
 	}
 	if err := s.Repo.SetCreativeRunProvisioningPhase(ctx, run.RunID, CreativeProvisioningPhaseHoldReserved); err != nil {
 		s.failRunAfterCreateError(ctx, run, "PROVISIONING_PHASE_FAILED", err)
@@ -1030,9 +1137,15 @@ func (s *CreativePublicService) CreateRun(ctx context.Context, scope CreativeRun
 		s.failRunAfterCreateError(ctx, run, "TRANSIENT_SAVE_FAILED", err)
 		return nil, ErrCreativeTransientFailed
 	}
+	if err := lease.check(); err != nil {
+		return nil, ErrCreativeTransientFailed.WithCause(err)
+	}
 	if err := s.Repo.SetCreativeRunProvisioningPhase(ctx, run.RunID, CreativeProvisioningPhaseTransientSaved); err != nil {
 		s.failRunAfterCreateError(ctx, run, "PROVISIONING_PHASE_FAILED", err)
 		return nil, err
+	}
+	if err := lease.check(); err != nil {
+		return nil, ErrCreativeTransientFailed.WithCause(err)
 	}
 	if s.Queue == nil {
 		err := errors.New("creative queue is not configured")
@@ -1042,6 +1155,9 @@ func (s *CreativePublicService) CreateRun(ctx context.Context, scope CreativeRun
 	if err := s.Queue.Enqueue(ctx, run.RunID); err != nil && !errors.Is(err, ErrCreativeAlreadyQueued) {
 		s.failRunAfterCreateError(ctx, run, "QUEUE_FAILED", err)
 		return nil, err
+	}
+	if err := lease.check(); err != nil {
+		return nil, ErrCreativeTransientFailed.WithCause(err)
 	}
 	if err := s.Repo.SetCreativeRunProvisioningPhase(ctx, run.RunID, CreativeProvisioningPhaseEnqueued); err != nil {
 		s.failRunAfterCreateError(ctx, run, "PROVISIONING_PHASE_FAILED", err)
@@ -1057,6 +1173,10 @@ func (s *CreativePublicService) CreateRun(ctx context.Context, scope CreativeRun
 // failRunAfterCreateError 把创建失败的任务标记为 failed；失败路径允许从 queued 直接转换。
 func (s *CreativePublicService) failRunAfterCreateError(ctx context.Context, run *CreativeRun, code string, cause error) {
 	if run == nil {
+		return
+	}
+	// 失去锁后只留给持久 outbox 接管，旧请求不能再失败任务或释放新拥有者的预占。
+	if checkCreativeProvisionLease(ctx) != nil {
 		return
 	}
 	message := sanitizeCreativeMessage(cause.Error())
@@ -1086,6 +1206,9 @@ func (s *CreativePublicService) saveRunTransient(ctx context.Context, run *Creat
 	if s.TransientStore == nil {
 		return errors.New("creative transient store is not configured")
 	}
+	if err := checkCreativeProvisionLease(ctx); err != nil {
+		return err
+	}
 	payload := &CreativeRunPayload{
 		RunID:              run.RunID,
 		UserID:             run.UserID,
@@ -1099,6 +1222,9 @@ func (s *CreativePublicService) saveRunTransient(ctx context.Context, run *Creat
 		Background:         validated.background,
 		ThinkingLevel:      validated.thinkingLevel,
 		Quality:            validated.quality,
+		Voice:              validated.voice,
+		AudioFormat:        validated.audioFormat,
+		Speed:              validated.speed,
 		SourceCount:        len(validated.sources),
 		HasMask:            validated.mask != nil,
 		RequestFingerprint: run.RequestFingerprint,
@@ -1107,11 +1233,17 @@ func (s *CreativePublicService) saveRunTransient(ctx context.Context, run *Creat
 		return err
 	}
 	for i := range validated.sources {
+		if err := checkCreativeProvisionLease(ctx); err != nil {
+			return err
+		}
 		if err := s.TransientStore.SaveInput(ctx, run.RunID, i, validated.sources[i].Bytes); err != nil {
 			return err
 		}
 	}
 	if validated.mask != nil {
+		if err := checkCreativeProvisionLease(ctx); err != nil {
+			return err
+		}
 		if err := s.TransientStore.SaveMask(ctx, run.RunID, validated.mask.Bytes); err != nil {
 			return err
 		}
@@ -1134,6 +1266,13 @@ func (s *CreativePublicService) validateCreateParams(ctx context.Context, userID
 	}
 	if !user.CanBindGroup(group.ID, group.IsExclusive) {
 		return nil, ErrCreativeGroupForbidden
+	}
+	if params.Operation == CreativeOperationTTS {
+		return s.validateCreativeAudioParams(ctx, group, params)
+	}
+	// 图片接口不能通过附带音频参数改变预占合同。
+	if params.Voice != "" || params.AudioFormat != "" || params.Speed != 0 {
+		return nil, ErrCreativeInvalidParams
 	}
 	if !group.AllowImageGeneration {
 		return nil, ErrCreativeGroupImageDisabled
@@ -1202,7 +1341,7 @@ func (s *CreativePublicService) validateCreateParams(ctx context.Context, userID
 	} else if outputCount == 0 {
 		outputCount = 1
 	}
-	if outputCount < 1 || outputCount > capabilities.maxOutputCount {
+	if outputCount < 1 || outputCount > capabilities.maxOutputCount || params.ExpectedOutputCount > 0 && params.ExpectedOutputCount != outputCount {
 		return nil, ErrCreativeInvalidParams
 	}
 
@@ -1438,6 +1577,9 @@ type creativeFingerprintPayload struct {
 	Background    string   `json:"background,omitempty"`
 	ThinkingLevel string   `json:"thinking_level,omitempty"`
 	OutputCount   int      `json:"output_count"`
+	Voice         string   `json:"voice,omitempty"`
+	AudioFormat   string   `json:"audio_format,omitempty"`
+	Speed         float64  `json:"speed,omitempty"`
 }
 
 // buildCreativeRequestFingerprint 计算幂等指纹：canonical JSON 的 sha256。
@@ -1491,6 +1633,11 @@ func (s *CreativePublicService) moderateCreativeRequest(ctx context.Context, use
 		"prompt": validated.prompt,
 		"images": images,
 	}
+	protocol := ContentModerationProtocolOpenAIImages
+	if validated.operation == CreativeOperationTTS {
+		protocol = ContentModerationProtocolOpenAIChat
+		payload = map[string]any{"messages": []map[string]any{{"role": "user", "content": validated.prompt}}}
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -1508,7 +1655,7 @@ func (s *CreativePublicService) moderateCreativeRequest(ctx context.Context, use
 		Endpoint:         "/v1/creative/runs",
 		Provider:         validated.group.Platform,
 		Model:            validated.model,
-		Protocol:         ContentModerationProtocolOpenAIImages,
+		Protocol:         protocol,
 		Body:             body,
 		NoMediaRetention: true,
 	})
@@ -1555,7 +1702,7 @@ func (s *CreativePublicService) resolveCreativePricing(ctx context.Context, user
 	if subscription := resolveUsageSubscription(ctx, nil, nil, usageSubscriptionResolverFrom(s.BillingRepo), userID, &groupID); subscription != nil {
 		effective = resolveUsageRateMultiplier(ctx, userID, &groupID, group, groupDefault, subscription, nil)
 	}
-	if group.ImageRateIndependent {
+	if group.ImageRateIndependent && validated.operation != CreativeOperationTTS {
 		effective = group.ImageRateMultiplier
 		subscriptionRate = group.ImageRateMultiplier
 		balanceRate = group.ImageRateMultiplier
@@ -1571,6 +1718,13 @@ func (s *CreativePublicService) resolveCreativePricing(ctx context.Context, user
 	pricingModel := validated.finalModel
 	if pricingModel == "" {
 		pricingModel = validated.model
+	}
+	if validated.operation == CreativeOperationTTS {
+		base, err := s.creativeAudioBasePrice(ctx, group, validated.prompt)
+		if err != nil {
+			return nil, err
+		}
+		return &CreativePricingSnapshot{BaseUnitPrice: base, SubscriptionRateMultiplier: subscriptionRate, BalanceRateMultiplier: balanceRate, PlanGroupRateEnabled: planGroupRateEnabled, EstimatedCost: base * effective}, nil
 	}
 	if IsMidjourneyImageGenerationModel(pricingModel) {
 		// 单次解析得到的显式单价直接写入快照，不能在并发配置更新后回退到 GPT 默认价。
@@ -1957,6 +2111,27 @@ func (s *CreativePublicService) SucceedRun(ctx context.Context, runID string, ac
 	for i := range results {
 		result := &results[i]
 		if result.Success {
+			if run.Operation == CreativeOperationTTS {
+				// 音频先暂存字节，再归档云端；云盘短时失败时可只重试存储而不重新生成。
+				if s.TransientStore == nil {
+					return nil, ErrCreativeTransientFailed
+				}
+				if err := s.TransientStore.SaveOutput(ctx, runID, result.Index, result.Bytes, transientTTL); err != nil {
+					return nil, ErrCreativeTransientFailed.WithCause(err)
+				}
+				if s.CloudOutputSink != nil {
+					if err := s.CloudOutputSink.PersistCreativeOutput(ctx, runID, result.Index, result.Bytes, result.Mime); err != nil {
+						return nil, ErrCreativeTransientFailed.WithCause(err)
+					}
+				}
+				continue
+			}
+			if s.CloudOutputSink != nil {
+				if err := s.CloudOutputSink.PersistCreativeOutput(ctx, runID, result.Index, result.Bytes, result.Mime); err != nil {
+					// provider 成功事实已经落库；保留结算等待，后续重试云资产写入，绝不重发生成。
+					return nil, fmt.Errorf("%w: cloud output %d: %v", ErrCreativeTransientFailed, result.Index, err)
+				}
+			}
 			if s.TransientStore == nil {
 				return nil, fmt.Errorf("%w: transient store is not configured", ErrCreativeTransientFailed)
 			}
@@ -2280,6 +2455,14 @@ func (s *CreativePublicService) recordCreativeUsageLog(ctx context.Context, run 
 		BillingMode:           &billingMode,
 		ImageSize:             &imageSize,
 		CreatedAt:             createdAt,
+	}
+	if run.Operation == CreativeOperationTTS {
+		// 音频沿用冻结费用与实际资金回执，不伪装成一张图片或重新报价。
+		billingMode = string(BillingModePerRequest)
+		upstreamEndpoint = "/v1/tts"
+		usageLog.ImageCount, usageLog.ImageOutputCost, usageLog.ImageSize = 0, 0, nil
+		usageLog.TotalCost = run.BaseUnitPrice * float64(successCount)
+		usageLog.RateMultiplier = math.Max(run.BalanceRateMultiplier, 0)
 	}
 	_, err := s.UsageLogRepo.Create(ctx, usageLog)
 	return err

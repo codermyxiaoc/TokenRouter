@@ -42,6 +42,9 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 	if cmd.SubscriptionScopeID != nil && *cmd.SubscriptionScopeID <= 0 {
 		return nil, service.ErrUsageBillingSubscriptionScopeInvalid
 	}
+	if err := validateCreativeTextBillingCommand(cmd); err != nil {
+		return nil, err
+	}
 
 	return retryPostgresDeadlock(ctx, "usage_billing_apply", 0, func() (*service.UsageBillingApplyResult, error) {
 		return r.applyOnce(ctx, cmd)
@@ -65,6 +68,9 @@ func (r *usageBillingRepository) applyOnce(ctx context.Context, cmd *service.Usa
 		return nil, err
 	}
 	if !applied {
+		if cmd.CreativeTextExecutionID != "" {
+			return replayCreativeTextBillingReceipt(ctx, tx, cmd)
+		}
 		if cmd.LegacyVideoTaskID > 0 {
 			// 已扣费但使用记录尚未保存时，重放真实分配，不用当前价卡或预估倍率重算。
 			var raw []byte
@@ -87,6 +93,16 @@ func (r *usageBillingRepository) applyOnce(ctx context.Context, cmd *service.Usa
 	if err := lockUsageBillingUser(ctx, tx, cmd.UserID); err != nil {
 		return nil, err
 	}
+	if cmd.CreativeTextExecutionID != "" {
+		// 先锁付款人再锁文本执行，与原资金事务保持一致；证据校验失败会回滚刚认领的去重键。
+		receipt, err := lockCreativeTextBillingEvidence(ctx, tx, cmd)
+		if err != nil {
+			return nil, err
+		}
+		if len(receipt) != 0 {
+			return nil, service.ErrUsageBillingRequestConflict
+		}
+	}
 
 	result := &service.UsageBillingApplyResult{Applied: true}
 	if err := r.applyUsageBillingEffects(ctx, tx, cmd, result); err != nil {
@@ -97,6 +113,12 @@ func (r *usageBillingRepository) applyOnce(ctx context.Context, cmd *service.Usa
 	}
 	if err := recordDailyActivitySpending(ctx, tx, cmd.UserID, cmd.APIKeyID, cmd.RequestID, result.SubscriptionAmountUSD, result.BalanceAmountUSD); err != nil {
 		return nil, err
+	}
+	if cmd.CreativeTextExecutionID != "" {
+		// 回执与余额、订阅、额度和去重同时提交，写回失败不得留下已扣款但无法恢复的任务。
+		if err := saveCreativeTextBillingReceipt(ctx, tx, cmd, result); err != nil {
+			return nil, err
+		}
 	}
 
 	if cmd.LegacyVideoTaskID > 0 {

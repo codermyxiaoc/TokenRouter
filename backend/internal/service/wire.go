@@ -114,6 +114,25 @@ func ProvideCreativeRunOutboxRepositories(repo CreativeRunOutboxRepository) []Cr
 	return []CreativeRunOutboxRepository{repo}
 }
 
+// @project-doc docs/domains/cloud_canvas.md#asset_retention
+// 画布文件放入部署持久目录，构造失败阻止启动，避免产生无法归档的新任务。
+func ProvideCreativeCanvasAssetStore() (CreativeCanvasAssetStore, error) {
+	return NewCreativeCanvasLocalStore(resolveBackupDataDir())
+}
+
+// 图片、视频执行器仅桥接原任务服务，后台独立恢复归档并定期回收过期文件。
+func ProvideCreativeCanvasService(repo CreativeCanvasRepository, store CreativeCanvasAssetStore, creative *CreativePublicService, video *CreativeVideoCanvasExecutor, gateway *GatewayService) *CreativeCanvasService {
+	svc := NewCreativeCanvasService(repo, store, creative)
+	// 画布任务的图片结果在 provider 事实落库后先写入私有目录，避免 Redis TTL 期间进程停机导致成品丢失。
+	if creative != nil {
+		creative.CloudOutputSink = svc
+		creative.TextCatalog = gateway
+	}
+	svc.SetExecutor("video", video)
+	svc.Start()
+	return svc
+}
+
 // ProvideBatchImageCleanupService 创建并启动批量图片清理服务。
 func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo AccountRepository, cfg *config.Config) *BatchImageCleanupService {
 	svc := NewBatchImageCleanupService(repo, accountRepo, cfg)
@@ -888,6 +907,9 @@ var ProviderSet = wire.NewSet(
 	ProvideBatchImageCleanupService,
 	ProvideBatchImageWorkerRuntime,
 	NewCreativePublicService,
+	ProvideCreativeCanvasAssetStore,
+	ProvideCreativeCanvasService,
+	NewCreativeVideoCanvasExecutor,
 	wire.Bind(new(CreativeSettingReader), new(*SettingService)),
 	ProvideCreativeUserRepository,
 	ProvideCreativeGroupRepository,

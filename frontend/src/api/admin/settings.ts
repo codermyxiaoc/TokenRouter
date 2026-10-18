@@ -20,11 +20,36 @@ export interface PaymentMethodFeeConfig {
   fee_rate: number;
 }
 
-/** 创作台全局生图模型白名单项。 */
+/** 创作台视频参数由管理员声明，服务端仍校验账号端点实际能力。 */
+export interface CreativeVideoCapabilities {
+  durations: number[];
+  resolutions: string[];
+  aspect_ratios: string[];
+  max_reference_images: number;
+}
+
+/** 音频能力由服务端按上游协议提供，管理员无需手动维护声音列表。 */
+export interface CreativeAudioCapabilities {
+  voices: string[];
+  formats: string[];
+  speed_min: number;
+  speed_max: number;
+  default_voice: string;
+  default_format: string;
+  default_speed: number;
+  default_language: string;
+  max_input_chars: number;
+}
+
+/** 创作台全局图片、文本、视频与音频模型白名单项。 */
 export interface CreativeModelSetting {
   group_id: number;
   model: string;
   operations: CreativeOperation[];
+  media_type?: 'image' | 'text' | 'video' | 'audio';
+  video_endpoint?: string;
+  video_capabilities?: CreativeVideoCapabilities;
+  audio_capabilities?: CreativeAudioCapabilities;
 }
 
 /** 管理员配置创作台模型时可选择的候选项。 */
@@ -34,6 +59,11 @@ export interface CreativeModelCandidate {
   platform: string;
   model: string;
   operations: CreativeOperation[];
+  media_type?: 'image' | 'text' | 'video' | 'audio';
+  video_endpoint?: string;
+  video_endpoints?: string[];
+  video_capabilities?: CreativeVideoCapabilities;
+  audio_capabilities?: CreativeAudioCapabilities;
 }
 
 /** 创作台任务 worker 池状态快照。 */

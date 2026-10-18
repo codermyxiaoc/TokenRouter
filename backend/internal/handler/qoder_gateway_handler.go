@@ -763,6 +763,9 @@ func (h *QoderGatewayHandler) submitUsageRecordTask(c *gin.Context, task service
 	if task == nil {
 		return
 	}
+	if runCreativeTextUsageRecordTask(c, task) {
+		return
+	}
 	task = wrapUsageRecordTaskContext(c, task)
 	if h.usageRecordWorkerPool != nil {
 		h.usageRecordWorkerPool.Submit(task)

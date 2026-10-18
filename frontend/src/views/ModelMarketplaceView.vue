@@ -368,6 +368,7 @@ import ModelPricingPanel from '@/components/marketplace/ModelPricingPanel.vue'
 import ModelVideoEndpoints from '@/components/marketplace/ModelVideoEndpoints.vue'
 import VideoPricingRulesSummary from '@/components/marketplace/VideoPricingRulesSummary.vue'
 import { videoPricingRows as buildVideoPricingRows } from '@/components/marketplace/marketplaceVideoPricing'
+import { audioPricingRows as buildAudioPricingRows } from '@/components/marketplace/marketplaceAudioPricing'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
@@ -383,7 +384,7 @@ import type { MarketplaceGroup, MarketplaceModelPricing, MarketplacePricingInter
 import { useAppStore, useAuthStore } from '@/stores'
 
 type VisibleMarketplaceGroup = MarketplaceGroup
-type PricingFilter = 'all' | 'token' | 'image' | 'video' | 'unpriced'
+type PricingFilter = 'all' | 'token' | 'image' | 'video' | 'audio' | 'unpriced'
 
 interface PricingRow {
   key: string
@@ -461,6 +462,7 @@ const pricingSelectOptions = computed(() => [
   { value: 'token', label: t('marketplace.tokenPricing') },
   { value: 'image', label: t('marketplace.imagePricing') },
   { value: 'video', label: t('marketplace.videoPricing') },
+  { value: 'audio', label: t('marketplace.audioPricing') },
   { value: 'unpriced', label: t('marketplace.unpriced') },
 ])
 
@@ -562,6 +564,9 @@ function pricingKind(pricing: MarketplaceModelPricing): Exclude<PricingFilter, '
   }
   if (['video', 'video_token', 'video_per_request'].includes(pricing.pricing_mode) && videoPricingRows(pricing).length > 0) {
     return 'video'
+  }
+  if (pricing.pricing_mode === 'audio' && buildAudioPricingRows(pricing, t, formatPrice).length > 0) {
+    return 'audio'
   }
   if (pricing.pricing_mode === 'token') {
     return 'token'
@@ -844,6 +849,9 @@ function compactPricingRows(pricing: MarketplaceModelPricing): PricingRow[] {
   }
   if (kind === 'video') {
     return videoPricingRows(pricing)
+  }
+  if (kind === 'audio') {
+    return buildAudioPricingRows(pricing, t, formatPrice)
   }
   return []
 }

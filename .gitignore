@@ -132,6 +132,9 @@ CLAUDE.md
 scripts
 !backend/scripts/
 !backend/scripts/resolve-version.sh
+!frontend/scripts/
+frontend/scripts/*
+!frontend/scripts/dev-with-canvas.mjs
 .code-review-state
 #openspec/
 code-reviews/
@@ -148,3 +151,8 @@ output/
 
 # 仓库根目录的 Vitest 与 Vite 缓存
 .vite/
+
+# 本轮本地浏览器验证产物与计划不进入源码提交，既有 diagnostics 源码不受影响。
+/diagnostics/canvas-qa-20261019/
+/diagnostics/canvas_live_qa_20261019.py
+/.agents/plans/

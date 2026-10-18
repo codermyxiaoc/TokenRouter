@@ -10,6 +10,7 @@
 # Documentation
 *.md
 !deploy/DOCKER.md
+!frontend/canvas-app/NOTICE.md
 docs/
 # admin-compliance gate 的 LegalDocumentView.vue 构建时会导入 docs/legal/*.md?raw。
 # docs/ 其他内容仍排除，只把法律文档子树放入 Docker 构建上下文。
@@ -32,6 +33,7 @@ build/
 
 # Node modules (will be installed in container)
 frontend/node_modules/
+frontend/canvas-app/node_modules/
 node_modules/
 
 # Go build cache (will be built in container)

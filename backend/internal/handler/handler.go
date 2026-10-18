@@ -67,6 +67,7 @@ type Handlers struct {
 	Video             *VideoHandler
 	BatchImage        *BatchImageHandler
 	Creative          *CreativeHandler
+	CreativeCanvas    *CreativeCanvasHandler
 	Team              *TeamHandler
 	Ticket            *TicketHandler
 	IntelligenceTests *IntelligenceHandler

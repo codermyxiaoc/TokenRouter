@@ -1,0 +1,13 @@
+/* 画面命中层仅负责选中/移动，原生控制条和全屏播放器保持可交互。 */
+.video-node-media{position:relative;width:100%;height:100%;border-radius:inherit;overflow:hidden}
+.video-node-drag-surface{position:absolute;inset:0 0 auto;height:auto;top:0;padding:0;border:0;border-radius:inherit;background:transparent;cursor:grab;touch-action:none;z-index:1}
+.video-node-drag-surface:active{cursor:grabbing}
+.video-node-drag-surface:focus-visible{outline:2px solid var(--brand);outline-offset:-3px}
+.canvas-node .video-node-heading{pointer-events:auto;cursor:grab;touch-action:none}
+/* 音频控件不铺满节点，留白和标题都可拖动，控件本身保留原生操作。 */
+.audio-node-media{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:10px;width:100%;height:100%;padding:10px;cursor:grab;overflow:hidden;border-radius:inherit}
+.audio-node-media>svg{flex:0 1 24px;min-height:0;opacity:.45;pointer-events:none}
+.audio-node-media audio{width:100%;max-width:100%;height:54px;flex:0 0 54px;cursor:auto}
+.audio-reference-hint{margin:0 0 4px;color:var(--muted);font-size:11px;line-height:18px}
+.reference-text{display:flex;flex-direction:column;justify-content:center;gap:5px;padding:7px;overflow:hidden}
+.reference-text span{font-size:10px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

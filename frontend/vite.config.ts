@@ -170,6 +170,12 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0',
       port: devPort,
       proxy: {
+        // 画布通过同源路径加载，开发环境也保持与生产一致的会话消息边界。
+        '/canvas-app': {
+          target: env.VITE_CANVAS_DEV_PROXY_TARGET || 'http://127.0.0.1:5174',
+          changeOrigin: false,
+          ws: true
+        },
         '/api': {
           target: backendUrl,
           changeOrigin: true

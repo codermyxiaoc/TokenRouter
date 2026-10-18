@@ -190,6 +190,19 @@ func TestCreativeMappedFinalModelCapability(t *testing.T) {
 	require.Equal(t, []string{"draw-alias"}, models)
 }
 
+// 映射账号同时配置显式白名单时，白名单中的额外图片模型也必须进入候选目录。
+func TestCreativeMappedAccountIncludesAdditionalImageWhitelist(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Credentials: map[string]any{
+			"model_mapping":   map[string]any{"draw-alias": "gpt-image-2"},
+			"model_whitelist": []string{"gpt-image-2", "gpt-image-custom"},
+		},
+	}
+	models := creativeExpandAccountModels(account, []string{"draw-alias"}, IsGPTImageGenerationModel)
+	require.Equal(t, []string{"draw-alias", "gpt-image-custom"}, models)
+}
+
 // TestCreativeGrokConfiguredImageWhitelistCandidates 校验代理侧图片模型变体能从显式白名单进入候选。
 func TestCreativeGrokConfiguredImageWhitelistCandidates(t *testing.T) {
 	account := &Account{

@@ -101,6 +101,7 @@ import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import VideoPricingRulesSummary from './VideoPricingRulesSummary.vue'
 import { videoPricingRows as buildVideoPricingRows } from './marketplaceVideoPricing'
+import { audioPricingRows as buildAudioPricingRows } from './marketplaceAudioPricing'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 import type { MarketplaceModel, MarketplaceModelPricing, MarketplacePricingInterval } from '@/types'
 
@@ -284,7 +285,7 @@ function videoPricingRows(pricing: MarketplaceModelPricing): PricingRow[] {
   return buildVideoPricingRows(pricing, t, formatPrice)
 }
 
-function pricingKind(pricing: MarketplaceModelPricing): 'token' | 'image' | 'video' | 'unpriced' {
+function pricingKind(pricing: MarketplaceModelPricing): 'token' | 'image' | 'video' | 'audio' | 'unpriced' {
   if (pricing.price_status !== 'priced') {
     return 'unpriced'
   }
@@ -293,6 +294,9 @@ function pricingKind(pricing: MarketplaceModelPricing): 'token' | 'image' | 'vid
   }
   if (['video', 'video_token', 'video_per_request'].includes(pricing.pricing_mode) && videoPricingRows(pricing).length > 0) {
     return 'video'
+  }
+  if (pricing.pricing_mode === 'audio' && buildAudioPricingRows(pricing, t, formatPrice).length > 0) {
+    return 'audio'
   }
   if (pricing.pricing_mode === 'token') {
     return 'token'
@@ -319,6 +323,9 @@ const activeSource = computed<MarketplaceModelPricing | MarketplacePricingInterv
 )
 
 const standardRows = computed<PricingRow[]>(() => {
+  if (pricingKind(props.model.pricing) === 'audio') {
+    return buildAudioPricingRows(props.model.pricing, t, formatPrice)
+  }
   if (pricingKind(props.model.pricing) === 'video') {
     return videoPricingRows(props.model.pricing)
   }

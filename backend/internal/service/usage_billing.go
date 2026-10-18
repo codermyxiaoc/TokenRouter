@@ -24,6 +24,8 @@ type UsageBillingCommand struct {
 	QuotaPlatform string `json:",omitempty"`
 	// LegacyVideoTaskID 将旧视频扣款回执与扣费事务关联，不参与通用幂等指纹。
 	LegacyVideoTaskID  int64 `json:"legacy_video_task_id,omitempty"`
+	// CreativeTextExecutionID 仅关联画布文本持久回执，不改变普通或历史命令的幂等指纹。
+	CreativeTextExecutionID string `json:"creative_text_execution_id,omitempty"`
 	RequestID          string
 	APIKeyID           int64
 	RequestFingerprint string

@@ -101,6 +101,29 @@ func (s *FrontendServer) Middleware() gin.HandlerFunc {
 		if cleanPath == "" {
 			cleanPath = "index.html"
 		}
+		// 画布目录入口显式读取子应用入口，避免 FileServer 把 index.html 重定向回目录。
+		if cleanPath == "canvas-app" || cleanPath == "canvas-app/" {
+			file, err := s.distFS.Open("canvas-app/index.html")
+			if err != nil {
+				c.AbortWithStatus(http.StatusNotFound)
+				return
+			}
+			content, readErr := io.ReadAll(file)
+			_ = file.Close()
+			if readErr != nil {
+				c.AbortWithStatus(http.StatusNotFound)
+				return
+			}
+			c.Header("Cache-Control", "no-cache")
+			c.Data(http.StatusOK, "text/html; charset=utf-8", content)
+			c.Abort()
+			return
+		}
+		// 子应用缺失资源必须真实返回 404，不能回退主站 SPA 后递归加载工作台。
+		if strings.HasPrefix(cleanPath, "canvas-app/") && !s.fileExists(cleanPath) {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
 
 		// For index.html or SPA routes, serve with injected settings
 		if cleanPath == "index.html" || !s.fileExists(cleanPath) {

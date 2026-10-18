@@ -1,7 +1,8 @@
 export default {
   creative: {
     title: '创作台',
-    description: '使用 AI 模型生成与编辑图片，素材仅保存在当前浏览器。',
+    description: '在个人云端画布中创作图片和视频，素材保留 7 天。',
+    sessionExpired: '登录会话已失效，请重新登录。任务仍会在后台处理。',
     panel: {
       model: '模型',
       // 图生图 / 局部重绘前置条件提示（未选中图片时点击生成也会作为表单错误提示）

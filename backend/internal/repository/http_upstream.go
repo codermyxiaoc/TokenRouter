@@ -301,6 +301,9 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 
 // doUpstreamRequest 只取消当前上游尝试，保留调用方的排水结算与后续重试上下文。
 func doUpstreamRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+	if err := service.ClaimCreativeTextUpstreamRequest(req); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(req.Context())
 	resp, err := servertiming.Do(client, req.WithContext(ctx))
 	if err != nil {
@@ -397,6 +400,9 @@ func httpClientWithGrokAccessDeniedFallback(client *http.Client) *http.Client {
 // RoundTrip 只接受官方 CLI 身份、OAuth Bearer 和明确 Access denied 响应作为回退候选。
 func (t *grokAccessDeniedFallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
+	if service.HasCreativeTextUsageSink(req.Context()) {
+		return resp, err
+	}
 	if err != nil || !isGrokCLIAccessDeniedFallbackCandidate(req, resp) {
 		return resp, err
 	}

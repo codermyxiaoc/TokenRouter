@@ -39,6 +39,14 @@ type ModelMarketplacePricing struct {
 	VideoFallbackPrice            *float64                          `json:"video_fallback_price,omitempty"`
 	VideoFallbackPricing          *ModelMarketplaceVideoPrice       `json:"video_fallback_pricing,omitempty"`
 	VideoTokenPrepay              *service.VideoTokenPrepayConfig   `json:"video_token_prepay,omitempty"`
+	AudioPrice                    *ModelMarketplaceAudioPrice       `json:"audio_price,omitempty"`
+}
+
+// ModelMarketplaceAudioPrice 明确连续计量单位；零价必须输出，不能显示成未知价格。
+type ModelMarketplaceAudioPrice struct {
+	Mode  string  `json:"mode"`
+	Price float64 `json:"price"`
+	Unit  string  `json:"unit"`
 }
 
 // ModelMarketplaceVideoPrice 的零价格不可省略，避免免费档位在前端被误判为未定价。
@@ -225,6 +233,10 @@ func modelMarketplaceCapacityFromService(capacity *service.GroupCapacitySummary)
 
 // modelMarketplacePricingFromService 将服务层价格快照转换为接口 DTO。
 func modelMarketplacePricingFromService(pricing service.ModelDisplayPricing) ModelMarketplacePricing {
+	var audioPrice *ModelMarketplaceAudioPrice
+	if pricing.AudioPrice != nil {
+		audioPrice = &ModelMarketplaceAudioPrice{Mode: pricing.AudioPrice.Mode, Price: pricing.AudioPrice.Price, Unit: pricing.AudioPrice.Unit}
+	}
 	videoPrices := make([]ModelMarketplaceVideoPrice, 0, len(pricing.VideoPrices))
 	for _, price := range pricing.VideoPrices {
 		videoPrices = append(videoPrices, modelMarketplaceVideoPriceFromService(price))
@@ -283,6 +295,7 @@ func modelMarketplacePricingFromService(pricing service.ModelDisplayPricing) Mod
 		VideoFallbackPrice:            (service.ChannelModelPricing{VideoFallbackPrice: pricing.VideoFallbackPrice}).Clone().VideoFallbackPrice,
 		VideoFallbackPricing:          videoFallbackPricing,
 		VideoTokenPrepay:              pricing.VideoTokenPrepay.Clone(),
+		AudioPrice:                    audioPrice,
 	}
 }
 

@@ -146,6 +146,10 @@ func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) g
 		if source := intelligencePreviewFrameSource(c.Request.Host); source != "" {
 			finalPolicy = addToDirective(finalPolicy, "frame-src", source)
 		}
+		// 仅放行本站内置画布目录，保持其它页面禁止被嵌入的默认边界。
+		if intelligencePreviewHost.MatchString(c.Request.Host) {
+			finalPolicy = addToDirective(finalPolicy, "frame-src", c.Request.Host+"/canvas-app/")
+		}
 		if getFrameSrcOrigins != nil {
 			for _, origin := range getFrameSrcOrigins() {
 				if origin != "" {
@@ -156,6 +160,12 @@ func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) g
 
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-Frame-Options", "DENY")
+		if c.Request.URL.Path == "/canvas-app/index.html" || c.Request.URL.Path == "/canvas-app/" {
+			// @project-doc docs/domains/cloud_canvas.md#session_boundary
+			// 画布代码只访问本站 API，不继承主站支付、插件等外部网络来源。
+			finalPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'"
+			c.Header("X-Frame-Options", "SAMEORIGIN")
+		}
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
 		if isAPIRoutePath(c) {
 			c.Next()

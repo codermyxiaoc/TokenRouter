@@ -219,6 +219,47 @@ describe('ModelMarketplaceView', () => {
     copyToClipboard.mockClear()
   })
 
+  it('Grok 音频卡片和详情按显式单位显示含零价，音频筛选不混入未定价或文字模型', async () => {
+    const voices = [
+      marketplaceModel('grok-tts', 'Grok TTS', { pricing_mode: 'audio', price_status: 'priced', audio_price: { mode: 'tts', price: 15, unit: 'million_characters' } }),
+      marketplaceModel('grok-voice-tts-1.0', 'Grok Voice TTS 1.0', { pricing_mode: 'audio', price_status: 'priced', audio_price: { mode: 'tts', price: 0, unit: 'million_characters' } }),
+      marketplaceModel('grok-stt', 'Grok STT', { pricing_mode: 'audio', price_status: 'priced', audio_price: { mode: 'stt', price: .36, unit: 'hour' } }),
+      marketplaceModel('grok-voice-latest', 'Grok Voice', { pricing_mode: 'audio', price_status: 'priced', audio_price: { mode: 'realtime', price: .05, unit: 'minute' } }),
+      marketplaceModel('grok-unknown-audio', 'Unknown Audio', { pricing_mode: 'audio', price_status: 'priced' }),
+      marketplaceModel('grok-4.6', 'Grok 4.6', tokenPricing),
+    ]
+    getMarketplaceModels.mockResolvedValue([{ ...marketplaceGroup(1, 'Grok', voices), platform: 'grok', rate_multiplier: 3, display_brand: 'Grok' }])
+    const wrapper = await mountMarketplace()
+    expect(wrapper.findAll('article')).toHaveLength(0)
+    await wrapper.get('[data-testid="marketplace-group-pricing-toggle"]').trigger('click')
+    const cards = wrapper.findAll('article')
+    expect(cards[0].text()).toContain('15.00 点 marketplace.perMillionCharacters')
+    expect(cards[0].text()).not.toContain('45.00 点')
+    expect(cards[1].text()).toContain('0.0000 点 marketplace.perMillionCharacters')
+    expect(cards[2].text()).toContain('0.3600 点 marketplace.perAudioHour')
+    expect(cards[3].text()).toContain('0.0500 点 marketplace.perAudioMinute')
+    for (const card of cards.slice(0, 4)) {
+      expect(card.text()).not.toContain('marketplace.pricingUnavailable')
+      expect(card.text()).not.toContain('perMillionTokens')
+      expect(card.text()).not.toContain('marketplace.perRequest')
+    }
+    expect(cards[4].text()).toContain('marketplace.pricingUnavailable')
+    await cards[0].get('[data-testid="model-pricing-toggle"]').trigger('click')
+    expect(cards[0].get('[data-testid="pricing-rows"]').text()).toContain('15.00 点 marketplace.perMillionCharacters')
+    const pricingSelect = wrapper.findAllComponents(SelectStub).find(select => (select.props('options') as Array<{ value: string }>).some(option => option.value === 'audio'))!
+    expect(pricingSelect).toBeDefined()
+    pricingSelect.vm.$emit('update:modelValue', 'audio')
+    await nextTick()
+    expect(wrapper.findAll('article')).toHaveLength(4)
+    expect(wrapper.text()).not.toContain('Grok 4.6')
+    expect(wrapper.text()).not.toContain('Unknown Audio')
+    pricingSelect.vm.$emit('update:modelValue', 'unpriced')
+    await nextTick()
+    expect(wrapper.findAll('article')).toHaveLength(1)
+    expect(wrapper.findAll('article')[0].text()).toContain('Unknown Audio')
+    wrapper.unmount()
+  })
+
   // 同一模型在不同分组可展示不同说明，未定价也不应丢失已公开的能力说明。
   it('shows independent video model descriptions scoped to each group', async () => {
     const first = {

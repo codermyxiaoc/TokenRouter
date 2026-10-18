@@ -3210,6 +3210,9 @@ func (h *OpenAIGatewayHandler) submitUsageRecordTask(c *gin.Context, task servic
 	if task == nil {
 		return
 	}
+	if runCreativeTextUsageRecordTask(c, task) {
+		return
+	}
 	task = wrapUsageRecordTaskContext(c, task)
 	if h.usageRecordWorkerPool != nil {
 		if mode := h.usageRecordWorkerPool.Submit(task); mode != service.UsageRecordSubmitModeDroppedStopped {
@@ -3245,6 +3248,9 @@ func (h *OpenAIGatewayHandler) submitOpenAIUsageRecordTask(c *gin.Context, resul
 
 func (h *OpenAIGatewayHandler) submitMandatoryUsageRecordTask(c *gin.Context, task service.UsageRecordTask) {
 	if task == nil {
+		return
+	}
+	if runCreativeTextUsageRecordTask(c, task) {
 		return
 	}
 	task = wrapUsageRecordTaskContext(c, task)

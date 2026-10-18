@@ -422,6 +422,19 @@ func (s *ModelMarketplaceService) buildPublicModelsForGroup(ctx context.Context,
 			pricing = s.getRequestableModelDisplayPricing(ctx, group, modelDef, imageConfig)
 		}
 		inputModalities, outputModalities := s.marketplaceModelModalities(modelDef)
+		if group.Platform == PlatformGrok && (len(inputModalities) == 0 || len(outputModalities) == 0) {
+			// 明确的 Voice 身份可以补足能力，但不能让未知音频族继承聊天 token 价。
+			pricingModel := firstNonEmptyMarketplaceHint(modelDef.PricingModel, modelDef.ID)
+			if mode, _, _ := marketplaceGrokAudioIdentity(pricingModel); mode != "" {
+				input, output := marketplaceAudioModalities(mode)
+				if len(inputModalities) == 0 {
+					inputModalities = input
+				}
+				if len(outputModalities) == 0 {
+					outputModalities = output
+				}
+			}
+		}
 
 		models = append(models, ModelMarketplaceModel{
 			ID:               modelDef.ID,
@@ -485,6 +498,11 @@ func (s *ModelMarketplaceService) getRequestableModelDisplayPricing(ctx context.
 func (s *ModelMarketplaceService) getPublicModelDisplayPricing(ctx context.Context, group *Group, model string, imageConfig *ImagePriceConfig, baseModelHints ...string) ModelDisplayPricing {
 	if s.billingService == nil {
 		return unknownDisplayPricing()
+	}
+	if group != nil && group.Platform == PlatformGrok {
+		if mode, billingModel, unit := marketplaceGrokAudioIdentity(model); mode != "" {
+			return s.getPublicAudioDisplayPricing(ctx, group, mode, billingModel, unit)
+		}
 	}
 	if group != nil && group.Platform == PlatformVideo {
 		resolver := NewModelPricingResolver(nil, s.billingService)

@@ -133,6 +133,9 @@ func (e *CreativeExecutor) Prepare(ctx context.Context, run CreativeRun) (*Creat
 	if err != nil {
 		return nil, err
 	}
+	if run.Operation == CreativeOperationTTS && (platform != PlatformGrok || run.Model != CreativeGrokTTSModel || run.RequestedOutputCount != 1) {
+		return nil, creativeNonRetryableError("unsupported creative audio group")
+	}
 	groupID := run.GroupID
 	var selection *AccountSelectionResult
 	switch platform {
@@ -145,15 +148,20 @@ func (e *CreativeExecutor) Prepare(ctx context.Context, run CreativeRun) (*Creat
 		if e.gateway == nil {
 			return nil, errors.New("creative OpenAI gateway is not configured")
 		}
+		selectionModel, capability := run.Model, OpenAIEndpointCapabilityGrokMediaGeneration
+		if run.Operation == CreativeOperationTTS {
+			// Voice 不借用图片付费资格，沿用正式语音端点的文本账号准入。
+			selectionModel, capability = CreativeGrokTTSSelectionModel, OpenAIEndpointCapabilityTextGeneration
+		}
 		selection, _, err = e.gateway.SelectAccountWithSchedulerForCapability(
 			ctx,
 			&groupID,
 			"",
 			"",
-			run.Model,
+			selectionModel,
 			nil,
 			OpenAIUpstreamTransportHTTPSSE,
-			OpenAIEndpointCapabilityGrokMediaGeneration,
+			capability,
 			false,
 			false,
 			PlatformGrok,
@@ -179,7 +187,10 @@ func (e *CreativeExecutor) Prepare(ctx context.Context, run CreativeRun) (*Creat
 		}
 		return nil, creativeNonRetryableError("creative account %d was not admitted", selection.Account.ID)
 	}
-	upstreamModel := strings.TrimSpace(resolveAccountUpstreamModel(ctx, selection.Account, run.Model))
+	upstreamModel := CreativeGrokTTSModel
+	if run.Operation != CreativeOperationTTS {
+		upstreamModel = strings.TrimSpace(resolveAccountUpstreamModel(ctx, selection.Account, run.Model))
+	}
 	if upstreamModel == "" {
 		if selection.ReleaseFunc != nil {
 			selection.ReleaseFunc()
@@ -187,7 +198,9 @@ func (e *CreativeExecutor) Prepare(ctx context.Context, run CreativeRun) (*Creat
 		return nil, creativeNonRetryableError("creative account %d has no upstream model for %s", selection.Account.ID, run.Model)
 	}
 	// 账号/渠道映射后必须再次校验最终模型能力，避免文本模型别名被错误送入图片执行器。
-	if !creativePlatformImageModel(platform, upstreamModel) {
+	if run.Operation == CreativeOperationTTS && platform == PlatformGrok && run.Model == CreativeGrokTTSModel {
+		upstreamModel = CreativeGrokTTSModel
+	} else if !creativePlatformImageModel(platform, upstreamModel) {
 		if selection.ReleaseFunc != nil {
 			selection.ReleaseFunc()
 		}
@@ -259,6 +272,19 @@ func (e *CreativeExecutor) Execute(ctx context.Context, run CreativeRun, payload
 	upstreamModel := strings.TrimSpace(execution.UpstreamModel)
 	if upstreamModel == "" {
 		return nil, errors.New("creative execution upstream model is not configured")
+	}
+	if run.Operation == CreativeOperationTTS {
+		if account.Platform != PlatformGrok || run.Model != CreativeGrokTTSModel || run.RequestedOutputCount != 1 || upstreamModel != CreativeGrokTTSModel {
+			return nil, creativeNonRetryableError("unsupported creative audio reservation")
+		}
+		execCtx, cancel := context.WithTimeout(ctx, e.executeTimeout())
+		defer cancel()
+		outputs, err := e.executeGrokAudio(execCtx, run, payload, account)
+		e.reportScheduleResult(execution, account.ID, err == nil)
+		if err != nil {
+			return nil, err
+		}
+		return &CreativeExecuteResult{Outputs: outputs, AccountID: account.ID}, nil
 	}
 	if IsMidjourneyImageGenerationModel(upstreamModel) && (account.Platform != PlatformOpenAI || account.Type != AccountTypeAPIKey) {
 		return nil, creativeNonRetryableError("creative Midjourney requires an OpenAI API key account")

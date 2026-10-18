@@ -299,7 +299,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		)
 	}
 	if err != nil {
-		if input.PrepareLegacyVideoQuote || !isUsagePricingUnavailableError(err) {
+		if HasCreativeTextUsageSink(ctx) || input.PrepareLegacyVideoQuote || !isUsagePricingUnavailableError(err) {
 			return err
 		}
 		logger.L().With(
@@ -599,6 +599,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	_, billingErr := applyUsageBilling(ctx, requestID, usageLog, params, s.billingDeps(), s.usageBillingRepo)
 
 	if billingErr != nil {
+		if HasCreativeTextUsageSink(ctx) {
+			return billingErr
+		}
 		// 结算事务失败时仍保留已计算的用量与成本明细；ActualCost 置零明确表示本次未成功结算。
 		usageLog.ActualCost = 0
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")

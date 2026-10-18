@@ -98,47 +98,17 @@ func (a *Account) IsHeaderOverrideEnabled() bool {
 // GetHeaderOverrides 返回生效的请求头覆写表（key 统一小写）。
 // 未启用、不符合平台/类型条件或配置为空时返回 nil。
 // 空 value 的条目（模板占位）与非法/禁止的 header 名会被跳过。
-// 结果带热路径缓存（同 GetModelMapping 先例）：同一 credentials 映射在
-// 一次请求 / 一条 WS 会话内的多次调用只做一次解析与校验。
+// 每次按当前 credentials 解析，避免账号对象在并发请求间共享可变缓存。
 func (a *Account) GetHeaderOverrides() map[string]string {
 	if !a.IsHeaderOverrideEnabled() {
 		return nil
 	}
 	rawMapping, rawIsAnyMap := a.Credentials[credKeyHeaderOverrides].(map[string]any)
 	if !rawIsAnyMap {
-		// 非 JSON 反序列化产物（如直接注入的 map[string]string）：直接解析，不缓存
+		// 非 JSON 反序列化产物（如直接注入的 map[string]string）：直接解析。
 		return resolveHeaderOverrides(stringMappingFromRaw(a.Credentials[credKeyHeaderOverrides]))
 	}
-
-	credentialsPtr := mapPtr(a.Credentials)
-	rawPtr := mapPtr(rawMapping)
-	rawLen := len(rawMapping)
-	rawSig := uint64(0)
-	rawSigReady := false
-
-	if a.headerOverrideCacheReady &&
-		a.headerOverrideCacheCredentialsPtr == credentialsPtr &&
-		a.headerOverrideCacheRawPtr == rawPtr &&
-		a.headerOverrideCacheRawLen == rawLen {
-		rawSig = modelMappingSignature(rawMapping)
-		rawSigReady = true
-		if a.headerOverrideCacheRawSig == rawSig {
-			return a.headerOverrideCache
-		}
-	}
-
-	overrides := resolveHeaderOverrides(stringMappingFromRaw(rawMapping))
-	if !rawSigReady {
-		rawSig = modelMappingSignature(rawMapping)
-	}
-
-	a.headerOverrideCache = overrides
-	a.headerOverrideCacheReady = true
-	a.headerOverrideCacheCredentialsPtr = credentialsPtr
-	a.headerOverrideCacheRawPtr = rawPtr
-	a.headerOverrideCacheRawLen = rawLen
-	a.headerOverrideCacheRawSig = rawSig
-	return overrides
+	return resolveHeaderOverrides(stringMappingFromRaw(rawMapping))
 }
 
 // resolveHeaderOverrides 解析并防御性过滤原始覆写表：保存路径已做校验，

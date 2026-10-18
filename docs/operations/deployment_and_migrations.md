@@ -65,7 +65,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.20`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.21`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -176,7 +176,7 @@ Gemini 缓存费用复用本站持久资金合同，使用 `gemini_cache` 报价
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.20`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `309_creative_quota_platform.sql`。从 v3.19 升级不新增或修改 SQL 迁移；更早版本仍须遵循对应迁移与恢复边界。
+当前发布版本为 `v0.1.278-ct-v3.21`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `312_creative_canvas_text.sql`。从 v3.20 升级新增 310–312 三项迁移；更早版本仍须遵循对应迁移与恢复边界。
 
 <a id="v3_21_upgrade"></a>
 ### v3.21 云端无限画布

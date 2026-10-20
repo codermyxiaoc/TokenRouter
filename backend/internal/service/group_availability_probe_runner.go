@@ -19,7 +19,7 @@ const (
 	// 最长运行时间覆盖合法配置下的全部尝试，并为账号选择和结果保存预留一分钟。
 	groupAvailabilityProbeMaxRunDuration     = time.Duration(maxGroupAvailabilityProbeMaxRetries+1)*time.Duration(maxGroupAvailabilityProbeTimeoutSeconds)*time.Second + time.Minute
 	groupAvailabilityProbeMaintenanceTimeout = time.Minute
-	groupAvailabilityProbeClaimTimeout       = time.Minute
+	groupAvailabilityProbeClaimTimeout       = 10 * time.Second
 	groupAvailabilityProbeLockDuration       = groupAvailabilityProbeMaxRunDuration + groupAvailabilityProbeClaimTimeout + time.Minute
 	groupAvailabilityProbeCleanupRetention   = 90 * 24 * time.Hour
 	groupAvailabilityProbeCleanupMinInterval = 12 * time.Hour
@@ -63,7 +63,7 @@ func (s *GroupAvailabilityProbeRunnerService) RunOnce(ctx context.Context, group
 	s.manualMu.Lock()
 	if s.manualRunning >= groupAvailabilityProbeDefaultMaxWorkers {
 		s.manualMu.Unlock()
-		return nil, infraerrors.Conflict("GROUP_AVAILABILITY_PROBE_BUSY", "Availability probes are busy; please try again later")
+		return nil, infraerrors.Conflict("GROUP_AVAILABILITY_PROBE_CAPACITY", "Availability probes are busy; please try again later")
 	}
 	s.manualRunning++
 	s.manualMu.Unlock()
@@ -74,7 +74,7 @@ func (s *GroupAvailabilityProbeRunnerService) RunOnce(ctx context.Context, group
 	}()
 	now := time.Now()
 	claimCtx, cancelClaim := context.WithTimeout(ctx, 10*time.Second)
-	due, err := s.repo.ClaimGroup(claimCtx, groupID, config, now, now.Add(time.Duration(maxGroupAvailabilityProbeTimeoutSeconds)*time.Second+time.Minute), s.instanceID)
+	due, err := s.repo.ClaimGroup(claimCtx, groupID, config, now, now.Add(GroupAvailabilityProbeLeaseDuration(config, true)), s.instanceID)
 	cancelClaim()
 	if err != nil {
 		return nil, err
@@ -97,6 +97,7 @@ func (s *GroupAvailabilityProbeRunnerService) RunOnce(ctx context.Context, group
 	if interval <= 0 {
 		interval = defaultGroupAvailabilityProbeIntervalMinutes
 	}
+	result.LeaseToken = due.LeaseToken
 	saveCtx, cancelSave := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelSave()
 	if err := s.repo.SaveResultAndScheduleNext(saveCtx, result, time.Now().Add(time.Duration(interval)*time.Minute)); err != nil {
@@ -205,7 +206,7 @@ func (s *GroupAvailabilityProbeRunnerService) runDue() {
 			defer wg.Done()
 			defer func() { <-sem }()
 			// 每个分组独立计时，数据库维护和其它分组不会挤占它的合法重试窗口。
-			probeCtx, probeCancel := context.WithTimeout(context.Background(), groupAvailabilityProbeMaxRunDuration)
+			probeCtx, probeCancel := context.WithTimeout(context.Background(), GroupAvailabilityProbeLeaseDuration(group.Config, false)-30*time.Second)
 			defer probeCancel()
 			s.runOne(probeCtx, group)
 		}()
@@ -365,7 +366,11 @@ func (s *GroupAvailabilityProbeRunnerService) saveResult(ctx context.Context, du
 		interval = time.Duration(defaultGroupAvailabilityProbeIntervalMinutes) * time.Minute
 	}
 	nextRunAt := time.Now().Add(interval)
-	if err := s.repo.SaveResultAndScheduleNext(ctx, result, nextRunAt); err != nil {
+	result.LeaseToken = due.LeaseToken
+	// 探测超时也必须记录失败并释放自己的租约，不能继续使用已取消的执行上下文。
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if err := s.repo.SaveResultAndScheduleNext(saveCtx, result, nextRunAt); err != nil {
 		logger.LegacyPrintf("service.group_availability_probe", "[GroupAvailabilityProbe] group=%d save result error: %v", due.GroupID, err)
 	}
 }

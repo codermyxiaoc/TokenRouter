@@ -1268,6 +1268,8 @@ affiliates: {
         testAccount: 'Account #{id}',
         testRequestFailed: 'The probe request failed. Please try again later.',
         testBusy: 'This group already has a probe running. Try again after it finishes.',
+        testCapacity: 'This server has reached its concurrent probe limit. Please try again later.',
+        testLeaseLost: 'This probe lease expired. Its result did not replace newer observations. Refresh channel status to check the latest result.',
         interval: 'Probe Interval (minutes)',
         timeout: 'Timeout (seconds)',
         maxRetries: 'Maximum Retries',

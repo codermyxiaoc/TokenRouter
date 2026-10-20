@@ -70,7 +70,7 @@ func (e *CreativeExecutor) executeGrok(ctx context.Context, run CreativeRun, pay
 		return nil, creativeHTTPStatusError(0, err.Error())
 	}
 	if resp.StatusCode >= 400 {
-		return nil, creativeHTTPStatusError(resp.StatusCode, extractUpstreamErrorMessage(respBody))
+		return nil, creativeHTTPResponseError(resp.StatusCode, respBody)
 	}
 	return parseCreativeOpenAIImageOutputs(respBody)
 }

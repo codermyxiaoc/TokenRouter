@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,12 +19,13 @@ import (
 // 测试替身不访问网络或已有数据库，只观察持久状态与远端调用顺序。
 type intelligenceRepoStub struct {
 	IntelligenceRepository
-	config   *IntelligenceConfig
-	run      *IntelligenceRun
-	runs     []IntelligenceRun
-	saves    []IntelligenceRun
-	denySave bool
-	nextPoll time.Time
+	config      *IntelligenceConfig
+	run         *IntelligenceRun
+	runs        []IntelligenceRun
+	saves       []IntelligenceRun
+	denySave    bool
+	nextPoll    time.Time
+	createdRuns int
 }
 
 func (r *intelligenceRepoStub) GetConfig(context.Context, int64) (*IntelligenceConfig, error) {
@@ -65,6 +70,7 @@ func (r *intelligenceRepoStub) GetRun(context.Context, string) (*IntelligenceRun
 	return &copy, nil
 }
 func (r *intelligenceRepoStub) CreateRun(_ context.Context, id int64, now time.Time) (*IntelligenceRun, error) {
+	r.createdRuns++
 	return &IntelligenceRun{ID: "local", ConfigID: id, Status: "queued", CreatedAt: now}, nil
 }
 
@@ -176,7 +182,11 @@ func TestIntelligenceConfigurationCredentialAndProtocolBoundaries(t *testing.T) 
 		name   string
 		mutate func(*IntelligenceConfigInput)
 	}{
-		{"糖果不能Chat", func(v *IntelligenceConfigInput) { v.Protocol = "chat_completions" }}, {"画图不能ultra", func(v *IntelligenceConfigInput) { v.Benchmark = "drawing"; v.ReasoningEffort = "ultra" }}, {"无default档", func(v *IntelligenceConfigInput) { v.ServiceTier = "default" }}, {"禁私网", func(v *IntelligenceConfigInput) { v.BaseURL = "https://127.0.0.1/v1" }}, {"禁userinfo", func(v *IntelligenceConfigInput) { v.BaseURL = "https://secret@gateway.example/v1" }}, {"禁query", func(v *IntelligenceConfigInput) { v.BaseURL = "https://gateway.example/v1?key=secret" }}, {"间隔下限", func(v *IntelligenceConfigInput) { v.IntervalMinutes = 4 }}, {"间隔上限", func(v *IntelligenceConfigInput) { v.IntervalMinutes = 10081 }},
+		{"未知协议", func(v *IntelligenceConfigInput) { v.Protocol = "unknown" }}, {"画图不能ultra", func(v *IntelligenceConfigInput) {
+			v.Benchmark = "drawing"
+			v.Model = manxue.DrawingModel
+			v.ReasoningEffort = "ultra"
+		}}, {"无default档", func(v *IntelligenceConfigInput) { v.ServiceTier = "default" }}, {"禁私网", func(v *IntelligenceConfigInput) { v.BaseURL = "https://127.0.0.1/v1" }}, {"禁userinfo", func(v *IntelligenceConfigInput) { v.BaseURL = "https://secret@gateway.example/v1" }}, {"禁query", func(v *IntelligenceConfigInput) { v.BaseURL = "https://gateway.example/v1?key=secret" }}, {"间隔下限", func(v *IntelligenceConfigInput) { v.IntervalMinutes = 4 }}, {"间隔上限", func(v *IntelligenceConfigInput) { v.IntervalMinutes = 10081 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _, _, key := newIntelligenceFixture()
@@ -242,7 +252,9 @@ func TestIntelligenceCreateOnceAfterDurableState(t *testing.T) {
 	s, repo, client, _ := newIntelligenceFixture()
 	run := intelligenceQueued()
 	repo.config.Benchmark = "drawing"
+	repo.config.Model = manxue.DrawingModel
 	run.Benchmark = "drawing"
+	run.Model = manxue.DrawingModel
 	client.create = func(in manxue.CreateRequest) (*manxue.TestResult, error) {
 		require.Equal(t, "pelican", in.Benchmark)
 		require.Equal(t, "submitting", repo.run.Status)
@@ -258,6 +270,136 @@ func TestIntelligenceCreateOnceAfterDurableState(t *testing.T) {
 	require.Equal(t, 1, client.creates)
 	require.Equal(t, 1, client.gets)
 }
+
+func TestIntelligenceLegacyProtocolsUseCurrentWireContract(t *testing.T) {
+	// 从旧配置经真实客户端发送到严格假服务，防止结构体替身掩盖废弃字段泄漏。
+	for _, benchmark := range []string{"candy", "drawing"} {
+		for _, protocol := range []string{"", "responses", "chat_completions"} {
+			t.Run(benchmark+"/"+protocol, func(t *testing.T) {
+				s, repo, _, key := newIntelligenceFixture()
+				repo.config.Protocol = protocol
+				repo.config.Benchmark = benchmark
+				if benchmark == "drawing" {
+					repo.config.Model = manxue.DrawingModel
+				}
+				run := intelligenceQueued()
+				run.Benchmark, run.Model = benchmark, repo.config.Model
+				var calls atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls.Add(1)
+					require.Equal(t, http.MethodPost, r.Method)
+					require.Equal(t, "/api/v1/tests", r.URL.Path)
+					require.Equal(t, run.ID, r.Header.Get("Idempotency-Key"))
+					var body map[string]any
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+					if _, exists := body["protocol"]; exists {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					require.NotContains(t, body, "random_scene")
+					require.Equal(t, repo.config.Model, body["model"])
+					require.Equal(t, key.Key, body["api_key"])
+					require.Equal(t, repo.config.BaseURL, body["base_url"])
+					require.Equal(t, "submitting", repo.run.Status)
+					w.WriteHeader(http.StatusAccepted)
+					fmt.Fprintf(w, `{"id":"remote-current","benchmark":%q,"status":"running"}`, body["benchmark"])
+				}))
+				defer server.Close()
+				client, err := manxue.NewClientWithBaseURL(server.Client(), server.URL)
+				require.NoError(t, err)
+				s.client = client
+				s.execute(context.Background(), run)
+				require.EqualValues(t, 1, calls.Load())
+				require.Equal(t, "running", repo.run.Status)
+				require.Equal(t, "remote-current", repo.run.RemoteID)
+				require.Empty(t, repo.run.ErrorMessage)
+				// 执行只适配远端协议，不改写已有配置或被测模型。
+				require.Equal(t, protocol, repo.config.Protocol)
+				require.Equal(t, run.Model, repo.config.Model)
+			})
+		}
+	}
+}
+
+func TestIntelligenceSaveNormalizesLegacyProtocol(t *testing.T) {
+	for _, benchmark := range []string{"candy", "drawing"} {
+		for _, protocol := range []string{"", "responses", "chat_completions"} {
+			t.Run(benchmark+"/"+protocol, func(t *testing.T) {
+				s, repo, _, key := newIntelligenceFixture()
+				in := intelligenceInput(key.Key)
+				in.Benchmark, in.Protocol = benchmark, protocol
+				if benchmark == "drawing" {
+					in.Model = manxue.DrawingModel
+				}
+				saved, err := s.SaveConfig(context.Background(), 0, in)
+				require.NoError(t, err)
+				require.Equal(t, "responses", saved.Protocol)
+				require.Equal(t, in.Model, saved.Model)
+				require.Equal(t, in.Model, repo.config.Model)
+			})
+		}
+	}
+}
+
+func TestIntelligenceUnsupportedDrawingModelDoesNotSubmit(t *testing.T) {
+	s, repo, client, key := newIntelligenceFixture()
+	repo.config.Benchmark = "drawing"
+	repo.config.Protocol = "chat_completions"
+	repo.config.ScheduleEnabled = true
+	in := intelligenceInput(key.Key)
+	in.Benchmark = "drawing"
+	for _, id := range []int64{0, 1} {
+		_, err := s.SaveConfig(context.Background(), id, in)
+		require.ErrorIs(t, err, ErrIntelligenceDrawingModel)
+	}
+	_, err := s.Run(context.Background(), repo.config.ID)
+	require.ErrorIs(t, err, ErrIntelligenceDrawingModel)
+	require.Zero(t, repo.createdRuns)
+
+	// 旧定时或已排队任务也在本地结束，不先进入可能已受理的 submitting 状态。
+	run := intelligenceQueued()
+	run.Benchmark = "drawing"
+	s.execute(context.Background(), run)
+	require.Zero(t, client.creates)
+	require.Zero(t, client.gets)
+	require.Len(t, repo.saves, 1)
+	require.Equal(t, "error", repo.run.Status)
+	require.Contains(t, repo.run.ErrorMessage, manxue.DrawingModel)
+	require.Empty(t, repo.run.RemoteID)
+	require.Equal(t, "gpt-test", repo.config.Model)
+
+	// 保留历史身份并允许管理员停用旧配置，不能把它静默重命名成新模型。
+	in.Enabled = false
+	in.ScheduleEnabled = true
+	_, err = s.SaveConfig(context.Background(), 1, in)
+	require.ErrorIs(t, err, ErrIntelligenceDrawingModel)
+	in.ScheduleEnabled = false
+	_, err = s.SaveConfig(context.Background(), 0, in)
+	require.ErrorIs(t, err, ErrIntelligenceDrawingModel)
+	saved, err := s.SaveConfig(context.Background(), 1, in)
+	require.NoError(t, err)
+	require.False(t, saved.Enabled)
+	require.False(t, saved.ScheduleEnabled)
+	require.Equal(t, "gpt-test", saved.Model)
+	require.Equal(t, "responses", saved.Protocol)
+}
+
+func TestIntelligenceExistingDrawingTaskStillPollsAfterContractChange(t *testing.T) {
+	s, repo, client, _ := newIntelligenceFixture()
+	repo.config.Benchmark = "drawing"
+	repo.config.Enabled = false
+	run := intelligenceQueued()
+	run.Benchmark, run.Status, run.RemoteID = "drawing", "running", "existing-remote"
+	client.result = &manxue.TestResult{ID: run.RemoteID, Benchmark: "pelican", Status: "succeeded", Result: &manxue.DrawingResult{HTML: "<p>已有作品</p>"}, Assessment: &manxue.Assessment{Quality: "normal"}}
+	s.execute(context.Background(), run)
+	require.Zero(t, client.creates)
+	require.Equal(t, 1, client.gets)
+	require.Equal(t, "completed", repo.run.Status)
+	require.Equal(t, "passed", repo.run.Verdict)
+	require.Equal(t, "gpt-test", repo.run.Model)
+	require.Equal(t, "<p>已有作品</p>", repo.run.HTML)
+}
+
 func TestIntelligenceRecoveryDoesNotResubmit(t *testing.T) {
 	t.Run("已获远端ID即使关闭也必须持久化", func(t *testing.T) {
 		s, repo, client, _ := newIntelligenceFixture()

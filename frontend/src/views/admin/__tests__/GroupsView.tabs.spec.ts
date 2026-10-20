@@ -384,12 +384,17 @@ describe('GroupsView 立即探测', () => {
     expect(button.attributes('disabled')).toBeUndefined()
   })
 
-  it('已有探测进行中时显示忙碌提示，不伪造成功结果', async () => {
-    groups.testAvailabilityProbe.mockRejectedValue({ status: 409, reason: 'GROUP_AVAILABILITY_PROBE_BUSY' })
+  it.each([
+    ['GROUP_AVAILABILITY_PROBE_BUSY', 'testBusy'],
+    ['GROUP_AVAILABILITY_PROBE_CAPACITY', 'testCapacity'],
+    ['GROUP_AVAILABILITY_PROBE_LEASE_LOST', 'testLeaseLost'],
+  ])('探测冲突 %s 显示对应原因，不伪造成功或自动重试', async (reason, message) => {
+    groups.testAvailabilityProbe.mockRejectedValue({ status: 409, reason })
     const wrapper = await open('edit', 'kimi', { availability_probe_config: config })
     await wrapper.get('[data-testid="availability-probe-test"]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[role="alert"]').text()).toBe('admin.groups.availabilityProbe.testBusy')
+    expect(wrapper.get('[role="alert"]').text()).toBe(`admin.groups.availabilityProbe.${message}`)
+    expect(groups.testAvailabilityProbe).toHaveBeenCalledTimes(1)
     expect(wrapper.find('[data-testid="availability-probe-result"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="availability-probe-test"]').attributes('disabled')).toBeUndefined()
   })

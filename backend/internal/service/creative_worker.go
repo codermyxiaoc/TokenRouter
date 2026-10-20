@@ -621,6 +621,10 @@ func (w *CreativeRunWorker) handleExecuteError(ctx context.Context, runID string
 func creativeExecuteErrorParts(err error) (string, string) {
 	var upstreamErr *CreativeUpstreamError
 	if errors.As(err, &upstreamErr) {
+		// 只接受本站白名单类别，避免通过新增字段把任意上游文本持久化为公共原因。
+		if message := creativeProviderFailureMessage(upstreamErr.Code); message != "" {
+			return upstreamErr.Code, message
+		}
 		code := "PROVIDER_FAILED"
 		if upstreamErr.StatusCode > 0 {
 			code = "UPSTREAM_STATUS_" + itoaPositive(upstreamErr.StatusCode)

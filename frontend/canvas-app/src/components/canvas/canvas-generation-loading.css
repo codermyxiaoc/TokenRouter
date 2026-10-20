@@ -4,5 +4,13 @@
 .canvas-generation-loading-indicator { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text); font-size: 11px; font-weight: 500; }
 .canvas-generation-loading.has-media .canvas-generation-loading-indicator { padding: 14px 20px; border-radius: 16px; background: color-mix(in srgb, var(--panel) 90%, transparent); }
 .canvas-generation-loading-indicator svg { color: var(--brand); }
-.canvas-generation-status-details { max-width: 280px; padding: 0 12px; line-height: 1.6; text-align: center; color: var(--muted); }
+.canvas-generation-status-details { max-width: 280px; padding: 0 12px; line-height: 1.6; text-align: center; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 只有详情按钮接收指针；其它加载区域仍可拖动节点和连线。 */
+.canvas-generation-details-button { pointer-events: auto; border: 0; padding: 4px 8px; background: transparent; color: var(--brand); font-size: 11px; cursor: pointer; }
+/* 小音频节点只保留状态与详情入口，长原因在弹层阅读，避免文字伸出节点。 */
+.canvas-generation-loading.compact .canvas-generation-loading-indicator { gap: 4px; padding: 8px; }
+.canvas-generation-loading.compact .canvas-generation-status-details { display: none; }
+.canvas-generation-loading.compact .canvas-generation-loading-indicator > svg { width: 20px; height: 20px; }
+.node-error { border: 0; text-align: left; cursor: pointer; }
+.node-error:focus-visible, .canvas-generation-details-button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .canvas-generation-loading-indicator .animate-spin { animation: none; } }

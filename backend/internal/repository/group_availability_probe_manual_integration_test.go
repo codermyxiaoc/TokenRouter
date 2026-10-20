@@ -62,7 +62,7 @@ func TestGroupAvailabilityProbeManualPostgres_ClaimAndHistory(t *testing.T) {
 	for _, group := range due {
 		require.NotEqual(t, id, group.GroupID)
 	}
-	result := &service.GroupAvailabilityProbeResult{GroupID: id, ModelID: "kimi-k3", Status: "success", Success: true, LatencyMs: 17, StartedAt: now, FinishedAt: now}
+	result := &service.GroupAvailabilityProbeResult{GroupID: id, LeaseToken: claim.LeaseToken, ModelID: "kimi-k3", Status: "success", Success: true, LatencyMs: 17, StartedAt: now, FinishedAt: now}
 	require.NoError(t, repo.SaveResultAndScheduleNext(ctx, result, now.Add(time.Hour)))
 	summary, err := repo.GetSummaryByGroupIDs(ctx, []int64{id}, 1, 5, "UTC", now.Add(time.Second))
 	require.NoError(t, err)
@@ -73,6 +73,7 @@ func TestGroupAvailabilityProbeManualPostgres_ClaimAndHistory(t *testing.T) {
 	claim, err = repo.ClaimGroup(ctx, id, manualProbeConfig(), now.Add(time.Second), now.Add(time.Minute), "manual-again")
 	require.NoError(t, err)
 	require.NotNil(t, claim)
+	result.LeaseToken = claim.LeaseToken
 	result.Success = false
 	result.Status = "failed"
 	result.ErrorMessage = "upstream rejected protocol"
@@ -84,6 +85,62 @@ func TestGroupAvailabilityProbeManualPostgres_ClaimAndHistory(t *testing.T) {
 	require.Equal(t, int64(2), summary[id].TotalCount)
 	require.Equal(t, int64(1), summary[id].SuccessCount)
 	require.Equal(t, "failed", summary[id].LastStatus)
+}
+
+// 同一实例的过期请求晚返回时，也不能覆盖新轮次、释放新锁或追加陈旧历史。
+func TestGroupAvailabilityProbeManualPostgres_ExpiredResultCannotOverwriteNewClaim(t *testing.T) {
+	ctx := context.Background()
+	id := newManualProbeGroup(t, true)
+	repo := NewGroupAvailabilityProbeRepository(integrationDB)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	first, err := repo.ClaimGroup(ctx, id, manualProbeConfig(), now, now.Add(time.Second), "same-instance")
+	require.NoError(t, err)
+	second, err := repo.ClaimGroup(ctx, id, manualProbeConfig(), now.Add(2*time.Second), now.Add(time.Minute), "same-instance")
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	require.NotEqual(t, first.LeaseToken, second.LeaseToken)
+	result := &service.GroupAvailabilityProbeResult{GroupID: id, LeaseToken: first.LeaseToken, ModelID: "kimi-k3", Status: "failed", StartedAt: now, FinishedAt: now.Add(3 * time.Second)}
+	require.ErrorIs(t, repo.SaveResultAndScheduleNext(ctx, result, now.Add(time.Hour)), service.ErrGroupAvailabilityProbeLeaseLost)
+	var token string
+	var count int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT locked_by FROM group_availability_probe_states WHERE group_id=$1`, id).Scan(&token))
+	require.Equal(t, second.LeaseToken, token)
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM group_availability_probe_results WHERE group_id=$1`, id).Scan(&count))
+	require.Zero(t, count)
+	result.LeaseToken = second.LeaseToken
+	result.Success = true
+	result.Status = "success"
+	require.NoError(t, repo.SaveResultAndScheduleNext(ctx, result, now.Add(time.Hour)))
+	// 重复保存已完成的同一代次也不能重复计入可用率。
+	require.ErrorIs(t, repo.SaveResultAndScheduleNext(ctx, result, now.Add(time.Hour)), service.ErrGroupAvailabilityProbeLeaseLost)
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM group_availability_probe_results WHERE group_id=$1`, id).Scan(&count))
+	require.Equal(t, 1, count)
+}
+
+func TestGroupAvailabilityProbeManualPostgres_ScheduledLeaseUsesConfiguredBudget(t *testing.T) {
+	ctx := context.Background()
+	id := newManualProbeGroup(t, true)
+	_, err := integrationDB.ExecContext(ctx, `UPDATE groups SET availability_probe_config=availability_probe_config || '{"max_retries":0}'::jsonb WHERE id=$1`, id)
+	require.NoError(t, err)
+	repo := NewGroupAvailabilityProbeRepository(integrationDB)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	due, err := repo.ClaimDue(ctx, now, now.Add(25*time.Minute), "cron", 1000)
+	require.NoError(t, err)
+	var claimed *service.GroupAvailabilityProbeDueGroup
+	for i := range due {
+		if due[i].GroupID == id {
+			claimed = &due[i]
+		}
+	}
+	require.NotNil(t, claimed)
+	var until time.Time
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT locked_until FROM group_availability_probe_states WHERE group_id=$1`, id).Scan(&until))
+	require.Equal(t, 65*time.Second, until.Sub(now))
+	// 模拟实例退出后租约自然过期，手动执行可以恢复，不能等待旧的 25 分钟。
+	recovered, err := repo.ClaimGroup(ctx, id, manualProbeConfig(), now.Add(66*time.Second), now.Add(2*time.Minute), "manual")
+	require.NoError(t, err)
+	require.NotNil(t, recovered)
+	require.NotEqual(t, claimed.LeaseToken, recovered.LeaseToken)
 }
 
 func TestGroupAvailabilityProbeManualPostgres_ConcurrentClaim(t *testing.T) {

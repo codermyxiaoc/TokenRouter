@@ -28,6 +28,8 @@ type CreativeUpstreamError struct {
 	StatusCode int
 	Message    string
 	Retryable  bool
+	// Code 仅保存本站定义的错误类别；不影响原有 HTTP 重试策略。
+	Code string
 }
 
 // CreativeProviderResultUnconfirmedError 表示上游可能已经生成，但尚未取得可交付产物。
@@ -75,7 +77,11 @@ func creativeHTTPStatusError(statusCode int, message string) *CreativeUpstreamEr
 	case statusCode >= 400:
 		publicMessage = "creative provider rejected request"
 	}
-	return &CreativeUpstreamError{StatusCode: statusCode, Message: publicMessage, Retryable: retryable}
+	code := creativeProviderFailureCode(statusCode, message)
+	if reason := creativeProviderFailureMessage(code); reason != "" {
+		publicMessage = reason
+	}
+	return &CreativeUpstreamError{StatusCode: statusCode, Message: publicMessage, Retryable: retryable, Code: code}
 }
 
 // IsRetryableCreativeError 判断错误是否值得 worker 有限重试。

@@ -100,7 +100,7 @@ func TestCreativeCanvasReconciliationProjectionRecoversOnOriginalExecution(t *te
 
 func TestCreativeImageProviderReconciliationDueAfterExecutionTimeout(t *testing.T) {
 	started := time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)
-	run := &CreativeRun{Operation: CreativeOperationGenerate, ProvisioningPhase: CreativeProvisioningPhaseProviderInflight, StartedAt: &started}
+	run := &CreativeRun{Status: CreativeRunStatusRunning, Operation: CreativeOperationGenerate, ProvisioningPhase: CreativeProvisioningPhaseProviderInflight, StartedAt: &started}
 	require.False(t, creativeImageProviderReconciliationDue(run, started.Add(4*time.Minute+59*time.Second), 5*time.Minute))
 	require.True(t, creativeImageProviderReconciliationDue(run, started.Add(5*time.Minute), 5*time.Minute))
 	code := "PROVIDER_RESULT_UNCONFIRMED"
@@ -108,6 +108,69 @@ func TestCreativeImageProviderReconciliationDueAfterExecutionTimeout(t *testing.
 	require.True(t, creativeImageProviderReconciliationDue(run, started, 5*time.Minute))
 	run.Operation = CreativeOperationTTS
 	require.False(t, creativeImageProviderReconciliationDue(run, started.Add(time.Hour), 5*time.Minute))
+}
+
+// 图片等待结束后的阶段投影不能改写账务或以旧栅栏掩盖已确认结果。
+func TestCreativeImagePollReconciliationStagesAndOwnership(t *testing.T) {
+	for _, tt := range []struct {
+		name, status, code, message string
+		unconfirmed                 bool
+	}{
+		{"等待超时", CreativeRunStatusRunning, "CREATIVE_IMAGE_SUBMISSION_UNCONFIRMED", "请求等待已超时", false},
+		{"响应已中断", CreativeRunStatusRunning, "CREATIVE_IMAGE_SUBMISSION_UNCONFIRMED", "请求已中断或返回结果无法确认", true},
+		{"成品待结算", CreativeRunStatusProviderSucceeded, "CREATIVE_IMAGE_SETTLEMENT_PENDING", "正在确认结算", true},
+		{"结算重试", CreativeRunStatusSettlementPending, "CREATIVE_IMAGE_SETTLEMENT_PENDING", "正在确认结算", true},
+		{"预扣释放", CreativeRunStatusReleasePending, "CREATIVE_IMAGE_RELEASE_PENDING", "正在释放预扣", true},
+		{"仍在排队", CreativeRunStatusQueued, "", "", true},
+		{"已完成", CreativeRunStatusSucceeded, "", "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newCreativeWorkerFixture()
+			runID := "crun_image_reconciliation"
+			seedCreativeRun(f, runID, true)
+			run := f.repo.runs[runID]
+			run.Status = tt.status
+			run.ProvisioningPhase = CreativeProvisioningPhaseProviderInflight
+			started := time.Now().Add(-6 * time.Minute)
+			run.StartedAt = &started
+			if tt.unconfirmed {
+				run.ErrorCode = creativeStringPtr("PROVIDER_RESULT_UNCONFIRMED")
+				run.ErrorMessage = creativeStringPtr("https://private-provider.example/secret?api_key=do-not-display")
+				if tt.status == CreativeRunStatusRunning {
+					started = time.Now()
+				}
+			}
+			workspace := testCreativeWorkspaceID
+			run.WorkspaceID = &workspace
+			x := &creativeCanvasImageExecutor{creative: f.service}
+			execution := &CreativeCanvasExecution{UserID: run.UserID, CanvasID: workspace, TaskID: runID, Kind: "image"}
+			for range 2 {
+				result, err := x.Poll(context.Background(), execution)
+				require.NoError(t, err)
+				require.Equal(t, tt.code, result.ErrorCode)
+				require.Contains(t, result.ErrorMessage, tt.message)
+				require.NotContains(t, result.ErrorMessage, "private-provider")
+				require.NotContains(t, result.ErrorMessage, "do-not-display")
+				if tt.code == "CREATIVE_IMAGE_SUBMISSION_UNCONFIRMED" {
+					require.Contains(t, result.ErrorMessage, "请联系管理员")
+					require.Contains(t, result.ErrorMessage, runID)
+					require.Contains(t, result.ErrorMessage, "预扣尚未结算")
+				}
+				if tt.status == CreativeRunStatusSucceeded {
+					require.Equal(t, "succeeded", result.Status)
+				} else {
+					require.Equal(t, "running", result.Status)
+				}
+			}
+			execution.UserID++
+			_, err := x.Poll(context.Background(), execution)
+			require.ErrorIs(t, err, ErrCreativeRunNotFound)
+			require.Equal(t, tt.status, run.Status)
+			require.Zero(t, f.exec.calls)
+			require.Zero(t, f.billing.captureN)
+			require.Zero(t, f.billing.releaseN)
+		})
+	}
 }
 
 func TestCreativeCanvasArchivePendingClearsOldReconciliationProjection(t *testing.T) {

@@ -5077,8 +5077,14 @@ const handleTestAvailabilityProbe = async () => {
     if (!isCurrent()) return;
     const reason = (error as { reason?: string; response?: { data?: { reason?: string } } })?.reason
       ?? (error as { response?: { data?: { reason?: string } } })?.response?.data?.reason;
-    availabilityProbeError.value = reason === "GROUP_AVAILABILITY_PROBE_BUSY"
-      ? t("admin.groups.availabilityProbe.testBusy")
+    // 实例并发已满与本分组租约冲突分开提示，不能将其它分组占用误报成当前分组卡住。
+    const probeErrorKeys: Record<string, string> = {
+      GROUP_AVAILABILITY_PROBE_BUSY: "testBusy",
+      GROUP_AVAILABILITY_PROBE_CAPACITY: "testCapacity",
+      GROUP_AVAILABILITY_PROBE_LEASE_LOST: "testLeaseLost",
+    };
+    availabilityProbeError.value = reason && probeErrorKeys[reason]
+      ? t(`admin.groups.availabilityProbe.${probeErrorKeys[reason]}`)
       : extractApiErrorMessage(error, t("admin.groups.availabilityProbe.testRequestFailed"));
   } finally {
     if (isCurrent()) availabilityProbeTesting.value = false;

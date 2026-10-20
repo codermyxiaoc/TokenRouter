@@ -157,6 +157,8 @@ Grok 分组内的 Grok Imagine 视频模型使用 `pricing_mode=video` 和 `vide
 
 每个实例的 runner 不允许分钟级 cron 轮次重叠；单轮只领取不超过实例 worker 数量的到期 Group，使每个已领取分组都能立即执行，并由 PostgreSQL 租约阻止其它实例重复领取。维护、领取和每个分组的探测分别使用独立超时预算，慢维护不能挤占合法重试窗口。管理 Group API 中不合法的 `availability_probe_config` 统一返回 HTTP `400` 和 reason `INVALID_AVAILABILITY_PROBE_CONFIG`。
 
+租约按当前分组的“单次超时 × 允许尝试次数 + 60 秒收尾余量”计算，手动测试始终只有一次；例如 5 秒且不重试的定时配置只保留 65 秒租约，不再统一等待全局最长的 25 分钟。进程中断或保存失败后通过自然到期恢复，不强行解除尚有效的租约。每次领取有独立 token；保存状态、清除租约和追加观测处于同一事务，必须匹配当前 token，过期后被新任务替代的旧结果、重复回调不能污染状态和历史。执行上下文已超时或取消时仍使用独立的 15 秒预算记录失败。分组占用、实例并发已满、租约被替代分别返回 `GROUP_AVAILABILITY_PROBE_BUSY`、`GROUP_AVAILABILITY_PROBE_CAPACITY` 和 `GROUP_AVAILABILITY_PROBE_LEASE_LOST`，前端分别展示，不自动重发探测。该变更复用已有状态列，不新增迁移；所有后端实例应一并更新，旧实例已持有的长租约保留至正常完成或自然过期。
+
 ## 一致性边界
 
 - 市场预取可调度账号后按账号全局优先级、账号 ID 恢复稳定候选顺序；AccountGroup 只表达成员关系，不保存分组内优先级。预取失败才逐分组回退，不能混用两批不同时间点的数据后宣称原子快照。

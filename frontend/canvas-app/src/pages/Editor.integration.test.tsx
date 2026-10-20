@@ -101,6 +101,56 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); poll = undefined; });
 
 describe('画布编辑器生成与恢复集成', () => {
+  it('失败原因可打开完整详情，查看和关闭不移动节点或提交收费任务', async () => {
+    const message = '视频模型不支持当前分辨率，请修改后重试；预扣已释放';
+    currentNode().metadata = { ...currentNode().metadata, status: 'error', errorDetails: message };
+    await mount();
+    const before = structuredClone(cloudState.document);
+    await click(button('生成失败详情'));
+    const dialog = document.querySelector('[role="dialog"][aria-label="生成失败详情"]');
+    expect(dialog?.textContent).toContain(message);
+    expect(dialog?.textContent).not.toContain('task_id');
+    await act(async () => { button('关闭任务详情').dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 160, clientY: 160 })); });
+    await click(button('关闭任务详情'));
+    expect(document.querySelector('[role="dialog"][aria-label="生成失败详情"]')).toBeNull();
+    expect(cloudState.document).toEqual(before);
+    expect(createExecution).not.toHaveBeenCalled();
+    expect(createImageBatch).not.toHaveBeenCalled();
+  });
+
+  it('任务查询超时保留在途任务且自动继续查询，恢复后清除提示并展示结果', async () => {
+    currentNode().metadata = { ...currentNode().metadata, execution_id: 'pending-image', status: 'loading' };
+    vi.mocked(listExecutions).mockRejectedValueOnce(new DOMException('timeout', 'TimeoutError'));
+    await mount();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('任务状态查询超时，将自动重试');
+    expect(currentNode().metadata).toMatchObject({ execution_id: 'pending-image', status: 'loading' });
+    expect(button('生成中…').disabled).toBe(true);
+    vi.mocked(listExecutions).mockResolvedValue({
+      items: [{ id: 'pending-image', canvas_id: 'canvas-test', node_id: imageNode.id, kind: 'image', status: 'succeeded', task_id: 'upstream-existing', assets: [asset('recovered')], created_at: '2026-10-18T00:00:00Z', updated_at: '2026-10-18T00:01:00Z' }],
+      total: 1, page: 1, page_size: 100,
+    });
+    await act(async () => poll!());
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(currentNode().metadata).toMatchObject({ execution_id: 'pending-image', status: 'success', asset_id: 'recovered' });
+    expect(createExecution).not.toHaveBeenCalled();
+    expect(createImageBatch).not.toHaveBeenCalled();
+  });
+
+  it('查询未完成时不会并行堆积轮询，退出画布会取消只读查询', async () => {
+    let finish: ((value: Awaited<ReturnType<typeof listExecutions>>) => void) | undefined;
+    vi.mocked(listExecutions).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    await mount();
+    await act(async () => { poll!(); poll!(); });
+    expect(listExecutions).toHaveBeenCalledTimes(1);
+    const signal = vi.mocked(listExecutions).mock.calls[0][2]!;
+    expect(signal.aborted).toBe(false);
+    await act(async () => root.render(null));
+    expect(signal.aborted).toBe(true);
+    await act(async () => finish!({ items: [], total: 0, page: 1, page_size: 100 }));
+    expect(createExecution).not.toHaveBeenCalled();
+    expect(createImageBatch).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('视频参数从设置面板准确提交且只创建一个任务（自定义=%s）', async custom => {
     const videoModel: Model = {
       ...model, model: 'video-test', media_type: 'video', video_endpoint: 'openai_videos',
@@ -308,6 +358,13 @@ describe('画布编辑器生成与恢复集成', () => {
     expect(indicator?.textContent).toContain(message);
     expect(indicator?.querySelector('.animate-spin')).toBeNull();
     expect(button('任务核对中…').disabled).toBe(true);
+    await click(button('任务核对详情'));
+    const dialog = document.querySelector('[role="dialog"][aria-label="任务核对详情"]');
+    expect(dialog?.textContent).toContain(message);
+    expect(dialog?.textContent).toContain('以服务端最终结算为准');
+    expect(dialog?.textContent).not.toContain('预扣已释放');
+    expect(currentNode().metadata?.status).toBe('loading');
+    await click(button('关闭任务详情'));
     expect(createImageBatch).not.toHaveBeenCalled();
   });
 
@@ -354,6 +411,11 @@ describe('画布编辑器生成与恢复集成', () => {
     await click(button('生成图片'));
     const first = structuredClone(vi.mocked(createImageBatch).mock.calls[0]);
     expect(currentNode().metadata?.generation_request?.count).toBe(2);
+    await click(button('任务核对详情'));
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('提交结果待确认');
+    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain('预扣已释放');
+    await click(button('关闭任务详情'));
+    expect(createImageBatch).toHaveBeenCalledTimes(1);
     await writePrompt('用户后来修改的提示词');
     await chooseCount(4);
     expect(currentNode().metadata).toMatchObject({ count: 4, prompt: '用户后来修改的提示词' });

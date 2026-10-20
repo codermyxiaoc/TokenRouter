@@ -70,6 +70,7 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 	if err != nil {
 		if midjourney {
 			// POST 发送后断连不能证明未生图，必须保留预占，禁止重复生成。
+			logCreativeImageUnconfirmed(ctx, run.RunID, account.ID, "transport", 0)
 			return nil, creativeResultUnconfirmedError()
 		}
 		return nil, creativeHTTPStatusError(0, err.Error())
@@ -84,20 +85,26 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 	}
 	if err != nil {
 		if midjourney {
+			logCreativeImageUnconfirmed(ctx, run.RunID, account.ID, "response_body", resp.StatusCode)
 			return nil, creativeResultUnconfirmedError()
 		}
 		return nil, creativeHTTPStatusError(0, err.Error())
 	}
 	if midjourney && (resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode >= 500 || resp.StatusCode < 200 || resp.StatusCode >= 300 && resp.StatusCode < 400) {
+		logCreativeImageUnconfirmed(ctx, run.RunID, account.ID, "http_status_unconfirmed", resp.StatusCode)
 		return nil, creativeResultUnconfirmedError()
 	}
 	if resp.StatusCode >= 400 {
 		// 只记状态与固定阶段，区分真实 HTTP 拒绝和成功响应后的解析失败，不落原包或供应商消息。
 		logger.L().Warn("creative.openai_image_failed", zap.String("run_id", run.RunID), zap.Int64("account_id", account.ID), zap.String("stage", "http_status"), zap.Int("upstream_status", resp.StatusCode))
-		return nil, creativeHTTPStatusError(resp.StatusCode, extractUpstreamErrorMessage(respBody))
+		return nil, creativeHTTPResponseError(resp.StatusCode, respBody)
 	}
 	if midjourney {
-		return parseCreativeMidjourneyImageOutputs(ctx, respBody, creativeMidjourneyImageDownloader)
+		outputs, parseErr := parseCreativeMidjourneyImageOutputs(ctx, respBody, creativeMidjourneyImageDownloader)
+		if parseErr != nil {
+			logCreativeImageUnconfirmed(ctx, run.RunID, account.ID, "response_parse", resp.StatusCode)
+		}
+		return outputs, parseErr
 	}
 	outputs, err := parseCreativeOpenAIImageOutputs(respBody)
 	if err != nil {
@@ -105,6 +112,16 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 		logger.L().Warn("creative.openai_image_failed", zap.String("run_id", run.RunID), zap.Int64("account_id", account.ID), zap.String("stage", "response_parse"), zap.Int("upstream_status", resp.StatusCode))
 	}
 	return outputs, err
+}
+
+// 未知结果不会抛出 worker 错误；独立记录固定阶段，供管理员用任务编号核对，
+// 不保存上游错误、响应体、素材地址或用户提示词。
+func logCreativeImageUnconfirmed(ctx context.Context, runID string, accountID int64, stage string, status int) {
+	logger.L().Warn("creative.openai_image_result_unconfirmed",
+		zap.String("run_id", runID), zap.Int64("account_id", accountID),
+		zap.String("stage", stage), zap.Int("upstream_status", status),
+		zap.Bool("execution_timed_out", errors.Is(ctx.Err(), context.DeadlineExceeded)),
+	)
 }
 
 // creativeOpenAIURL 推导 OpenAI images 上游 URL：账号自定义 base_url 优先，否则官方端点。

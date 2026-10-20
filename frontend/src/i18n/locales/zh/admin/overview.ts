@@ -1265,6 +1265,8 @@ affiliates: {
         testAccount: '账号 #{id}',
         testRequestFailed: '探测请求失败，请稍后重试',
         testBusy: '当前分组正在探测，请等待本轮结束后再试',
+        testCapacity: '当前服务器的并行探测已满，请稍后再试',
+        testLeaseLost: '本次探测租约已过期，结果未覆盖新的探测记录，请刷新渠道状态查看',
         interval: '探测间隔（分钟）',
         timeout: '超时时间（秒）',
         maxRetries: '最大重试次数',

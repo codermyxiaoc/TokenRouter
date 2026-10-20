@@ -18,7 +18,9 @@ import (
 )
 
 const (
-	DefaultBaseURL   = "https://manxue.ai"
+	DefaultBaseURL = "https://manxue.ai"
+	// DrawingModel 是检测服务当前接受的画图模型，不得把其他被测模型静默改写为此值。
+	DrawingModel     = "gpt-6-astra"
 	MaxResponseBytes = 4 << 20
 	MaxHTMLBytes     = 2 << 20
 	defaultTimeout   = 45 * time.Second
@@ -40,13 +42,12 @@ type Client struct {
 	baseURL    string
 }
 
-// CreateRequest 中的 APIKey 不得写入日志；String 方法提供脱敏调试描述。
+// CreateRequest 中的 APIKey 不得写入日志；协议由服务端固定为 Responses，不发送已废弃字段。
 type CreateRequest struct {
 	Benchmark       string `json:"benchmark"`
 	BaseURL         string `json:"base_url"`
 	APIKey          string `json:"api_key"`
 	Model           string `json:"model"`
-	Protocol        string `json:"protocol,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	ServiceTier     string `json:"service_tier,omitempty"`
 }
@@ -368,9 +369,6 @@ func newClient(source *http.Client, baseURL string) *Client {
 
 // Create 仅提交一次；幂等键由业务层生成并持久化，客户端不执行自动重试。
 func (c *Client) Create(ctx context.Context, input CreateRequest, idempotencyKey string) (*TestResult, error) {
-	if input.Protocol == "" {
-		input.Protocol = "responses"
-	}
 	if err := validateCreate(input, idempotencyKey); err != nil {
 		return nil, err
 	}
@@ -428,10 +426,8 @@ func validateCreate(input CreateRequest, key string) error {
 	if input.Benchmark != "candy" && input.Benchmark != "pelican" {
 		return ErrInvalidRequest
 	}
-	if input.Protocol != "responses" && input.Protocol != "chat_completions" {
-		return ErrInvalidRequest
-	}
-	if input.Benchmark == "candy" && input.Protocol != "responses" {
+	// 画图只支持固定模型；提前拒绝不兼容配置，避免产生注定失败的远端任务。
+	if input.Benchmark == "pelican" && input.Model != DrawingModel {
 		return ErrInvalidRequest
 	}
 	if key != "" && !idempotencyPattern.MatchString(key) {

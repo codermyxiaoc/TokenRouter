@@ -402,7 +402,8 @@ func (s *CreativeVideoCanvasExecutor) Poll(ctx context.Context, e *CreativeCanva
 		if task.BillingStatus != "released" {
 			return &CreativeCanvasExecutionResult{Status: "running", ErrorCode: "CREATIVE_VIDEO_RELEASE_PENDING", ErrorMessage: "视频任务未完成，正在核对预扣处理结果，请勿重复生成"}, nil
 		}
-		return &CreativeCanvasExecutionResult{Status: "failed", ErrorCode: "CREATIVE_VIDEO_FAILED", ErrorMessage: "视频任务未完成，预扣已释放"}, nil
+		code := creativeVideoFailureCode(task)
+		return &CreativeCanvasExecutionResult{Status: "failed", ErrorCode: code, ErrorMessage: creativeVideoTerminalMessage(code)}, nil
 	default:
 		if task.BillingStatus == "reconciliation" {
 			return &CreativeCanvasExecutionResult{Status: "running", ErrorCode: "CREATIVE_VIDEO_RECONCILIATION", ErrorMessage: "视频任务状态与费用正在核对，请勿重复生成"}, nil

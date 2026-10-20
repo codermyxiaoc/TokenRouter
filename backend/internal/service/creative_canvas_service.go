@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -365,6 +366,11 @@ func (s *CreativeCanvasService) withExecutionAssets(ctx context.Context, e *Crea
 
 // creativeCanvasFailureMessage 只映射服务端已知错误码，不暴露上游响应、提示词或素材地址。
 func creativeCanvasExecutionFailureMessage(kind, code string) string {
+	if kind == "video" {
+		if message := creativeVideoTerminalMessage(code); message != "" {
+			return message
+		}
+	}
 	if kind == "audio" {
 		switch code {
 		case "UPSTREAM_STATUS_404":
@@ -384,6 +390,18 @@ func creativeCanvasExecutionFailureMessage(kind, code string) string {
 
 // creativeCanvasFailureMessage 保留既有图片和视频的安全错误文案。
 func creativeCanvasFailureMessage(code string) string {
+	if message := creativeProviderFailureMessage(code); message != "" {
+		return message
+	}
+	// 老任务只保存了 HTTP 状态码，读取时仍能给出明确且不泄露原文的失败类别。
+	if strings.HasPrefix(code, "UPSTREAM_STATUS_") {
+		status, err := strconv.Atoi(strings.TrimPrefix(code, "UPSTREAM_STATUS_"))
+		if err == nil {
+			if message := creativeProviderFailureMessage(creativeProviderFailureCode(status, "")); message != "" {
+				return message
+			}
+		}
+	}
 	switch code {
 	case "PROVISIONING_INCOMPLETE":
 		return "生成任务准备失败，请重新生成"
@@ -629,7 +647,7 @@ func (s *CreativeCanvasService) reconcileOne(ctx context.Context, e *CreativeCan
 	result, err := executor.Poll(ctx, e)
 	if err != nil {
 		// 已知核对提示应跨临时查询故障保留，避免重新显示成普通生成中。
-		if (!strings.HasPrefix(e.ErrorCode, "CREATIVE_VIDEO_") && !strings.HasPrefix(e.ErrorCode, "CREATIVE_AUDIO_") && !strings.HasPrefix(e.ErrorCode, "CREATIVE_TEXT_")) || e.ErrorMessage == "" {
+		if (!strings.HasPrefix(e.ErrorCode, "CREATIVE_VIDEO_") && !strings.HasPrefix(e.ErrorCode, "CREATIVE_AUDIO_") && !strings.HasPrefix(e.ErrorCode, "CREATIVE_TEXT_") && !strings.HasPrefix(e.ErrorCode, "CREATIVE_IMAGE_")) || e.ErrorMessage == "" {
 			e.ErrorMessage = "任务状态或素材正在恢复"
 		}
 		s.saveExecution(ctx, e, 10*time.Second)

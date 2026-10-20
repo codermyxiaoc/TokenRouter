@@ -26,7 +26,80 @@ func testClient(t *testing.T, handler http.HandlerFunc) *Client {
 }
 
 func createInput(benchmark string) CreateRequest {
-	return CreateRequest{Benchmark: benchmark, BaseURL: "https://gateway.example/v1", APIKey: "sk-unit-test-only", Model: "unit-model", Protocol: "responses"}
+	model := "unit-model"
+	if benchmark == "pelican" {
+		model = DrawingModel
+	}
+	return CreateRequest{Benchmark: benchmark, BaseURL: "https://gateway.example/v1", APIKey: "sk-unit-test-only", Model: model}
+}
+
+// 按当前文档严格拒绝未知字段，直接检查实际 JSON，避免客户端结构体解码忽略废弃参数。
+func TestCreateCurrentWireContract(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		benchmark string
+		reasoning string
+		tier      string
+	}{
+		{"candy defaults", "candy", "", ""},
+		{"candy extended reasoning", "candy", "max", "ultrafast"},
+		{"drawing defaults", "pelican", "", ""},
+		{"drawing high reasoning", "pelican", "high", "priority"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := createInput(tc.benchmark)
+			input.ReasoningEffort = tc.reasoning
+			input.ServiceTier = tc.tier
+			var calls atomic.Int32
+			client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.Method != http.MethodPost || r.URL.Path != "/api/v1/tests" {
+					t.Error("创建方法或路径不匹配")
+				}
+				if r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Idempotency-Key") != "current_contract" {
+					t.Error("创建请求头不匹配")
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error("创建请求不是合法 JSON")
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				expected := map[string]string{
+					"benchmark": tc.benchmark,
+					"base_url":  input.BaseURL,
+					"api_key":   input.APIKey,
+					"model":     input.Model,
+				}
+				if tc.reasoning != "" {
+					expected["reasoning_effort"] = tc.reasoning
+				}
+				if tc.tier != "" {
+					expected["service_tier"] = tc.tier
+				}
+				for field := range body {
+					if _, allowed := expected[field]; !allowed {
+						t.Errorf("发送了当前契约不接受的字段：%s", field)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+				}
+				for field, value := range expected {
+					if body[field] != value {
+						t.Errorf("创建字段与被测配置不一致：%s", field)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+				}
+				w.WriteHeader(http.StatusAccepted)
+				fmt.Fprintf(w, `{"id":"current_task","benchmark":%q,"status":"running","phase":"generating"}`, tc.benchmark)
+			})
+			result, err := client.Create(context.Background(), input, "current_contract")
+			if err != nil || result == nil || result.ID != "current_task" || calls.Load() != 1 {
+				t.Fatalf("当前契约创建失败或重复提交：%v", err)
+			}
+		})
+	}
 }
 
 func TestCreateAndGetCandy(t *testing.T) {
@@ -40,12 +113,18 @@ func TestCreateAndGetCandy(t *testing.T) {
 			if r.URL.Path != "/api/v1/tests" || r.Header.Get("Idempotency-Key") != "monitor_123" {
 				t.Error("创建路径或幂等键错误")
 			}
-			var body CreateRequest
+			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
-			if body.APIKey != "sk-unit-test-only" || body.BaseURL != "https://gateway.example/v1" || body.Protocol != "responses" {
+			if body["api_key"] != "sk-unit-test-only" || body["base_url"] != "https://gateway.example/v1" || body["model"] != "unit-model" {
 				t.Error("创建参数未按契约发送")
+			}
+			if _, present := body["protocol"]; present {
+				t.Error("创建请求不能发送已废弃的 protocol 字段")
+			}
+			if _, present := body["random_scene"]; present {
+				t.Error("创建请求不能发送已废弃的 random_scene 字段")
 			}
 			w.WriteHeader(http.StatusAccepted)
 			fmt.Fprint(w, `{"id":"task_123","benchmark":"candy","status":"running","phase":"generating","expires_at":"2026-10-03T10:00:00Z"}`)
@@ -57,7 +136,6 @@ func TestCreateAndGetCandy(t *testing.T) {
 		fmt.Fprint(w, `{"id":"task_123","benchmark":"candy","status":"succeeded","phase":"complete","usage_reported":true,"candy":{"status":"passed","question":"题目","answer":"答案 21","started_at":"2026-10-03T08:00:00Z","finished_at":"2026-10-03T08:00:42Z","duration_ms":42000,"input_tokens":4317,"output_tokens":1159}}`)
 	})
 	input := createInput("candy")
-	input.Protocol = ""
 	result, err := client.Create(context.Background(), input, "monitor_123")
 	if err != nil {
 		t.Fatal(err)
@@ -325,8 +403,14 @@ func TestCreateValidatesBeforeSending(t *testing.T) {
 		key    string
 	}{
 		{"benchmark", func(r *CreateRequest) { r.Benchmark = "arbitrary" }, "ok"},
-		{"candy chat", func(r *CreateRequest) { r.Protocol = "chat_completions" }, "ok"},
-		{"protocol", func(r *CreateRequest) { r.Protocol = "invalid" }, "ok"},
+		{"unsupported drawing model", func(r *CreateRequest) { r.Benchmark = "pelican" }, "ok"},
+		{"drawing model alias", func(r *CreateRequest) { r.Benchmark = "pelican"; r.Model = "alias/" + DrawingModel }, "ok"},
+		{"drawing model whitespace", func(r *CreateRequest) { r.Benchmark = "pelican"; r.Model = DrawingModel + " " }, "ok"},
+		{"drawing extended reasoning", func(r *CreateRequest) {
+			r.Benchmark = "pelican"
+			r.Model = DrawingModel
+			r.ReasoningEffort = "max"
+		}, "ok"},
 		{"key missing", func(r *CreateRequest) { r.APIKey = "" }, "ok"},
 		{"model missing", func(r *CreateRequest) { r.Model = " " }, "ok"},
 		{"insecure target", func(r *CreateRequest) { r.BaseURL = "http://target.example" }, "ok"},

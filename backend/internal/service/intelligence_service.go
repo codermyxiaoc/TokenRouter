@@ -17,9 +17,10 @@ import (
 )
 
 var (
-	ErrIntelligenceNotFound = infraerrors.NotFound("INTELLIGENCE_NOT_FOUND", "检测配置或记录不存在")
-	ErrIntelligenceDisabled = infraerrors.Forbidden("INTELLIGENCE_DISABLED", "降智检测未开启")
-	ErrIntelligenceBusy     = infraerrors.Conflict("INTELLIGENCE_BUSY", "当前配置正在检测，请等待本次检测结束")
+	ErrIntelligenceNotFound     = infraerrors.NotFound("INTELLIGENCE_NOT_FOUND", "检测配置或记录不存在")
+	ErrIntelligenceDisabled     = infraerrors.Forbidden("INTELLIGENCE_DISABLED", "降智检测未开启")
+	ErrIntelligenceBusy         = infraerrors.Conflict("INTELLIGENCE_BUSY", "当前配置正在检测，请等待本次检测结束")
+	ErrIntelligenceDrawingModel = infraerrors.BadRequest("INTELLIGENCE_DRAWING_MODEL_UNSUPPORTED", "满血 AI 画图测试当前仅支持 gpt-6-astra；请停用旧配置并新增对应模型配置，历史记录会保留")
 )
 
 // 兼容旧密钥已被删除的场景，观测正文不保留回显的站内 sk 凭据。
@@ -80,11 +81,13 @@ func (s *IntelligenceService) SaveConfig(ctx context.Context, id int64, in Intel
 	if in.IntervalMinutes < 5 || in.IntervalMinutes > 10080 {
 		return nil, intelligenceInvalid("检测间隔须为5至10080分钟")
 	}
-	if in.Protocol == "" {
-		in.Protocol = "responses"
+	if !intelligenceChoice(in.Protocol, "", "responses", "chat_completions") {
+		return nil, intelligenceInvalid("检测服务当前统一使用 Responses")
 	}
-	if !intelligenceChoice(in.Protocol, "responses", "chat_completions") || (in.Benchmark == "candy" && in.Protocol != "responses") {
-		return nil, intelligenceInvalid("糖果测试仅支持 Responses；画图支持 Responses 或 Chat Completions")
+	// 兼容旧页面提交的协议字段，仅归一站内配置；远端不再接受 protocol。
+	in.Protocol = "responses"
+	if !intelligenceModelSupported(in.Benchmark, in.Model) && (id == 0 || in.Enabled || in.ScheduleEnabled) {
+		return nil, ErrIntelligenceDrawingModel
 	}
 	if !intelligenceChoice(in.ReasoningEffort, "", "low", "medium", "high", "xhigh", "max", "ultra") || (in.Benchmark == "drawing" && !intelligenceChoice(in.ReasoningEffort, "", "low", "medium", "high")) {
 		return nil, intelligenceInvalid("不支持的推理程度")
@@ -139,6 +142,11 @@ func intelligenceChoice(v string, allowed ...string) bool {
 func intelligenceInvalid(message string) error {
 	return infraerrors.BadRequest("INTELLIGENCE_INVALID", message)
 }
+
+// 旧画图配置保留原模型身份；协议升级不能把历史结果冒充为另一个模型。
+func intelligenceModelSupported(benchmark, model string) bool {
+	return benchmark != "drawing" || model == manxue.DrawingModel
+}
 func intelligenceValidKey(key *APIKey, groupID int64) bool {
 	// 普通 Key 的自动降级开关不会改变正常绑定分组；分组不可用时仍沿用原网关降级规则。
 	return key != nil && key.Key != "" && key.IsActive() && !key.IsExpired() && !key.IsQuotaExhausted() && !key.IsComposite && !key.SmartRouting && len(key.CompositeGroups) == 0 && key.GroupID != nil && *key.GroupID == groupID && key.ManagedBy == nil && key.User != nil && key.User.Status == StatusActive && key.User.DeletedAt == nil
@@ -167,6 +175,9 @@ func (s *IntelligenceService) Run(ctx context.Context, id int64) (*IntelligenceR
 	}
 	if !c.Enabled {
 		return nil, ErrIntelligenceDisabled
+	}
+	if !intelligenceModelSupported(c.Benchmark, c.Model) {
+		return nil, ErrIntelligenceDrawingModel
 	}
 	key, err := s.keys.GetByID(ctx, c.APIKeyID)
 	if err != nil || !intelligenceValidKey(key, c.GroupID) {
@@ -330,6 +341,11 @@ func (s *IntelligenceService) execute(ctx context.Context, run *IntelligenceRun)
 			s.finish(ctx, run, "error", "error", "检测配置不可用")
 			return
 		}
+		// 包括升级前已排队及定时产生的任务，均在提交凭据前检查新模型约束。
+		if !intelligenceModelSupported(c.Benchmark, c.Model) {
+			s.finish(ctx, run, "error", "error", ErrIntelligenceDrawingModel.Message)
+			return
+		}
 		group, err := s.groups.GetByID(ctx, c.GroupID)
 		if err != nil || group == nil || group.Status != StatusActive {
 			s.finish(ctx, run, "error", "error", "分组不可用")
@@ -355,7 +371,7 @@ func (s *IntelligenceService) execute(ctx context.Context, run *IntelligenceRun)
 		if benchmark == "drawing" {
 			benchmark = "pelican"
 		}
-		result, err := s.client.Create(ctx, manxue.CreateRequest{Benchmark: benchmark, BaseURL: c.BaseURL, APIKey: key.Key, Model: c.Model, Protocol: c.Protocol, ReasoningEffort: c.ReasoningEffort, ServiceTier: c.ServiceTier}, run.ID)
+		result, err := s.client.Create(ctx, manxue.CreateRequest{Benchmark: benchmark, BaseURL: c.BaseURL, APIKey: key.Key, Model: c.Model, ReasoningEffort: c.ReasoningEffort, ServiceTier: c.ServiceTier}, run.ID)
 		if err != nil {
 			status := "unknown"
 			var httpErr *manxue.HTTPError

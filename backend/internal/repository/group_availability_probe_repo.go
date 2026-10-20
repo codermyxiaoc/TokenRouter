@@ -9,6 +9,7 @@ import (
 
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/TokenFlux/TokenRouter/internal/service"
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
 
@@ -21,7 +22,7 @@ func NewGroupAvailabilityProbeRepository(db *sql.DB) service.GroupAvailabilityPr
 }
 
 // ClaimGroup 原子保存探测配置并领取租约，失败请求不会覆盖获胜请求或其它分组设置。
-func (r *groupAvailabilityProbeRepository) ClaimGroup(ctx context.Context, groupID int64, config service.GroupAvailabilityProbeConfig, now time.Time, lockUntil time.Time, lockedBy string) (*service.GroupAvailabilityProbeDueGroup, error) {
+func (r *groupAvailabilityProbeRepository) ClaimGroup(ctx context.Context, groupID int64, config service.GroupAvailabilityProbeConfig, now time.Time, lockUntil time.Time, _ string) (*service.GroupAvailabilityProbeDueGroup, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("availability probe database is not configured")
 	}
@@ -56,12 +57,14 @@ func (r *groupAvailabilityProbeRepository) ClaimGroup(ctx context.Context, group
 		return nil, err
 	}
 	var claimedID int64
+	// 每次领取独立代次；同一实例重启或租约过期后的旧结果不能释放后续任务。
+	group.LeaseToken = uuid.NewString()
 	err = tx.QueryRowContext(ctx, `
 		UPDATE group_availability_probe_states
 		SET locked_until = $3, locked_by = $4, updated_at = NOW()
 		WHERE group_id = $1 AND (locked_until IS NULL OR locked_until <= $2)
 		RETURNING group_id
-	`, groupID, now, lockUntil, lockedBy).Scan(&claimedID)
+	`, groupID, now, lockUntil, group.LeaseToken).Scan(&claimedID)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -86,7 +89,7 @@ func (r *groupAvailabilityProbeRepository) ClaimGroup(ctx context.Context, group
 	return &group, nil
 }
 
-func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now time.Time, lockUntil time.Time, lockedBy string, limit int) ([]service.GroupAvailabilityProbeDueGroup, error) {
+func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now time.Time, lockUntil time.Time, _ string, limit int) ([]service.GroupAvailabilityProbeDueGroup, error) {
 	if r == nil || r.db == nil {
 		return nil, nil
 	}
@@ -130,8 +133,7 @@ func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now tim
 	}
 
 	rows, err := tx.QueryContext(ctx, `
-		WITH due AS (
-			SELECT s.group_id
+			SELECT g.id, g.name, g.platform, g.availability_probe_config
 			FROM group_availability_probe_states s
 			JOIN groups g ON g.id = s.group_id
 			WHERE g.deleted_at IS NULL
@@ -140,23 +142,9 @@ func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now tim
 			  AND (s.next_run_at IS NULL OR s.next_run_at <= $1)
 			  AND (s.locked_until IS NULL OR s.locked_until <= $1)
 			ORDER BY COALESCE(s.next_run_at, 'epoch'::timestamptz), s.group_id
-			LIMIT $4
+			LIMIT $2
 			FOR UPDATE OF s SKIP LOCKED
-		),
-		claimed AS (
-			UPDATE group_availability_probe_states s
-			SET locked_until = $2,
-				locked_by = $3,
-				updated_at = NOW()
-			FROM due
-			WHERE s.group_id = due.group_id
-			RETURNING s.group_id
-		)
-		SELECT g.id, g.name, g.platform, g.availability_probe_config
-		FROM claimed c
-		JOIN groups g ON g.id = c.group_id
-		ORDER BY g.id
-	`, now, lockUntil, lockedBy, limit)
+	`, now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -174,10 +162,27 @@ func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now tim
 				return nil, fmt.Errorf("decode availability probe config: %w", err)
 			}
 		}
+		item.LeaseToken = uuid.NewString()
 		dueGroups = append(dueGroups, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	// 保持同一事务的行锁，按各分组配置领取；不能将短探测统一锁住二十五分钟。
+	for _, group := range dueGroups {
+		groupLockUntil := now.Add(service.GroupAvailabilityProbeLeaseDuration(group.Config, false))
+		if lockUntil.Before(groupLockUntil) {
+			groupLockUntil = lockUntil
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE group_availability_probe_states
+			SET locked_until=$2, locked_by=$3, updated_at=NOW() WHERE group_id=$1
+		`, group.GroupID, groupLockUntil, group.LeaseToken); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -190,6 +195,9 @@ func (r *groupAvailabilityProbeRepository) SaveResultAndScheduleNext(ctx context
 	if r == nil || r.db == nil || result == nil {
 		return nil
 	}
+	if result.LeaseToken == "" {
+		return service.ErrGroupAvailabilityProbeLeaseLost
+	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -199,6 +207,25 @@ func (r *groupAvailabilityProbeRepository) SaveResultAndScheduleNext(ctx context
 		_ = tx.Rollback()
 	}()
 
+	// 先原子核对领取代次再更新状态；不匹配时连历史观测也不写入，避免旧结果污染可用率。
+	updated, err := tx.ExecContext(ctx, `
+		UPDATE group_availability_probe_states SET
+			next_run_at=$2, locked_until=NULL, locked_by=NULL,
+			last_status=$3, last_success=$4, last_latency_ms=$5,
+			last_error=$6, last_checked_at=$7, updated_at=NOW()
+		WHERE group_id=$1 AND locked_by=$8
+	`, result.GroupID, nextRunAt, result.Status, result.Success, result.LatencyMs,
+		nullableProbeString(result.ErrorMessage), result.FinishedAt, result.LeaseToken)
+	if err != nil {
+		return err
+	}
+	affected, err := updated.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return service.ErrGroupAvailabilityProbeLeaseLost
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO group_availability_probe_results (
 			group_id, account_id, model_id, status, success, latency_ms,
@@ -206,26 +233,6 @@ func (r *groupAvailabilityProbeRepository) SaveResultAndScheduleNext(ctx context
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 	`, result.GroupID, result.AccountID, result.ModelID, result.Status, result.Success, result.LatencyMs, nullableProbeString(result.ErrorMessage), result.StartedAt, result.FinishedAt); err != nil {
-		return err
-	}
-
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO group_availability_probe_states (
-			group_id, next_run_at, locked_until, locked_by, last_status,
-			last_success, last_latency_ms, last_error, last_checked_at, created_at, updated_at
-		)
-		VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, NOW(), NOW())
-		ON CONFLICT (group_id) DO UPDATE SET
-			next_run_at = EXCLUDED.next_run_at,
-			locked_until = NULL,
-			locked_by = NULL,
-			last_status = EXCLUDED.last_status,
-			last_success = EXCLUDED.last_success,
-			last_latency_ms = EXCLUDED.last_latency_ms,
-			last_error = EXCLUDED.last_error,
-			last_checked_at = EXCLUDED.last_checked_at,
-			updated_at = NOW()
-	`, result.GroupID, nextRunAt, result.Status, result.Success, result.LatencyMs, nullableProbeString(result.ErrorMessage), result.FinishedAt); err != nil {
 		return err
 	}
 

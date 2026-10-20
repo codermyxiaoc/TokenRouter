@@ -14,6 +14,7 @@ import {ConfigNodePanel,configKind} from '@/components/ConfigNodePanel';
 import {ConfigComposer} from '@/components/ConfigComposer';
 import {configInputs,compileConfigPrompt,remapConfigReferences} from '@/platform/config-composer';
 import {GenerationSettings} from '@/components/GenerationSettings';
+import {GenerationStatusDetails} from '@/components/GenerationStatusDetails';
 import {resolveGenerationSettings} from '@/platform/generation-settings';
 import {referenceImageSizeWarning} from '@/platform/reference-image-limit';
 import {mediaUploadAccept,validateUploadFiles} from '@/platform/upload-validation';
@@ -49,6 +50,7 @@ export function Editor(){
  const [,historyRender]=useState(0);const history=useRef<{past:CanvasDocument[];future:CanvasDocument[]}>({past:[],future:[]});const copied=useRef<CanvasDocument|null>(null);const container=useRef<HTMLDivElement>(null);const uploadInput=useRef<HTMLInputElement>(null);const documentRef=useRef(doc);documentRef.current=doc;
  const submitLocks=useRef(new Set<string>());const activeExecutions=useRef(new Map<string,Execution>());const themeName=useThemeStore(s=>s.theme);const setTheme=useThemeStore(s=>s.setTheme);const theme=canvasThemes[themeName];
  const [configComposerId,setConfigComposerId]=useState('');
+ const [executionSyncError,setExecutionSyncError]=useState('');
  const [settingsAnchor,setSettingsAnchor]=useState<HTMLButtonElement|null>(null);
  const [expandedPrompt,setExpandedPrompt]=useState(false);const [nodeFilter,setNodeFilter]=useState('all');const [gridList,setGridList]=useState(false);const [infoOpen,setInfoOpen]=useState(false);
  const [viewSize,setViewSize]=useState({width:1200,height:800});
@@ -81,7 +83,34 @@ export function Editor(){
  const refreshAssets=useCallback(async()=>{const result=await listAssets(id,assetPage);setAssets(result.items);setAssetTotal(result.total);},[id,assetPage]);
  useEffect(()=>{void refreshAssets().catch(report);},[refreshAssets]);
  // 收齐分页后聚合同一批次，避免部分页面暂时把未完成任务显示为成功。
- useEffect(()=>{if(!doc)return;let live=true;let running=false;const refresh=async()=>{if(running)return;running=true;try{let page=1,total=Infinity,seen=0;while(live&&seen<total){const result=await listExecutions(id,page++);if(!live)return;total=result.total;seen+=result.items.length;for(const execution of result.items){if(execution.canvas_id!==id)continue;const cached=activeExecutions.current.get(execution.id);if(!cached||Date.parse(execution.updated_at)>=Date.parse(cached.updated_at))activeExecutions.current.set(execution.id,execution);}if(!result.items.length)break;}if(live){update(old=>mergeExecutions(old,[...activeExecutions.current.values()],id));void refreshAssets().catch(()=>{});}}catch(e){if(live)report(e);}finally{running=false;}};void refresh();const timer=setInterval(()=>void refresh(),4000);return()=>{live=false;clearInterval(timer);};},[id,!!doc,update,refreshAssets]);
+ useEffect(()=>{
+  if(!doc)return;
+  let live=true;let running=false;const controller=new AbortController();
+  const refresh=async()=>{
+   if(running)return;
+   running=true;
+   try{
+    let page=1,total=Infinity,seen=0;
+    while(live&&seen<total){
+     const result=await listExecutions(id,page++,controller.signal);
+     if(!live)return;
+     total=result.total;seen+=result.items.length;
+     for(const execution of result.items){
+      if(execution.canvas_id!==id)continue;
+      const cached=activeExecutions.current.get(execution.id);
+      if(!cached||Date.parse(execution.updated_at)>=Date.parse(cached.updated_at))activeExecutions.current.set(execution.id,execution);
+     }
+     if(!result.items.length)break;
+    }
+    if(live){setExecutionSyncError('');update(old=>mergeExecutions(old,[...activeExecutions.current.values()],id));void refreshAssets().catch(()=>{});}
+   }catch(e){
+    // 查询失败不能改写任务/费用状态，后续只继续 GET，不自动重发生成。
+    if(live&&((e as Error)?.name!=='AbortError'))setExecutionSyncError((e as Error)?.name==='TimeoutError'?'任务状态查询超时，将自动重试。任务结果尚未确认，请勿重复生成。':'任务状态暂时无法更新，将自动重试。任务结果尚未确认，请勿重复生成。');
+   }finally{running=false;}
+  };
+  void refresh();const timer=setInterval(()=>void refresh(),4000);
+  return()=>{live=false;controller.abort();clearInterval(timer);};
+ },[id,!!doc,update,refreshAssets]);
  // 移动、缩放和框选共享指针生命周期，设置弹层吞掉松手或切换窗口后也立即停止。
  const nodeGesture=usePointerGesture<Gesture>({scope:id,onMove(e,g){
   const point=world(e.clientX,e.clientY);
@@ -258,7 +287,7 @@ export function Editor(){
   {sidebar&&<aside className="side-panel" style={{background:theme.node.panel,borderColor:theme.node.stroke}}><div className="side-tabs">{(['canvas','assets','prompts'] as const).map(tab=><button key={tab} className={sideTab===tab?'active':''} onClick={()=>setSideTab(tab)}>{tab==='canvas'?'画布':tab==='assets'?'素材':'提示词库'}</button>)}</div><div className="side-subheading"><span>{sideTab==='canvas'?`画布元素 ${doc.nodes.length}`:sideTab==='assets'?'个人素材 · 保留 7 天':'提示词库'}</span>{sideTab==='canvas'&&<><button title="选择所有节点" onClick={()=>setSelected(new Set(doc.nodes.map(n=>n.id)))}><ListChecks size={14}/><span>选择</span></button><Choice compact label="筛选节点类型" value={nodeFilter} options={[{value:'all',label:'全部'},...Object.entries(names).map(([value,label])=>({value,label}))]} onChange={setNodeFilter}/><button title="切换列表布局" onClick={()=>setGridList(v=>!v)}><LayoutGrid size={14}/></button></>}</div><label className="search"><Search size={15}/><input placeholder="搜索节点" value={search} onChange={e=>setSearch(e.target.value)}/></label>
    <div className={`side-list ${gridList?'grid-list':''}`}>{sideTab==='assets'?<>{assets.filter(a=>!search||a.media_type.includes(search)).map(asset=><button key={asset.id} className="asset-card" disabled={isAssetExpired(asset)} onClick={()=>void insertAsset(asset)}><AssetView id={asset.id} type={asset.media_type} expired={isAssetExpired(asset)}/><span>{asset.media_type} · {isAssetExpired(asset)?'已过期':new Date(asset.expires_at).toLocaleDateString()}</span></button>)}{assetTotal>50&&<div className="pagination"><button disabled={assetPage===1} onClick={()=>setAssetPage(p=>p-1)}>上一页</button><span>{assetPage}</span><button disabled={assetPage*50>=assetTotal} onClick={()=>setAssetPage(p=>p+1)}>下一页</button></div>}</>:doc.nodes.filter(n=>(sideTab!=='prompts'||n.type==='text'||!!n.metadata?.prompt)&&(nodeFilter==='all'||sideTab!=='canvas'||n.type===nodeFilter)&&`${n.title} ${n.metadata?.content||''} ${n.metadata?.prompt||''}`.toLowerCase().includes(search.toLowerCase())).map(node=>{const Icon=iconFor(node.type);return <button key={node.id} className={`node-list-item ${selected.has(node.id)?'selected':''}`} onClick={()=>{setSelected(new Set([node.id]));setSettingsOpen(false);focus(node);}}><div className="node-list-preview">{node.type==='image'&&node.metadata?.asset_id?<AssetView id={node.metadata.asset_id} type="image"/>:<Icon size={18}/>}</div><div className="node-list-copy"><strong>{node.title}</strong><small>{names[node.type]}</small></div><span className={`node-status ${node.metadata?.status||'idle'}`}/><Eye size={13} className="node-visibility"/>{sideTab==='prompts'&&<span className="text-preview">{node.metadata?.content||node.metadata?.prompt}</span>}</button>;})}</div><button className="flat" onClick={()=>sideTab==='assets'?pickUpload():addNode('text')}>{sideTab==='assets'?'+ 上传素材':'+ 添加文本'}</button></aside>}
   <section className="canvas-main"><header className="canvas-top"><button title="画布库" onClick={()=>void cloud.flush().then(()=>navigate('/')).catch(report)}><ArrowLeft size={18}/></button><button title="侧栏" onClick={()=>setSidebar(s=>!s)}>{sidebar?<PanelLeftClose size={18}/>:<PanelLeftOpen size={18}/>}</button><strong>{cloud.record.title}</strong><span className="save-state">{cloud.conflict?'保存冲突':cloud.saving?'保存中…':cloud.error?'保存失败':'已保存'}</span><span className="grow"/><button title="导出画布" onClick={()=>void exportCanvas({...cloud.record!,document:doc}).catch(report)}><Download size={18}/></button><button title="切换主题" onClick={()=>setTheme(themeName==='dark'?'light':'dark')}>{themeName==='dark'?<Sun size={18}/>:<Moon size={18}/>}</button></header>
-   {(error||cloud.error)&&<div className="editor-alert" role="alert">{error||cloud.error}{cloud.conflict&&<><button onClick={()=>void exportCanvas({...cloud.record!,document:doc}).catch(report)}>导出本地草稿</button><button onClick={()=>{if(confirm('重新载入会放弃未保存修改，是否继续？'))void cloud.reload().catch(report);}}>重新载入</button></>}<button aria-label="关闭错误" onClick={()=>setError('')}><X size={16}/></button></div>}
+   {(error||cloud.error||executionSyncError)&&<div className="editor-alert" role="alert">{error||cloud.error||executionSyncError}{cloud.conflict&&<><button onClick={()=>void exportCanvas({...cloud.record!,document:doc}).catch(report)}>导出本地草稿</button><button onClick={()=>{if(confirm('重新载入会放弃未保存修改，是否继续？'))void cloud.reload().catch(report);}}>重新载入</button></>}<button aria-label="关闭错误" onClick={()=>{setError('');setExecutionSyncError('');}}><X size={16}/></button></div>}
    <div className="canvas-stage">
     <InfiniteCanvas containerRef={container} viewport={doc.viewport} tool={tool} backgroundMode={doc.backgroundMode} onViewportChange={viewport} onCanvasDeselect={()=>{setSelected(new Set());setSelectedEdge('');connectionController.current?.cancel();}} onCanvasMouseDown={e=>nodeGesture.begin(e,{kind:'select',x:e.clientX,y:e.clientY,start:snapshot(doc),ids:new Set()})} onCanvasDoubleClick={e=>addNode('text',world(e.clientX,e.clientY))} onContextMenu={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();void upload([...e.dataTransfer.files],world(e.clientX,e.clientY));}}>
      <CanvasConnectionLayer ref={connectionController} containerRef={container} nodes={doc.nodes} connections={doc.connections} viewport={doc.viewport} selected={selected} selectedEdge={selectedEdge} onSelect={edgeId=>{setSelectedEdge(edgeId);setSelected(new Set());}} onConnect={link}/>
@@ -267,7 +296,7 @@ export function Editor(){
       {node.type==='text'?<textarea className="text-node-content" value={node.metadata?.content||''} placeholder="输入文本或提示词…" onPointerDown={e=>e.stopPropagation()} onChange={e=>patchNode(node.id,{content:e.target.value})}/>:node.type==='image'?<ImageResults node={node} onSelect={assetId=>selectImage(node.id,assetId)} onDownload={downloadImage} onExtract={assetId=>void assetMetadata(assetId).then(asset=>insertAsset(asset,{x:node.position.x+node.width+48,y:node.position.y})).catch(report)}/>:['video','audio'].includes(node.type)?<AssetView id={node.metadata?.asset_id} type={node.type} expired={expired} videoNodeInteraction={node.type==='video'?{scale:doc.viewport.k,height:node.height,onSelect:event=>selectMediaNode(event,node)}:undefined} audioNodeInteraction={node.type==='audio'?{onSelect:event=>selectMediaNode(event,node)}:undefined}/>:node.type==='config'?<ConfigNodePanel node={node} inputs={configInputs(doc,node.id)} models={models} selected={isSelected} busy={busy||cloud.conflict} pending={!!doc.nodes.find(n=>n.id===node.metadata?.generation_target_id)?.metadata?.generation_request} running={doc.nodes.find(n=>n.id===node.metadata?.generation_target_id)?.metadata?.status==='loading'} reconciling={doc.nodes.find(n=>n.id===node.metadata?.generation_target_id)?.metadata?.generation_phase==='reconciliation'} composerOpen={configComposerId===node.id} onChange={patch=>patchNode(node.id,patch)} onComposerToggle={()=>{setSelected(new Set([node.id]));setConfigComposerId(current=>current===node.id?'':node.id);if(configComposerId!==node.id)viewport(focusNodeLayout(node,viewSize,304));}} onGenerate={()=>void execute(node)}/>:null}
       {node.type==='config'&&isSelected&&configComposerId===node.id&&<div className="node-panel" style={{width:Math.min(600,viewSize.width-24),transform:`translateX(-50%) scale(${1/doc.viewport.k})`}}><ConfigComposer kind={configKind(node)} onAddText={()=>addTextReference(node)} onUploadImage={()=>pickUpload({nodeId:node.id,mode:'reference'})} value={node.metadata?.composerContent??node.metadata?.prompt??''} inputs={configInputs(doc,node.id)} onChange={value=>patchNode(node.id,{composerContent:value})} onClose={()=>setConfigComposerId('')} onDisconnect={from=>change(old=>({...old,connections:old.connections.filter(edge=>!(edge.toNodeId===node.id&&edge.fromNodeId===from))}))}/></div>}
       <CanvasGenerationLoading node={node}/>
-      {node.metadata?.status==='error'&&<div className="node-error">{node.metadata.errorDetails||'生成失败'}</div>}
+      {node.metadata?.status==='error'&&<GenerationStatusDetails node={node}/>}
       <button className="handle target" style={{touchAction:'none'}} title="连接输入" onPointerDown={e=>connectionController.current?.begin(e,node.id,'target')}/>
       {node.type!=='config'&&<button className="handle source" style={{touchAction:'none'}} title="拖动或点击后选择输入连接点" onPointerDown={e=>connectionController.current?.begin(e,node.id,'source')}/>}
       {isSelected&&<button className="resize-handle" aria-label="缩放节点" onPointerDown={e=>onMoveStart(e,node,true)}/>}

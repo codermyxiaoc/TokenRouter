@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"image"
 	"image/color"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/stretchr/testify/require"
@@ -256,6 +258,43 @@ func TestCreativeMidjourneyHTTPFailureDoesNotResubmit(t *testing.T) {
 			require.False(t, IsRetryableCreativeError(err))
 			require.Len(t, upstream.requests, 1)
 		})
+	}
+}
+
+// 验证实际送入 HTTP 的上下文始终有时限；零值配置不能让同步图片请求无限挂起。
+func TestCreativeImageExecutionAlwaysHasBoundedRequestContext(t *testing.T) {
+	image := base64.StdEncoding.EncodeToString(creativeMJTestPNG(t, 42))
+	for _, model := range []string{"MJ-v8.1", "gpt-image-2"} {
+		for _, seconds := range []int{-1, 0, 12} {
+			t.Run(fmt.Sprintf("%s/%d", model, seconds), func(t *testing.T) {
+				cfg := &config.Config{}
+				cfg.Creative.ExecuteTimeoutSeconds = seconds
+				upstream := &httpUpstreamRecorder{resp: &http.Response{
+					StatusCode: http.StatusOK, Header: http.Header{},
+					Body: io.NopCloser(strings.NewReader(`{"data":[{"b64_json":"` + image + `"}]}`)),
+				}}
+				executor := &CreativeExecutor{cfg: cfg, gateway: &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}}
+				run := creativeMJTestRun()
+				if model == "gpt-image-2" {
+					run.RequestedOutputCount = 1
+				}
+				start := time.Now()
+				result, err := executor.Execute(context.Background(), run, CreativeRunPayload{Prompt: "a teapot"}, &CreativeExecution{
+					Account:       &Account{ID: 1, Type: AccountTypeAPIKey, Platform: PlatformOpenAI, Credentials: map[string]any{"api_key": "local-test"}},
+					UpstreamModel: model,
+				})
+				require.NoError(t, err)
+				require.Len(t, result.Outputs, 1)
+				require.Len(t, upstream.requests, 1)
+				deadline, ok := upstream.requests[0].Context().Deadline()
+				require.True(t, ok)
+				budget := defaultCreativeExecuteTimeout
+				if seconds > 0 {
+					budget = time.Duration(seconds) * time.Second
+				}
+				require.WithinDuration(t, start.Add(budget), deadline, time.Second)
+			})
+		}
 	}
 }
 

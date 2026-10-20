@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -18,7 +19,7 @@ type creativeCanvasImageExecutor struct {
 
 // creativeImageProviderReconciliationDue 将执行超时后的图片任务投影为核对状态，避免界面无限显示“生成中”。
 func creativeImageProviderReconciliationDue(run *CreativeRun, now time.Time, timeout time.Duration) bool {
-	if run == nil || run.Operation == CreativeOperationTTS || run.ProvisioningPhase != CreativeProvisioningPhaseProviderInflight {
+	if run == nil || run.Status != CreativeRunStatusRunning || run.Operation == CreativeOperationTTS || run.ProvisioningPhase != CreativeProvisioningPhaseProviderInflight {
 		return false
 	}
 	if run.ErrorCode != nil && *run.ErrorCode == "PROVIDER_RESULT_UNCONFIRMED" {
@@ -35,6 +36,16 @@ func creativeCanvasImageExecutionTimeout(public *CreativePublicService) time.Dur
 		return time.Duration(public.Config.Creative.ExecuteTimeoutSeconds) * time.Second
 	}
 	return defaultCreativeExecuteTimeout
+}
+
+// 栅栏后的同步响应无法查询远端任务；明确提示人工核对，不能伪装成仍在自动生成。
+// 任务编号来自已验证归属的记录，仅展示安全身份，不回显供应商响应或素材地址。
+func creativeImageUnconfirmedMessage(run *CreativeRun, now time.Time, timeout time.Duration) string {
+	reason := "图片请求已中断或返回结果无法确认"
+	if run.StartedAt != nil && timeout > 0 && !now.Before(run.StartedAt.Add(timeout)) {
+		reason = "图片请求等待已超时，上游结果尚未确认"
+	}
+	return fmt.Sprintf("%s，请联系管理员核对任务 %s；已停止自动重发，预扣尚未结算", reason, run.RunID)
 }
 
 func (x *creativeCanvasImageExecutor) Recover(ctx context.Context, e *CreativeCanvasExecution) (string, error) {
@@ -112,8 +123,19 @@ func (x *creativeCanvasImageExecutor) Poll(ctx context.Context, e *CreativeCanva
 	if run.Operation == CreativeOperationTTS && run.ProvisioningPhase == CreativeProvisioningPhaseProviderInflight && run.ErrorCode != nil && *run.ErrorCode == "PROVIDER_RESULT_UNCONFIRMED" {
 		out.ErrorCode, out.ErrorMessage = "CREATIVE_AUDIO_SUBMISSION_UNCONFIRMED", "语音请求结果正在核对，请勿重复生成；费用以最终结算为准"
 	}
-	if run.Operation != CreativeOperationTTS && creativeImageProviderReconciliationDue(run, time.Now(), creativeCanvasImageExecutionTimeout(x.creative)) {
-		out.ErrorCode, out.ErrorMessage = "CREATIVE_IMAGE_SUBMISSION_UNCONFIRMED", "图片请求结果正在核对，请勿重复生成；费用以最终结算为准"
+	if run.Operation != CreativeOperationTTS {
+		// 已确认成品或进入释放阶段后，不再沿用上游受理未知的提示；各阶段仍由原账本推进。
+		switch run.Status {
+		case CreativeRunStatusProviderSucceeded, CreativeRunStatusSettlementPending:
+			out.ErrorCode, out.ErrorMessage = "CREATIVE_IMAGE_SETTLEMENT_PENDING", "图片已生成，正在确认结算并保存成品，请勿重复生成"
+		case CreativeRunStatusReleasePending:
+			out.ErrorCode, out.ErrorMessage = "CREATIVE_IMAGE_RELEASE_PENDING", "图片任务正在释放预扣，请等待处理完成"
+		default:
+			now, timeout := time.Now(), creativeCanvasImageExecutionTimeout(x.creative)
+			if creativeImageProviderReconciliationDue(run, now, timeout) {
+				out.ErrorCode, out.ErrorMessage = "CREATIVE_IMAGE_SUBMISSION_UNCONFIRMED", creativeImageUnconfirmedMessage(run, now, timeout)
+			}
+		}
 	}
 	switch run.Status {
 	case CreativeRunStatusFailed, CreativeRunStatusCancelled:

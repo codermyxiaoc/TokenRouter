@@ -44,7 +44,15 @@ export const listModels = () => api<Model[]>('/models');
 function executionRecord(value:Execution & {params?:{batch_id?:string;batch_index?:number;batch_size?:number;batch_output_count?:number}}):Execution {
   return {...value,batch_id:value.params?.batch_id,batch_index:value.params?.batch_index,batch_size:value.params?.batch_size,batch_output_count:value.params?.batch_output_count};
 }
-export const listExecutions = async (canvasId:string,page=1) => {const result=await api<Page<Execution>>(`/executions?canvas_id=${encodeURIComponent(canvasId)}&page=${page}&page_size=100`);return {...result,items:result.items.map(executionRecord)};};
+// 只读状态查询必须可结束；一次悬挂连接不能永久占住编辑器的轮询锁。生成提交不沿用此超时或自动重试。
+export const listExecutions = async (canvasId:string,page=1,signal?:AbortSignal) => {
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(new DOMException('任务状态查询超时','TimeoutError')),20_000);
+  try {
+    const result=await api<Page<Execution>>(`/executions?canvas_id=${encodeURIComponent(canvasId)}&page=${page}&page_size=100`,{signal:signal?AbortSignal.any([signal,controller.signal]):controller.signal});
+    return {...result,items:result.items.map(executionRecord)};
+  } finally {clearTimeout(timer);}
+};
 export const getExecution = async (id:string) => executionRecord(await api<Execution>(`/executions/${encodeURIComponent(id)}`));
 export const createExecution = (canvasId:string,nodeId:string,kind:GenerationKind,params:ExecuteParams,key:string) => api<Execution>('/executions',{method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify({canvas_id:canvasId,node_id:nodeId,kind,params})});
 export const createImageBatch = async (canvasId:string,nodeId:string,params:ExecuteParams,count:number,key:string) => {const result=await api<ExecutionBatch>('/execution-batches',{method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify({canvas_id:canvasId,node_id:nodeId,kind:'image',count,params})});return {...result,executions:result.executions.map(executionRecord)};};

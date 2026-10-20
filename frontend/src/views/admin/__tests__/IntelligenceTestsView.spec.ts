@@ -17,7 +17,7 @@ vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof
 const mountPage = () => mount(IntelligenceTestsView, { global: { stubs: {
   AppLayout: { template: '<div><slot /></div>' },
   BaseDialog: { props: ['show', 'title'], template: '<div v-if="show" class="dialog"><h2>{{ title }}</h2><slot /><slot name="footer" /></div>' },
-  Select: { props: ['id', 'modelValue', 'options', 'disabled'], emits: ['update:modelValue'], template: '<div :id="id" />' },
+  Select: { props: ['id', 'modelValue', 'options', 'disabled', 'creatable'], emits: ['update:modelValue'], template: '<div :id="id" />' },
   Toggle: { props: ['id', 'modelValue', 'disabled'], emits: ['update:modelValue'], template: '<div :id="id" />' },
   IntelligenceRunDialog: true,
 } } })
@@ -152,13 +152,14 @@ describe('管理员降智检测', () => {
     expect((wrapper.get('#intelligence-api-key').element as HTMLInputElement).value).toBe('manual-test-secret')
     wrapper.unmount()
   })
-  it('新配置默认仅手动60分钟，糖果只允许Responses', async () => {
+  it('新配置默认仅手动60分钟，所有测试只允许Responses', async () => {
     const wrapper = mountPage()
     await flushPromises()
     await clickText(wrapper, 'intelligence.add')
     expect(wrapper.getComponent('#intelligence-schedule').props('modelValue')).toBe(false)
     expect(wrapper.getComponent('#intelligence-protocol').props('modelValue')).toBe('responses')
     expect(wrapper.getComponent('#intelligence-protocol').props('disabled')).toBe(true)
+    expect(wrapper.getComponent('#intelligence-protocol').props('options')).toEqual([{ value: 'responses', label: 'Responses' }])
     wrapper.getComponent('#intelligence-group').vm.$emit('update:modelValue', 1)
     await flushPromises()
     wrapper.getComponent('#intelligence-model').vm.$emit('update:modelValue', 'model-b')
@@ -168,6 +169,109 @@ describe('管理员降智检测', () => {
     await flushPromises()
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ group_id: 1, model: 'model-b', schedule_enabled: false, interval_minutes: 60, api_key: 'test-secret-not-real' }), undefined)
     expect(run).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+  it('旧 Chat 配置显示实际 Responses 协议，编辑不会改变模型身份', async () => {
+    configs.mockResolvedValue([configFixture({ model: 'gpt-6-astra', benchmark: 'drawing', protocol: 'chat_completions' })])
+    const wrapper = mountPage()
+    await flushPromises()
+    expect(wrapper.get('[data-config-id="1"]').text()).toContain('Responses')
+    expect(wrapper.text()).not.toContain('Chat Completions')
+    await clickText(wrapper, 'common.edit')
+    expect(wrapper.getComponent('#intelligence-protocol').props('modelValue')).toBe('responses')
+    expect(wrapper.getComponent('#intelligence-protocol').props('disabled')).toBe(true)
+    expect(wrapper.getComponent('#intelligence-protocol').props('options')).toEqual([{ value: 'responses', label: 'Responses' }])
+    await wrapper.get('#intelligence-config-form').trigger('submit')
+    await flushPromises()
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-6-astra', benchmark: 'drawing', protocol: 'responses' }), 1)
+    wrapper.unmount()
+  })
+  it('糖果切换画图不自动改模型，只有明确选择支持模型才能创建', async () => {
+    const wrapper = mountPage()
+    await flushPromises()
+    await clickText(wrapper, 'intelligence.add')
+    await chooseGroup(wrapper, 1)
+    wrapper.getComponent('#intelligence-model').vm.$emit('update:modelValue', 'model-b')
+    wrapper.getComponent('#intelligence-benchmark').vm.$emit('update:modelValue', 'drawing')
+    await wrapper.get('#intelligence-base-url').setValue('https://gateway.example/v1')
+    await wrapper.get('#intelligence-api-key').setValue('test-secret-not-real')
+    expect(wrapper.getComponent('#intelligence-model').props('modelValue')).toBe('model-b')
+    expect(wrapper.getComponent('#intelligence-model').props('creatable')).toBe(false)
+    expect(wrapper.getComponent('#intelligence-model').props('options')).toEqual([
+      { value: 'gpt-6-astra', label: 'gpt-6-astra', disabled: false },
+      { value: 'model-b', label: 'model-b', disabled: true },
+    ])
+    expect(wrapper.text()).toContain('intelligence.drawingModelHint')
+    expect(wrapper.findAll('button').find(button => button.text() === 'intelligence.save')!.attributes('disabled')).toBeDefined()
+    await wrapper.get('#intelligence-config-form').trigger('submit')
+    expect(save).not.toHaveBeenCalled()
+    // 新建的不支持模型即使先停用，也不能绕过画图模型约束。
+    wrapper.getComponent('#intelligence-config-enabled').vm.$emit('update:modelValue', false)
+    await wrapper.get('#intelligence-config-form').trigger('submit')
+    expect(save).not.toHaveBeenCalled()
+    wrapper.getComponent('#intelligence-config-enabled').vm.$emit('update:modelValue', true)
+    wrapper.getComponent('#intelligence-model').vm.$emit('update:modelValue', 'gpt-6-astra')
+    await wrapper.get('#intelligence-config-form').trigger('submit')
+    await flushPromises()
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-6-astra', benchmark: 'drawing', protocol: 'responses', enabled: true }), undefined)
+    wrapper.unmount()
+  })
+  it('旧不支持画图模型禁止运行或继续启用，显式停用时同时停止定时并保留模型身份', async () => {
+    appStore.cachedPublicSettings.intelligence_enabled = true
+    configs.mockResolvedValue([configFixture({ model: 'old-model', benchmark: 'drawing', protocol: 'chat_completions', schedule_enabled: true })])
+    const wrapper = mountPage()
+    await flushPromises()
+    expect(wrapper.get('[data-config-id="1"]').text()).toContain('intelligence.drawingModelUnsupported')
+    const runButton = wrapper.findAll('button').find(button => button.text() === 'intelligence.run')!
+    expect(runButton.attributes('disabled')).toBeDefined()
+    await runButton.trigger('click')
+    expect(run).not.toHaveBeenCalled()
+    await clickText(wrapper, 'common.edit')
+    expect(wrapper.getComponent('#intelligence-model').props('modelValue')).toBe('old-model')
+    expect(wrapper.getComponent('#intelligence-model').props('disabled')).toBe(true)
+    await wrapper.get('#intelligence-config-form').trigger('submit')
+    expect(save).not.toHaveBeenCalled()
+    wrapper.getComponent('#intelligence-config-enabled').vm.$emit('update:modelValue', false)
+    await flushPromises()
+    expect(wrapper.getComponent('#intelligence-schedule').props('modelValue')).toBe(false)
+    expect(wrapper.getComponent('#intelligence-schedule').props('disabled')).toBe(true)
+    await wrapper.get('#intelligence-config-form').trigger('submit')
+    await flushPromises()
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ model: 'old-model', benchmark: 'drawing', protocol: 'responses', enabled: false, schedule_enabled: false }), 1)
+    wrapper.unmount()
+  })
+  it('旧不支持画图配置仍可查看历史和删除', async () => {
+    configs.mockResolvedValue([configFixture({ model: 'old-model', benchmark: 'drawing' })])
+    history.mockResolvedValue([])
+    remove.mockResolvedValue(undefined)
+    const wrapper = mountPage()
+    await flushPromises()
+    await clickText(wrapper, 'intelligence.history')
+    expect(history).toHaveBeenCalledWith(1, expect.any(AbortSignal))
+    expect(wrapper.text()).toContain('intelligence.noRuns')
+    await clickText(wrapper, 'common.delete')
+    const deleteButtons = wrapper.findAll('button').filter(button => button.text() === 'common.delete')
+    await deleteButtons.at(-1)!.trigger('click')
+    await flushPromises()
+    expect(remove).toHaveBeenCalledWith(1)
+    expect(run).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+  it('支持的画图旧 Chat 配置仍可运行，任意模型的糖果配置不受限制', async () => {
+    appStore.cachedPublicSettings.intelligence_enabled = true
+    configs.mockResolvedValue([
+      configFixture({ model: 'gpt-6-astra', benchmark: 'drawing', protocol: 'chat_completions' }),
+      configFixture({ id: 2, model: 'other-model', benchmark: 'candy' }),
+    ])
+    const wrapper = mountPage()
+    await flushPromises()
+    const buttons = wrapper.findAll('button').filter(button => button.text() === 'intelligence.run')
+    for (const button of buttons) {
+      expect(button.attributes('disabled')).toBeUndefined()
+      await button.trigger('click')
+      await flushPromises()
+    }
+    expect(run.mock.calls).toEqual([[1], [2]])
     wrapper.unmount()
   })
   it('双击立即测试只有一条创建请求，运行中禁止再次提交', async () => {

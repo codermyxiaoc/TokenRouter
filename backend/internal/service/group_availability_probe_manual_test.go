@@ -19,12 +19,15 @@ type manualProbeRepoStub struct {
 	saved   []*GroupAvailabilityProbeResult
 	saveErr error
 	next    time.Time
+	lease   time.Duration
 }
 
-func (r *manualProbeRepoStub) ClaimGroup(_ context.Context, _ int64, config GroupAvailabilityProbeConfig, _ time.Time, _ time.Time, _ string) (*GroupAvailabilityProbeDueGroup, error) {
+func (r *manualProbeRepoStub) ClaimGroup(_ context.Context, _ int64, config GroupAvailabilityProbeConfig, now time.Time, lockUntil time.Time, _ string) (*GroupAvailabilityProbeDueGroup, error) {
 	r.claims++
+	r.lease = lockUntil.Sub(now)
 	if r.due != nil {
 		r.due.Config = config
+		r.due.LeaseToken = "current-claim"
 	}
 	if r.onClaim != nil {
 		r.onClaim()
@@ -81,6 +84,8 @@ func TestGroupAvailabilityProbeManualOnceRecordsFailureWithoutRetries(t *testing
 			require.Contains(t, result.ErrorMessage, "no eligible accounts")
 			require.Len(t, repo.saved, 1)
 			require.Same(t, result, repo.saved[0])
+			require.Equal(t, "current-claim", repo.saved[0].LeaseToken)
+			require.Equal(t, 65*time.Second, repo.lease, "单次手动测试租约不能包含周期重试窗口")
 			require.True(t, repo.next.After(before.Add(29*time.Minute)))
 			require.Zero(t, runner.manualRunning)
 		})
@@ -99,7 +104,38 @@ func TestGroupAvailabilityProbeManualBusyDoesNotCreateObservation(t *testing.T) 
 	runner.manualRunning = groupAvailabilityProbeDefaultMaxWorkers
 	_, err = runner.RunOnce(context.Background(), 43, config)
 	require.Equal(t, 409, infraerrors.Code(err))
+	require.Equal(t, "GROUP_AVAILABILITY_PROBE_CAPACITY", infraerrors.Reason(err))
 	require.Equal(t, 1, repo.claims)
+}
+
+// 上游取消或超时后仍须持久化失败并释放自己的租约，不能沿用已取消的 context 保存。
+func TestGroupAvailabilityProbeScheduledTimeoutStillSavesFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	repo := &manualProbeRepoStub{}
+	runner := NewGroupAvailabilityProbeRunnerService(repo, &AccountTestService{}, nil, nil, nil, nil)
+	retries := 0
+	due := GroupAvailabilityProbeDueGroup{GroupID: 42, Platform: PlatformKimi, LeaseToken: "timed-out-claim", Config: GroupAvailabilityProbeConfig{
+		Enabled: true, ModelID: "kimi-k3", Prompt: "hi", TimeoutSeconds: 5, MaxRetries: &retries,
+	}}
+	runner.runOne(ctx, due)
+	require.Len(t, repo.saved, 1)
+	require.False(t, repo.saved[0].Success)
+	require.Equal(t, due.LeaseToken, repo.saved[0].LeaseToken)
+}
+
+func TestGroupAvailabilityProbeLeaseMatchesExecutionBudget(t *testing.T) {
+	retries := 0
+	config := GroupAvailabilityProbeConfig{Enabled: true, ModelID: "kimi-k3", Prompt: "hi", TimeoutSeconds: 5, MaxRetries: &retries}
+	require.Equal(t, 65*time.Second, GroupAvailabilityProbeLeaseDuration(config, false))
+	config.MaxRetries = nil
+	require.Equal(t, 80*time.Second, GroupAvailabilityProbeLeaseDuration(config, false), "历史配置仍保留三次重试")
+	retries = 10
+	config.TimeoutSeconds = 120
+	config.MaxRetries = &retries
+	require.Equal(t, 23*time.Minute, GroupAvailabilityProbeLeaseDuration(config, false))
+	require.Equal(t, 3*time.Minute, GroupAvailabilityProbeLeaseDuration(config, true))
+	require.Equal(t, time.Minute, GroupAvailabilityProbeLeaseDuration(GroupAvailabilityProbeConfig{}, false))
 }
 
 func TestGroupAvailabilityProbeManualSaveErrorIsReturned(t *testing.T) {

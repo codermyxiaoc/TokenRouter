@@ -79,7 +79,11 @@ export default {
     bucketInherited: 'Leave blank to use the backup bucket', publicBaseUrl: 'Public base URL (optional)',
     publicBaseUrlHint: 'Leave blank for signed links with an expiry. A public URL must be configured to serve the stored image objects.',
     presignExpiryHours: 'Signed link validity (hours)', maxDownloadBytes: 'Upstream image download limit (bytes)',
-    lifecycleHint: 'Async image API query records last 24 hours. Configure image retention through bucket lifecycle rules. This setting does not control Creative Studio temporary assets.',
+    presignExpiryHint: 'Enter a whole number from 1 to 168 hours. Signed links are valid for at most 7 days.',
+    retentionHours: 'Image retention (hours)',
+    retentionHint: 'Defaults to 24 hours; supports 1–8760 hours. Applies only to new uploads, with expiry fixed at upload time. R2/S3 objects are automatically cleaned up after expiry. Images not registered by older versions are not deleted retroactively.',
+    retentionInvalid: 'Enter a whole number from 1 to 8760 hours.',
+    lifecycleHint: 'Async image API query records last 24 hours. Signed links cannot outlast the remaining image retention period. This setting does not control Creative Studio temporary assets.',
     saved: 'Async image storage settings saved',
   },
 }

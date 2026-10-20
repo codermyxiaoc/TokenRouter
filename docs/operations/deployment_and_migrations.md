@@ -11,6 +11,7 @@
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
 - [平台额度事务化升级](#transactional_platform_quotas)：切换额度统计权威来源、旧实例及缓存处理时读取。
+- [v3.23 异步图片存储与到期清理](#v3_23_upgrade)：启用存储预检、新图片保存期和持久清理队列，或回退自动清理时读取。
 - [v3.22 任务诊断与检测兼容](#v3_22_upgrade)：升级创作台错误诊断、分组探测租约或满血 AI 检测协议时读取。
 - [v3.21 云端无限画布](#v3_21_upgrade)：替换旧创作台、迁移私人画布与素材、启用文本/视频/语音或回退新执行类型时读取。
 - [v3.20 Midjourney 尺寸与比例](#v3_20_upgrade)：启用 MJ 三档尺寸、五种比例、按所选档位计费或回退新增参数任务时读取。
@@ -66,7 +67,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.22`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.23`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -81,11 +82,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.22`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.23`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.22 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.23 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -113,6 +114,8 @@
 普通 `*.sql` 在单个事务中执行，SQL 与迁移记录一起提交或回滚。包含 `CREATE INDEX CONCURRENTLY` 或 `DROP INDEX CONCURRENTLY` 的文件必须以 `_notx.sql` 结尾；该模式逐语句在事务外执行，只接受带 `IF NOT EXISTS`/`IF EXISTS` 的并发索引语句，也禁止 `BEGIN`、`COMMIT` 和 `ROLLBACK`。非事务迁移可能在 SQL 成功但记录写入前中断，因此每条语句必须可安全重放。
 
 首次检测到旧 `schema_migrations` 且缺少 Atlas 记录时，runner 会用当前最后一个迁移建立 `atlas_schema_revisions` 基线。该兼容记录不改变 SQL 文件仍为 schema 权威来源的事实。
+
+`313_image_object_cleanup.sql` 为新上传异步图片新增独立到期清理队列，不追溯登记旧对象，不修改任务、余额或用量记录。清理快照使用稳定的 `TOTP_ENCRYPTION_KEY` 加密，包括 YAML 配置存储的部署也必须持久保存该密钥。切换桶或凭据后，旧快照仍依赖原凭据的删除权限；回退旧二进制会暂停自动清理，重新运行支持本迁移的版本后继续。队列和密钥应纳入受保护的备份范围，具体保留期和重试边界见[图片对象保存与清理](../domains/media_tasks.md#async_image_object_retention)。
 
 迁移是前向且不可变的：
 
@@ -177,7 +180,18 @@ Gemini 缓存费用复用本站持久资金合同，使用 `gemini_cache` 报价
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.22`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `312_creative_canvas_text.sql`。从 v3.21 升级不新增或修改 SQL 迁移；更早版本仍须遵循对应迁移与恢复边界。
+当前发布版本为 `v0.1.278-ct-v3.23`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `313_image_object_cleanup.sql`。从 v3.22 升级只新增迁移 313，不改写既有迁移或历史账本；更早版本仍须遵循对应迁移与恢复边界。
+
+<a id="v3_23_upgrade"></a>
+### v3.23 异步图片存储与到期清理
+
+本版为第三方 API Key 异步 Images 新增迁移 `313_image_object_cleanup.sql`，建立独立的对象到期清理队列。后台“数据备份 → 异步图片存储”可设置图片保存时间，默认 **24 小时**，允许整数 1–8760 小时。只对新版登记的新上传对象生效；首次上传前固定到期时间，传输重试及后续配置变更不延长期限，旧版本未登记的桶内对象不追溯删除。创作台素材、备份和其他文件的保留规则不变。
+
+升级前备份 PostgreSQL、应用配置及稳定的 `TOTP_ENCRYPTION_KEY`；包括仅通过 YAML 配置图片存储的部署，也须显式持久保存该密钥。清理记录保存加密的桶和凭据快照；更换桶或密钥后，应保留旧桶凭据的删除权限与原加密密钥，直至已有对象完成清理。统一更新应用及前端，检查迁移完成后，在后台执行存储连接测试，确认指定目录具有写入、读取及删除权限，再受理新的异步生成。
+
+提交任务和调用模型前会对同一存储快照进行真实读写删除预检，成功缓存最多 30 秒，上传失败使缓存失效。已知存储不可用时在生成和资金预占前拒绝执行。下载上游图片、图片大小/格式、存储权限、缺桶及超时错误提供独立的安全分类；预检不能保证生成结束时存储仍然可用，也不改变原扣费或退款规则。历史任务已经丢失且桶内不存在的原图不能凭升级恢复，不应通过重发生成来补做存储。
+
+服务启动后立即补扫到期记录，并每 15 秒清理；失败保留记录并退避重试，关闭新异步生成不会停止旧对象清理。回退到 v3.22 或更早程序会停止这项自动清理，但不删除队列；重新运行新版后继续处理到期对象。回退前停止新异步请求并由新版处理在途任务，保留迁移、队列、密钥和资金账本；应用回退不会撤销已经完成的物理删除。具体期限、签名链接和故障恢复边界见[图片对象保存与清理](../domains/media_tasks.md#async_image_object_retention)。
 
 <a id="v3_22_upgrade"></a>
 ### v3.22 任务诊断与检测兼容

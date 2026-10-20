@@ -34,6 +34,7 @@ type AsyncImageHandler struct {
 }
 
 const asyncImageMaxPendingTasks = 64
+const asyncImageStorageUnavailableMessage = "image storage is unavailable; generation has not started and no generation usage has been billed; contact the administrator"
 
 // acquirePending 限制单进程已受理任务数，额度覆盖排队、生成和结果转存整个生命周期。
 func (h *AsyncImageHandler) acquirePending() (func(), bool) {
@@ -169,6 +170,14 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 		imageTaskJSONError(c, http.StatusNotFound, "not_found_error", "async image tasks are not enabled")
 		return
 	}
+	// 先验证目标桶和目录可用，再创建任务；失败时不能进入网关预占或计费。
+	if err := uploader.CheckReadiness(c.Request.Context()); err != nil {
+		_, code, _ := service.ImageStorageFailureDetails(err)
+		logger.L().Warn("image_task.storage_preflight_failed", zap.Int64("api_key_id", apiKey.ID), zap.String("code", code))
+		c.Header("Retry-After", "30")
+		imageTaskJSONError(c, http.StatusServiceUnavailable, "image_storage_unavailable", asyncImageStorageUnavailableMessage)
+		return
+	}
 	taskCtx, recorder, cancel := newAsyncImageContext(c, body, h.tasks.ExecutionTimeout())
 	observation := service.MediaTaskObservation{Source: "async_image", MediaType: "image", Platform: platform, Status: "processing", UserID: apiKey.UserID, APIKeyID: apiKey.ID, GroupID: apiKey.GroupID}
 	observation.RequestID, _ = taskCtx.Request.Context().Value(ctxkey.ClientRequestID).(string)
@@ -291,6 +300,13 @@ func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, r
 		}
 	}()
 
+	// 受理与后台执行之间可能发生存储故障，复用同一快照再次检查；缓存命中不会重复探测。
+	if err := uploader.CheckReadiness(taskCtx.Request.Context()); err != nil {
+		_, code, _ := service.ImageStorageFailureDetails(err)
+		logger.L().Warn("image_task.storage_preflight_failed", zap.String("task_id", taskID), zap.String("code", code))
+		h.failTask(taskID, http.StatusServiceUnavailable, imageTaskErrorPayload("image_storage_unavailable", asyncImageStorageUnavailableMessage))
+		return
+	}
 	h.execute(platform, taskCtx)
 	body := bytes.TrimSpace(recorder.Body.Bytes())
 	if err := taskCtx.Request.Context().Err(); err != nil && len(body) == 0 {
@@ -458,19 +474,8 @@ func (h *AsyncImageHandler) observeFinishedTask(observation service.MediaTaskObs
 	expires := time.Unix(task.ExpiresAt, 0)
 	observation.ExpiresAt = &expires
 	if len(task.Error) > 0 {
-		var envelope struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-		}
-		if json.Unmarshal(task.Error, &envelope) == nil {
-			// 原始上游错误可能回显提示词，只由短期任务接口返回；长期任务列表保存固定分类。
-			observation.ErrorMessage = "图片生成失败，请根据请求 ID 查看错误日志"
-			if strings.Contains(envelope.Message, "image was generated but object storage failed") {
-				observation.ErrorMessage = "图片生成完成但结果存储失败，生成用量可能已经计费"
-			} else if envelope.Type == "timeout_error" {
-				observation.ErrorMessage = "图片生成任务超时"
-			}
-		}
+		// 原始上游错误可能回显提示词或签名 URL；长期任务列表只保存固定分类。
+		observation.ErrorMessage = service.ImageTaskFailureSummary(task.Error)
 	}
 	if err := h.observer.ObserveMediaTask(ctx, observation); err != nil {
 		logger.L().Warn("image_task.observation_write_failed", zap.String("task_id", observation.TaskID), zap.Error(err))

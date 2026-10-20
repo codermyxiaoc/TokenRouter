@@ -79,7 +79,11 @@ export default {
     bucketInherited: '留空使用备份的 Bucket', publicBaseUrl: '公开访问地址（可选）',
     publicBaseUrlHint: '留空时返回有有效期的签名链接。填写时需确保该地址能够访问图片对象。',
     presignExpiryHours: '签名链接有效期（小时）', maxDownloadBytes: '上游图片下载上限（字节）',
-    lifecycleHint: '异步图片 API 的查询记录保留 24 小时；图片文件的保存期限请在存储桶生命周期规则中配置。这里不控制创作台的临时素材。',
+    presignExpiryHint: '请输入 1–168 小时的整数，签名链接最长有效 7 天。',
+    retentionHours: '图片保存时间（小时）',
+    retentionHint: '默认 24 小时，支持 1–8760 小时。仅作用于新上传图片，上传时固定到期时间，到期后自动清理 R2/S3 对象。旧版本未登记的图片不会追溯删除。',
+    retentionInvalid: '请输入 1–8760 小时的整数。',
+    lifecycleHint: '异步图片 API 的查询记录保留 24 小时；签名链接有效期不会超过图片剩余保存时间。这里不控制创作台的临时素材。',
     saved: '异步图片存储配置已保存',
   },
 }

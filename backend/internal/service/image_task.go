@@ -98,6 +98,8 @@ type ImageTaskService struct {
 	executionTimeout time.Duration
 	runtime          *imageTaskRuntime
 	imageBilling     ImageBillingReservationRepository
+	// objectRetention 独立清理已上传对象，任务记录到期不影响删除凭据。
+	objectRetention *ImageObjectRetention
 	// billingRecovery 仅重试已有安全证据的账务动作，不能调用生成。
 	billingRecovery func(context.Context) error
 }
@@ -267,11 +269,13 @@ func (s *ImageTaskService) CompleteWithUploader(ctx context.Context, id string, 
 		rewritten, err := uploader.Rewrite(ctx, id, result)
 		if err != nil {
 			// 转存失败不回退存 base64，避免大 blob 撑爆 Redis：直接把任务标记为失败。
-			logger.L().Error("image_task.offload_failed", zap.String("task_id", id), zap.Error(err))
+			stage, code, message := ImageStorageFailureDetails(err)
+			logger.L().Error("image_task.offload_failed", zap.String("task_id", id), zap.String("stage", stage), zap.String("code", code))
 			// 对象存储超时后仍给终态写入独立预算，避免任务永远停在处理中。
 			failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			defer cancel()
-			return s.Fail(failureCtx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "image was generated but object storage failed; generation usage may already have been billed"))
+			taskErr, _ := json.Marshal(map[string]string{"type": "api_error", "code": code, "message": message})
+			return s.Fail(failureCtx, id, http.StatusBadGateway, taskErr)
 		}
 		result = rewritten
 	}

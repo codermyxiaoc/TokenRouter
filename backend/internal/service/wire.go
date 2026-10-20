@@ -897,6 +897,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpenAIQuotaService,
 	ProvideBatchImageModelPricingResolver,
 	ProvideImageStorageSettingService,
+	ProvideImageObjectRetention,
 	ProvideImageTaskService,
 	ProvideMediaTaskServiceWithVideoContent,
 	ProvideVideoTaskService,
@@ -1071,13 +1072,21 @@ func ProvidePaymentOrderExpiryService(paymentSvc *PaymentService, lockCache Lead
 }
 
 // ProvideImageStorageSettingService 复用后台加密器与备份凭据，配置文件只作为未设置时的回落。
-func ProvideImageStorageSettingService(repo SettingRepository, encryptor SecretEncryptor, backup *BackupService, factory ImageStorageFactory, cfg *config.Config) *ImageStorageSettingService {
-	return NewImageStorageSettingService(repo, encryptor, backup, factory, cfg.ImageStorage)
+func ProvideImageStorageSettingService(repo SettingRepository, encryptor SecretEncryptor, backup *BackupService, factory ImageStorageFactory, cfg *config.Config, retention *ImageObjectRetention) *ImageStorageSettingService {
+	svc := NewImageStorageSettingService(repo, encryptor, backup, factory, cfg.ImageStorage)
+	svc.objectRetention = retention
+	return svc
+}
+
+// ProvideImageObjectRetention 使用稳定加密密钥保存跨重启、跨桶的到期删除凭据。
+func ProvideImageObjectRetention(store ImageObjectCleanupStore, encryptor SecretEncryptor, factory ImageStorageFactory, cfg *config.Config) *ImageObjectRetention {
+	return NewImageObjectRetention(store, encryptor, factory, cfg.Totp.EncryptionKeyConfigured)
 }
 
 // ProvideImageTaskService 保持热更新开关和已接收任务的查询能力。
-func ProvideImageTaskService(store ImageTaskStore, settings *ImageStorageSettingService, billing UsageBillingRepository, gateway *OpenAIGatewayService, keys *APIKeyService) *ImageTaskService {
+func ProvideImageTaskService(store ImageTaskStore, settings *ImageStorageSettingService, billing UsageBillingRepository, gateway *OpenAIGatewayService, keys *APIKeyService, retention *ImageObjectRetention) *ImageTaskService {
 	svc := NewImageTaskServiceWithResolver(store, settings.Resolver(), 0, 0)
+	svc.objectRetention = retention
 	svc.imageBilling, _ = billing.(ImageBillingReservationRepository)
 	// 与任务维护共用生命周期，只恢复已确认成果的账务和使用记录。
 	svc.SetBillingRecovery(func(ctx context.Context) error {

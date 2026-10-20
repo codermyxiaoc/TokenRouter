@@ -101,7 +101,7 @@ func TestAsyncImageDurabilityStorageFailureReportsGeneratedButUnsaved(t *testing
 	require.Equal(t, 1, storage.attempts)
 	require.Len(t, observer.stored, 2)
 	require.Equal(t, "failed", observer.stored[1].Status)
-	require.Equal(t, "图片生成完成但结果存储失败，生成用量可能已经计费", observer.stored[1].ErrorMessage)
+	require.Equal(t, "图片生成完成但上传存储失败，生成用量可能已经计费", observer.stored[1].ErrorMessage)
 }
 
 func TestAsyncImageDurabilityTransientTerminalWriteFailureRecoversWithoutRegeneration(t *testing.T) {

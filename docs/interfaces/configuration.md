@@ -51,6 +51,10 @@ Compose 的 `.env` 还包含只供部署工具插值的变量：`SUB2API_IMAGE` 
 
 环境变量把点分键转成大写下划线，例如 `database.host` 对应 `DATABASE_HOST`，`gateway.max_body_size` 对应 `GATEWAY_MAX_BODY_SIZE`。`setDefaults` 还负责把所有 struct 键注册进 Viper，使纯环境变量部署能被 `Unmarshal` 看到；新增字段不能只加 `mapstructure` tag 而不注册默认/可达键。定价进程配置中的 `pricing.override_file` 是可选本地 JSON 补丁，按字段浅合并覆盖远程目录和回退文件，修改后在重启或下一次目录下载时生效；文件缺失/非法只记录告警并保留原目录。少量变量有显式绑定或专用解析：`ENABLE_SERVER_TIMING`，逗号分隔的 `SERVER_TRUSTED_PROXIES` 和 `SECURITY_FORWARDED_CLIENT_IP_HEADERS`，以及受兼容条件约束的旧 WeChat 变量。
 
+`image_storage.presign_expiry_hours`（环境变量 `IMAGE_STORAGE_PRESIGN_EXPIRY_HOURS`）控制异步图片结果签名链接的有效期，默认 24 小时，非正数兼容为默认值，正数上限为 168 小时。后台保存、测试及运行时创建存储客户端均校验上限；无效的历史或 YAML/环境值不能启用异步图片存储，但不会阻止配置加载或禁用状态下的应用启动。数据库中已有图片存储设置仍优先于文件回落。生成前存储读写探针及各保留期限的区别见[异步图片与任务记录](../domains/media_tasks.md#async_image_lifecycle)。
+
+`image_storage.retention_hours`（环境变量 `IMAGE_STORAGE_RETENTION_HOURS`）独立控制新上传异步图片在 R2/S3 中的保存期，默认 24 小时；缺省或 0 兼容为 24，允许整数 1–8760 小时，负数和超限值在后台保存/测试时返回明确参数错误，并禁止存储启用。后台字段同为 `retention_hours`；旧版数据库设置读取时采用默认值而不回写。每张图片上传时固定到期时间，后续修改设置不重排已有对象，旧版本没有登记的图片不追溯删除。签名链接不超过对象剩余保存时间；任务查询保留期、价格或创作台素材保存策略不变。持久清理需要迁移 `313_image_object_cleanup.sql` 和稳定配置的 `TOTP_ENCRYPTION_KEY`，具体边界见[图片对象保存与清理](../domains/media_tasks.md#async_image_object_retention)。
+
 简易模式新增两个显式进程开关：`simple_mode.auto_create_default_groups`（环境变量 `SIMPLE_MODE_AUTO_CREATE_DEFAULT_GROUPS`）默认 `true`，关闭仅停止启动补齐默认分组，管理员并发初始化仍执行；`simple_mode_key_rate_limit_enabled`（`SIMPLE_MODE_KEY_RATE_LIMIT_ENABLED`）默认 `false`，开启后只对设有限额的 API Key 执行 5h/1d/7d 消费窗口预检查与累计，不启用余额、套餐、团队成员、账号额度或平台额度扣费。窗口预检查直接读取数据库，失败时拒绝放行；后扣复用持久请求去重事务，不能退回无幂等的缓存累计。WebSocket 每轮获取槽位后复核窗口，标准模式不增加重复 RPM 检查。窗口是已完成请求的费用累计，不能据此承诺在途并发请求绝不超出阈值。标准模式的混合结算规则保持不变。
 
 国产供应商周期用量监控属于启动时进程配置 `gateway.cn_providers`。`monitor_enabled` 默认关闭；开启后默认每 10 分钟运行一次、并发 4、单账号探测超时 20 秒、整轮预算 300 秒，余额临时停调阈值 `balance_threshold` 默认 `0.5`。对应键为 `interval_minutes`、`concurrency`、`probe_timeout_seconds` 和 `round_timeout_seconds`，修改后需要重启。该监控也覆盖 OpenCode GO 三窗口，Zen 不执行未接入的余额查询。管理员手动查询不受监控开关影响；自定义中继的自动监控还要求启用并命中 `security.url_allowlist.upstream_hosts`。

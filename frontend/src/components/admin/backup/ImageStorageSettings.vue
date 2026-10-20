@@ -20,7 +20,8 @@
             <label class="flex items-center gap-2 text-sm md:col-span-2"><input v-model="form.force_path_style" type="checkbox" /><span>{{ t('admin.backup.s3.forcePathStyle') }}</span></label>
           </template>
           <div><label class="input-label" for="image-storage-public-url">{{ t('imageStorage.publicBaseUrl') }}</label><input id="image-storage-public-url" v-model="form.public_base_url" class="input w-full" placeholder="https://images.example.com" /><p class="mt-1 text-xs text-gray-500">{{ t('imageStorage.publicBaseUrlHint') }}</p></div>
-          <div><label class="input-label" for="image-storage-expiry">{{ t('imageStorage.presignExpiryHours') }}</label><input id="image-storage-expiry" v-model.number="form.presign_expiry_hours" type="number" min="1" step="1" required class="input w-full" /></div>
+          <div><label class="input-label" for="image-storage-expiry">{{ t('imageStorage.presignExpiryHours') }}</label><input id="image-storage-expiry" v-model.number="form.presign_expiry_hours" type="number" min="1" max="168" step="1" required class="input w-full" /><p class="mt-1 text-xs text-gray-500">{{ t('imageStorage.presignExpiryHint') }}</p></div>
+          <div><label class="input-label" for="image-storage-retention">{{ t('imageStorage.retentionHours') }}</label><input id="image-storage-retention" v-model.number="form.retention_hours" type="number" min="1" max="8760" step="1" required class="input w-full" /><p class="mt-1 text-xs text-gray-500">{{ t('imageStorage.retentionHint') }}</p></div>
           <div><label class="input-label" for="image-storage-max-bytes">{{ t('imageStorage.maxDownloadBytes') }}</label><input id="image-storage-max-bytes" v-model.number="form.max_download_bytes" type="number" min="1" step="1" required class="input w-full" /></div>
         </div>
         <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">{{ t('imageStorage.lifecycleHint') }}</p>
@@ -49,7 +50,7 @@ const appStore = useAppStore()
 const stepUp = useStepUp()
 const form = ref<ImageStorageConfig>({
   enabled: false, reuse_backup_s3: true, bucket: '', prefix: 'images/', public_base_url: '',
-  presign_expiry_hours: 24, max_download_bytes: 33554432,
+  presign_expiry_hours: 24, retention_hours: 24, max_download_bytes: 33554432,
   endpoint: '', region: 'auto', access_key_id: '', secret_access_key: '', force_path_style: false,
 })
 const secretConfigured = ref(false)
@@ -65,7 +66,13 @@ async function load() {
   try {
     const result = await adminAPI.backup.getImageStorageConfig()
     // 密钥只写不读；服务端掩码与已配置标志都不能成为下次提交的新密钥。
-    form.value = { ...result.config, secret_access_key: '' }
+    // 旧配置的非正数在服务端代表默认 24 小时，表单也显示实际采用的值。
+    form.value = {
+      ...result.config,
+      presign_expiry_hours: result.config.presign_expiry_hours <= 0 ? 24 : result.config.presign_expiry_hours,
+      retention_hours: result.config.retention_hours === undefined || result.config.retention_hours === 0 ? 24 : result.config.retention_hours,
+      secret_access_key: '',
+    }
     // 复用模式返回的是备份密钥状态，不能把它当成独立存储已保存的密钥。
     secretConfigured.value = !result.config.reuse_backup_s3 && result.secret_configured
     loaded.value = true
@@ -86,8 +93,27 @@ function reportError(error: unknown) {
   }
   appStore.showError(extractApiErrorMessage(error, t('errors.networkError')))
 }
+// 测试按钮不触发表单原生校验，两个入口统一拦截无效期限，避免写入不可用的签名配置。
+function validatePresignExpiry(): boolean {
+  const hours = form.value.presign_expiry_hours
+  if (!Number.isInteger(hours) || hours < 1 || hours > 168) {
+    appStore.showError(t('imageStorage.presignExpiryHint'))
+    return false
+  }
+  return true
+}
+// 保存时间只影响新对象，拒绝小数及越界输入，防止默认值掩盖错误的清理计划。
+function validateRetentionHours(): boolean {
+  const hours = form.value.retention_hours
+  if (!Number.isInteger(hours) || hours < 1 || hours > 8760) {
+    appStore.showError(t('imageStorage.retentionInvalid'))
+    return false
+  }
+  return true
+}
 async function save() {
   if (!loaded.value || saving.value || testing.value) return
+  if (!validatePresignExpiry() || !validateRetentionHours()) return
   saving.value = true
   try {
     const config = payload()
@@ -100,6 +126,7 @@ async function save() {
 }
 async function test() {
   if (!loaded.value || testing.value || saving.value) return
+  if (!validatePresignExpiry() || !validateRetentionHours()) return
   testing.value = true
   try {
     const config = payload()

@@ -492,18 +492,7 @@ func normalizeImageTaskObservation(task *service.ImageTaskRecord) {
 	// 列表仅展示固定分类，原错误对象只留在短期任务结果内。
 	o.ErrorMessage = ""
 	if task.Status == service.ImageTaskStatusFailed {
-		o.ErrorMessage = "图片生成失败，请根据请求 ID 查看错误日志"
-		var envelope struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(task.Error, &envelope) == nil {
-			if strings.Contains(envelope.Message, "image was generated but object storage failed") {
-				o.ErrorMessage = "图片生成完成但结果存储失败，生成用量可能已经计费"
-			} else if envelope.Type == "timeout_error" {
-				o.ErrorMessage = "图片生成任务超时"
-			}
-		}
+		o.ErrorMessage = service.ImageTaskFailureSummary(task.Error)
 	}
 	if imageTaskInterrupted(task) {
 		o.ErrorMessage = imageTaskInterruptedSummary

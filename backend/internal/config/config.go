@@ -1820,10 +1820,16 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	trustedProxiesConfigured := viper.InConfig("server.trusted_proxies") ||
 		viper.IsSet("server.trusted_proxies") || trustedProxiesEnvConfigured
 
+	// YAML 的小数不能被弱类型解码静默截断，否则会提前删除图片。
+	if hours, ok := viper.Get("image_storage.retention_hours").(float64); ok && (math.IsNaN(hours) || math.IsInf(hours, 0) || hours != math.Trunc(hours)) {
+		return nil, fmt.Errorf("image_storage.retention_hours must be an integer number of hours")
+	}
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config error: %w", err)
 	}
+	// 旧文件及显式零值继续采用 24 小时保存期，负数由存储启用校验拒绝。
+	cfg.ImageStorage.RetentionHours = cfg.ImageStorage.EffectiveRetentionHours()
 	if trustedProxiesEnvConfigured {
 		cfg.Server.TrustedProxies = normalizeStringSlice(strings.Split(trustedProxiesEnv, ","))
 	}
@@ -2232,6 +2238,7 @@ func setDefaults() {
 	viper.SetDefault("image_storage.prefix", "images/")
 	viper.SetDefault("image_storage.force_path_style", false)
 	viper.SetDefault("image_storage.presign_expiry_hours", 24)
+	viper.SetDefault("image_storage.retention_hours", ImageStorageDefaultRetentionHours)
 	viper.SetDefault("image_storage.max_download_bytes", 33554432)
 	viper.SetDefault("image_storage.endpoint", "")
 	viper.SetDefault("image_storage.bucket", "")

@@ -45,7 +45,29 @@ func (s *ImageTaskService) Start() {
 	}
 	r.started = true
 	r.wg.Add(1)
+	if s.objectRetention != nil {
+		// 在解锁前登记工作，确保 Stop 不会漏等刚启动的清理循环。
+		r.wg.Add(1)
+	}
 	r.mu.Unlock()
+	if s.objectRetention != nil {
+		go func() {
+			defer r.wg.Done()
+			ticker := time.NewTicker(imageTaskHeartbeatInterval)
+			defer ticker.Stop()
+			for {
+				if err := s.objectRetention.Sweep(r.ctx, time.Now().UTC()); err != nil && r.ctx.Err() == nil {
+					// 仓储错误可能含连接信息，此处仅记录固定事件名称。
+					logger.L().Warn("image_object.cleanup_sweep_failed")
+				}
+				select {
+				case <-r.ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+	}
 	go func() {
 		defer r.wg.Done()
 		ticker := time.NewTicker(imageTaskHeartbeatInterval)

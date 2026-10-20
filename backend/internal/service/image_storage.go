@@ -61,6 +61,24 @@ func NewImageResultUploader(storage ImageStorage, prefix string, maxDownloadByte
 	}
 }
 
+// CheckReadiness 在进入生成和计费之前验证固定存储快照，不能只根据凭证非空判断可用。
+// 生产 S3 实现包含有界读写探测和并发缓存；无存储的测试实例保持原有行为。
+// @project-doc docs/domains/media_tasks.md#async_image_lifecycle
+func (u *ImageResultUploader) CheckReadiness(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if u == nil || u.storage == nil {
+		return nil
+	}
+	if checker, ok := u.storage.(interface{ CheckReadiness(context.Context) error }); ok {
+		checkCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		return checker.CheckReadiness(checkCtx)
+	}
+	return nil
+}
+
 func defaultImageDownloadHTTPClient() *http.Client {
 	// 禁止环境代理和内网连接；直接拨号已校验的解析地址，避免 DNS 重绑定与重定向绕过。
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -116,30 +134,30 @@ func (u *ImageResultUploader) Rewrite(ctx context.Context, taskID string, result
 	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(result, &top); err != nil {
-		return nil, fmt.Errorf("parse image response: %w", err)
+		return nil, classifyImageStorageFailure("decode", imageResultInvalid, fmt.Errorf("parse image response: %w", err))
 	}
 	rawData, ok := top["data"]
 	if !ok {
-		return nil, errors.New("image response has no data array")
+		return nil, classifyImageStorageFailure("decode", imageResultInvalid, errors.New("image response has no data array"))
 	}
 	var items []map[string]json.RawMessage
 	if err := json.Unmarshal(rawData, &items); err != nil {
-		return nil, fmt.Errorf("parse image response data: %w", err)
+		return nil, classifyImageStorageFailure("decode", imageResultInvalid, fmt.Errorf("parse image response data: %w", err))
 	}
 	if len(items) == 0 {
-		return nil, errors.New("image response has no generated images")
+		return nil, classifyImageStorageFailure("decode", imageResultInvalid, errors.New("image response has no generated images"))
 	}
 	for i, item := range items {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, classifyImageStorageFailure("result", imageResultTimeout, err)
 		}
 		data, contentType, err := u.fetchImageBytes(ctx, item)
 		if err != nil {
-			return nil, fmt.Errorf("image %d: %w", i, err)
+			return nil, classifyImageStorageFailure("decode", imageResultInvalid, fmt.Errorf("image %d: %w", i, err))
 		}
 		// 只转存已知位图格式，禁止 SVG/HTML 伪装成图片落入公开存储桶。
 		if !isBackfillImageContent(data) {
-			return nil, fmt.Errorf("image %d: unsupported image content", i)
+			return nil, classifyImageStorageFailure("decode", imageResultInvalid, fmt.Errorf("image %d: unsupported image content", i))
 		}
 		contentType = http.DetectContentType(data)
 		key := u.buildKey(taskID, i, contentType)
@@ -151,7 +169,7 @@ func (u *ImageResultUploader) Rewrite(ctx context.Context, taskID string, result
 			return saveErr
 		})
 		if err != nil {
-			return nil, fmt.Errorf("image %d: upload to object storage: %w", i, err)
+			return nil, classifyImageStorageFailure("upload", imageStorageUploadFailed, fmt.Errorf("image %d: upload to object storage: %w", i, err))
 		}
 		urlRaw, err := json.Marshal(storedURL)
 		if err != nil {
@@ -240,14 +258,14 @@ func (u *ImageResultUploader) fetchImageBytes(ctx context.Context, item map[stri
 			if b64 = strings.TrimSpace(b64); b64 != "" {
 				limit := u.maxDownloadBytes
 				if int64(base64.StdEncoding.DecodedLen(len(b64))) > limit+2 {
-					return nil, "", fmt.Errorf("decoded image exceeds %d bytes", limit)
+					return nil, "", classifyImageStorageFailure("decode", imageResultTooLarge, fmt.Errorf("decoded image exceeds %d bytes", limit))
 				}
 				data, err := base64.StdEncoding.DecodeString(b64)
 				if err != nil {
 					return nil, "", fmt.Errorf("decode b64_json: %w", err)
 				}
 				if int64(len(data)) > limit {
-					return nil, "", fmt.Errorf("decoded image exceeds %d bytes", limit)
+					return nil, "", classifyImageStorageFailure("decode", imageResultTooLarge, fmt.Errorf("decoded image exceeds %d bytes", limit))
 				}
 				return data, detectImageContentType(data), nil
 			}
@@ -311,7 +329,7 @@ func (u *ImageResultUploader) decodeImageDataURL(rawURL string) ([]byte, string,
 		return nil, "", fmt.Errorf("decode image data URL base64 payload: %w", err)
 	}
 	if int64(len(data)) > limit {
-		return nil, "", fmt.Errorf("decoded image data URL exceeds %d bytes", limit)
+		return nil, "", classifyImageStorageFailure("decode", imageResultTooLarge, fmt.Errorf("decoded image data URL exceeds %d bytes", limit))
 	}
 
 	contentType := detectedImageContentType(data)
@@ -330,7 +348,7 @@ func (u *ImageResultUploader) download(ctx context.Context, rawURL string) ([]by
 		data, contentType, downloadErr = u.downloadOnce(ctx, rawURL)
 		return downloadErr
 	})
-	return data, contentType, err
+	return data, contentType, classifyImageStorageFailure("download", imageSourceDownloadFailed, err)
 }
 
 func (u *ImageResultUploader) downloadOnce(ctx context.Context, rawURL string) ([]byte, string, error) {
@@ -358,7 +376,7 @@ func (u *ImageResultUploader) downloadOnce(ctx context.Context, rawURL string) (
 		return nil, "", fmt.Errorf("read image body: %w", err)
 	}
 	if int64(len(data)) > limit {
-		return nil, "", fmt.Errorf("downloaded image exceeds %d bytes", limit)
+		return nil, "", classifyImageStorageFailure("download", imageResultTooLarge, fmt.Errorf("downloaded image exceeds %d bytes", limit))
 	}
 	contentType := strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0])
 	if !strings.HasPrefix(contentType, "image/") {

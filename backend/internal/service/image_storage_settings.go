@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -34,6 +36,7 @@ type ImageStorageSettings struct {
 	Prefix           string `json:"prefix"`
 	PublicBaseURL    string `json:"public_base_url"`
 	PresignExpiry    int    `json:"presign_expiry_hours"`
+	RetentionHours   int    `json:"retention_hours"`
 	MaxDownloadBytes int64  `json:"max_download_bytes"`
 
 	// 以下仅在 ReuseBackupS3 为假时使用
@@ -52,6 +55,8 @@ type ImageStorageSettingService struct {
 	encryptor   SecretEncryptor
 	backup      *BackupService
 	factory     ImageStorageFactory
+	// objectRetention 在生产装配时注入，确保真实上传拥有持久到期清理记录。
+	objectRetention *ImageObjectRetention
 
 	// fallback 是 config.yaml 里的配置。后台从未保存过设置时沿用它，
 	// 保证升级前已用配置文件开启该功能的部署不被打断。
@@ -112,6 +117,14 @@ func (s *ImageStorageSettingService) resolve() (*ImageResultUploader, bool) {
 	if !cfg.Enabled {
 		return nil, false
 	}
+	if err := cfg.ValidatePresignExpiry(); err != nil {
+		logger.L().Warn("image_storage.invalid_presign_expiry; async image tasks stay disabled", zap.Error(err))
+		return nil, false
+	}
+	if err := cfg.ValidateRetentionHours(); err != nil {
+		logger.L().Warn("image_storage.invalid_retention; async image tasks stay disabled", zap.Error(err))
+		return nil, false
+	}
 	if !cfg.IsConfigured() {
 		logger.L().Warn("image_storage is enabled but not fully configured; async image tasks are disabled",
 			zap.Strings("missing_keys", cfg.MissingCredentialKeys()))
@@ -122,6 +135,9 @@ func (s *ImageStorageSettingService) resolve() (*ImageResultUploader, bool) {
 	if err != nil {
 		logger.L().Error("image_storage.client_build_failed; async image tasks stay disabled", zap.Error(err))
 		return nil, false
+	}
+	if s.objectRetention != nil {
+		storage = s.objectRetention.Wrap(cfg, storage)
 	}
 	s.uploader = NewImageResultUploader(storage, cfg.Prefix, cfg.MaxDownloadByte, nil)
 	s.enabled = true
@@ -169,6 +185,15 @@ func (s *ImageStorageSettingService) SecretConfigured(ctx context.Context) bool 
 // Update 保存设置并立即生效。SecretAccessKey 留空表示沿用已保存的值。
 func (s *ImageStorageSettingService) Update(ctx context.Context, in ImageStorageSettings) (*ImageStorageSettings, error) {
 	normalizeImageStorageSettings(&in)
+	if err := validateImageStoragePresignExpiry(in.PresignExpiry); err != nil {
+		return nil, err
+	}
+	if err := validateImageStorageRetention(in.RetentionHours); err != nil {
+		return nil, err
+	}
+	if in.Enabled && s.objectRetention != nil && !s.objectRetention.stableEncryption {
+		return nil, ErrSecretEncryptionKeyNotConfigured
+	}
 	newSecret := in.SecretAccessKey != ""
 
 	if in.ReuseBackupS3 {
@@ -218,6 +243,17 @@ func (s *ImageStorageSettingService) Update(ctx context.Context, in ImageStorage
 // 与 Update 一样支持留空 SecretAccessKey 表示沿用已保存的值。
 func (s *ImageStorageSettingService) TestConnection(ctx context.Context, in ImageStorageSettings) error {
 	normalizeImageStorageSettings(&in)
+	if err := validateImageStoragePresignExpiry(in.PresignExpiry); err != nil {
+		return err
+	}
+	if err := validateImageStorageRetention(in.RetentionHours); err != nil {
+		return err
+	}
+	if s.objectRetention != nil {
+		if err := s.objectRetention.ready(ctx); err != nil {
+			return err
+		}
+	}
 	if !in.ReuseBackupS3 && in.SecretAccessKey == "" {
 		old, err := s.load(ctx)
 		if err != nil {
@@ -254,6 +290,7 @@ func (s *ImageStorageSettingService) effectiveConfig(ctx context.Context) (*conf
 	}
 	if settings == nil {
 		fallback := s.fallback
+		fallback.RetentionHours = fallback.EffectiveRetentionHours()
 		return &fallback, nil
 	}
 	return s.toImageStorageConfig(ctx, settings)
@@ -266,6 +303,7 @@ func (s *ImageStorageSettingService) toImageStorageConfig(ctx context.Context, i
 		Prefix:          in.Prefix,
 		PublicBaseURL:   in.PublicBaseURL,
 		PresignExpiry:   in.PresignExpiry,
+		RetentionHours:  in.RetentionHours,
 		MaxDownloadByte: in.MaxDownloadBytes,
 		Endpoint:        in.Endpoint,
 		Region:          in.Region,
@@ -273,6 +311,7 @@ func (s *ImageStorageSettingService) toImageStorageConfig(ctx context.Context, i
 		SecretAccessKey: in.SecretAccessKey,
 		ForcePathStyle:  in.ForcePathStyle,
 	}
+	cfg.RetentionHours = cfg.EffectiveRetentionHours()
 
 	if in.ReuseBackupS3 {
 		backupCfg, err := s.backupCredentials(ctx)
@@ -326,6 +365,10 @@ func (s *ImageStorageSettingService) load(ctx context.Context) (*ImageStorageSet
 	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
 		return nil, fmt.Errorf("parse image storage settings: %w", err)
 	}
+	// 不回写历史配置；缺省字段在读取时采用默认保存期，供表单及存储快照统一使用。
+	if settings.RetentionHours == 0 {
+		settings.RetentionHours = config.ImageStorageDefaultRetentionHours
+	}
 	return &settings, nil
 }
 
@@ -336,6 +379,7 @@ func settingsFromConfig(cfg config.ImageStorageConfig) *ImageStorageSettings {
 		Prefix:           cfg.Prefix,
 		PublicBaseURL:    cfg.PublicBaseURL,
 		PresignExpiry:    cfg.PresignExpiry,
+		RetentionHours:   cfg.EffectiveRetentionHours(),
 		MaxDownloadBytes: cfg.MaxDownloadByte,
 		Endpoint:         cfg.Endpoint,
 		Region:           cfg.Region,
@@ -364,9 +408,30 @@ func normalizeImageStorageSettings(in *ImageStorageSettings) {
 		in.Region = "auto"
 	}
 	if in.PresignExpiry <= 0 {
-		in.PresignExpiry = 24
+		in.PresignExpiry = config.ImageStorageDefaultPresignExpiryHours
+	}
+	if in.RetentionHours == 0 {
+		in.RetentionHours = config.ImageStorageDefaultRetentionHours
 	}
 	if in.MaxDownloadBytes <= 0 {
 		in.MaxDownloadBytes = defaultImageMaxDownloadBytes
 	}
+}
+
+// 显式保存和测试必须返回可见的参数错误，不能把无效签名期限误报为内部服务故障。
+func validateImageStoragePresignExpiry(hours int) error {
+	cfg := config.ImageStorageConfig{PresignExpiry: hours}
+	if err := cfg.ValidatePresignExpiry(); err != nil {
+		return infraerrors.New(http.StatusBadRequest, "IMAGE_STORAGE_PRESIGN_EXPIRY_INVALID", err.Error())
+	}
+	return nil
+}
+
+// 保存时间与签名期限独立校验；显式非法值不得转成默认值再静默保存。
+func validateImageStorageRetention(hours int) error {
+	cfg := config.ImageStorageConfig{RetentionHours: hours}
+	if err := cfg.ValidateRetentionHours(); err != nil {
+		return infraerrors.New(http.StatusBadRequest, "IMAGE_STORAGE_RETENTION_INVALID", err.Error())
+	}
+	return nil
 }

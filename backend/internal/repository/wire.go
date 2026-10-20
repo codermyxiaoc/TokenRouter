@@ -97,6 +97,7 @@ var ProviderSet = wire.NewSet(
 	NewLegacyVideoTaskRepository,
 	NewMediaTaskPreviewCache,
 	NewDurableImageTaskStore,
+	NewImageObjectCleanupStore,
 	ProvideImageStorageFactory,
 	NewBatchImageRepository,
 	NewGeminiCachedContentRepository,

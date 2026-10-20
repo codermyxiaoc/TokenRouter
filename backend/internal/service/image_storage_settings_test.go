@@ -6,11 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -259,4 +262,186 @@ func TestImageStorageSettingsRetainsFallbackSecretOnFirstSave(t *testing.T) {
 	_, enabled := svc.resolve()
 	require.True(t, enabled)
 	require.Equal(t, "yaml-secret", (*built)[1].SecretAccessKey)
+}
+
+// 超出 S3 签名期限的配置在任何显式入口都应被拒绝，且不能先覆盖原有可用配置。
+func TestImageStorageSettingsRejectExcessivePresignExpiry(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
+			svc, repo, built := newImageStorageFixture(t, config.ImageStorageConfig{})
+			ctx := context.Background()
+			good := ImageStorageSettings{Enabled: true, Bucket: "images", AccessKeyID: "ak", SecretAccessKey: "secret", PresignExpiry: 24}
+			_, err := svc.Update(ctx, good)
+			require.NoError(t, err)
+			before, err := repo.GetValue(ctx, settingKeyImageStorageConfig)
+			require.NoError(t, err)
+			bad := good
+			bad.Enabled, bad.PresignExpiry = enabled, 169
+			_, err = svc.Update(ctx, bad)
+			require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
+			require.Equal(t, "IMAGE_STORAGE_PRESIGN_EXPIRY_INVALID", infraerrors.Reason(err))
+			require.Contains(t, infraerrors.Message(err), "1 and 168")
+			err = svc.TestConnection(ctx, bad)
+			require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
+			after, err := repo.GetValue(ctx, settingKeyImageStorageConfig)
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+			require.Empty(t, *built, "无效参数不能创建客户端或探测存储")
+		})
+	}
+}
+
+// 保存的历史值及环境/YAML 回落均必须在创建存储客户端之前验证。
+func TestImageStorageSettingsInvalidPresignNeverEnables(t *testing.T) {
+	for _, persisted := range []bool{false, true} {
+		for _, enabled := range []bool{false, true} {
+			t.Run(strconv.FormatBool(persisted)+"/"+strconv.FormatBool(enabled), func(t *testing.T) {
+				fallback := config.ImageStorageConfig{Enabled: enabled, Bucket: "images", AccessKeyID: "ak", SecretAccessKey: "secret", PresignExpiry: 169}
+				svc, repo, built := newImageStorageFixture(t, fallback)
+				if persisted {
+					raw, err := json.Marshal(settingsFromConfig(fallback))
+					require.NoError(t, err)
+					require.NoError(t, repo.Set(context.Background(), settingKeyImageStorageConfig, string(raw)))
+				}
+				uploader, active := svc.resolve()
+				require.False(t, active)
+				require.Nil(t, uploader)
+				require.Empty(t, *built)
+				// 无效的旧配置仍可读取修正，不得导致整个应用无法启动。
+				got, err := svc.Get(context.Background())
+				require.NoError(t, err)
+				require.Equal(t, 169, got.PresignExpiry)
+			})
+		}
+	}
+}
+
+func TestImageStorageSettingsPresignBoundsAndLegacyDefault(t *testing.T) {
+	for _, hours := range []int{-1, 0, 1, 24, 168} {
+		t.Run(strconv.Itoa(hours), func(t *testing.T) {
+			svc, _, built := newImageStorageFixture(t, config.ImageStorageConfig{})
+			ctx := context.Background()
+			input := ImageStorageSettings{Enabled: true, Bucket: "images", AccessKeyID: "ak", SecretAccessKey: "secret", PresignExpiry: hours}
+			got, err := svc.Update(ctx, input)
+			require.NoError(t, err)
+			want := hours
+			if want <= 0 {
+				want = config.ImageStorageDefaultPresignExpiryHours
+			}
+			require.Equal(t, want, got.PresignExpiry)
+			require.NoError(t, svc.TestConnection(ctx, input))
+			require.Len(t, *built, 1)
+			require.Equal(t, want, (*built)[0].PresignExpiry)
+			_, active := svc.resolve()
+			require.True(t, active)
+		})
+	}
+}
+
+// 保存期影响删除计划，显式非法值必须拒绝，且不得改写已生效设置或创建存储客户端。
+func TestImageStorageSettingsRetentionValidation(t *testing.T) {
+	for _, hours := range []int{-1, 8761} {
+		t.Run(strconv.Itoa(hours), func(t *testing.T) {
+			svc, repo, built := newImageStorageFixture(t, config.ImageStorageConfig{})
+			ctx := context.Background()
+			good := ImageStorageSettings{Enabled: true, Bucket: "images", AccessKeyID: "ak", SecretAccessKey: "secret", RetentionHours: 48}
+			_, err := svc.Update(ctx, good)
+			require.NoError(t, err)
+			before, err := repo.GetValue(ctx, settingKeyImageStorageConfig)
+			require.NoError(t, err)
+			bad := good
+			bad.RetentionHours = hours
+			_, err = svc.Update(ctx, bad)
+			require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
+			require.Equal(t, "IMAGE_STORAGE_RETENTION_INVALID", infraerrors.Reason(err))
+			require.Contains(t, infraerrors.Message(err), "1 and 8760")
+			require.Equal(t, http.StatusBadRequest, infraerrors.Code(svc.TestConnection(ctx, bad)))
+			after, err := repo.GetValue(ctx, settingKeyImageStorageConfig)
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+			require.Empty(t, *built)
+		})
+	}
+}
+
+func TestImageStorageSettingsRetentionDefaultsAndRoundTrip(t *testing.T) {
+	for _, hours := range []int{0, 1, 72, 8760} {
+		t.Run(strconv.Itoa(hours), func(t *testing.T) {
+			svc, _, built := newImageStorageFixture(t, config.ImageStorageConfig{})
+			ctx := context.Background()
+			in := ImageStorageSettings{Enabled: true, Bucket: "images", AccessKeyID: "ak", SecretAccessKey: "secret", PresignExpiry: 12, RetentionHours: hours}
+			want := hours
+			if want == 0 {
+				want = config.ImageStorageDefaultRetentionHours
+			}
+			saved, err := svc.Update(ctx, in)
+			require.NoError(t, err)
+			require.Equal(t, want, saved.RetentionHours)
+			got, err := svc.Get(ctx)
+			require.NoError(t, err)
+			require.Equal(t, want, got.RetentionHours)
+			require.Equal(t, 12, got.PresignExpiry, "保存期不得重写签名有效期")
+			require.NoError(t, svc.TestConnection(ctx, in))
+			_, enabled := svc.resolve()
+			require.True(t, enabled)
+			require.Len(t, *built, 2)
+			for _, cfg := range *built {
+				require.Equal(t, want, cfg.RetentionHours)
+				require.Equal(t, 12, cfg.PresignExpiry)
+			}
+		})
+	}
+}
+
+// 升级前数据库、文件及备份复用配置的缺省保存期一致，读取不额外持久化历史对象。
+func TestImageStorageSettingsLegacyRetentionAndReuse(t *testing.T) {
+	for _, source := range []string{"stored", "fallback", "reuse"} {
+		t.Run(source, func(t *testing.T) {
+			fallback := config.ImageStorageConfig{Enabled: true, Bucket: "images", AccessKeyID: "ak", SecretAccessKey: "secret"}
+			svc, repo, built := newImageStorageFixture(t, fallback)
+			ctx := context.Background()
+			if source == "stored" {
+				require.NoError(t, repo.Set(ctx, settingKeyImageStorageConfig, `{"enabled":true,"bucket":"images","access_key_id":"ak","secret_access_key":"enc:secret"}`))
+			}
+			if source == "reuse" {
+				seedBackupS3(t, repo, BackupS3Config{Bucket: "images", AccessKeyID: "ak", SecretAccessKey: "secret"})
+				_, err := svc.Update(ctx, ImageStorageSettings{Enabled: true, ReuseBackupS3: true, RetentionHours: 72})
+				require.NoError(t, err)
+			}
+			want := 24
+			if source == "reuse" {
+				want = 72
+			}
+			got, err := svc.Get(ctx)
+			require.NoError(t, err)
+			require.Equal(t, want, got.RetentionHours)
+			_, enabled := svc.resolve()
+			require.True(t, enabled)
+			require.Equal(t, want, (*built)[0].RetentionHours)
+			if source == "stored" {
+				raw, err := repo.GetValue(ctx, settingKeyImageStorageConfig)
+				require.NoError(t, err)
+				require.NotContains(t, raw, "retention_hours")
+			}
+		})
+	}
+}
+
+func TestImageStorageSettingsInvalidRetentionNeverEnables(t *testing.T) {
+	for _, hours := range []int{-1, 8761} {
+		for _, persisted := range []bool{false, true} {
+			t.Run(strconv.Itoa(hours)+"/"+strconv.FormatBool(persisted), func(t *testing.T) {
+				cfg := config.ImageStorageConfig{Enabled: true, Bucket: "images", AccessKeyID: "ak", SecretAccessKey: "secret", RetentionHours: hours}
+				svc, repo, built := newImageStorageFixture(t, cfg)
+				if persisted {
+					raw, err := json.Marshal(settingsFromConfig(cfg))
+					require.NoError(t, err)
+					require.NoError(t, repo.Set(context.Background(), settingKeyImageStorageConfig, string(raw)))
+				}
+				_, enabled := svc.resolve()
+				require.False(t, enabled)
+				require.Empty(t, *built)
+			})
+		}
+	}
 }

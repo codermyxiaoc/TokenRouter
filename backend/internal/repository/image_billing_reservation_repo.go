@@ -201,7 +201,7 @@ func (r *usageBillingRepository) reserveImageBillingOnce(ctx context.Context, or
 		Hold: cmd, Quote: append(json.RawMessage(nil), quote...), ExpiresAt: expiresAt}, nil
 }
 
-func readImageBillingReservation(ctx context.Context, tx *sql.Tx, id string, apiKeyID int64, lockRow ...bool) (*imageBillingStoredReservation, error) {
+func readImageBillingReservation(ctx context.Context, tx mediaBillingQueryer, id string, apiKeyID int64, lockRow ...bool) (*imageBillingStoredReservation, error) {
 	var snapshot, quote, result []byte
 	var stored imageBillingStoredReservation
 	var ownerID int64

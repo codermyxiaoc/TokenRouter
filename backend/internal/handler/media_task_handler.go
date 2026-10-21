@@ -11,7 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// MediaTaskHandler 只查询元数据和缓存媒体；播放只读文件，不查询模型状态或执行结算。
+// MediaTaskHandler 的查询与播放保持只读，账务处理仅由独立管理员写入口执行。
 type MediaTaskHandler struct{ service *service.MediaTaskService }
 
 func NewMediaTaskHandler(s *service.MediaTaskService) *MediaTaskHandler {
@@ -42,6 +42,32 @@ func (h *MediaTaskHandler) Models(c *gin.Context)       { h.models(c, false) }
 func (h *MediaTaskHandler) AdminModels(c *gin.Context)  { h.models(c, true) }
 func (h *MediaTaskHandler) Preview(c *gin.Context)      { h.preview(c, false) }
 func (h *MediaTaskHandler) AdminPreview(c *gin.Context) { h.preview(c, true) }
+
+// AdminSettleBilling 只开放管理端；客户端不能指定资金来源、付款人或扣款金额。
+func (h *MediaTaskHandler) AdminSettleBilling(c *gin.Context) {
+	actor, ok := mediaTaskActor(c, true)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid media task identifier")
+		return
+	}
+	var input struct {
+		Action string `json:"action"`
+		Reason string `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		response.BadRequest(c, "Invalid settlement request")
+		return
+	}
+	result, err := h.service.SettleBilling(c.Request.Context(), actor, id, input.Action, input.Reason)
+	if !response.ErrorFrom(c, err) {
+		c.Header("Cache-Control", "no-store")
+		response.Success(c, result)
+	}
+}
 
 // models 返回完整可见集合的选项，分页和模型自身不参与筛选。
 func (h *MediaTaskHandler) models(c *gin.Context, admin bool) {

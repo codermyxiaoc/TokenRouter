@@ -181,6 +181,9 @@ type SystemSettings struct {
 	CreativeModelSettings       []service.CreativeModelSetting `json:"creative_model_settings"`
 	CreativeWorkerCount         int                            `json:"creative_worker_count"`
 
+	// 失败媒体任务待确认超时（分钟），仅管理员可读写。
+	MediaTaskReconciliationTimeoutMinutes int `json:"media_task_reconciliation_timeout_minutes"`
+
 	DefaultConcurrency                   int                          `json:"default_concurrency"`
 	DefaultBalance                       float64                      `json:"default_balance"`
 	TeamEnabled                          bool                         `json:"team_enabled"`         // 团队功能页面开关

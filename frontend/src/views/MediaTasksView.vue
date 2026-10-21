@@ -90,7 +90,7 @@
               </div>
               <div class="flex min-w-0 items-start justify-between gap-4">
                 <dt class="max-w-[60%] text-xs text-gray-500 dark:text-gray-400">{{ t('mediaTasks.cost') }}</dt>
-                <dd class="min-w-0 break-all text-right tabular-nums text-gray-900 dark:text-gray-100">{{ formatCost(task) }}</dd>
+                <dd class="min-w-0 break-all text-right tabular-nums text-gray-900 dark:text-gray-100">{{ formatCost(task) }}<MediaTaskBillingSummary :review="task.billing_review" /></dd>
               </div>
               <div class="flex min-w-0 items-start justify-between gap-4">
                 <dt class="shrink-0 text-xs text-gray-500 dark:text-gray-400">{{ t('mediaTasks.updatedAt') }}</dt>
@@ -119,7 +119,7 @@
               </td>
               <td class="max-w-xs px-4 py-4"><p class="break-words">{{ task.model }}</p><p class="mt-1 text-xs text-gray-500">{{ task.group_name || task.platform || '—' }}</p></td>
               <td class="whitespace-nowrap px-4 py-4"><span class="rounded-full px-2 py-1 text-xs font-medium" :class="statusClass(getMediaTaskDisplayStatus(task))">{{ label('statuses', getMediaTaskDisplayStatus(task)) }}</span><p v-if="isVideoTaskReconciliation(task) && getMediaTaskDisplayStatus(task) !== 'reconciliation'" class="mt-1 text-xs text-amber-700 dark:text-amber-300">{{ t('mediaTasks.videoBilling.reconciliation') }}</p></td>
-              <td class="whitespace-nowrap px-4 py-4 tabular-nums">{{ formatCost(task) }}</td>
+              <td class="whitespace-nowrap px-4 py-4 tabular-nums">{{ formatCost(task) }}<MediaTaskBillingSummary :review="task.billing_review" /></td>
               <td class="whitespace-nowrap px-4 py-4 text-xs text-gray-500">{{ formatTime(task.updated_at) }}</td>
               <td class="px-4 py-4"><div class="flex gap-2"><button v-if="task.status === 'completed'" type="button" class="btn btn-secondary btn-sm whitespace-nowrap" @click="openPreview(task)">{{ t('mediaTasks.preview.open') }}</button><button type="button" class="btn btn-secondary btn-sm whitespace-nowrap" @click="openDetails(task.id)">{{ t('mediaTasks.details') }}</button></div></td>
             </tr></tbody>
@@ -136,6 +136,7 @@
       <template v-else-if="detail">
         <dl class="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2"><div v-for="field in detailFields" :key="field.key" class="min-w-0"><dt class="text-xs text-gray-500">{{ t(`mediaTasks.${field.key}`) }}</dt><dd class="mt-1 break-all text-gray-900 dark:text-gray-100">{{ field.value }}</dd></div></dl>
         <VideoTaskBillingDetails v-if="detail.video_billing" :billing="detail.video_billing" />
+        <MediaTaskBillingReview :key="detail.id" :task="detail" :admin="admin" @settled="handleSettlement" />
         <div v-if="detail.error_message" class="mt-5 min-w-0"><p class="text-xs text-gray-500">{{ t('mediaTasks.error') }}</p><p class="mt-1 whitespace-pre-wrap break-words text-sm text-red-600 [overflow-wrap:anywhere] dark:text-red-400">{{ detail.error_message }}</p></div>
         <p class="mt-5 border-t border-gray-100 pt-4 text-xs leading-5 text-gray-500 dark:border-dark-700">{{ t('mediaTasks.billingHint') }}</p>
       </template>
@@ -146,6 +147,8 @@
 <script setup lang="ts">
 import { getBillingModeLabel } from '@/utils/billingMode'
 import VideoTaskBillingDetails from "@/components/media/VideoTaskBillingDetails.vue"
+import MediaTaskBillingReview from '@/components/media/MediaTaskBillingReview.vue'
+import MediaTaskBillingSummary from '@/components/media/MediaTaskBillingSummary.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -334,6 +337,12 @@ async function openDetails(id: number) {
   }
 }
 function closeDetails() { ++detailRequest; detailsOpen.value = false; detail.value = null }
+function handleSettlement(result: MediaTask) {
+  if (!props.admin || detail.value?.id !== result.id) return
+  detail.value = result
+  // 用结算返回的账本立即更新详情，同时重新读取分页和筛选选项。
+  refresh()
+}
 watch(() => props.admin, () => { closeDetails(); closePreview(); selectedUser.value = null; filters.user_id = ''; filters.model = ''; models.value = []; items.value = []; search() })
 onMounted(refresh)
 onBeforeUnmount(() => { ++listRequest; ++detailRequest; ++modelsRequest; ++previewRequest })

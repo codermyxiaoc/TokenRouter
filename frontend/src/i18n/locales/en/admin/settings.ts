@@ -93,6 +93,13 @@ export default {
           'If the window and bucket size would produce more than 720 bars, the backend widens the bucket size automatically.'
       },
       features: {
+        mediaReconciliation: {
+          title: 'Media task settlement review',
+          description: 'Set a review deadline for failed image and video tasks so unresolved reservations do not remain frozen indefinitely.',
+          timeout: 'Automatic release delay (minutes)',
+          hint: 'Default: 60 minutes. Range: 1–10080. Counted from task failure and also applies to existing failed tasks. Expiry releases unsettled reservations without reversing settled charges or changing media retention.',
+          invalid: 'The automatic release delay must be an integer from 1 to 10080 minutes.',
+        },
         pluginManagement: {
           title: 'Plugin Management',
           enabled: 'Show Plugin Management menu',

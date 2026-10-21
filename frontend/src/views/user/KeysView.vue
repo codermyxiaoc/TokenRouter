@@ -1485,6 +1485,7 @@ import CcSwitchImportDialog from '@/components/keys/CcSwitchImportDialog.vue'
 	import GroupBadge from '@/components/common/GroupBadge.vue'
 	import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
 import SmartRoutingGroupEditor from '@/components/keys/SmartRoutingGroupEditor.vue'
+import { MAX_SMART_ROUTING_GROUPS } from '@/constants/smartRouting'
 	import ScopeDropdown, { type DataScope } from '@/components/team/ScopeDropdown.vue'
 	import type {
 	  ApiKey,
@@ -2034,7 +2035,7 @@ const smartRoutingFormError = computed(() => {
   if (!formData.value.smart_routing) return ''
   const ids = formData.value.smart_routing_group_ids
   if (ids.length === 0) return t('keys.smartRouting.groupRequired')
-  if (ids.length > 10) return t('keys.smartRouting.limitReached')
+  if (ids.length > MAX_SMART_ROUTING_GROUPS) return t('keys.smartRouting.limitReached')
   if (new Set(ids).size !== ids.length) return t('keys.composite.groupDuplicate')
   return smartRoutingCooldownError.value
 })

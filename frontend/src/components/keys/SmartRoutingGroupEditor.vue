@@ -63,7 +63,7 @@
       :search-placeholder="t('keys.searchGroup')"
       :aria-label="t('keys.smartRouting.addGroup')"
       :searchable="true"
-      :disabled="disabled || modelValue.length >= 10 || availableOptions.length === 0"
+      :disabled="disabled || modelValue.length >= MAX_SMART_ROUTING_GROUPS || availableOptions.length === 0"
       data-test="smart-routing-add-group"
       @update:model-value="addGroup"
     >
@@ -83,7 +83,7 @@
         />
       </template>
     </Select>
-    <p v-if="modelValue.length >= 10" class="text-xs text-gray-500 dark:text-dark-400">
+    <p v-if="modelValue.length >= MAX_SMART_ROUTING_GROUPS" class="text-xs text-gray-500 dark:text-dark-400">
       {{ t('keys.smartRouting.limitReached') }}
     </p>
   </div>
@@ -96,6 +96,7 @@ import Select from '@/components/common/Select.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { MAX_SMART_ROUTING_GROUPS } from '@/constants/smartRouting'
 import type { Group } from '@/types'
 
 const props = withDefaults(defineProps<{
@@ -127,9 +128,9 @@ const availableOptions = computed<RoutingGroupOption[]>(() => props.groups
   .filter((group) => !props.modelValue.includes(group.id))
   .map((group) => ({ value: group.id, label: group.name, description: group.description, displayBrand: group.display_brand, group })))
 
-// 同时约束交互入口，避免重复事件或组件事件绕过最多十组的限制。
+// 同时约束交互入口，避免重复事件或组件事件绕过最多二十组的限制。
 const addGroup = (value: string | number | boolean | null) => {
-  if (props.disabled || typeof value !== 'number' || props.modelValue.length >= 10) return
+  if (props.disabled || typeof value !== 'number' || props.modelValue.length >= MAX_SMART_ROUTING_GROUPS) return
   if (!availableOptions.value.some((option) => option.value === value)) return
   emit('update:modelValue', [...props.modelValue, value])
 }

@@ -7501,6 +7501,18 @@
               <Toggle v-model="form.intelligence_enabled" data-testid="intelligence-enabled-toggle" />
             </div>
           </div>
+          <!-- 账务处理期限独立于媒体保存期，旧失败任务也按失败时间计算。 -->
+          <div class="card" data-testid="media-task-reconciliation-settings">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('admin.settings.features.mediaReconciliation.title') }}</h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.settings.features.mediaReconciliation.description') }}</p>
+            </div>
+            <div class="p-6">
+              <label class="input-label" for="media-task-reconciliation-timeout">{{ t('admin.settings.features.mediaReconciliation.timeout') }}</label>
+              <input id="media-task-reconciliation-timeout" v-model.number="form.media_task_reconciliation_timeout_minutes" type="number" min="1" max="10080" step="1" class="input max-w-xs" data-testid="media-task-reconciliation-timeout" />
+              <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.features.mediaReconciliation.hint') }}</p>
+            </div>
+          </div>
           <!-- 此开关仅隐藏菜单，运行中的插件必须在插件管理页停用。 -->
           <div class="card">
             <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
@@ -10151,6 +10163,7 @@ const form = reactive<SettingsForm>({
   intelligence_enabled: false,
   creative_model_settings: [] as CreativeModelSetting[],
   creative_worker_count: 128,
+  media_task_reconciliation_timeout_minutes: 60,
   risk_control_enabled: false,
   cyber_policy_user_allowlist: "",
   cyber_session_block_enabled: false,
@@ -11954,6 +11967,13 @@ async function saveSettings() {
     }
     form.creative_worker_count = normalizedCreativeWorkerCount;
 
+    const normalizedMediaTaskTimeout = Number(form.media_task_reconciliation_timeout_minutes);
+    if (!Number.isSafeInteger(normalizedMediaTaskTimeout) || normalizedMediaTaskTimeout < 1 || normalizedMediaTaskTimeout > 10080) {
+      activeTab.value = "features";
+      appStore.showError(t("admin.settings.features.mediaReconciliation.invalid"));
+      return;
+    }
+
     const rawDefaultUserAPIKeyLimit = String(
       form.default_user_api_key_limit,
     ).trim();
@@ -12428,6 +12448,7 @@ async function saveSettings() {
       intelligence_enabled: form.intelligence_enabled,
       creative_model_settings: normalizedCreativeModelSettings,
       creative_worker_count: normalizedCreativeWorkerCount,
+      media_task_reconciliation_timeout_minutes: normalizedMediaTaskTimeout,
       risk_control_enabled: form.risk_control_enabled,
       cyber_policy_user_allowlist: form.cyber_policy_user_allowlist,
       cyber_session_block_enabled: form.cyber_session_block_enabled,

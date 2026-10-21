@@ -141,7 +141,7 @@ export default {
     selectGroup: 'Select a group',
     smartRouting: {
       label: 'Smart routing',
-      hint: 'Select up to 10 groups across platforms and set their order. Groups with mismatched account model catalogs or no schedulable accounts are skipped. An account cooldown leaves healthy accounts in the same group available. Text, token-count, and Embeddings requests can try the next group after upstream errors persist, provided no business output or usage settlement has started and the request is not canceled. Local validation, spending limits, and explicit content policy rejections stop retries. Image/video tasks and requests dependent on remote state are not replayed across groups.',
+      hint: 'Select up to 20 groups across platforms and set their order. Groups with mismatched account model catalogs or no schedulable accounts are skipped. An account cooldown leaves healthy accounts in the same group available. Text, token-count, and Embeddings requests can try the next group after upstream errors persist, provided no business output or usage settlement has started and the request is not canceled. Local validation, spending limits, and explicit content policy rejections stop retries. Image/video tasks and requests dependent on remote state are not replayed across groups.',
       cooldownLabel: 'Failed account cooldown (seconds)',
       cooldownHint: 'Defaults to 60 seconds; enter an integer from 0 to 3600. A confirmed upstream error temporarily skips only the failed account for this key, requested model, and endpoint. Healthy accounts in the same group remain available. Repeated failures during a cooldown do not extend it. Zero disables cooldown across requests; the current request still skips accounts that already failed. If every matching account is cooling down, the request returns 503.',
       cooldownInvalid: 'Enter a whole number of seconds from 0 to 3600',
@@ -149,7 +149,7 @@ export default {
       addGroup: 'Add group',
       editRoutes: 'Edit smart routing groups',
       groupRequired: 'Smart routing requires at least one candidate group',
-      limitReached: 'Select up to 10 candidate groups',
+      limitReached: 'Select up to 20 candidate groups',
       unavailableGroup: 'Group #{id} (unavailable)',
       moveUp: 'Move candidate group up',
       moveDown: 'Move candidate group down',

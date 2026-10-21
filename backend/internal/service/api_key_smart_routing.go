@@ -8,11 +8,11 @@ import (
 )
 
 // MaxSmartRoutingGroups 限制单个请求需要检查的候选分组数量。
-const MaxSmartRoutingGroups = 10
+const MaxSmartRoutingGroups = 20
 
 var (
 	ErrSmartRoutingGroupsRequired = infraerrors.BadRequest("SMART_ROUTING_GROUPS_REQUIRED", "smart routing requires at least one group")
-	ErrSmartRoutingTooManyGroups  = infraerrors.BadRequest("SMART_ROUTING_TOO_MANY_GROUPS", "smart routing supports at most 10 groups")
+	ErrSmartRoutingTooManyGroups  = infraerrors.BadRequest("SMART_ROUTING_TOO_MANY_GROUPS", "smart routing supports at most 20 groups")
 	ErrSmartRoutingGroupDuplicate = infraerrors.BadRequest("SMART_ROUTING_GROUP_DUPLICATE", "smart routing groups must be unique")
 	ErrSmartRoutingConflict       = infraerrors.BadRequest("SMART_ROUTING_CONFIGURATION_CONFLICT", "smart routing cannot use composite mode, composite_groups or group_id")
 	ErrSmartRoutingTargetRequired = infraerrors.BadRequest("SMART_ROUTING_TARGET_GROUP_REQUIRED", "disabling smart routing requires a target group")

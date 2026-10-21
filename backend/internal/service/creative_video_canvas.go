@@ -403,6 +403,10 @@ func (s *CreativeVideoCanvasExecutor) Poll(ctx context.Context, e *CreativeCanva
 		}
 		return &CreativeCanvasExecutionResult{Status: "succeeded", Outputs: []CreativeCanvasOutput{{Index: 0, MIMEType: contentType, Reader: response.Body, Size: response.ContentLength}}}, nil
 	case "failed", "cancelled", "expired":
+		// 管理员已确认原预留费用也属于账务终态，不能让失败画布节点继续等待退款。
+		if task.BillingStatus == "settled" {
+			return &CreativeCanvasExecutionResult{Status: "failed", ErrorCode: "CREATIVE_VIDEO_MANUALLY_SETTLED", ErrorMessage: "视频任务未完成，管理员已确认费用；详情请查看任务记录"}, nil
+		}
 		if task.BillingStatus != "released" {
 			return &CreativeCanvasExecutionResult{Status: "running", ErrorCode: "CREATIVE_VIDEO_RELEASE_PENDING", ErrorMessage: "视频任务未完成，正在核对预扣处理结果，请勿重复生成"}, nil
 		}

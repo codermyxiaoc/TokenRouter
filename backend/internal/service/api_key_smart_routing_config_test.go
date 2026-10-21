@@ -76,7 +76,8 @@ func TestSmartRoutingCooldownAuthSnapshotRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			var snapshot APIKeyAuthSnapshot
 			require.NoError(t, json.Unmarshal(payload, &snapshot))
-			require.Equal(t, 39, snapshot.Version)
+			// 冷却字段按当前快照版本往返，后续字段升级不应使本用例停留在 v39。
+			require.Equal(t, apiKeyAuthSnapshotVersion, snapshot.Version)
 			restored, hit, err := svc.applyAuthCacheEntry(key.Key, &APIKeyAuthCacheEntry{Snapshot: &snapshot})
 			require.NoError(t, err)
 			require.True(t, hit)

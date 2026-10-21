@@ -23,10 +23,14 @@ export function getMediaTaskDisplayStatus(task: MediaTaskBillingState & Pick<Med
 }
 
 export function formatMediaTaskCost(
-  task: Pick<MediaTask, 'source' | 'actual_cost' | 'video_billing'>,
+  task: Pick<MediaTask, 'source' | 'actual_cost' | 'video_billing' | 'billing_review'>,
   pendingLabel: string,
   billingLabels: { released: string; reconciliation: string },
 ): string {
+  // 已处理账本优先于缺失或迟到的用量关联，释放冻结不再误报“待确认”。
+  if (task.billing_review?.status === 'released' || task.billing_review?.status === 'expired') return billingLabels.released
+  if (task.billing_review?.status === 'charged') return formatVideoTaskAmount(task.billing_review.actual_amount ?? task.actual_cost) ?? pendingLabel
+  if (task.billing_review?.status === 'pending') return billingLabels.reconciliation
   if (task.source === 'video') {
     // 释放由服务端账务确认；历史预留金额或缺少用量记录都不能再显示为待扣费。
     if (task.video_billing?.status === 'released') return billingLabels.released

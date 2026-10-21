@@ -91,6 +91,13 @@ export default {
         bucketLimitHint: '如果窗口和粒度会产生超过 720 根柱子，后端会自动放大单柱时间窗口。'
       },
       features: {
+        mediaReconciliation: {
+          title: '媒体任务待确认处理',
+          description: '配置失败图片、视频任务的账务处理期限，避免未处理的预留资金长期冻结。',
+          timeout: '自动释放等待时间（分钟）',
+          hint: '默认 60 分钟，支持 1–10080 分钟。从失败时间起计算，旧失败任务也适用；到期后释放尚未结算的冻结资金，不撤销已完成扣款，不改变图片或视频保存期。',
+          invalid: '媒体任务自动释放等待时间必须为 1–10080 分钟的整数。',
+        },
         pluginManagement: {
           title: '插件管理',
           enabled: '显示插件管理菜单',

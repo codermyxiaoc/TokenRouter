@@ -15,7 +15,7 @@ func TestSmartRoutingGroupValidation(t *testing.T) {
 		err  error
 	}{
 		{"empty", nil, ErrSmartRoutingGroupsRequired},
-		{"too_many", make([]int64, 11), ErrSmartRoutingTooManyGroups},
+		{"too_many", make([]int64, 21), ErrSmartRoutingTooManyGroups},
 		{"duplicate", []int64{2, 2}, ErrSmartRoutingGroupDuplicate},
 		{"invalid", []int64{0}, ErrGroupNotAllowed},
 	}
@@ -29,12 +29,24 @@ func TestSmartRoutingGroupValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(20), inputs[0].GroupID)
 	require.Equal(t, int64(3), inputs[1].GroupID)
-	maximum := make([]int64, 10)
+	maximum := make([]int64, 20)
 	for index := range maximum {
 		maximum[index] = int64(index + 1)
 	}
-	_, err = smartRoutingGroupInputs(maximum)
+	inputs, err = smartRoutingGroupInputs(maximum)
 	require.NoError(t, err)
+	require.Len(t, inputs, 20)
+	// 创建和更新共用的权限校验链仍需完整接受全部二十组。
+	groups := make(map[int64]*Group, len(maximum))
+	for _, id := range maximum {
+		groups[id] = &Group{ID: id, Platform: PlatformOpenAI, Status: StatusActive, IsExclusive: true}
+	}
+	user := &User{ID: 20, Status: StatusActive, AllowedGroups: maximum, GroupRestrictionsLoaded: true}
+	svc := NewAPIKeyService(nil, nil, &compositeGroupRepoStub{groups: groups}, nil, nil, nil, nil)
+	bindings, err := svc.prepareSmartRoutingGroups(context.Background(), user, maximum)
+	require.NoError(t, err)
+	require.Len(t, bindings, 20)
+	require.Equal(t, int64(20), bindings[19].GroupID)
 }
 
 func TestSmartRoutingAPIKeyUpdateModesAndPermissions(t *testing.T) {

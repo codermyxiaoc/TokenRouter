@@ -1,12 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mediaTasksAPI } from '../mediaTasks'
+import { adminMediaTasksAPI, mediaTasksAPI } from '../mediaTasks'
 
-const { get } = vi.hoisted(() => ({ get: vi.fn() }))
-vi.mock('../client', () => ({ apiClient: { get } }))
+const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
+vi.mock('../client', () => ({ apiClient: { get, post } }))
 
 // 用户请求不能通过共用参数对象携带管理端的用户筛选字段。
 describe('mediaTasksAPI', () => {
-  beforeEach(() => { get.mockReset(); get.mockResolvedValue({ data: { items: [] } }) })
+  beforeEach(() => { get.mockReset(); post.mockReset(); get.mockResolvedValue({ data: { items: [] } }) })
+
+  it('结算仅使用独立管理员入口，按原请求传理由而不传客户端金额', async () => {
+    const updated = { id: 42, billing_review: { status: 'released' } }
+    post.mockResolvedValue({ data: updated })
+    const request = { action: 'release' as const, reason: '已核对上游失败' }
+    expect(await adminMediaTasksAPI.settle(42, request)).toEqual(updated)
+    expect(post).toHaveBeenCalledWith('/admin/media-tasks/42/settlement', request)
+    expect(mediaTasksAPI()).not.toHaveProperty('settle')
+    expect(mediaTasksAPI(true)).not.toHaveProperty('settle')
+  })
 
   it('使用个人入口并移除 user_id', async () => {
     await mediaTasksAPI().list({ page: 2, page_size: 20, user_id: 99, media_type: 'video' })

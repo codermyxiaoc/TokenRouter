@@ -513,7 +513,7 @@ func loadLegacyImageObservation(ctx context.Context, tx *sql.Tx, task *service.I
 func projectDurableImageObservation(ctx context.Context, tx *sql.Tx, o service.MediaTaskObservation) error {
 	// 新任务状态受行锁校验；滚动升级期间也保留旧实例已经写出的真实终态。
 	// 只有维护器的固定中断分类可以被随后到达的真实结果纠正。
-	const preserve = `media_tasks.status IN ('completed','failed','cancelled','expired') AND media_tasks.error_message<>$18`
+	const preserve = `(EXISTS(SELECT 1 FROM media_task_billing_resolutions d WHERE d.media_task_id=media_tasks.id) OR (media_tasks.status IN ('completed','failed','cancelled','expired') AND media_tasks.error_message<>$18))`
 	result, err := tx.ExecContext(ctx, `INSERT INTO media_tasks
  (source,task_id,media_type,platform,model,status,upstream_status,user_id,api_key_id,group_id,account_id,http_status,error_message,request_id,created_at,completed_at,expires_at)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)

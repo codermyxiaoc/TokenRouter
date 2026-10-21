@@ -3,8 +3,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import MediaTasksView from '../MediaTasksView.vue'
 import type { MediaTask } from '@/api/mediaTasks'
 
-const { list, get, models, preview, api } = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), models: vi.fn(), preview: vi.fn(), api: vi.fn() }))
-vi.mock('@/api/mediaTasks', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/api/mediaTasks')>()), mediaTasksAPI: api }))
+const { list, get, models, preview, api, settle } = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), models: vi.fn(), preview: vi.fn(), api: vi.fn(), settle: vi.fn() }))
+vi.mock('@/api/mediaTasks', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/api/mediaTasks')>()), mediaTasksAPI: api, adminMediaTasksAPI: { settle } }))
 vi.mock('vue-i18n', async (importOriginal) => ({
   ...(await importOriginal<typeof import('vue-i18n')>()),
   useI18n: () => ({ t: (key: string) => key, te: () => true }),
@@ -33,7 +33,34 @@ function mountView(admin = false) {
 }
 
 describe('MediaTasksView', () => {
-  beforeEach(() => { list.mockReset(); get.mockReset(); models.mockReset(); preview.mockReset(); api.mockReset(); api.mockReturnValue({ list, get, models, preview }); list.mockResolvedValue(result([])); models.mockResolvedValue(['gpt-image-2', 'image-model']); preview.mockResolvedValue({ items: [] }) })
+  beforeEach(() => { list.mockReset(); get.mockReset(); models.mockReset(); preview.mockReset(); settle.mockReset(); api.mockReset(); api.mockReturnValue({ list, get, models, preview }); list.mockResolvedValue(result([])); models.mockResolvedValue(['gpt-image-2', 'image-model']); preview.mockResolvedValue({ items: [] }) })
+
+  it('管理员处理冻结后刷新列表和详情，过期释放不再显示待确认', async () => {
+    const original = task({ source: 'async_image', media_type: 'image', status: 'failed', billing_review: {
+      status: 'pending', held_balance_amount: 0.5, held_subscription_amount: 0.25, original_reserved_amount: 0.75,
+      can_charge: true, can_release: true, expires_at: '2026-10-22T01:00:00Z',
+    } })
+    const released = { ...original, billing_review: { ...original.billing_review!, status: 'released' as const, held_balance_amount: 0, held_subscription_amount: 0, can_charge: false, can_release: false } }
+    list.mockResolvedValue(result([original]))
+    get.mockResolvedValue(original)
+    settle.mockResolvedValue(released)
+    const wrapper = mountView(true)
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="billing-review-summary"]')).toHaveLength(2)
+    await wrapper.findAll('button').find(button => button.text() === 'mediaTasks.details')!.trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="billing-release"]').trigger('click')
+    await wrapper.get('[data-testid="billing-reason"]').setValue('已核对没有产出')
+    list.mockResolvedValue(result([released, { ...released, id: 2, billing_review: { ...released.billing_review, status: 'expired' } }]))
+    await wrapper.get('[data-testid="billing-confirmation"]').trigger('submit')
+    await flushPromises()
+    expect(list).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="detail"]').text()).toContain('mediaTasks.billingReview.statuses.released')
+    expect(wrapper.get('[data-testid="desktop-task-list"]').text()).toContain('mediaTasks.billingReview.statuses.expired')
+    expect(wrapper.get('[data-testid="desktop-task-list"]').text()).not.toContain('mediaTasks.pendingCost')
+    expect(wrapper.find('[data-testid="billing-release"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
 
   // 同一账务状态须覆盖桌面、手机及详情；已知生成终态不被待核对覆盖。
   it.each([false, true])('Video 待核对与释放在 admin=%s 的各入口保持一致', async admin => {

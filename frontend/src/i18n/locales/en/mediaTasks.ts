@@ -1,5 +1,28 @@
 export default {
   mediaTasks: {
+    billingReview: {
+      title: 'Reserved funds and settlement', status: 'Settlement status',
+      statuses: { pending: 'Awaiting review', charged: 'Charge confirmed', released: 'Reservation released', expired: 'Expired and released', unreserved: 'No reserved funds', unavailable: 'Billing information unavailable' },
+      hints: {
+        pending: 'Review the upstream result before settling. Unhandled failed tasks release existing reservations at the deadline, independently of media retention.',
+        charged: 'The charge has been confirmed. This action cannot charge or refund it again.',
+        released: 'Reserved funds were returned to their original balance or subscription quota. This is not an additional refund.',
+        expired: 'The review deadline has passed and reserved funds were released. No further automatic charge will occur.',
+        unreserved: 'No actionable reservation was found. An unknown cost does not prove that funds are frozen or refundable.',
+        unavailable: 'The ledger state cannot be confirmed at present. Refresh later; settlement actions are unavailable.',
+      },
+      heldTotal: 'Currently reserved: {amount}', deadlineValue: 'Review deadline: {time}',
+      heldBalance: 'Current balance reservation (USD)', heldSubscription: 'Current subscription reservation (USD)',
+      originalReserved: 'Original total reservation (USD)', actual: 'Confirmed charge (USD)', deadline: 'Settlement deadline',
+      resolvedAt: 'Resolved at', action: 'Resolution', actor: 'Administrator', reason: 'Reason',
+      actions: { charge: 'Confirm charge', release: 'Manual release', expire: 'Automatic expiry release' },
+      release: 'Release reservation / refund', charge: 'Confirm charge',
+      releaseConfirm: 'Release this task’s reserved funds?', chargeConfirm: 'Charge the original reservation amount?',
+      releaseAmount: 'The original reservation was {amount}. Only funds still reserved are returned to their balance or subscription quota; settled charges are not refunded.',
+      chargeAmount: 'Confirm a charge of {amount} using the original server-side reservation. No additional amount is charged.',
+      reasonPlaceholder: 'Enter the review result or reason (1–500 characters)', reasonInvalid: 'The reason must contain 1–500 characters.',
+      saved: 'Settlement completed', failed: 'Settlement failed. Refresh to check the current state before retrying.',
+    },
     videoBilling: {
       sources: { group: 'Group pricing', channel: 'Channel pricing' },
   "title": "Video billing",
@@ -43,7 +66,7 @@ export default {
     description: 'Review the latest status and recorded charges for asynchronous image and video tasks.',
     adminDescription: 'Review asynchronous image and video tasks across all users.',
     observationHint: 'This page shows the latest saved task status. Refreshing the list does not query upstream. Independent Video tasks are polled in the background; legacy Grok/Seedance tasks still update when the original client queries upstream.',
-    billingHint: 'Task completion does not confirm a charge. Pending means no billing record has been linked yet. Check usage records for actual charges.',
+    billingHint: 'Task completion does not confirm a charge. An unknown cost means no billing record has been linked, not that funds are frozen. See task details for current reservations and settlement results.',
     type: 'Media type', status: 'Status', source: 'Source', model: 'Model', all: 'All',
     user: 'User', userId: 'User ID', task: 'Task ID', cost: 'Recorded charge (USD)', updatedAt: 'Last updated',
     empty: 'No matching task records', pendingCost: 'Pending', details: 'Task details',

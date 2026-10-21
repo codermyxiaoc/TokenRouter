@@ -85,6 +85,8 @@ setup 使用 `DATA_DIR > 可写 /app/data > 当前目录` 选择 `config.yaml` �
 
 ## 数据库运行时设置
 
+媒体任务后台设置 `media_task_reconciliation_timeout_minutes` 控制失败待核对账本的自动释放期限，默认 60 分钟，范围 1–10080；管理员设置使用可选整数进行部分更新，省略或 null 保留原值。维护器每轮动态读取，缺键使用默认，读取失败或非法持久值跳过处理；只作用于失败且尚有待处理资金合同的任务，与图片保存期无关。修改对历史失败待核对任务同样生效，详见[失败任务账务处理](../domains/media_tasks.md#media_task_reconciliation)。
+
 `upstream_billing_probe_settings` 是管理员专用 JSON 设置，控制[上游声明倍率探测](upstream_billing_probe.md)的全局周期（默认 30 分钟，范围 5–1440 分钟）与运行开关。全局启用不会自动开启账号探测；账号的自动探测和同步倍率开关分别存放在 `extra`，缺省关闭。设置不进入用户公共配置，也不影响现有上游钱包查询或调度权重。
 
 `daily_activity_config` 由系统设置“每日活动”独立保存，默认关闭，包含三类规则各自的 `enabled` 开关（旧配置缺失按开启）、达标门槛和随机奖励上限，以及默认关闭的 `include_redeem_balance`、`include_admin_balance` 两个来源开关；来源只累计对应开关开启后的新增到账，关闭不清除已累计资格，历史流水不补计。首次开启的数据库时间 `started_at` 不可由客户端覆盖，关闭再开也不重置。公开设置及 HTML 注入只返回 `daily_activity_enabled`；详细规则和资格见[每日活动](../domains/daily_activities.md#daily_activity_configuration)。

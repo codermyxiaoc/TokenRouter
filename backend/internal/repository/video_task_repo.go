@@ -146,8 +146,9 @@ func (r *videoTaskRepository) Create(ctx context.Context, t *service.VideoTaskRe
 
 func (r *videoTaskRepository) Claim(ctx context.Context, id string, duration time.Duration) (*service.VideoTaskRecord, error) {
 	token := uuid.NewString()
+	// 查询方的旧快照不能重新领取已最终结算的任务，避免再次写入供应商用量或执行完成效果。
 	return scanVideoTask(r.db.QueryRowContext(ctx, `UPDATE video_tasks SET lease_token=$2,lease_until=NOW()+$3 * INTERVAL '1 second'
- WHERE id=$1 AND (lease_until IS NULL OR lease_until<=NOW()) RETURNING `+videoTaskColumns, id, token, duration.Seconds()))
+ WHERE id=$1 AND effects_done=FALSE AND (lease_until IS NULL OR lease_until<=NOW()) RETURNING `+videoTaskColumns, id, token, duration.Seconds()))
 }
 
 func (r *videoTaskRepository) ClaimReady(ctx context.Context, limit int, duration time.Duration) ([]*service.VideoTaskRecord, error) {

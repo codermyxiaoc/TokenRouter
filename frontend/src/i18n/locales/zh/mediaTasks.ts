@@ -1,5 +1,28 @@
 export default {
   mediaTasks: {
+    billingReview: {
+      title: '冻结资金与账务处理', status: '账务状态',
+      statuses: { pending: '待处理', charged: '已确认扣款', released: '冻结已释放', expired: '已到期释放', unreserved: '无预留资金', unavailable: '账务信息暂不可用' },
+      hints: {
+        pending: '请核对上游结果后处理。到期仍未处理的失败任务会释放现有冻结；此时间与图片、视频保存期无关。',
+        charged: '本任务已确认扣款，不能通过此入口再次扣款或退款。',
+        released: '原冻结已返还对应余额或订阅额度，不代表新增了一笔退款。',
+        expired: '本任务已到达处理期限，原冻结已释放，不会再次自动扣款。',
+        unreserved: '没有找到可操作的预留资金，不能根据费用待确认推断存在冻结或退款。',
+        unavailable: '暂时无法确认账本状态，请稍后刷新。此时不提供资金操作。',
+      },
+      heldTotal: '当前冻结：{amount}', deadlineValue: '处理截止：{time}',
+      heldBalance: '当前余额冻结（USD）', heldSubscription: '当前订阅额度预留（USD）',
+      originalReserved: '原预留总额（USD）', actual: '已确认扣费（USD）', deadline: '账务处理截止时间',
+      resolvedAt: '处理时间', action: '处理方式', actor: '操作管理员', reason: '处理理由',
+      actions: { charge: '确认扣款', release: '人工释放', expire: '到期释放' },
+      release: '释放冻结/退款', charge: '确认扣款',
+      releaseConfirm: '确认释放这笔任务的冻结资金？', chargeConfirm: '确认按原预留总额扣款？',
+      releaseAmount: '原预留总额为 {amount}。仅返还仍冻结的余额或订阅额度，不退还已完成扣款。',
+      chargeAmount: '确认扣款 {amount}，使用服务端原预留总额结算，不会额外增加扣款。',
+      reasonPlaceholder: '请输入核对结果或处理原因（1–500 个字符）', reasonInvalid: '处理理由必须为 1–500 个字符。',
+      saved: '账务处理完成', failed: '账务处理失败，请刷新核对当前状态后重试。',
+    },
     videoBilling: {
       sources: { group: '分组定价', channel: '渠道定价' },
   "title": "视频计费",
@@ -43,7 +66,7 @@ export default {
     description: '查看异步图片和视频任务的最近状态与费用。',
     adminDescription: '查看所有用户的异步图片和视频任务。',
     observationHint: '这里显示系统最近保存的任务状态，刷新列表不会触发上游查询。独立 Video 任务由后台轮询更新；旧 Grok/Seedance 任务仍需原客户端查询上游后更新。',
-    billingHint: '任务完成不代表已扣费。费用“待确认”表示尚未关联到扣费记录，实际扣费请以使用记录为准。',
+    billingHint: '任务完成不代表已扣费。费用“待确认”表示尚未关联到扣费记录，不代表存在冻结；当前冻结及人工处理结果请查看任务详情。',
     type: '媒体类型', status: '状态', source: '来源', model: '模型', all: '全部',
     user: '用户', userId: '用户 ID', task: '任务 ID', cost: '已记录扣费（USD）', updatedAt: '最近更新',
     empty: '暂无符合条件的任务记录', pendingCost: '待确认', details: '任务详情',

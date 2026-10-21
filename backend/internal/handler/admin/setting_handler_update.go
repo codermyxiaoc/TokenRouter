@@ -189,6 +189,9 @@ type UpdateSettingsRequest struct {
 	CreativeModelSettings       *[]service.CreativeModelSetting `json:"creative_model_settings"`
 	CreativeWorkerCount         *int                            `json:"creative_worker_count"`
 
+	// 失败媒体任务超过此等待时间后可由后台自动释放冻结额度。
+	MediaTaskReconciliationTimeoutMinutes *int `json:"media_task_reconciliation_timeout_minutes"`
+
 	// 默认配置
 	DefaultConcurrency                        int                               `json:"default_concurrency"`
 	DefaultBalance                            float64                           `json:"default_balance"`
@@ -519,6 +522,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	auditReq := settingsAuditRequest(req)
 	omitted := omittedSettingKeys(sentFields)
+	// 超时设置缺省时直接保留数据库值，避免把历史脏值或并发修改覆盖成展示默认值。
+	if req.MediaTaskReconciliationTimeoutMinutes == nil {
+		omitted[service.SettingKeyMediaTaskReconciliationTimeoutMinutes] = struct{}{}
+	}
 
 	previousSettings, err := h.settingService.GetAllSettings(c.Request.Context())
 	if err != nil {
@@ -1718,6 +1725,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		response.BadRequest(c, "creative_worker_count must be > 0")
 		return
 	}
+	if req.MediaTaskReconciliationTimeoutMinutes != nil {
+		if err := service.ValidateMediaTaskReconciliationTimeoutMinutes(*req.MediaTaskReconciliationTimeoutMinutes); err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+	}
 
 	settings := &service.SystemSettings{
 		// 系统全局 platform quota 默认值（整体替换语义）
@@ -1912,6 +1925,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.CreativeWorkerCount
 			}
 			return previousSettings.CreativeWorkerCount
+		}(),
+		MediaTaskReconciliationTimeoutMinutes: func() int {
+			if req.MediaTaskReconciliationTimeoutMinutes != nil {
+				return *req.MediaTaskReconciliationTimeoutMinutes
+			}
+			return previousSettings.MediaTaskReconciliationTimeoutMinutes
 		}(),
 		RiskControlEnabled: func() bool {
 			if req.RiskControlEnabled != nil {
@@ -2505,6 +2524,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		IntelligenceEnabled:                              updatedSettings.IntelligenceEnabled,
 		CreativeModelSettings:                            updatedSettings.CreativeModelSettings,
 		CreativeWorkerCount:                              updatedSettings.CreativeWorkerCount,
+		MediaTaskReconciliationTimeoutMinutes:            updatedSettings.MediaTaskReconciliationTimeoutMinutes,
 		RiskControlEnabled:                               updatedSettings.RiskControlEnabled,
 		CyberSessionBlockEnabled:                         updatedSettings.CyberSessionBlockEnabled,
 		CyberPolicyUserAllowlist:                         updatedSettings.CyberPolicyUserAllowlist,

@@ -56,6 +56,39 @@ func TestCreativeVideoPollProjectsReconciliationWithoutBillingChanges(t *testing
 	}
 }
 
+// 人工确认失败任务的费用后，画布应停止轮询且不再次退款或提交上游。
+func TestCreativeVideoPollManuallySettledFailureIsTerminal(t *testing.T) {
+	for _, status := range []string{"failed", "cancelled", "expired"} {
+		t.Run(status, func(t *testing.T) {
+			s, e, upstream, billing, _ := creativeVideoTestFixture(t)
+			e.TaskID = "vid_manually_settled"
+			task := &VideoTaskRecord{ID: e.TaskID, APIKeyID: 2, UserID: e.UserID, GroupID: e.Params.GroupID,
+				IdempotencyKey: "creative_video:" + e.ID, Status: status, BillingStatus: "settled", NextPollAt: time.Now().Add(time.Hour)}
+			task.Target = VideoUpstreamTarget{Version: 1, Endpoint: VideoEndpointCompat, Model: e.Params.Model, CreatePath: "/v1/video/generations", AccountID: 4}
+			s.repo.(*videoLifecycleRepo).tasks[task.ID] = task
+			content := &creativeVideoContentStub{}
+			s.content = content
+			for range 2 {
+				result, err := s.Poll(context.Background(), e)
+				require.NoError(t, err)
+				require.Equal(t, "failed", result.Status)
+				require.Equal(t, "CREATIVE_VIDEO_MANUALLY_SETTLED", result.ErrorCode)
+				require.Contains(t, result.ErrorMessage, "管理员已确认费用")
+				require.NotContains(t, result.ErrorMessage, "已释放")
+				require.Empty(t, result.Outputs)
+			}
+			require.Equal(t, status, task.Status)
+			require.Equal(t, "settled", task.BillingStatus)
+			require.Equal(t, "vid_manually_settled", e.TaskID)
+			require.Zero(t, upstream.submitted)
+			require.Zero(t, billing.reserves)
+			require.Zero(t, billing.captures)
+			require.Zero(t, billing.releases)
+			require.Zero(t, content.calls)
+		})
+	}
+}
+
 type canvasProgressExecutor struct {
 	result  *CreativeCanvasExecutionResult
 	err     error

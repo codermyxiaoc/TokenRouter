@@ -64,7 +64,7 @@ const messages: Record<string, string> = {
   'keys.selectGroup': 'Select a group',
   'keys.smartRouting.label': 'Smart routing',
   'keys.smartRouting.groupRequired': 'Select a smart routing group',
-  'keys.smartRouting.limitReached': 'Select up to 10 candidate groups',
+  'keys.smartRouting.limitReached': 'Select up to 20 candidate groups',
   'keys.smartRouting.cooldownInvalid': 'Enter an integer cooldown from 0 to 3600',
   'keys.composite.label': 'Composite key',
   'keys.composite.hint': 'Choose a group with a prefix/model ID.',
@@ -1322,34 +1322,51 @@ describe('user KeysView column settings', () => {
     }))
   })
 
-  it('prevents duplicate candidates and an eleventh group, then reopens space after removal', async () => {
-    getAvailableGroups.mockResolvedValueOnce(Array.from({ length: 11 }, (_, index) => ({
+  it.each(['create', 'edit'])('limits %s to twenty ordered candidates and reopens space after removal', async (mode) => {
+    getAvailableGroups.mockResolvedValueOnce(Array.from({ length: 21 }, (_, index) => ({
       id: index + 1, name: `Group ${index + 1}`, platform: 'openai', rate_multiplier: 1,
     })))
+    if (mode === 'edit') {
+      listKeys.mockResolvedValueOnce({
+        items: [{ ...createApiKey(), smart_routing: true, smart_routing_group_ids: [1] }],
+        total: 1, page: 1, page_size: 20, pages: 1,
+      })
+    }
     const wrapper = await mountView()
-    await getButtonByText(wrapper, 'Create API Key').trigger('click')
-    await wrapper.get('[data-test="smart-routing-toggle"]').setValue(true)
+    await getButtonByText(wrapper, mode === 'create' ? 'Create API Key' : 'Edit').trigger('click')
+    if (mode === 'create') await wrapper.get('[data-test="smart-routing-toggle"]').setValue(true)
     const addGroup = () => wrapper.getComponent('[data-test="smart-routing-add-group"]')
     await addGroup().vm.$emit('update:modelValue', 1)
     await addGroup().vm.$emit('update:modelValue', 1)
     await addGroup().vm.$emit('update:modelValue', 99)
-    for (let id = 2; id <= 11; id++) {
+    for (let id = 2; id <= 21; id++) {
       await addGroup().vm.$emit('update:modelValue', id)
     }
 
-    expect(wrapper.findAll('[data-test^="smart-routing-row-"]')).toHaveLength(10)
+    expect(wrapper.findAll('[data-test^="smart-routing-row-"]')).toHaveLength(20)
     expect(addGroup().props('disabled')).toBe(true)
     expect(wrapper.get('[data-test="smart-routing-up-0"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-test="smart-routing-down-9"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="smart-routing-down-19"]').attributes('disabled')).toBeDefined()
+
+    // 即使候选组件意外提交超限数组，创建与编辑的表单也必须拦截第二十一组。
+    const editor = wrapper.getComponent({ name: 'SmartRoutingGroupEditor' })
+    await editor.vm.$emit('update:modelValue', Array.from({ length: 21 }, (_, index) => index + 1))
+    await wrapper.get('form#key-form').trigger('submit')
+    expect(showError).toHaveBeenCalledWith('Select up to 20 candidate groups')
+    expect(createKey).not.toHaveBeenCalled()
+    expect(updateKey).not.toHaveBeenCalled()
+    await editor.vm.$emit('update:modelValue', Array.from({ length: 20 }, (_, index) => index + 1))
 
     await wrapper.get('[data-test="smart-routing-remove-3"]').trigger('click')
     expect(addGroup().props('disabled')).toBe(false)
-    await addGroup().vm.$emit('update:modelValue', 11)
+    await addGroup().vm.$emit('update:modelValue', 21)
     await wrapper.get('form#key-form').trigger('submit')
     await flushPromises()
-    expect(createKey).toHaveBeenCalledWith(expect.objectContaining({
-      smart_routing_group_ids: [1, 2, 3, 5, 6, 7, 8, 9, 10, 11],
-    }))
+    const expected = expect.objectContaining({
+      smart_routing_group_ids: Array.from({ length: 21 }, (_, index) => index + 1).filter((id) => id !== 4),
+    })
+    if (mode === 'create') expect(createKey).toHaveBeenCalledWith(expected)
+    else expect(updateKey).toHaveBeenCalledWith(1, expected)
   })
 
   it('requires at least one smart routing group after deleting the last candidate', async () => {

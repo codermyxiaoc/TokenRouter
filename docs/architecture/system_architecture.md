@@ -73,6 +73,8 @@
 
 `ProvideTicketRuntime` 启动工单每分钟到期扫描及独立邮件队列，`provideCleanup` 在数据库关闭前调用幂等 `Stop` 并取消执行上下文。多实例过期扫描使用状态和截止时间条件更新，避免覆盖同时到达的用户回复；通知只由新消息写入实例入队，以消息编号复用通知发送去重。工单状态及附件持久化见[工单](../domains/support_tickets.md)。
 
+`ProvideMediaTaskReconciliationRuntime` 在启动后和每分钟执行失败媒体账务到期扫描，配置读取失败时跳过，资金效果与最终决定同事务提交。`provideCleanup` 在关闭数据库前取消并等待循环退出；它不调用上游模型。边界见[失败任务账务处理](../domains/media_tasks.md#media_task_reconciliation)。
+
 `ProvideTicketConfigService` 将独立工单设置的成功写入接入既有设置更新回调，使工单总开关同步刷新 HTML 注入缓存。关闭后请求期阻止用户和管理员业务操作，后台扫描及待发送邮件也检查总开关；设置入口和历史数据保留。
 
 收到终止信号后先给 HTTP server 五秒完成优雅关闭，停止接收新请求；函数返回时执行应用 `Cleanup`。关闭过程有独立三十秒上下文：大部分互不依赖的 worker 并行停止，然后按顺序停止配额等需要 drain 或 flush 的服务，最后关闭 Redis 和 Ent/PostgreSQL。单个关闭步骤失败会记录日志并继续，超时会告警而不会无限阻塞进程退出。

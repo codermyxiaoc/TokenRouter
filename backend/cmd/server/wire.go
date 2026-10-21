@@ -109,6 +109,7 @@ func provideCleanup(
 	imageTasks *service.ImageTaskService,
 	videoTasks *service.VideoTaskService,
 	legacyVideoTasks *service.LegacyVideoRuntime,
+	mediaTaskReconciliation *service.MediaTaskReconciliationRuntime,
 	pricing *service.PricingService,
 	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
@@ -149,6 +150,7 @@ func provideCleanup(
 		// 应用层清理步骤可并行执行；持久化刷写服务在基础设施关闭前按顺序停止。
 		parallelSteps := []cleanupStep{
 			{"LegacyVideoRuntime", func() error { legacyVideoTasks.Stop(); return nil }},
+			{"MediaTaskReconciliationRuntime", func() error { mediaTaskReconciliation.Stop(); return nil }},
 			{"VideoTaskService", func() error {
 				if videoTasks != nil {
 					videoTasks.Stop()

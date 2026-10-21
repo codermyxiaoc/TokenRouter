@@ -261,6 +261,8 @@ const (
 	SettingKeyLoginAgreementUpdatedAt             = "login_agreement_updated_at"       // 条款更新日期（展示用）
 	SettingKeyLoginAgreementDocuments             = "login_agreement_documents"        // 条款文档列表（JSON，Markdown 内容）
 
+	SettingKeyMediaTaskReconciliationTimeoutMinutes = "media_task_reconciliation_timeout_minutes" // 失败媒体任务待确认超时（分钟）
+
 	// 邮件服务设置
 	SettingKeySMTPHost     = "smtp_host"      // SMTP服务器地址
 	SettingKeySMTPPort     = "smtp_port"      // SMTP端口

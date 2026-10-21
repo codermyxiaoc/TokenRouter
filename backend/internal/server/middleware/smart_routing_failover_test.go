@@ -150,6 +150,53 @@ func TestSmartRoutingFailoverLastErrorAndAllCooling(t *testing.T) {
 	}
 }
 
+func TestSmartRoutingFailoverTwentyGroupBoundary(t *testing.T) {
+	for _, google := range []bool{false, true} {
+		for _, succeedLast := range []bool{false, true} {
+			t.Run(fmt.Sprintf("google=%t/success=%t", google, succeedLast), func(t *testing.T) {
+				key := smartRoutingTestKey()
+				key.CompositeGroups = nil
+				// 多放一组模拟异常历史快照，验证执行总预算仍止于二十组。
+				for id := int64(1); id <= 21; id++ {
+					group := &service.Group{ID: id, Platform: service.PlatformOpenAI, Status: service.StatusActive, Hydrated: true}
+					if google {
+						group.Platform = service.PlatformGemini
+					}
+					key.CompositeGroups = append(key.CompositeGroups, service.APIKeyCompositeGroup{GroupID: id, Group: group})
+				}
+				var visits []int64
+				router := newFailoverRouter(t, key, &failoverResolver{}, google, func(c *gin.Context) {
+					selected, _ := GetAPIKeyFromContext(c)
+					id := *selected.GroupID
+					visits = append(visits, id)
+					if succeedLast && id == 20 {
+						c.JSON(200, gin.H{"ok": true})
+						return
+					}
+					upstreamFailure(c, 502, fmt.Sprint("failed-", id))
+				}, nil)
+				path, body := "/v1/responses", `{"model":"target"}`
+				if google {
+					path, body = "/v1beta/models/target:generateContent", `{"contents":[]}`
+				}
+				response := callFailoverRouter(router, path, body)
+				want := make([]int64, 20)
+				for i := range want {
+					want[i] = int64(i + 1)
+				}
+				require.Equal(t, want, visits)
+				if succeedLast {
+					require.Equal(t, 200, response.Code, response.Body.String())
+					require.JSONEq(t, `{"ok":true}`, response.Body.String())
+				} else {
+					require.Equal(t, 502, response.Code, response.Body.String())
+					require.JSONEq(t, `{"error":{"message":"failed-20"}}`, response.Body.String())
+				}
+			})
+		}
+	}
+}
+
 func TestSmartRoutingFailoverZeroCooldownStillRetries(t *testing.T) {
 	key := smartRoutingTestKey()
 	resolver := &failoverResolver{}

@@ -75,6 +75,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.CreativeWorkerCount != after.CreativeWorkerCount {
 		changed = append(changed, "creative_worker_count")
 	}
+	if before.MediaTaskReconciliationTimeoutMinutes != after.MediaTaskReconciliationTimeoutMinutes {
+		changed = append(changed, "media_task_reconciliation_timeout_minutes")
+	}
 	if before.RiskControlEnabled != after.RiskControlEnabled {
 		changed = append(changed, "risk_control_enabled")
 	}

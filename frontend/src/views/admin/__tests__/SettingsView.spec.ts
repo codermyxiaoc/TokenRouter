@@ -3349,6 +3349,30 @@ describe("admin SettingsView platform quota matrix", () => {
     // 不管输入是什么，提交值应为 null（而非 "" 或 NaN）
     expect(quotas["anthropic"]?.["daily"]).toBe(null);
   });
+  it.each([undefined, 120])("媒体账务处理期限加载默认值或已保存值 %s 并提交", async (minutes) => {
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse, ...(minutes === undefined ? {} : { media_task_reconciliation_timeout_minutes: minutes }) });
+    const wrapper = mountView();
+    await flushPromises();
+    const input = wrapper.get<HTMLInputElement>('[data-testid="media-task-reconciliation-timeout"]');
+    expect(input.element.value).toBe(String(minutes ?? 60));
+    await input.setValue(180);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ media_task_reconciliation_timeout_minutes: 180 }));
+    wrapper.unmount();
+  });
+
+  it.each(["", 0, -1, 1.5, 10081])("媒体账务处理期限拒绝非法输入 %s", async (minutes) => {
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="media-task-reconciliation-timeout"]').setValue(minutes);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith('admin.settings.features.mediaReconciliation.invalid');
+    wrapper.unmount();
+  });
+
   it("loads and saves the open button visibility for each custom menu", async () => {
     const menuItems = [
       { id: "docs", label: "Docs", url: "https://example.com/docs", icon_svg: "", visibility: "user", sort_order: 0 },

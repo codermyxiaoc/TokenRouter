@@ -50,30 +50,31 @@ type MediaTaskUser struct {
 
 // MediaTask 只投影展示字段；费用从既有使用记录关联，不在列表流程执行结算。
 type MediaTask struct {
-	ID             int64                `json:"id"`
-	Source         string               `json:"source"`
-	TaskID         string               `json:"task_id"`
-	MediaType      string               `json:"media_type"`
-	Platform       string               `json:"platform"`
-	Model          string               `json:"model"`
-	Status         string               `json:"status"`
-	UpstreamStatus string               `json:"upstream_status"`
-	UserID         int64                `json:"user_id"`
-	User           *MediaTaskUser       `json:"user,omitempty"`
-	APIKeyID       int64                `json:"api_key_id"`
-	GroupID        *int64               `json:"group_id"`
-	GroupName      *string              `json:"group_name"`
-	AccountID      *int64               `json:"account_id"`
-	HTTPStatus     int                  `json:"http_status"`
-	ErrorMessage   string               `json:"error_message"`
-	RequestID      string               `json:"request_id"`
-	CreatedAt      time.Time            `json:"created_at"`
-	UpdatedAt      time.Time            `json:"updated_at"`
-	CompletedAt    *time.Time           `json:"completed_at"`
-	ExpiresAt      *time.Time           `json:"expires_at"`
-	ActualCost     *float64             `json:"actual_cost"`
-	BillingMode    *string              `json:"billing_mode"`
-	VideoBilling   *VideoBillingDetails `json:"video_billing,omitempty"`
+	ID             int64                   `json:"id"`
+	Source         string                  `json:"source"`
+	TaskID         string                  `json:"task_id"`
+	MediaType      string                  `json:"media_type"`
+	Platform       string                  `json:"platform"`
+	Model          string                  `json:"model"`
+	Status         string                  `json:"status"`
+	UpstreamStatus string                  `json:"upstream_status"`
+	UserID         int64                   `json:"user_id"`
+	User           *MediaTaskUser          `json:"user,omitempty"`
+	APIKeyID       int64                   `json:"api_key_id"`
+	GroupID        *int64                  `json:"group_id"`
+	GroupName      *string                 `json:"group_name"`
+	AccountID      *int64                  `json:"account_id"`
+	HTTPStatus     int                     `json:"http_status"`
+	ErrorMessage   string                  `json:"error_message"`
+	RequestID      string                  `json:"request_id"`
+	CreatedAt      time.Time               `json:"created_at"`
+	UpdatedAt      time.Time               `json:"updated_at"`
+	CompletedAt    *time.Time              `json:"completed_at"`
+	ExpiresAt      *time.Time              `json:"expires_at"`
+	ActualCost     *float64                `json:"actual_cost"`
+	BillingMode    *string                 `json:"billing_mode"`
+	VideoBilling   *VideoBillingDetails    `json:"video_billing,omitempty"`
+	BillingReview  *MediaTaskBillingReview `json:"billing_review,omitempty"`
 }
 
 // MediaTaskActor 只能由认证层构建；管理员从个人入口访问时仍限制为本人。
@@ -111,8 +112,11 @@ type MediaTaskService struct {
 	previewHTTP  *http.Client
 	previewSlots chan struct{}
 	// 面板视频只读内容能力不持有生成协调器，避免与任务观测形成循环依赖。
-	videoContentTransport videoTaskContentTransport
-	videoAccounts         AccountRepository
+	videoContentTransport  videoTaskContentTransport
+	videoAccounts          AccountRepository
+	reconciliationSettings mediaTaskTimeoutSettings
+	settlementCache        *BillingCacheService
+	settlementKeys         *APIKeyService
 }
 
 func NewMediaTaskService(repo MediaTaskRepository) *MediaTaskService {
@@ -179,8 +183,10 @@ func (s *MediaTaskService) List(ctx context.Context, actor MediaTaskActor, filte
 	if err != nil {
 		return nil, err
 	}
+	timeout, _ := s.reconciliationTimeout(ctx)
 	for i := range result.Items {
 		s.enrichVideoBilling(ctx, &result.Items[i])
+		s.enrichBillingReview(ctx, &result.Items[i], actor, timeout)
 		projectMediaTaskForActor(&result.Items[i], actor)
 	}
 	return result, nil
@@ -233,6 +239,8 @@ func (s *MediaTaskService) Get(ctx context.Context, actor MediaTaskActor, id int
 	}
 	projectMediaTaskForActor(result, actor)
 	s.enrichVideoBilling(ctx, result)
+	timeout, _ := s.reconciliationTimeout(ctx)
+	s.enrichBillingReview(ctx, result, actor, timeout)
 	return result, nil
 }
 

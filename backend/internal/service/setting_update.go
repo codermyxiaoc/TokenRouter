@@ -418,6 +418,14 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		settings.CreativeWorkerCount = DefaultCreativeWorkerCount
 	}
 	updates[SettingKeyCreativeWorkerCount] = strconv.Itoa(settings.CreativeWorkerCount)
+	// 内部整份设置的零值沿用升级默认；外部更新明确提交零值会在 handler 被拒绝。
+	if settings.MediaTaskReconciliationTimeoutMinutes == 0 {
+		settings.MediaTaskReconciliationTimeoutMinutes = DefaultMediaTaskReconciliationTimeoutMinutes
+	}
+	if err := ValidateMediaTaskReconciliationTimeoutMinutes(settings.MediaTaskReconciliationTimeoutMinutes); err != nil {
+		return nil, infraerrors.BadRequest("INVALID_MEDIA_TASK_RECONCILIATION_TIMEOUT", err.Error())
+	}
+	updates[SettingKeyMediaTaskReconciliationTimeoutMinutes] = strconv.Itoa(settings.MediaTaskReconciliationTimeoutMinutes)
 
 	// 默认配置
 	updates[SettingKeyDefaultConcurrency] = strconv.Itoa(settings.DefaultConcurrency)

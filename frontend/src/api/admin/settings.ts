@@ -765,6 +765,7 @@ export interface SystemSettings {
   intelligence_enabled: boolean;
   creative_model_settings: CreativeModelSetting[];
   creative_worker_count: number;
+  media_task_reconciliation_timeout_minutes: number;
   risk_control_enabled: boolean;
   cyber_session_block_enabled: boolean;
   cyber_policy_user_allowlist: string;
@@ -1093,6 +1094,7 @@ export interface UpdateSettingsRequest {
   creative_enabled?: boolean;
   intelligence_enabled?: boolean;
   creative_worker_count?: number;
+  media_task_reconciliation_timeout_minutes?: number;
   risk_control_enabled?: boolean;
   cyber_session_block_enabled?: boolean;
   cyber_policy_user_allowlist?: string;

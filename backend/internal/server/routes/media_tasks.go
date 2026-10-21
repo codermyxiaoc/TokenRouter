@@ -16,6 +16,7 @@ func registerMediaTaskRoutes(parent *gin.RouterGroup, h *handler.Handlers, admin
 		g.GET("/models", h.MediaTask.AdminModels)
 		g.GET("/:id/preview", h.MediaTask.AdminPreview)
 		g.GET("/:id", h.MediaTask.AdminGet)
+		g.POST("/:id/settlement", h.MediaTask.AdminSettleBilling)
 	} else {
 		g.GET("", h.MediaTask.List)
 		g.GET("/models", h.MediaTask.Models)

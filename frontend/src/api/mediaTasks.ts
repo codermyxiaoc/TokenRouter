@@ -4,6 +4,27 @@ export const mediaTaskTypes = ['image', 'video'] as const
 export const mediaTaskStatuses = ['queued', 'processing', 'completed', 'failed', 'cancelled', 'expired'] as const
 export const mediaTaskSources = ['async_image', 'grok_video', 'seedance_video', 'video'] as const
 
+// 账务处理截止独立于产物保存期；当前冻结必须以服务端账本为准。
+export interface MediaTaskBillingReview {
+  status: 'pending' | 'charged' | 'released' | 'expired' | 'unreserved' | 'unavailable'
+  held_balance_amount: number
+  held_subscription_amount: number
+  original_reserved_amount: number
+  actual_amount?: number
+  expires_at?: string
+  resolved_at?: string
+  action?: 'charge' | 'release' | 'expire'
+  reason?: string
+  actor_id?: number
+  can_charge: boolean
+  can_release: boolean
+}
+
+export interface MediaTaskSettlementRequest {
+  action: 'charge' | 'release'
+  reason: string
+}
+
 // 视频任务费用由后端预留与结算状态返回，前端不据任务成功自行推算。
 export interface VideoTaskBilling {
   status: 'pending' | 'reserved' | 'settled' | 'released' | 'reconciliation'
@@ -57,6 +78,15 @@ export interface MediaTask {
   actual_cost: string | number | null
   billing_mode: string | null
   video_billing?: VideoTaskBilling
+  billing_review?: MediaTaskBillingReview
+}
+
+// 写入只导出管理员入口，不允许共享的个人 API 拼接结算操作。
+export const adminMediaTasksAPI = {
+  async settle(id: number, request: MediaTaskSettlementRequest): Promise<MediaTask> {
+    const { data } = await apiClient.post<MediaTask>(`/admin/media-tasks/${id}/settlement`, request)
+    return data
+  },
 }
 
 export interface MediaTaskFilters {

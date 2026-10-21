@@ -100,7 +100,8 @@ func runSmartRoutingAuthentication(c *gin.Context, resolver service.SmartRouting
 				service.MarkSmartRoutingAccountFailed(current.Request.Context(), accountID)
 			}
 		}
-		canRetry := terminal != nil && len(guards) > 0 && attempts < 9 &&
+		// 总尝试数包含首组，随候选上限统一调整，避免后半段候选只能保存却不能执行。
+		canRetry := terminal != nil && len(guards) > 0 && attempts < service.MaxSmartRoutingGroups-1 &&
 			!w.committed && state.attempt.CanReplay() && current.Request.Context().Err() == nil &&
 			state.replayBlockReason == "" && failed
 		// 只冷却真实失败账号，0 只关闭跨请求冷却，不影响本次失败集合与换组。

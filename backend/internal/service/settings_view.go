@@ -185,6 +185,8 @@ type SystemSettings struct {
 	CreativeModelSettings []CreativeModelSetting
 	// CreativeWorkerCount 是创作台任务 worker 数量，缺失时回退默认值。
 	CreativeWorkerCount int
+	// MediaTaskReconciliationTimeoutMinutes 是失败媒体任务待确认的自动释放等待时间。
+	MediaTaskReconciliationTimeoutMinutes int
 
 	DefaultConcurrency int
 	DefaultBalance     float64

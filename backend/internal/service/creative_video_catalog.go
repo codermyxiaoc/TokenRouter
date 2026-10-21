@@ -24,25 +24,49 @@ type CreativeVideoCapabilities struct {
 	MaxReferenceImageBytes int64 `json:"max_reference_image_bytes,omitempty"`
 }
 
-func normalizeCreativeVideoCapabilities(endpoint VideoEndpoint, input *CreativeVideoCapabilities) (*CreativeVideoCapabilities, error) {
-	if input == nil {
-		// 未配置时沿用单一保守默认值；画布运行目录再扩展可选参数，不重写历史配置。
-		duration := 5.0
-		if endpoint == VideoEndpointOpenAIVideos {
-			duration = 4
-		}
-		if endpoint == VideoEndpointMiniMax {
-			duration = 6
-		}
-		resolution := "720p"
-		// MiniMax/H3 的官方产品档位不是 720p；使用其常见的 768p 默认值，避免未填写能力时直接触发上游 400。
-		if endpoint == VideoEndpointMiniMax {
-			resolution = "768p"
-		}
-		input = &CreativeVideoCapabilities{Durations: []float64{duration}, Resolutions: []string{resolution}, AspectRatios: []string{"16:9", "9:16"}, MaxReferenceImages: 1}
+// 管理端候选与保存共用端点默认值，不根据请求别名猜测最终模型能力。
+// @project-doc docs/interfaces/cloud_canvas.md#video_model_settings
+func defaultCreativeVideoCapabilities(endpoint VideoEndpoint) *CreativeVideoCapabilities {
+	duration, resolution := 5.0, "720p"
+	if endpoint == VideoEndpointOpenAIVideos {
+		duration = 4
 	}
-	if len(input.Durations) == 0 || len(input.Durations) > 60 || len(input.Resolutions) == 0 || len(input.Resolutions) > 20 || len(input.AspectRatios) == 0 || len(input.AspectRatios) > 10 || input.MaxReferenceImages < 0 || input.MaxReferenceImages > 10 {
-		return nil, fmt.Errorf("creative video capabilities are invalid")
+	if endpoint == VideoEndpointMiniMax {
+		duration, resolution = 6, "768p"
+	}
+	return &CreativeVideoCapabilities{Durations: []float64{duration}, Resolutions: []string{resolution}, AspectRatios: []string{"16:9", "9:16"}, MaxReferenceImages: 1}
+}
+
+func normalizeCreativeVideoCapabilities(endpoint VideoEndpoint, input *CreativeVideoCapabilities) (*CreativeVideoCapabilities, error) {
+	defaults := defaultCreativeVideoCapabilities(endpoint)
+	if input == nil {
+		input = defaults
+	} else {
+		// 旧表单只编辑一个字段时会发送其它空集合，按未配置处理；保留显式零参考图和所有已填值。
+		// 使用副本补齐，避免修改调用方缓存的设置或正在编辑的对象。
+		filled := *input
+		if len(filled.Durations) == 0 {
+			filled.Durations = defaults.Durations
+		}
+		if len(filled.Resolutions) == 0 {
+			filled.Resolutions = defaults.Resolutions
+		}
+		if len(filled.AspectRatios) == 0 {
+			filled.AspectRatios = defaults.AspectRatios
+		}
+		input = &filled
+	}
+	if len(input.Durations) > 60 {
+		return nil, fmt.Errorf("creative video durations must contain at most 60 values")
+	}
+	if len(input.Resolutions) > 20 {
+		return nil, fmt.Errorf("creative video resolutions must contain at most 20 values")
+	}
+	if len(input.AspectRatios) > 10 {
+		return nil, fmt.Errorf("creative video aspect_ratios must contain at most 10 values")
+	}
+	if input.MaxReferenceImages < 0 || input.MaxReferenceImages > 10 {
+		return nil, fmt.Errorf("creative video max_reference_images must be between 0 and 10")
 	}
 	if endpoint != VideoEndpointSeedance && endpoint != VideoEndpointVidu && input.MaxReferenceImages > 1 {
 		return nil, fmt.Errorf("creative video endpoint supports at most one reference image")
@@ -187,7 +211,8 @@ func (s *CreativePublicService) creativeVideoCandidatesAndReferenceLimitsForGrou
 				referenceLimits[model][endpoint] = s.creativeVideoReferenceImageLimit(ctx, group, model, endpoint, accounts)
 			}
 		}
-		out = append(out, CreativeModelCandidate{GroupID: group.ID, GroupName: group.Name, Platform: PlatformVideo, Model: model, Operations: []string{CreativeOperationGenerate}, MediaType: "video", VideoEndpoints: endpoints})
+		// 候选直接返回首个可用端点的真实初始值，避免表单占位符被误认为已保存参数。
+		out = append(out, CreativeModelCandidate{GroupID: group.ID, GroupName: group.Name, Platform: PlatformVideo, Model: model, Operations: []string{CreativeOperationGenerate}, MediaType: "video", VideoEndpoints: endpoints, VideoEndpoint: endpoints[0], VideoCapabilities: defaultCreativeVideoCapabilities(endpoints[0])})
 	}
 	return out, referenceLimits, nil
 }

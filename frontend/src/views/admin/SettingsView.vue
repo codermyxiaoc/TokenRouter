@@ -7696,7 +7696,7 @@
                       <div v-if="item.media_type === 'video'" class="grid grid-cols-1 gap-3 sm:col-span-3 sm:grid-cols-2">
                         <label class="text-xs text-gray-600 dark:text-dark-300">
                           {{ t('admin.settings.features.creative.modelSettings.videoEndpoint') }}
-                          <Select v-model="item.video_endpoint" :options="creativeVideoEndpointOptions(item)" class="mt-1" />
+                          <Select :model-value="item.video_endpoint" :options="creativeVideoEndpointOptions(item)" class="mt-1" data-testid="creative-video-endpoint" @change="onCreativeVideoEndpointChanged(item, $event)" />
                         </label>
                         <label class="text-xs text-gray-600 dark:text-dark-300">
                           {{ t('admin.settings.features.creative.modelSettings.videoDurations') }}
@@ -7712,8 +7712,9 @@
                         </label>
                         <label class="text-xs text-gray-600 dark:text-dark-300">
                           {{ t('admin.settings.features.creative.modelSettings.videoReferences') }}
-                          <input :value="item.video_capabilities?.max_reference_images ?? 0" type="number" min="0" max="16" step="1" class="input mt-1" @input="setCreativeVideoReferenceLimit(item, ($event.target as HTMLInputElement).value)" />
+                          <input :value="item.video_capabilities?.max_reference_images ?? ''" type="number" min="0" :max="creativeVideoReferenceMax(item)" step="1" class="input mt-1" data-testid="creative-video-reference-limit" @input="setCreativeVideoReferenceLimit(item, ($event.target as HTMLInputElement).value)" />
                         </label>
+                        <p class="text-xs text-gray-500 sm:col-span-2 dark:text-dark-400">{{ t('admin.settings.features.creative.modelSettings.videoDefaultsHint') }}</p>
                       </div>
                     </div>
                   </div>
@@ -9177,6 +9178,7 @@ import { useAppStore } from "@/stores";
 import { useAdminSettingsStore } from "@/stores/adminSettings";
 import { getMarketplaceModels } from "@/api/marketplace";
 import { normalizeVisibleMethod } from "@/components/payment/paymentFlow";
+import { normalizeVideoResolution, validVideoResolution } from "@/components/admin/channel/videoPricing";
 import { MAX_USER_API_KEY_LIMIT } from "@/constants/user";
 import {
   isRegistrationEmailSuffixDomainValid,
@@ -10175,6 +10177,10 @@ const creativeOperationChoices: CreativeOperation[] = [
 const creativeModelCandidates = ref<CreativeModelCandidate[]>([]);
 const creativeModelCandidatesLoading = ref(false);
 const creativeModelCandidatesError = ref(false);
+const creativeModelSettingsValidationError = ref("");
+type CreativeVideoDefaultField = 'durations' | 'resolutions' | 'aspect_ratios';
+// 仅跟踪本次表单自动填入的默认值；已保存或显式编辑的参数不能在切换端点时被误删。
+const creativeVideoAutomaticFields = new WeakMap<CreativeModelSetting, Set<CreativeVideoDefaultField>>();
 
 // 创作台 worker 使用情况：进入功能标签页时轮询运行时状态，离开时停止，避免后台空转。
 const creativeWorkerStatus = ref<CreativeWorkerStatus | null>(null);
@@ -10307,6 +10313,11 @@ function assignCreativeMediaSettings(row: CreativeModelSetting, candidate: Creat
   row.video_capabilities = row.media_type === 'video' && candidate.video_capabilities
     ? structuredClone(toRaw(candidate.video_capabilities)) : undefined;
   row.audio_capabilities = undefined;
+  if (row.video_capabilities) {
+    creativeVideoAutomaticFields.set(toRaw(row), new Set(['durations', 'resolutions', 'aspect_ratios']));
+  } else {
+    creativeVideoAutomaticFields.delete(toRaw(row));
+  }
 }
 
 function creativeVideoEndpointOptions(item: CreativeModelSetting) {
@@ -10318,15 +10329,48 @@ function creativeVideoEndpointOptions(item: CreativeModelSetting) {
   return endpoints.map((value) => ({ value, label: labels[value] || value }));
 }
 
-function ensureCreativeVideoCapabilities(item: CreativeModelSetting) {
-  return item.video_capabilities ??= { durations: [], resolutions: [], aspect_ratios: [], max_reference_images: 0 };
+function creativeVideoCapabilityDefaults(item: CreativeModelSetting) {
+  const candidate = creativeCandidateForSetting(item);
+  // 候选默认参数只属于它声明的端点，切换端点后不能借用另一种协议的默认分辨率。
+  return item.video_endpoint === (candidate?.video_endpoint || candidate?.video_endpoints?.[0])
+    ? candidate?.video_capabilities : undefined;
 }
 
-function setCreativeVideoCapability(item: CreativeModelSetting, key: 'durations' | 'resolutions' | 'aspect_ratios', value: string) {
+function creativeVideoReferenceMax(item: CreativeModelSetting) {
+  return item.video_endpoint === 'seedance' || item.video_endpoint === 'vidu' ? 10 : 1;
+}
+
+function onCreativeVideoEndpointChanged(item: CreativeModelSetting, value: string | number | boolean | null) {
+  if (typeof value !== 'string' || value === item.video_endpoint) return;
+  // 旧端点自动填入的默认值交给新端点重新解析；参考图数量和用户输入始终保留并正常校验。
+  if (item.video_capabilities) {
+    for (const field of creativeVideoAutomaticFields.get(toRaw(item)) ?? []) {
+      item.video_capabilities[field] = [];
+    }
+  }
+  item.video_endpoint = value;
+}
+
+function ensureCreativeVideoCapabilities(item: CreativeModelSetting) {
+  if (item.video_capabilities) return item.video_capabilities;
+  const defaults = creativeVideoCapabilityDefaults(item);
+  if (defaults) creativeVideoAutomaticFields.set(toRaw(item), new Set(['durations', 'resolutions', 'aspect_ratios']));
+  return item.video_capabilities = defaults
+    ? structuredClone(toRaw(defaults))
+    : { durations: [], resolutions: [], aspect_ratios: [], max_reference_images: 0 };
+}
+
+function setCreativeVideoCapability(item: CreativeModelSetting, key: CreativeVideoDefaultField, value: string) {
   const parts = [...new Set(value.split(/[,，]/).map((part) => part.trim()).filter(Boolean))];
   const caps = ensureCreativeVideoCapabilities(item);
-  if (key === 'durations') caps.durations = parts.map(Number);
+  const defaults = creativeVideoCapabilityDefaults(item);
+  if (key === 'durations') caps.durations = parts.length ? parts.map(Number) : [...(defaults?.durations ?? [])];
+  else if (!parts.length) caps[key] = [...(defaults?.[key] ?? [])];
   else caps[key] = parts;
+  const automaticFields = creativeVideoAutomaticFields.get(toRaw(item)) ?? new Set<CreativeVideoDefaultField>();
+  if (parts.length) automaticFields.delete(key);
+  else automaticFields.add(key);
+  creativeVideoAutomaticFields.set(toRaw(item), automaticFields);
 }
 
 function setCreativeVideoReferenceLimit(item: CreativeModelSetting, value: string) {
@@ -10364,15 +10408,13 @@ function addCreativeModelSetting() {
     (item) => !form.creative_model_settings.some((setting) => creativeModelSettingKey(setting) === creativeModelSettingKey(item)),
   );
   if (!candidate) return;
-  form.creative_model_settings.push({
+  const row: CreativeModelSetting = {
     group_id: candidate.group_id,
     model: candidate.model,
     operations: [...candidate.operations],
-    media_type: candidate.media_type || 'image',
-    video_endpoint: candidate.video_endpoint || candidate.video_endpoints?.[0],
-    // 候选来自响应式列表，先解包 Proxy 再克隆，避免新增视频模型抛出 DataCloneError。
-    video_capabilities: candidate.video_capabilities ? structuredClone(toRaw(candidate.video_capabilities)) : undefined,
-  });
+  };
+  assignCreativeMediaSettings(row, candidate);
+  form.creative_model_settings.push(row);
 }
 
 function removeCreativeModelSetting(index: number) {
@@ -10389,6 +10431,7 @@ function toggleCreativeOperation(index: number, operation: CreativeOperation, ch
 }
 
 function normalizeCreativeModelSettingsForSave(): CreativeModelSetting[] | null {
+  creativeModelSettingsValidationError.value = "";
   const seen = new Set<string>();
   const normalized: CreativeModelSetting[] = [];
   for (const item of form.creative_model_settings) {
@@ -10406,10 +10449,27 @@ function normalizeCreativeModelSettingsForSave(): CreativeModelSetting[] | null 
       return null;
     }
     if (item.media_type === 'video') {
+      const invalid = (field: string) => {
+        creativeModelSettingsValidationError.value = t('admin.settings.features.creative.modelSettings.videoValidationError', {
+          model,
+          reason: t(`admin.settings.features.creative.modelSettings.${field}`),
+        });
+        return null;
+      };
+      if (!item.video_endpoint || (candidate?.video_endpoints && !candidate.video_endpoints.includes(item.video_endpoint))) return invalid('videoEndpointInvalid');
       const caps = item.video_capabilities;
-      if (!item.video_endpoint || (candidate?.video_endpoints && !candidate.video_endpoints.includes(item.video_endpoint))) return null;
-      if (caps && (caps.durations.some((value) => !Number.isSafeInteger(value) || value <= 0 || value > 60) ||
-        !Number.isSafeInteger(caps.max_reference_images) || caps.max_reference_images < 0 || caps.max_reference_images > 16)) return null;
+      if (caps) {
+        // 空集合交给服务端按端点补齐；非空非法输入必须明确提示，不能静默改成默认参数。
+        if (caps.durations.length > 60 || caps.durations.some((value) => !Number.isSafeInteger(value) || value <= 0 || value > 60) ||
+          new Set(caps.durations).size !== caps.durations.length) return invalid('videoDurationsInvalid');
+        if (caps.resolutions.length > 20 || caps.resolutions.some((value) => !validVideoResolution(value)) ||
+          new Set(caps.resolutions.map(normalizeVideoResolution)).size !== caps.resolutions.length) return invalid('videoResolutionsInvalid');
+        const allowedRatios = ['1:1', '16:9', '9:16', '4:3', '3:4', '21:9', '9:21', '3:2', '2:3', 'adaptive'];
+        if (caps.aspect_ratios.length > 10 || caps.aspect_ratios.some((value) => !allowedRatios.includes(value.trim())) ||
+          new Set(caps.aspect_ratios.map((value) => value.trim())).size !== caps.aspect_ratios.length) return invalid('videoRatiosInvalid');
+        if (!Number.isSafeInteger(caps.max_reference_images) || caps.max_reference_images < 0 ||
+          caps.max_reference_images > creativeVideoReferenceMax(item)) return invalid('videoReferencesInvalid');
+      }
     }
     if (operations.length === 0) {
       // 已知候选但没有任何可用能力时删除该条目；未知历史分组仍按 fail-closed 保留原值。
@@ -11993,7 +12053,7 @@ async function saveSettings() {
     const normalizedCreativeModelSettings = normalizeCreativeModelSettingsForSave();
     if (!normalizedCreativeModelSettings) {
       appStore.showError(
-        t("admin.settings.features.creative.modelSettings.validationError"),
+        creativeModelSettingsValidationError.value || t("admin.settings.features.creative.modelSettings.validationError"),
       );
       return;
     }

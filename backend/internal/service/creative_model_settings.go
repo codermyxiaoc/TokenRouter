@@ -28,6 +28,8 @@ type CreativeModelCandidate struct {
 	Operations        []string                   `json:"operations"`
 	MediaType         string                     `json:"media_type,omitempty"`
 	VideoEndpoints    []VideoEndpoint            `json:"video_endpoints,omitempty"`
+	VideoEndpoint     VideoEndpoint              `json:"video_endpoint,omitempty"`
+	VideoCapabilities *CreativeVideoCapabilities `json:"video_capabilities,omitempty"`
 	AudioCapabilities *CreativeAudioCapabilities `json:"audio_capabilities,omitempty"`
 }
 
@@ -147,7 +149,7 @@ func NormalizeCreativeModelSettings(input []CreativeModelSetting) ([]CreativeMod
 			var capabilityErr error
 			videoCapabilities, capabilityErr = normalizeCreativeVideoCapabilities(item.VideoEndpoint, item.VideoCapabilities)
 			if capabilityErr != nil {
-				return nil, capabilityErr
+				return nil, fmt.Errorf("creative model setting %d (group %d, model %q): %w", index, item.GroupID, model, capabilityErr)
 			}
 		} else if item.VideoEndpoint != "" || item.VideoCapabilities != nil {
 			return nil, fmt.Errorf("creative non-video setting cannot configure video parameters")

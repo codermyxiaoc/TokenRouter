@@ -2551,6 +2551,167 @@ describe("admin SettingsView payment visible method controls", () => {
     wrapper.unmount();
   });
 
+  it("displays server defaults for mapped video aliases and preserves the alias on save", async () => {
+    // 上游映射不应改变配置中的请求别名；占位文字不能代替真实的服务端默认参数。
+    const video = {
+      group_id: 3, model: 'minimax-h3-y', group_name: 'Video', platform: 'video',
+      media_type: 'video', operations: ['generate'], video_endpoint: 'openai_videos', video_endpoints: ['openai_videos'],
+      video_capabilities: { durations: [4], resolutions: ['720p'], aspect_ratios: ['16:9', '9:16'], max_reference_images: 1 },
+    };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [] });
+    getCreativeModelCandidates.mockResolvedValue([video]);
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.findAll('button').find((node) => node.text().includes('admin.settings.features.creative.modelSettings.add'))!.trigger('click');
+    expect((wrapper.get('input[placeholder="5, 10"]').element as HTMLInputElement).value).toBe('4');
+    expect((wrapper.get('input[placeholder="720p, 1080p"]').element as HTMLInputElement).value).toBe('720p');
+    expect((wrapper.get('[data-testid="creative-video-reference-limit"]').element as HTMLInputElement).value).toBe('1');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ creative_model_settings: [expect.objectContaining({
+      model: 'minimax-h3-y', video_capabilities: video.video_capabilities,
+    })] }));
+    wrapper.unmount();
+  });
+
+  it.each(['references', 'duration'])("editing only %s fills missing historical video capabilities from the server", async (field) => {
+    // 旧设置可能完全没有能力对象；仅改一项时其余字段也应来自同端点候选默认值。
+    const video = { group_id: 3, model: 'minimax-h3-y', media_type: 'video', operations: ['generate'], video_endpoint: 'openai_videos' };
+    const caps = { durations: [4], resolutions: ['720p'], aspect_ratios: ['16:9', '9:16'], max_reference_images: 1 };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [video] });
+    getCreativeModelCandidates.mockResolvedValue([{ ...video, group_name: 'Video', platform: 'video', video_endpoints: ['openai_videos'], video_capabilities: caps }]);
+    const wrapper = mountView();
+    await flushPromises();
+    const input = wrapper.get(field === 'references' ? '[data-testid="creative-video-reference-limit"]' : 'input[placeholder="5, 10"]');
+    await input.setValue(field === 'references' ? '0' : '5');
+    await input.trigger('change');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ creative_model_settings: [expect.objectContaining({
+      model: 'minimax-h3-y', video_capabilities: field === 'references' ? { ...caps, max_reference_images: 0 } : { ...caps, durations: [5] },
+    })] }));
+    wrapper.unmount();
+  });
+
+  it("does not copy candidate defaults from another video endpoint", async () => {
+    // 多端点候选首项的默认值不能替代用户已切换端点的默认值，缺省项由服务端解析。
+    const video = { group_id: 3, model: 'minimax-h3-y', media_type: 'video', operations: ['generate'], video_endpoint: 'openai_videos' };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [video] });
+    getCreativeModelCandidates.mockResolvedValue([{ ...video, group_name: 'Video', platform: 'video', video_endpoint: 'minimax', video_endpoints: ['minimax', 'openai_videos'],
+      video_capabilities: { durations: [6], resolutions: ['768p'], aspect_ratios: ['16:9', '9:16'], max_reference_images: 1 } }]);
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="creative-video-reference-limit"]').setValue('0');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ creative_model_settings: [expect.objectContaining({
+      video_endpoint: 'openai_videos', video_capabilities: { durations: [], resolutions: [], aspect_ratios: [], max_reference_images: 0 },
+    })] }));
+    wrapper.unmount();
+  });
+
+  it("clears unedited auto-filled defaults after adding a model and changing its endpoint", async () => {
+    // 必须覆盖真实新增流程：默认值已经复制进能力对象后，换端点也不能携带旧协议的默认值。
+    const video = { group_id: 3, model: 'minimax-h3-y', group_name: 'Video', platform: 'video', media_type: 'video', operations: ['generate'],
+      video_endpoint: 'openai_videos', video_endpoints: ['openai_videos', 'minimax'],
+      video_capabilities: { durations: [4], resolutions: ['720p'], aspect_ratios: ['16:9', '9:16'], max_reference_images: 1 } };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [] });
+    getCreativeModelCandidates.mockResolvedValue([video]);
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.findAll('button').find((node) => node.text().includes('admin.settings.features.creative.modelSettings.add'))!.trigger('click');
+    expect((wrapper.get('input[placeholder="5, 10"]').element as HTMLInputElement).value).toBe('4');
+    await wrapper.get('[data-testid="creative-video-endpoint"]').setValue('minimax');
+    expect((wrapper.get('input[placeholder="5, 10"]').element as HTMLInputElement).value).toBe('');
+    expect((wrapper.get('input[placeholder="720p, 1080p"]').element as HTMLInputElement).value).toBe('');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ creative_model_settings: [expect.objectContaining({
+      video_endpoint: 'minimax', video_capabilities: { durations: [], resolutions: [], aspect_ratios: [], max_reference_images: 1 },
+    })] }));
+    wrapper.unmount();
+  });
+
+  it("preserves explicitly edited defaults and disabled references when changing video endpoints", async () => {
+    const video = { group_id: 3, model: 'minimax-h3-y', group_name: 'Video', platform: 'video', media_type: 'video', operations: ['generate'],
+      video_endpoint: 'openai_videos', video_endpoints: ['openai_videos', 'minimax'],
+      video_capabilities: { durations: [4], resolutions: ['720p'], aspect_ratios: ['16:9', '9:16'], max_reference_images: 1 } };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [] });
+    getCreativeModelCandidates.mockResolvedValue([video]);
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.findAll('button').find((node) => node.text().includes('admin.settings.features.creative.modelSettings.add'))!.trigger('click');
+    // 用户明确输入了与原默认值相同的 4 秒，也必须作为显式选择保留。
+    await wrapper.get('input[placeholder="5, 10"]').setValue('4');
+    await wrapper.get('input[placeholder="5, 10"]').trigger('change');
+    await wrapper.get('input[placeholder="720p, 1080p"]').setValue('1080p');
+    await wrapper.get('input[placeholder="720p, 1080p"]').trigger('change');
+    await wrapper.get('[data-testid="creative-video-reference-limit"]').setValue('0');
+    await wrapper.get('[data-testid="creative-video-endpoint"]').setValue('minimax');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ creative_model_settings: [expect.objectContaining({
+      video_endpoint: 'minimax', video_capabilities: { durations: [4], resolutions: ['1080p'], aspect_ratios: [], max_reference_images: 0 },
+    })] }));
+    wrapper.unmount();
+  });
+
+  it("keeps an explicit reference count above a newly selected endpoint limit and reports it", async () => {
+    const video = { group_id: 3, model: 'minimax-h3-y', group_name: 'Video', platform: 'video', media_type: 'video', operations: ['generate'],
+      video_endpoint: 'vidu', video_endpoints: ['vidu', 'openai_videos'],
+      video_capabilities: { durations: [5], resolutions: ['720p'], aspect_ratios: ['16:9'], max_reference_images: 1 } };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [] });
+    getCreativeModelCandidates.mockResolvedValue([video]);
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.findAll('button').find((node) => node.text().includes('admin.settings.features.creative.modelSettings.add'))!.trigger('click');
+    await wrapper.get('[data-testid="creative-video-reference-limit"]').setValue('2');
+    await wrapper.get('[data-testid="creative-video-endpoint"]').setValue('openai_videos');
+    expect((wrapper.get('[data-testid="creative-video-reference-limit"]').element as HTMLInputElement).value).toBe('2');
+    expect(wrapper.get('[data-testid="creative-video-reference-limit"]').attributes('max')).toBe('1');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith('admin.settings.features.creative.modelSettings.videoValidationError');
+    wrapper.unmount();
+  });
+
+  it.each([
+    ['resolution', '720p, 720'], ['resolution', '65537p'], ['resolution', 'auto'],
+    ['ratio', '5:4'], ['references', '2'], ['references', '-1'], ['references', '0.5'],
+  ])("rejects invalid creative video %s value %s with a video-specific message", async (field, value) => {
+    const video = { group_id: 3, model: 'minimax-h3-y', media_type: 'video', operations: ['generate'], video_endpoint: 'openai_videos',
+      video_capabilities: { durations: [5], resolutions: ['720p'], aspect_ratios: ['16:9'], max_reference_images: 1 } };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [video] });
+    getCreativeModelCandidates.mockResolvedValue([{ ...video, group_name: 'Video', platform: 'video', video_endpoints: ['openai_videos'] }]);
+    const wrapper = mountView();
+    await flushPromises();
+    const input = wrapper.get(field === 'resolution' ? 'input[placeholder="720p, 1080p"]' : field === 'ratio' ? 'input[placeholder="16:9, 9:16"]' : '[data-testid="creative-video-reference-limit"]');
+    await input.setValue(value);
+    await input.trigger('change');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith('admin.settings.features.creative.modelSettings.videoValidationError');
+    wrapper.unmount();
+  });
+
+  it("restores a cleared capability from the same endpoint candidate default", async () => {
+    const video = { group_id: 3, model: 'minimax-h3-y', media_type: 'video', operations: ['generate'], video_endpoint: 'openai_videos',
+      video_capabilities: { durations: [4], resolutions: ['720p'], aspect_ratios: ['16:9'], max_reference_images: 1 } };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [video] });
+    getCreativeModelCandidates.mockResolvedValue([{ ...video, group_name: 'Video', platform: 'video', video_endpoints: ['openai_videos'] }]);
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('input[placeholder="5, 10"]').setValue('');
+    await wrapper.get('input[placeholder="5, 10"]').trigger('change');
+    expect((wrapper.get('input[placeholder="5, 10"]').element as HTMLInputElement).value).toBe('4');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ creative_model_settings: [video] }));
+    wrapper.unmount();
+  });
+
   it("drops a Gemini setting that only contains stale inpaint", async () => {
     getSettings.mockResolvedValue({
       ...baseSettingsResponse,

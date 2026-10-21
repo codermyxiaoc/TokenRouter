@@ -47,7 +47,7 @@ func RequestLogger() gin.HandlerFunc {
 
 // 短期媒体票据具有访问权限，日志仅记录固定路径，连无效票据也不能写入日志。
 func redactMediaPreviewPath(path string) string {
-	for _, prefix := range []string{"/api/v1/media-tasks/preview-content/", "/api/v1/intelligence-tests/preview-content/"} {
+	for _, prefix := range []string{"/api/v1/media-tasks/preview-content/", "/api/v1/intelligence-tests/preview-content/", "/api/v1/video-references/"} {
 		if strings.HasPrefix(path, prefix) {
 			return prefix + ":ticket"
 		}

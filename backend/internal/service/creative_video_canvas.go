@@ -42,10 +42,14 @@ type CreativeVideoCanvasExecutor struct {
 	billing       creativeVideoBillingAdmission
 	subscriptions creativeVideoSubscriptions
 	moderation    creativeVideoModeration
+	references    videoReferencePublisher
 }
 
-func NewCreativeVideoCanvasExecutor(public *CreativePublicService, tasks *VideoTaskService, keys APIKeyRepository, concurrency *ConcurrencyService, billing *BillingCacheService, subscriptions *SubscriptionService) *CreativeVideoCanvasExecutor {
+func NewCreativeVideoCanvasExecutor(public *CreativePublicService, tasks *VideoTaskService, keys APIKeyRepository, concurrency *ConcurrencyService, billing *BillingCacheService, subscriptions *SubscriptionService, references *VideoReferenceService) *CreativeVideoCanvasExecutor {
 	executor := &CreativeVideoCanvasExecutor{public: public, keys: keys}
+	if references != nil {
+		executor.references = references
+	}
 	// 避免将空具体指针装进非空接口后绕过依赖检查。
 	if tasks != nil {
 		executor.tasks, executor.content, executor.repo = tasks, tasks, tasks.repo
@@ -168,7 +172,7 @@ func (s *CreativeVideoCanvasExecutor) Submit(ctx context.Context, e *CreativeCan
 	if inboundProtocol == string(VideoEndpointCompat) {
 		inboundProtocol = "unified"
 	}
-	response, err := s.tasks.Submit(ctx, key, VideoTaskSubmitRequest{Body: body, ContentType: "application/json", InboundProtocol: inboundProtocol, Native: e.Params.Endpoint != string(VideoEndpointCompat) && e.Params.Endpoint != string(VideoEndpointOpenAIVideos), IdempotencyKey: idempotency, canvasAdaptiveRatio: adaptiveRatio, canvasMaxReferenceImageBytes: maxReferenceImageBytes})
+	response, err := s.tasks.Submit(ctx, key, VideoTaskSubmitRequest{Body: body, ContentType: "application/json", InboundProtocol: inboundProtocol, Native: e.Params.Endpoint != string(VideoEndpointCompat) && e.Params.Endpoint != string(VideoEndpointOpenAIVideos), IdempotencyKey: idempotency, canvasAdaptiveRatio: adaptiveRatio, canvasMaxReferenceImageBytes: maxReferenceImageBytes, canvasPrepareReferences: newCreativeVideoReferencePreparer(s.references, user.ID)})
 	if err != nil {
 		// 预扣后保存失败也可能已经存在任务，必须先绑定原账本，不能让画布丢掉冻结金额。
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)

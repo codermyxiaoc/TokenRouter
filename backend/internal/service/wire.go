@@ -304,6 +304,7 @@ func ProvideAccountTestService(
 	tlsFPProfileService *TLSFingerprintProfileService,
 	settingService *SettingService,
 	pluginManager *PluginManager,
+	videoReferences *VideoReferenceService,
 ) *AccountTestService {
 	service := NewAccountTestService(
 		accountRepo,
@@ -319,6 +320,7 @@ func ProvideAccountTestService(
 	service.agentIdentityWS = openAIGatewayService
 	service.SetPluginManager(pluginManager)
 	service.SetSettingService(settingService)
+	service.videoReferences = videoReferences
 	return service
 }
 
@@ -900,6 +902,7 @@ var ProviderSet = wire.NewSet(
 	ProvideImageObjectRetention,
 	ProvideImageTaskService,
 	ProvideMediaTaskServiceWithVideoContent,
+	NewVideoReferenceService,
 	ProvideVideoTaskService,
 	NewLegacyVideoRecovery,
 	ProvideLegacyVideoRuntime,

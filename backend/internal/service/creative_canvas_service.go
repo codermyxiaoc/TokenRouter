@@ -424,6 +424,14 @@ func creativeCanvasFailureMessage(code string) string {
 		return "参考图片格式不支持，请上传 PNG、JPEG 或 WebP 图片"
 	case "CREATIVE_VIDEO_REFERENCE_TOO_LARGE":
 		return "参考图超过本站 H3 单张 2 MiB 发送上限，请手动更换不超过 2 MiB 的图片；原图已保留，本次未提交生成或预扣费用"
+	case "VIDEO_REFERENCE_PUBLIC_URL_REQUIRED":
+		return ErrVideoReferencePublicURL.Message
+	case "VIDEO_REFERENCE_INVALID":
+		return ErrVideoReferenceInvalid.Message
+	case "VIDEO_REFERENCE_UNAVAILABLE":
+		return ErrVideoReferenceUnavailable.Message
+	case "VIDEO_REFERENCE_QUOTA":
+		return ErrVideoReferenceQuota.Message
 	case "CREATIVE_ASSET_TOO_LARGE", "CREATIVE_INPUT_TOO_LARGE", "CANVAS_STORAGE_LIMIT":
 		return "参考素材超过大小或存储限制，请缩小素材后重试"
 	case "CANVAS_EXECUTION_LIMIT":

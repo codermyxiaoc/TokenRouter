@@ -13,11 +13,17 @@ func VideoProtocolResponseMatchesTask(target VideoUpstreamTarget, body []byte, t
 	if ValidateVideoProtocolTarget(target) != nil {
 		return false
 	}
+	if adapter, _ := VideoTargetProtocolAdapter(target); adapter == VideoProtocolAdapterYezonghui {
+		return taskID == "" || videoYezonghuiResponseIdentityMatches(body, taskID)
+	}
 	return videoResponseMatchesTask(videoProtocolResponseIdentityEndpoint(target, body), body, taskID)
 }
 
 // VideoProtocolResponseHasConflictingTaskIDs 只识别任务字段，不把 Kling outputs[].id 产物 ID 当成任务。
 func VideoProtocolResponseHasConflictingTaskIDs(target VideoUpstreamTarget, body []byte) bool {
+	if adapter, err := VideoTargetProtocolAdapter(target); err == nil && adapter == VideoProtocolAdapterYezonghui {
+		return ValidateVideoProtocolTarget(target) != nil || !videoYezonghuiResponseIdentityMatches(body, "")
+	}
 	return ValidateVideoProtocolTarget(target) != nil || videoResponseHasConflictingTaskIDs(videoProtocolResponseIdentityEndpoint(target, body), body)
 }
 
@@ -30,6 +36,10 @@ func ExtractVideoProtocolResponse(target VideoUpstreamTarget, status int, body [
 		return nil, errVideoTaskResponseMismatch
 	}
 	id, _ := VideoTargetProtocolAdapter(target)
+	if id == VideoProtocolAdapterYezonghui {
+		// 本协议的 size 表示宽高比，不能经过 OpenAI 像素尺寸的响应解析器。
+		return extractVideoYezonghuiResponse(status, body, expectedTaskID), nil
+	}
 	profile := ""
 	if id == VideoProtocolAdapterMetasoH3 {
 		profile = VideoOpenAIProfileMetasoH3

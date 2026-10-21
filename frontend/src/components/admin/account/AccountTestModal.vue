@@ -103,7 +103,7 @@
         </div>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div class="space-y-1.5">
-            <label for="account-test-video-resolution" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t(isMetasoH3VideoTest ? 'admin.accounts.video.testH3Resolution' : 'admin.accounts.video.testResolution') }}</label>
+            <label for="account-test-video-resolution" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t(isMetasoH3VideoTest || isYezonghuiVideoTest ? 'admin.accounts.video.testH3Resolution' : 'admin.accounts.video.testResolution') }}</label>
             <input id="account-test-video-resolution" v-model="videoResolution" class="input" type="text" maxlength="32" :placeholder="videoResolutionPlaceholder" :disabled="status === 'connecting'" data-testid="account-test-video-resolution" @input="markVideoOptionEdited('resolution')" />
           </div>
           <div class="space-y-1.5">
@@ -153,7 +153,7 @@
 
       <div v-if="supportsImageUpload" class="space-y-1.5">
         <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-          {{ t(isVideoAccount && videoEndpoint === 'vidu' ? 'admin.accounts.video.testViduImageLabel' : testType === 'video' ? 'admin.accounts.grok.videoFirstFrameLabel' : 'admin.accounts.grok.imageUploadLabel') }}
+          {{ t(isYezonghuiVideoTest ? 'admin.accounts.video.testYezonghuiImageLabel' : isVideoAccount && videoEndpoint === 'vidu' ? 'admin.accounts.video.testViduImageLabel' : testType === 'video' ? 'admin.accounts.grok.videoFirstFrameLabel' : 'admin.accounts.grok.imageUploadLabel') }}
         </label>
         <div class="flex items-center gap-3">
           <button type="button" class="btn btn-secondary btn-sm shrink-0" :disabled="status === 'connecting'" @click="imageFileInput?.click()">
@@ -163,7 +163,7 @@
           <button v-if="uploadImageDataURL" type="button" class="text-xs text-gray-500" :disabled="status === 'connecting'" @click="clearMediaUploads">{{ t('common.remove') }}</button>
           <input ref="imageFileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden" :disabled="status === 'connecting'" @change="onImageFileChange" />
         </div>
-        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(isVideoAccount && videoEndpoint === 'vidu' ? 'admin.accounts.video.testViduImageHint' : isMetasoH3VideoTest ? 'admin.accounts.video.testH3ImageHint' : testType === 'video' ? 'admin.accounts.grok.videoFirstFrameHint' : 'admin.accounts.grok.imageUploadHint') }}</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(isYezonghuiVideoTest ? 'admin.accounts.video.testYezonghuiImageHint' : isVideoAccount && videoEndpoint === 'vidu' ? 'admin.accounts.video.testViduImageHint' : isMetasoH3VideoTest ? 'admin.accounts.video.testH3ImageHint' : testType === 'video' ? 'admin.accounts.grok.videoFirstFrameHint' : 'admin.accounts.grok.imageUploadHint') }}</p>
         <img v-if="uploadImageDataURL" :src="uploadImageDataURL" :alt="t('admin.accounts.grok.uploadPreviewAlt')" class="max-h-40 w-full rounded-lg object-contain" />
       </div>
       <div v-if="supportsAudioUpload" class="space-y-1.5">
@@ -414,7 +414,7 @@ const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-ima
 // 图片/文字请求类型完全由管理员选择，不再从模型名称推断。
 const supportsImageTest = computed(() => testType.value === 'image')
 const {
-  isVideoAccount, isMetasoH3VideoTest, videoProtocolAdapter, videoAdapterTextKey, videoResolutionHint, videoResolutionPlaceholder, videoRatioPlaceholder, resetVideoOptions, markVideoOptionEdited,
+  isVideoAccount, isMetasoH3VideoTest, isYezonghuiVideoTest, videoProtocolAdapter, videoAdapterTextKey, videoResolutionHint, videoResolutionPlaceholder, videoRatioPlaceholder, resetVideoOptions, markVideoOptionEdited,
   videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
   videoOperation, videoOperationOptions, videoTestRatio, videoTestMediaValidation,
   testEndpoint, isGrokAccount, testTypeOptions, endpointOptions, showEndpointSelect,

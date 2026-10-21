@@ -1826,14 +1826,17 @@ func sleepGeminiBackoff(ctx context.Context, attempt int) error {
 
 var (
 	sensitiveQueryParamRegex = regexp.MustCompile(`(?i)([?&](?:key|client_secret|access_token|refresh_token)=)[^&"\s]+`)
-	retryInRegex             = regexp.MustCompile(`Please retry in ([0-9.]+)s`)
+	// 供应商可能在诊断消息中回显临时参考图地址；路径中的票据与查询凭据一样必须遮罩。
+	videoReferenceTicketRegex = regexp.MustCompile(`(/api/v1/video-references/)[a-fA-F0-9]{64}([^a-fA-F0-9]|$)`)
+	retryInRegex              = regexp.MustCompile(`Please retry in ([0-9.]+)s`)
 )
 
 func sanitizeUpstreamErrorMessage(msg string) string {
 	if msg == "" {
 		return msg
 	}
-	return sensitiveQueryParamRegex.ReplaceAllString(msg, `$1***`)
+	msg = sensitiveQueryParamRegex.ReplaceAllString(msg, `$1***`)
+	return videoReferenceTicketRegex.ReplaceAllString(msg, `${1}[redacted]${2}`)
 }
 
 func (s *GeminiMessagesCompatService) writeGeminiMappedError(c *gin.Context, account *Account, upstreamStatus int, upstreamRequestID string, body []byte) error {

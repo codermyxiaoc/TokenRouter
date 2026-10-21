@@ -22,3 +22,11 @@ func TestIntelligencePreviewLogPathRedactsTicket(t *testing.T) {
 	}
 	require.Equal(t, "/api/v1/intelligence-tests/runs/abc/preview", redactMediaPreviewPath("/api/v1/intelligence-tests/runs/abc/preview"))
 }
+
+// 视频供应商参考图票据同样是短期访问凭据，无效票据也不能进入全局访问日志。
+func TestVideoReferenceLogPathRedactsTicket(t *testing.T) {
+	for _, token := range []string{strings.Repeat("a", 64), "invalid-ticket", "invalid/nested"} {
+		require.Equal(t, "/api/v1/video-references/:ticket", redactMediaPreviewPath("/api/v1/video-references/"+token))
+	}
+	require.Equal(t, "/api/v1/video-references", redactMediaPreviewPath("/api/v1/video-references"))
+}

@@ -14,15 +14,16 @@ import (
 )
 
 const (
-	VideoProtocolAdapterLegacy   = "legacy_v1"
-	VideoProtocolAdapterOpenAI   = "openai_v1"
-	VideoProtocolAdapterMetasoH3 = "metaso_h3_v1"
-	VideoProtocolAdapterSeedance = "seedance_v1"
-	VideoProtocolAdapterMiniMax  = "minimax_v2"
-	VideoProtocolAdapterWan      = "wan_v1"
-	VideoProtocolAdapterKling    = "kling_v1"
-	VideoProtocolAdapterKemei    = "kemei_v1"
-	VideoProtocolAdapterVidu     = "vidu_v2"
+	VideoProtocolAdapterLegacy    = "legacy_v1"
+	VideoProtocolAdapterOpenAI    = "openai_v1"
+	VideoProtocolAdapterMetasoH3  = "metaso_h3_v1"
+	VideoProtocolAdapterSeedance  = "seedance_v1"
+	VideoProtocolAdapterMiniMax   = "minimax_v2"
+	VideoProtocolAdapterWan       = "wan_v1"
+	VideoProtocolAdapterKling     = "kling_v1"
+	VideoProtocolAdapterKemei     = "kemei_v1"
+	VideoProtocolAdapterVidu      = "vidu_v2"
+	VideoProtocolAdapterYezonghui = "yezonghui_v1"
 )
 
 // ValidVideoProtocolAdapter 限制适配器与端点的组合，不能通过配置跨协议授权。
@@ -42,7 +43,7 @@ func ValidVideoProtocolAdapter(endpoint VideoEndpoint, id string) bool {
 		// 兼容路径只借用明确的 OpenAI 参数合同，不迁移请求路径或端点权限。
 		return id == VideoProtocolAdapterOpenAI
 	case VideoEndpointOpenAIVideos:
-		return id == VideoProtocolAdapterOpenAI || id == VideoProtocolAdapterMetasoH3
+		return id == VideoProtocolAdapterOpenAI || id == VideoProtocolAdapterMetasoH3 || id == VideoProtocolAdapterYezonghui
 	case VideoEndpointSeedance:
 		return id == VideoProtocolAdapterSeedance
 	case VideoEndpointMiniMax:
@@ -192,6 +193,8 @@ func PrepareVideoProtocolRequest(body []byte, modelPath string, target VideoUpst
 		body, metadata, err = prepareVideoKemeiRequest(values, target)
 	case VideoProtocolAdapterVidu:
 		body, metadata, err = prepareVideoOfficialVidu(values, target)
+	case VideoProtocolAdapterYezonghui:
+		body, metadata, err = prepareVideoYezonghui(values)
 	}
 	metadata.Model = target.Model
 	return body, metadata, err

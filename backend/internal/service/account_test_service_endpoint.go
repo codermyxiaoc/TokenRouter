@@ -17,8 +17,10 @@ import (
 
 // AccountTestOptions 只承载本次管理员测试的素材，不写入账号或任务记录。
 type AccountTestOptions struct {
-	ImageDataURL string `json:"image_data_url"`
-	AudioDataURL string `json:"audio_data_url"`
+	// 由管理端鉴权处理器设置；浏览器不能指定临时参考图的限额归属。
+	AuthenticatedUserID int64  `json:"-"`
+	ImageDataURL        string `json:"image_data_url"`
+	AudioDataURL        string `json:"audio_data_url"`
 	// 视频参数只用于本次主动诊断，不保存到账号，也不改变正常网关请求。
 	VideoEndpoint  string `json:"video_endpoint"`
 	VideoOperation string `json:"video_operation"`

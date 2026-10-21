@@ -183,11 +183,17 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 		return s.sendErrorAndEnd(c, err.Error())
 	}
 	prompt = firstNonEmpty(strings.TrimSpace(prompt), "A red ball bouncing once on a white floor, short simple motion.")
-	body, err := buildVideoAccountTestPayload(target, prompt, imageURL, duration, options)
+	body, err := s.prepareVideoAccountTestPayload(c.Request.Context(), target, prompt, imageURL, duration, options)
 	if err != nil {
 		return s.sendErrorAndEnd(c, err.Error())
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), videoAccountTestTimeout)
+	adapter, _ := VideoTargetProtocolAdapter(target)
+	testTimeout := videoAccountTestTimeout
+	if adapter == VideoProtocolAdapterYezonghui {
+		// 该供应商文档建议至少等待三十分钟；仅扩大主动测试的观察窗口，不补发创建。
+		testTimeout = 30 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), testTimeout)
 	defer cancel()
 	// 查询也禁跟随重定向，防止诊断把账号凭据发送到上游给出的其它主机。
 	ctx = WithHTTPUpstreamRedirectsDisabled(ctx)
@@ -225,20 +231,50 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 		case "failed", "cancelled", "expired":
 			return s.sendErrorAndEnd(c, "Video task "+taskID+" ended with status "+result.Status)
 		}
-		// 第一轮立即查询；此后保持三秒一次，不因状态未知或请求失败重发创建。
-		if result, err = upstream.Poll(ctx, account, target, taskID); err != nil {
-			return s.sendErrorAndEnd(c, "视频查询失败或已取消；已提交任务可能继续生成（任务 ID："+taskID+"）。"+err.Error())
+		// 第一轮立即查询，之后 Yezonghui 使用分钟级间隔，其它方案保留原三秒节奏。
+		polled, pollErr := upstream.Poll(ctx, account, target, taskID)
+		if adapter == VideoProtocolAdapterYezonghui && pollErr == nil && polled != nil && polled.StatusCode >= 200 && polled.StatusCode < 300 && polled.Status == "failed" && polled.MetadataError == "" {
+			// 已核对身份的明确生成失败不是临时查询错误，不能继续显示生成中。
+			return s.sendErrorAndEnd(c, "Video task "+taskID+" ended with status failed")
 		}
-		if err := videoAccountTestResponseError(endpoint, result, diagnosticSecrets...); err != nil {
-			return s.sendErrorAndEnd(c, "Video task "+taskID+": "+err.Error())
+		if pollErr == nil {
+			pollErr = videoAccountTestResponseError(endpoint, polled, diagnosticSecrets...)
+		}
+		if pollErr != nil {
+			if adapter != VideoProtocolAdapterYezonghui || ctx.Err() != nil {
+				return s.sendErrorAndEnd(c, "视频查询失败或已取消；已提交任务可能继续生成（任务 ID："+taskID+"）。"+pollErr.Error())
+			}
+			// 临时查询失败保留原任务；不回显可能含素材票据的响应，也不把查询失败当生成失败。
+			s.sendEvent(c, TestEvent{Type: "status", Text: "视频任务查询暂不可用，将继续查询原任务：" + taskID})
+		} else {
+			result = polled
 		}
 		if result.Status == "completed" || result.Status == "failed" || result.Status == "cancelled" || result.Status == "expired" {
 			continue
 		}
+		if err := waitVideoAccountTestPoll(c, ctx, videoTaskPollDelay(target, 3*time.Second), 15*time.Second); err != nil {
+			return s.sendErrorAndEnd(c, "视频测试等待超时或已取消；已提交任务可能继续生成（任务 ID："+taskID+"）")
+		}
+	}
+}
+
+// 长轮询间隔仍发送 SSE 注释保活，避免代理把等待误判为断流；保活不查询或重建任务。
+func waitVideoAccountTestPoll(c *gin.Context, ctx context.Context, delay, heartbeat time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	ticker := time.NewTicker(heartbeat)
+	defer ticker.Stop()
+	for {
 		select {
 		case <-ctx.Done():
-			return s.sendErrorAndEnd(c, "视频测试等待超时或已取消；已提交任务可能继续生成（任务 ID："+taskID+"）")
-		case <-time.After(3 * time.Second):
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		case <-ticker.C:
+			if _, err := fmt.Fprint(c.Writer, ": keep-alive\n\n"); err != nil {
+				return err
+			}
+			c.Writer.Flush()
 		}
 	}
 }

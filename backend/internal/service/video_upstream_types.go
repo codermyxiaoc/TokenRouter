@@ -33,6 +33,8 @@ type VideoTaskSubmitRequest struct {
 	// 仅云画布从已鉴权、已校验的原图字节计算；在实际账号协议确定后检查发送上限。
 	// 不读取客户端同名 JSON，不保存到任务快照，也不改变普通 API 请求合同。
 	canvasMaxReferenceImageBytes int64
+	// 仅内部画布提供，实际协议选定后才发布已鉴权参考图；不接受 JSON，也不参与原始请求幂等摘要。
+	canvasPrepareReferences func(context.Context, VideoUpstreamTarget, []byte) ([]byte, error)
 	// ExcludedAccountIDs 用于容量拒绝及明确未受理后的重选，不接收客户端 JSON 或参与幂等摘要。
 	ExcludedAccountIDs map[int64]struct{} `json:"-"`
 }

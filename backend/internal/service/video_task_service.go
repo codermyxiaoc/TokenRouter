@@ -227,7 +227,7 @@ func (s *VideoTaskService) prepareTask(ctx context.Context, key *APIKey, req Vid
 	t := &VideoTaskRecord{ID: "vid_" + strings.ReplaceAll(uuid.NewString(), "-", ""), UserID: usageActorUserID(key, key.User), APIKeyID: key.ID, GroupID: key.Group.ID, AccountID: selection.Account.ID,
 		IdempotencyKey: req.IdempotencyKey, PayloadHash: hash, Status: "prepared", BillingStatus: "pending", Target: selection.Target, Metadata: selection.Metadata,
 		RequestedModel: selection.RequestedModel, InternalModel: selection.InternalModel, Native: req.Native, InboundPath: req.NativePath, Quote: quote,
-		CreatedAt: now, NextPollAt: now.Add(15 * time.Second), LeaseToken: uuid.NewString(), LeaseUntil: now.Add(s.videoSubmissionLease()), AccountRateMultiplier: selection.Account.BillingRateMultiplier()}
+		CreatedAt: now, NextPollAt: now.Add(videoTaskPollDelay(selection.Target, 15*time.Second)), LeaseToken: uuid.NewString(), LeaseUntil: now.Add(s.videoSubmissionLease()), AccountRateMultiplier: selection.Account.BillingRateMultiplier()}
 	if t.InboundPath == "" {
 		t.InboundPath = "/v1/video/generations"
 		if req.InboundProtocol == string(VideoEndpointOpenAIVideos) {
@@ -415,7 +415,7 @@ func (s *VideoTaskService) submitPreparedTask(ctx context.Context, key *APIKey, 
 		}
 	}
 	s.finish(ctx, t)
-	t.NextPollAt = time.Now().Add(15 * time.Second)
+	t.NextPollAt = time.Now().Add(videoTaskPollDelay(t.Target, 15*time.Second))
 	_ = s.saveVideoTaskState(ctx, t, true)
 	if req.Native || response.StatusCode < 200 || response.StatusCode >= 300 {
 		return &VideoTaskResponse{StatusCode: response.StatusCode, Header: response.Header, Body: response.Body, LocalTaskID: t.ID}, nil
@@ -659,6 +659,15 @@ func (s *VideoTaskService) Cancel(ctx context.Context, key *APIKey, id, protocol
 	return videoTaskResponse(t, false), nil
 }
 
+// Yezonghui 文档建议分钟级查询；只调整该冻结方案，不改变现有模型和错误退避上限。
+func videoTaskPollDelay(target VideoUpstreamTarget, fallback time.Duration) time.Duration {
+	adapter, err := VideoTargetProtocolAdapter(target)
+	if err == nil && adapter == VideoProtocolAdapterYezonghui && fallback < time.Minute {
+		return time.Minute
+	}
+	return fallback
+}
+
 func (s *VideoTaskService) advance(ctx context.Context, t *VideoTaskRecord) {
 	defer func() {
 		cleanup, done := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -667,7 +676,7 @@ func (s *VideoTaskService) advance(ctx context.Context, t *VideoTaskRecord) {
 			slog.Error("video task state save failed", "task_id", t.ID, "error", err)
 		}
 	}()
-	t.NextPollAt = time.Now().Add(30 * time.Second)
+	t.NextPollAt = time.Now().Add(videoTaskPollDelay(t.Target, 30*time.Second))
 	if !videoStoredResponseMatchesTask(t) {
 		// 不追溯修改历史费用，已知不匹配的旧观测也不能继续结算或生成列表投影。
 		t.ErrorMessage = "上游任务响应归属不匹配，需要核对"
@@ -728,7 +737,7 @@ func (s *VideoTaskService) advance(ctx context.Context, t *VideoTaskRecord) {
 	if err != nil || !videoProtocolUpstreamResponseMatchesTask(t.Target, response, t.UpstreamTaskID) || response.StatusCode < 200 || response.StatusCode >= 300 {
 		// HTTP查询失败不代表视频生成失败，更不能触发退款或重新生成。
 		t.ErrorMessage = "上游任务状态查询暂不可用"
-		t.NextPollAt = time.Now().Add(time.Duration(min(300, 15+t.PollAttempts*5)) * time.Second)
+		t.NextPollAt = time.Now().Add(videoTaskPollDelay(t.Target, time.Duration(min(300, 15+t.PollAttempts*5))*time.Second))
 		_ = s.observe(ctx, t)
 		return
 	}

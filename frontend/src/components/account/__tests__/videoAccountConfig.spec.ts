@@ -2,6 +2,27 @@ import { describe, expect, it } from 'vitest'
 import { VIDEO_ENDPOINTS, VIDEO_DEFAULT_ADAPTERS, VIDEO_ENDPOINT_ADAPTERS, VIDEO_VIDU_PATHS, createVideoAccountForm, validateVideoAccountForm, videoAccountCredentials, videoEndpointAdapter, type VideoEndpoint, type VideoProtocolAdapter } from '../videoAccountConfig'
 
 describe('Video account credentials', () => {
+  // 新供应商只能显式选择；导入和编辑后的端点默认、模型覆盖应完整往返。
+  it('round-trips Yezonghui endpoint and bound/unbound model overrides without changing other adapters', () => {
+    const credentials = {
+      video_endpoints: ['openai_videos', 'minimax'],
+      video_endpoint_adapters: { openai_videos: 'yezonghui_v1', minimax: 'minimax_v2' },
+      video_model_bindings: { relay: 'openai_videos', official: ['openai_videos', 'minimax'] },
+      video_model_adapters: { relay: { openai_videos: 'yezonghui_v1' }, official: { openai_videos: 'openai_v1' }, unbound: { openai_videos: 'yezonghui_v1' } },
+    }
+    const form = createVideoAccountForm(credentials)
+    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
+    expect(videoAccountCredentials(form)).toMatchObject(credentials)
+    expect(videoEndpointAdapter(createVideoAccountForm(videoAccountCredentials(form)), 'openai_videos')).toBe('yezonghui_v1')
+    expect(VIDEO_DEFAULT_ADAPTERS.openai_videos).toBe('openai_v1')
+    expect(videoEndpointAdapter(createVideoAccountForm({ base_url: 'https://new.yezonghui.org', video_endpoints: ['openai_videos'] }), 'openai_videos')).toBe('legacy_v1')
+  })
+
+  it.each(VIDEO_ENDPOINTS.filter(endpoint => endpoint !== 'openai_videos'))('rejects Yezonghui for unsupported endpoint %s', endpoint => {
+    const form = createVideoAccountForm({ video_endpoints: [endpoint], video_endpoint_adapters: { [endpoint]: 'yezonghui_v1' } })
+    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('adapterInvalid')
+  })
+
   // 新增可选合同不替换已保存的可美端点；模型覆盖及继承继续独立往返。
   it.each<[VideoEndpoint, VideoProtocolAdapter]>([['compat', 'openai_v1'], ['vidu', 'vidu_v2'], ['vidu', 'legacy_v1']])('preserves %s adapter %s only when explicitly selected', (endpoint, adapter) => {
     const form = createVideoAccountForm({

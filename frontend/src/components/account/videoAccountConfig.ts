@@ -6,7 +6,7 @@ export type VideoOpenAIProfile = typeof VIDEO_OPENAI_PROFILES[number]
 // 方案 ID 固定带版本；新增协议只能显式加入所属端点，不能借适配配置增加端点权限。
 export const VIDEO_ENDPOINT_ADAPTERS = {
   compat: ['legacy_v1', 'openai_v1', 'kemei_v1'],
-  openai_videos: ['openai_v1', 'metaso_h3_v1', 'legacy_v1'],
+  openai_videos: ['openai_v1', 'metaso_h3_v1', 'yezonghui_v1', 'legacy_v1'],
   seedance: ['seedance_v1', 'kemei_v1', 'legacy_v1'],
   kling: ['kling_v1', 'kemei_v1', 'legacy_v1'],
   wan: ['wan_v1', 'kemei_v1', 'legacy_v1'],

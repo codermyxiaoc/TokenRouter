@@ -6,6 +6,7 @@
 
 - [账号与模型端点](#video_accounts)：配置独立平台、多个端点、模型绑定与预算上限。
 - [版本化协议适配](#video_adapters)：端点默认、模型覆盖、官方参数和旧任务兼容。
+- [Yezonghui 视频兼容](#video_yezonghui)：复用 `/v1/videos` 的分辨率、参考图交付和异步下载。
 - [入站和上游协议](#video_protocols)：核对原生路径、参数保真、任务 ID 与取消语义。
 - [OpenAI 视频入口与内容](#video_openai_content)：核对 `/v1/videos`、共享 Grok 分派及凭据隔离的流式下载。
 - [管理员账号测试](#video_account_tests)：选择模型及其已配置端点，提交一次测试视频并轮询预览。
@@ -58,7 +59,7 @@ Vidu 使用独立的 `video_vidu_model_paths`，以最终上游模型精确名�
 | 端点 | 新建表单默认方案 | 其他可选方案 |
 | --- | --- | --- |
 | compat | `legacy_v1`：保留原有协议 | `openai_v1`：OpenAI 官方参数格式，保持兼容路径；`kemei_v1`：可美视频 |
-| openai_videos | `openai_v1`：OpenAI JSON 协议 | `legacy_v1`；`metaso_h3_v1` 保留已有秘塔 H3 适配 |
+| openai_videos | `openai_v1`：OpenAI JSON 协议 | `legacy_v1`；`metaso_h3_v1` 保留已有秘塔 H3 适配；`yezonghui_v1`：Yezonghui 视频兼容 |
 | seedance | `seedance_v1`：Seedance 原生协议 | `legacy_v1`、`kemei_v1` |
 | minimax | `minimax_v2`：MiniMax H3 V2 协议 | `legacy_v1`、`kemei_v1` |
 | wan | `wan_v1`：万相异步视频协议 | `legacy_v1`、`kemei_v1` |
@@ -110,6 +111,21 @@ Vidu 的 `img2video` 恰好一张图，`reference2video` 至少一张，`start-e
 可美的零 Token 占位不证明免费用量；Vidu 不凭空生成 Token 用量。选用 Token 价格但没有可信用量的任务仍待核对，不能借适配改按秒结算。协议只提供归属、状态、产物和计费事实，继续使用已有预算、捕获、释放及统计幂等事务。
 
 供应商合同来源：[统一兼容接口](https://token.xinhankr.com/docs/openai/doc0019)、[MiniMax H3](https://token.xinhankr.com/docs/examples/doc0015)、[Seedance](https://token.xinhankr.com/docs/examples/doc0010)、[Kling](https://token.xinhankr.com/docs/examples/doc0012)、[Wan](https://token.xinhankr.com/docs/examples/doc0014)、[Vidu](https://token.xinhankr.com/docs/examples/doc0041)。供应商方案的实现入口为 `video_protocol_kemei*.go`，Vidu 操作与响应在 `video_protocol_kemei_vidu.go`；添加新的供应商合同应使用新方案 ID，不改变已有方案语义。
+
+<a id="video_yezonghui"></a>
+## Yezonghui 视频兼容
+
+在 Video API Key 账号启用 `openai_videos`，显式选择 `yezonghui_v1`，Base URL 按供应商配置（当前文档为 `https://new.yezonghui.org`）。最终上游模型可以单独覆盖该方案；不凭域名或模型名称自动切换，不新增平台或视频端点。新任务冻结版本二及方案 ID，已有任务继续使用原快照。供应商合同来源：[对接文档](https://new.yezonghui.org/docs)及其[原始文档接口](https://new.yezonghui.org/api/docs)，本版只接入其中视频协议。
+
+创建与查询分别复用 `POST /v1/videos`、`GET /v1/videos/{id}`。要求非空 `prompt`、1–3600 的整数时长和明确的可报价分辨率档位，出站 `seconds` 为整数字符串；`duration` 是数值别名。`resolution` 与 `size` 分离：前者是 `720p`、`1080p`、`2k`、`4k` 等本站可报价档位，后者是可省略的正整数比例，如 `16:9`，不是像素尺寸。`ratio`/`aspect_ratio` 合并为 `size`；同义字段同时存在必须等值。`metadata.resolution` 可提供档位，但与顶层冲突时拒绝，不能绕过报价。供应商实际支持档位和时长由具体模型决定，适配器不降档、不改价、不承诺所有档位可生成。
+
+`images` 转为 `image_urls`，`generate_audio` 转为 `audio`；`image_urls`、`video_urls`、`audio_urls` 只接受 HTTP(S) 公共链接，不接受 Base64、Data URL、内网字面量或登录态素材。`audio_urls` 是否可用由上游模型决定，不扩大模型能力声明。`negative_prompt`、`seed`、`fps`、`camera_fixed` 和 `audio` 按文档类型校验，厂商扩展放入 `metadata` 并保留数字精度；不支持的顶层参数（包括 `watermark`）明确拒绝。当前一个任务只交付一个视频，`n` 只允许 1，不把多个作品合并成单次收费。
+
+创作台和画布沿用已有视频模型目录、1–60 秒编辑范围、参考图上限和站内价格。已经鉴权的私有图片在实际选中本方案后转换为[短期访问链接](cloud_canvas.md#video_reference_delivery)，原素材不改写、不公开桶；缺少可用公网站点地址或参考图交付失败时在创建和预扣前拒绝。幂等摘要使用原始画布请求，同次选号重用已签发的链接，恢复已有任务不再发布或生成。画布的“自动”比例只在本方案下省略 `size`，不强制变为横屏；旧模型继续原来的自动比例逻辑。正式 API 调用者自行提供公共素材 URL，不获得将任意私有文件公开的能力。
+
+响应仅按顶层 `id`/`task_id` 识别任务，二者冲突或查询 ID 不匹配时保留核对，不任选 ID 或释放预算。`queued`、`in_progress`、`completed`、`failed` 分别映射排队、处理中、完成和失败；`unknown` 与未识别状态保持非终态。创建没有可靠受理结果时沿用原状态机，不盲目重建任务。后台为该冻结方案使用至少 60 秒查询间隔，查询失败继续原 ID 退避，既有模型间隔不变。完成响应可无 `url`，由原账号凭据请求 `/v1/videos/{id}/content`，不让上游凭据进入浏览器。当前供应商文档没有取消合同，不新增取消能力。
+
+站内仍使用原有按秒、按次或 Token 价卡及图片固定附加费，分辨率按实际发送的 `resolution` 报价，不把比例当分辨率。预扣、成功捕获、失败释放、并发幂等和内容下载复用原账本；上游价率 Header 不覆盖站内价格。文档未保证 Token 用量，选用 Token 价却缺少可信正数用量时保持待核对，零占位不能推断免费。仅返回完成而没有尺寸/时长时可沿用创建时冻结维度；显式异常、冲突或不同价档继续待核对，不自动改费。图片异步端点和其存储、保留策略不在本适配范围内。
 
 <a id="video_protocols"></a>
 ## 入站和上游协议
@@ -188,7 +204,9 @@ Video API Key 账号在账号管理中使用与 Grok 相同的测试弹窗、进
 
 Seedance 官方账号测试的分辨率保持空值，输入示例为 `720p`，不再沿用通用 `768p` 示例；未编辑的比例也默认留空，上传参考图时不自动填入 `16:9`，由官方选择当前模型的默认比例。两套测试弹窗共用官方档位提示和输入校验，用户手填或明确清空的值不会被切换模型或方案覆盖；模型级限制由后端在模型映射和协议覆盖之后统一检查，非法输入不会触发付费创建。
 
-测试载荷按所选协议构造，模型映射、端点 Base URL 覆盖、受控 Kling/Vidu 路径、代理、TLS 与受保护 Header Override 均沿用原有账号配置。上游创建最多一次，后续只用该账号、端点和任务 ID 轮询；不因错误或等待超时重新提交。最多等待 10 分钟。成功必须取得明确完成状态，以及安全媒体链接或已下载的视频内容；OpenAI 内容端点下载最多 64 MiB，带凭据请求禁止自动跟随跳转，公共跳转另走无凭据安全下载。失败、未知状态、冲突任务 ID 或内容下载错误不能伪装成成功。
+Yezonghui 主动测试默认 5 秒、比例留空，要求填写明确分辨率档位，不套用 OpenAI 的像素尺寸限制。参考图沿用单张 4 MiB 校验，签发身份取已登录管理员，不能由 JSON 指定；临时访问失败不会发送上游创建。测试只等待一个上游任务，第一轮立即查询，后续至少 60 秒查询一次，最多等待 30 分钟；等待间隔每 15 秒写 SSE 注释保活，不增加模型或查询请求。临时查询失败继续原任务，明确失败终态立即结束；停止或超时不会重新生成或假定上游取消。
+
+测试载荷按所选协议构造，模型映射、端点 Base URL 覆盖、受控 Kling/Vidu 路径、代理、TLS 与受保护 Header Override 均沿用原有账号配置。上游创建最多一次，后续只用该账号、端点和任务 ID 轮询；不因错误或等待超时重新提交。除上述 Yezonghui 方案外最多等待 10 分钟。成功必须取得明确完成状态，以及安全媒体链接或已下载的视频内容；OpenAI 内容端点下载最多 64 MiB，带凭据请求禁止自动跟随跳转，公共跳转另走无凭据安全下载。失败、未知状态、冲突任务 ID 或内容下载错误不能伪装成成功。
 
 上游生成完成与浏览器预览可用性分别展示。公共产物链接由浏览器直接读取，仍可能受到本机网络、链接有效期或编码支持限制；播放器加载失败会显示独立提示，可仅重新加载预览或在新页打开安全作品链接。等待视频元数据超过 30 秒仅提示媒体连接缓慢，仍可继续等待，加载成功后自动恢复；换源、重载和卸载时清理等待计时器。预览重载不会再次提交生成、查询上游任务或产生新的测试费用。生产默认 CSP 明确允许受支持的 HTTPS、同源、Data URL 和 Blob 媒体来源，管理员自定义 CSP 仍按其配置生效。
 

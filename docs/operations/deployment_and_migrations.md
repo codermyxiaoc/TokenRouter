@@ -11,6 +11,7 @@
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
 - [平台额度事务化升级](#transactional_platform_quotas)：切换额度统计权威来源、旧实例及缓存处理时读取。
+- [v3.24 Yezonghui 视频兼容](#v3_24_upgrade)：启用新视频方案、公网参考图交付或回退冻结方案任务时读取。
 - [v3.23 异步图片存储与到期清理](#v3_23_upgrade)：启用存储预检、新图片保存期和持久清理队列，或回退自动清理时读取。
 - [v3.22 任务诊断与检测兼容](#v3_22_upgrade)：升级创作台错误诊断、分组探测租约或满血 AI 检测协议时读取。
 - [v3.21 云端无限画布](#v3_21_upgrade)：替换旧创作台、迁移私人画布与素材、启用文本/视频/语音或回退新执行类型时读取。
@@ -67,7 +68,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.23`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.24`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -82,11 +83,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.23`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.24`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.23 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.24 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -180,7 +181,16 @@ Gemini 缓存费用复用本站持久资金合同，使用 `gemini_cache` 报价
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.23`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `313_image_object_cleanup.sql`。从 v3.22 升级只新增迁移 313，不改写既有迁移或历史账本；更早版本仍须遵循对应迁移与恢复边界。
+当前发布版本为 `v0.1.278-ct-v3.24`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `313_image_object_cleanup.sql`。从 v3.23 升级不新增或修改 SQL 迁移，不改写历史账本；更早版本仍须遵循对应迁移与恢复边界。
+
+<a id="v3_24_upgrade"></a>
+### v3.24 Yezonghui 视频兼容
+
+Video API Key 账号的 `openai_videos` 端点新增显式 `yezonghui_v1` 方案，端点默认和最终上游模型覆盖继续保存到已有账号 JSON。管理员测试、创作台、画布以及正式视频 API 共用转换与任务协议，沿用 `/v1/videos` 创建、查询和内容下载，无新平台、SQL 迁移或账务表。未选择新方案的账号及既有任务继续原行为，不按域名或模型名自动切换；本站价格、预扣、终态结算和失败释放仍由现有视频任务账本管理。
+
+升级前备份数据库、配置、稳定安全密钥及私人素材目录；统一更新全部应用、视频恢复实例和嵌入前端，再选择新方案、配置正确上游模型与本站价格。创作台参考图及管理员带图测试还须配置后台 `frontend_url`（未设置时使用 `server.frontend_url`）为可信且上游可访问的本站公网 HTTP(S) 地址，反向代理须将根路径 `/api/v1/video-references/` 交给后端。所有实例使用同一 Redis，临时图片副本依赖 Redis 的两小时固定有效期；进程重启不重新签发，Redis 数据丢失或提前淘汰会使链接失效。新链接不携带站内 Key、JWT 或供应商凭据，不改写云端原图或桶权限。部署者须自行验证公网 DNS、路由和读取可达性，不能只以后台配置保存成功作为可用证明。
+
+发布后先核对版本、健康、原视频方案、模型价格与任务查询/下载权限，再按需启用新方案。新任务冻结版本二的 `yezonghui_v1` 及原账号、Base URL 和路径，后续账号修改不迁移在途任务。回退到 v3.23 或更早版本前，停止新 Yezonghui 提交，由新版处理完在途、受理待核对和待结算任务，并恢复旧程序可识别的账号配置；旧恢复器不能解释新方案。保留全部任务、资金预占和结算记录，不通过删除任务、清空 Redis 或重新生成解除异常。完整参数及短期参考图边界见 [Yezonghui 视频兼容](../interfaces/video_upstream.md#video_yezonghui)与[视频参考图交付](../interfaces/cloud_canvas.md#video_reference_delivery)。
 
 <a id="v3_23_upgrade"></a>
 ### v3.23 异步图片存储与到期清理

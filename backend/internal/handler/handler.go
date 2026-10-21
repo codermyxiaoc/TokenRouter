@@ -65,6 +65,7 @@ type Handlers struct {
 	MediaTask         *MediaTaskHandler
 	AsyncImage        *AsyncImageHandler
 	Video             *VideoHandler
+	VideoReference    *VideoReferenceHandler
 	BatchImage        *BatchImageHandler
 	Creative          *CreativeHandler
 	CreativeCanvas    *CreativeCanvasHandler

@@ -188,6 +188,7 @@ type AccountTestService struct {
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	settingService            *SettingService
+	videoReferences           videoReferencePublisher
 	tlsFPProfileService       *TLSFingerprintProfileService
 	qoderSessionProvider      qoderAccountTestSessionProvider
 	qoderClient               qoderStreamClient

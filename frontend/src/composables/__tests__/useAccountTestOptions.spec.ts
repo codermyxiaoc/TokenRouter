@@ -46,6 +46,38 @@ describe('视频测试分辨率协议边界', () => {
     expect(options.videoResolution.value).toBe(resolution)
   })
 
+  // Yezonghui 和 OpenAI 共用路由，但分辨率与比例是独立字段，不继承像素尺寸默认值。
+  it('Yezonghui 使用五秒、空比例和独立分辨率提示，手填值在切换时保留', async () => {
+    const { options, models } = await setup('openai_videos', 'yezonghui_v1')
+    expect(options.videoDuration.value).toBe(5)
+    expect(options.videoRatio.value).toBe('')
+    expect(options.videoResolutionPlaceholder.value).toBe('720p')
+    expect(options.videoResolutionHint.value).toBe('admin.accounts.video.testYezonghuiResolutionHint')
+    expect(options.videoTestValidationMessage.value).toBe('admin.accounts.video.testYezonghuiResolutionRequired')
+    options.videoResolution.value = '1080p'
+    options.videoDuration.value = 10
+    options.videoRatio.value = '9:16'
+    expect(options.videoTestValidationMessage.value).toBe('')
+    models.value = [{ ...models.value[0]!, video_protocol_adapters: { openai_videos: 'openai_v1' } }]
+    await nextTick()
+    expect(options.videoDuration.value).toBe(10)
+    expect(options.videoResolution.value).toBe('1080p')
+    expect(options.videoRatio.value).toBe('9:16')
+    expect(options.isYezonghuiVideoTest.value).toBe(false)
+  })
+
+  it.each(['', '  ', 'auto', 'AUTO', 'adaptive', '1280x720', '16:9', '720 p', '720', '1.5k', '720p\u0000'])('Yezonghui 无明确档位 %j 时禁止试跑', async resolution => {
+    const { options } = await setup('openai_videos', 'yezonghui_v1')
+    options.videoResolution.value = resolution
+    expect(options.videoTestValidationMessage.value).toBe('admin.accounts.video.testYezonghuiResolutionRequired')
+  })
+
+  it.each(['720p', ' 1080P ', '768p', '2K', '540p'])('Yezonghui 合法档位 %j 留待模型能力校验', async resolution => {
+    const { options } = await setup('openai_videos', 'yezonghui_v1')
+    options.videoResolution.value = resolution
+    expect(options.videoTestValidationMessage.value).toBe('')
+  })
+
   it.each(['768p', '768P', '2K', '1280x720', '720', '720 p', '720p\u0000', '720p,1080p', 'NaN', '<script>'])('官方非法档位 %j 不允许提交', async resolution => {
     const { options } = await setup('seedance', 'seedance_v1')
     options.videoResolution.value = resolution

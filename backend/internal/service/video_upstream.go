@@ -159,6 +159,9 @@ func (s *VideoUpstreamService) SelectAccount(ctx context.Context, key *APIKey, r
 		}
 		body := append([]byte(nil), request.Body...)
 		body, err = prepareCreativeVideoAdaptiveRatio(body, target, request.canvasAdaptiveRatio)
+		if err == nil && request.canvasPrepareReferences != nil {
+			body, err = request.canvasPrepareReferences(ctx, target, body)
+		}
 		if err == nil {
 			body, metadata, err = PrepareVideoProtocolRequest(body, request.ModelPath, target)
 		}

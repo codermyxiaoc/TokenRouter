@@ -3,7 +3,7 @@
 当前标准、本地目录和 standalone Compose 默认从 DockerHub 拉取：
 
 ```text
-coderxiaoc/tokenrouter:v0.1.278-ct-v3.23
+coderxiaoc/tokenrouter:v0.1.278-ct-v3.24
 ```
 
 在 `.env` 中设置 `SUB2API_IMAGE` 可选择其他已发布标签或镜像摘要。这些 Compose 保留 `pull_policy: always`，部署服务器无需源码。应用依赖 PostgreSQL 和 Redis；Compose 提供运行配置、持久化存储、健康检查和依赖启动顺序。
@@ -27,10 +27,10 @@ coderxiaoc/tokenrouter:v0.1.278-ct-v3.23
 
 ```bash
 docker login
-docker buildx build --platform linux/amd64 --build-arg ALPINE_IMAGE=alpine:3.23 --build-arg POSTGRES_IMAGE=postgres:18-alpine3.23 --build-arg VERSION=0.1.278-ct-v3.23 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v3.23 --load --file Dockerfile .
-docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v3.23 --version
-docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v3.23 --version
-docker push coderxiaoc/tokenrouter:v0.1.278-ct-v3.23
+docker buildx build --platform linux/amd64 --build-arg ALPINE_IMAGE=alpine:3.23 --build-arg POSTGRES_IMAGE=postgres:18-alpine3.23 --build-arg VERSION=0.1.278-ct-v3.24 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v3.24 --load --file Dockerfile .
+docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v3.24 --version
+docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v3.24 --version
+docker push coderxiaoc/tokenrouter:v0.1.278-ct-v3.24
 ```
 
 版本和 PostgreSQL 客户端检查不挂载现有数据，也不启动应用服务。程序内部版本号不带 `v`，镜像标签保留 `v` 前缀。根 `Dockerfile` 还支持 `COMMIT`、`DATE` 构建参数；发布下一版本时同时替换构建参数、镜像标签与部署端 `SUB2API_IMAGE`。以上命令只发布 `amd64`，不会同时生成 `arm64` 镜像。
@@ -43,8 +43,8 @@ docker push coderxiaoc/tokenrouter:v0.1.278-ct-v3.23
 
 ```bash
 set -e
-binary="$PWD/release/sub2api_v0.1.278-ct-v3.23_linux_amd64/sub2api"
-image=coderxiaoc/tokenrouter:v0.1.278-ct-v3.23
+binary="$PWD/release/sub2api_v0.1.278-ct-v3.24_linux_amd64/sub2api"
+image=coderxiaoc/tokenrouter:v0.1.278-ct-v3.24
 build_context="$(mktemp -d)"
 test -s "$binary"
 mkdir -p "$build_context/backend" "$build_context/deploy"
@@ -64,7 +64,7 @@ image_binary_hash="$(docker run --rm --entrypoint sha256sum "$image" /app/sub2ap
 test "$binary_hash" = "$image_binary_hash"
 ```
 
-核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v3.23`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
+核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v3.24`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
 
 ```bash
 docker login
@@ -89,7 +89,7 @@ nano .env
 在现有部署目录修改 `.env`，保留原有密码、JWT/TOTP 密钥以及其他配置：
 
 ```dotenv
-SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v3.23
+SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v3.24
 POSTGRES_BIND_HOST=127.0.0.1
 POSTGRES_PORT=5433
 ```
@@ -107,7 +107,7 @@ docker compose -f docker-compose.yml pull sub2api
 
 ```bash
 docker compose -f docker-compose.yml stop sub2api
-backup_dir="backups/pre-v3.23-$(date +%Y%m%d-%H%M%S)"
+backup_dir="backups/pre-v3.24-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$backup_dir"
 chmod 700 "$backup_dir"
 cp -p .env docker-compose.yml "$backup_dir/"
@@ -129,6 +129,14 @@ docker compose -f docker-compose.yml exec -T sub2api wget -q -O - http://127.0.0
 私有 DockerHub 仓库需要先在服务器执行 `docker login`。应用镜像更新或端口映射变更应使用 `up -d` 重建相关容器；仅 `restart` 不会应用这些变更。已有部署无需用 `.env.example` 覆盖 `.env`，也不要执行 `down -v`。
 
 `--no-deps sub2api` 只更新应用，不替换 PostgreSQL 或 Redis。新应用启动时自动执行待应用迁移。沿用既有数据、配置和稳定安全密钥，完成升级后检查程序版本、健康状态、登录、网关调用和用量记录。
+
+### v3.24 Yezonghui 视频兼容
+
+从 v3.23 升级不新增或修改 SQL 迁移，最高迁移仍为 `313_image_object_cleanup.sql`。Video 账号在 OpenAI Videos 端点下新增显式的“Yezonghui 视频兼容”方案，管理员测试、创作台与画布共用请求适配、任务查询和下载。既有账号默认方案和在途任务保持原配置；本站价格、预扣、结算与失败释放沿用现有视频账本。
+
+先备份数据库、配置和私人素材目录，统一更新全部应用、视频恢复实例与前端，再在对应账号或模型上启用新方案并补齐本站价格。带参考图时须配置上游可访问的本站公网 HTTP(S) 前端基础 URL，确保根路径 `/api/v1/video-references/` 能路由到后端，所有实例共享同一 Redis；短期图片副本在 Redis 保存两小时，不改写原素材或桶权限。链接失效不会自动重发生成。
+
+新任务会冻结 `yezonghui_v1` 方案，旧程序无法接管。回退前停止新增 Yezonghui 请求，由新版处理完在途、待核对及待结算任务，再恢复旧版可识别的账号方案；保留任务、预扣和资金账本，不通过删除记录或重复生成解除异常。完整升级和回退边界见 [v3.24 升级](../docs/operations/deployment_and_migrations.md#v3_24_upgrade)。
 
 ### v3.23 异步图片存储与到期清理
 
@@ -428,7 +436,7 @@ v1.3 的 WS 执行状态按 API Key、原始线程/会话和 `request_kind` 隔�
 
 ## 镜像标签
 
-当前默认固定版本标签 `v0.1.278-ct-v3.23`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
+当前默认固定版本标签 `v0.1.278-ct-v3.24`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
 
 ## 相关链接
 

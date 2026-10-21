@@ -62,6 +62,37 @@ describe.each([
     return wrapper
   }
 
+  // 两个测试入口仅提交规范化前的测试参数，签名参考图与最终供应商协议由服务端统一处理。
+  it('tests Yezonghui with separate resolution, optional ratio and uploaded reference without OpenAI pixel hints', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'relay-model', display_name: 'Relay', video_endpoints: ['openai_videos'], video_protocol_adapters: { openai_videos: 'yezonghui_v1' } }])
+    const wrapper = await open('metaso_h3')
+    const vm = wrapper.vm as any
+    expect(vm.videoProtocolAdapter).toBe('yezonghui_v1')
+    expect(vm.videoDuration).toBe(5)
+    expect(vm.videoRatio).toBe('')
+    expect(wrapper.get('[data-testid="account-test-video-resolution"]').attributes('placeholder')).toBe('720p')
+    expect(wrapper.text()).toContain('admin.accounts.video.testYezonghuiResolutionHint')
+    expect(wrapper.text()).toContain('admin.accounts.video.testYezonghuiImageHint')
+    expect(wrapper.text()).not.toContain('admin.accounts.video.testOpenAIResolutionHint')
+    expect(wrapper.text()).not.toContain('admin.accounts.video.testH3ImageHint')
+    expect(vm.canStartTest).toBe(false)
+    await vm.startTest()
+    expect(fetch).not.toHaveBeenCalled()
+    vm.videoResolution = '1080p'
+    vm.videoDuration = 10
+    vm.uploadImageDataURL = 'data:image/png;base64,aGVsbG8='
+    await flushPromises()
+    expect(vm.canStartTest).toBe(true)
+    await vm.startTest()
+    expect(fetch).toHaveBeenCalledTimes(1)
+    const payload = JSON.parse((fetch as any).mock.calls[0][1].body)
+    expect(payload).toMatchObject({ model_id: 'relay-model', test_type: 'video', video_endpoint: 'openai_videos', duration: 10, resolution: '1080p', image_data_url: 'data:image/png;base64,aGVsbG8=' })
+    expect(payload).not.toHaveProperty('ratio')
+    expect(payload).not.toHaveProperty('video_protocol_adapter')
+    expect(payload).not.toHaveProperty('size')
+    wrapper.unmount()
+  })
+
   // 同一窗口的并发点击只能创建一个任务，防止管理员测试重复消耗上游额度。
   it('submits only one paid request while repeated start actions race', async () => {
     let resolveRequest!: (response: Response) => void

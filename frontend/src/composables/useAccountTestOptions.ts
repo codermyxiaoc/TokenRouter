@@ -28,7 +28,9 @@ export function useAccountTestOptions(
     return videoEndpoint.value === 'openai_videos' && account.value?.credentials?.video_openai_profile === 'metaso_h3' ? 'metaso_h3_v1' : 'legacy_v1'
   })
   const isMetasoH3VideoTest = computed(() => isVideoAccount.value && videoProtocolAdapter.value === 'metaso_h3_v1')
+  const isYezonghuiVideoTest = computed(() => isVideoAccount.value && videoProtocolAdapter.value === 'yezonghui_v1')
   const videoResolutionHint = computed(() => `admin.accounts.video.${videoProtocolAdapter.value === 'openai_v1' ? 'testOpenAIResolutionHint'
+    : isYezonghuiVideoTest.value ? 'testYezonghuiResolutionHint'
     : videoProtocolAdapter.value === 'minimax_v2' ? 'testMiniMaxResolutionHint'
     : videoProtocolAdapter.value === 'seedance_v1' ? 'testSeedanceResolutionHint'
     : videoProtocolAdapter.value === 'vidu_v2' ? 'testViduResolutionHint'
@@ -36,11 +38,11 @@ export function useAccountTestOptions(
     : isMetasoH3VideoTest.value ? 'testH3ResolutionHint' : 'testResolutionHint'}`)
   const videoResolutionPlaceholder = computed(() => videoProtocolAdapter.value === 'openai_v1' ? '1280x720'
     : videoProtocolAdapter.value === 'minimax_v2' ? '768P'
-    : videoProtocolAdapter.value === 'seedance_v1' ? '720p'
+    : ['seedance_v1', 'yezonghui_v1'].includes(videoProtocolAdapter.value) ? '720p'
     : videoProtocolAdapter.value === 'vidu_v2' ? t('admin.accounts.video.testViduResolutionPlaceholder')
     : videoProtocolAdapter.value === 'kemei_v1' ? kemeiResolution() || '720p' : '768p')
   // 官方 Seedance 各模型与输入模式的默认比例不同，不用 16:9 占位诱导覆盖上游默认值。
-  const videoRatioPlaceholder = computed(() => videoProtocolAdapter.value === 'seedance_v1'
+  const videoRatioPlaceholder = computed(() => ['seedance_v1', 'yezonghui_v1'].includes(videoProtocolAdapter.value)
     ? t('admin.accounts.video.testSeedanceRatioPlaceholder') : '16:9')
   // 可美按已选端点确定测试档位，不根据模型名称或上游域名猜测协议。
   function kemeiResolution() {
@@ -59,8 +61,8 @@ export function useAccountTestOptions(
     applyingVideoDefaults = true
     if (!videoEdited.duration) videoDuration.value = adapter === 'openai_v1' ? 4 : 5
     if (!videoEdited.resolution) videoResolution.value = adapter === 'minimax_v2' ? '768P' : adapter === 'kemei_v1' ? kemeiResolution() : ''
-    // Seedance/Vidu 官方比例由模型和输入模式决定，留空继承上游默认，避免首帧图被固定比例拒绝。
-    if (!videoEdited.ratio) videoRatio.value = ['openai_v1', 'vidu_v2', 'seedance_v1'].includes(adapter) ? '' : '16:9'
+    // Seedance/Vidu 与 Yezonghui 比例由模型和输入模式决定，留空继承上游默认，避免强行固定横屏。
+    if (!videoEdited.ratio) videoRatio.value = ['openai_v1', 'vidu_v2', 'seedance_v1', 'yezonghui_v1'].includes(adapter) ? '' : '16:9'
     applyingVideoDefaults = false
   }
   function resetVideoOptions() {
@@ -126,6 +128,10 @@ export function useAccountTestOptions(
     if (videoEndpoint.value === 'vidu' && !(VIDEO_VIDU_PATHS as readonly string[]).includes(videoOperation.value)) return t('admin.accounts.video.testViduOperationRequired')
     const duration = Number(videoDuration.value)
     if (!Number.isInteger(duration) || duration < 1 || duration > 60) return t('admin.accounts.video.testDurationInvalid')
+    // Yezonghui 的分辨率是独立档位，必须明确选择；具体模型档位由服务端再次校验。
+    if (isYezonghuiVideoTest.value && !/^[0-9]+[pk]$/.test(videoResolution.value.trim().toLowerCase())) {
+      return t('admin.accounts.video.testYezonghuiResolutionRequired')
+    }
     // 官方 Seedance 不接受 768p；这里只验证协议档位，最终映射模型的限制由服务端检查。
     if (videoProtocolAdapter.value === 'seedance_v1' && videoResolution.value.trim() &&
       !['480p', '720p', '1080p', '4k'].includes(videoResolution.value.trim().toLowerCase())) {
@@ -221,7 +227,7 @@ export function useAccountTestOptions(
     }
   })
   return {
-    isVideoAccount, isMetasoH3VideoTest, videoProtocolAdapter, videoAdapterTextKey, videoResolutionHint, videoResolutionPlaceholder, videoRatioPlaceholder, resetVideoOptions, markVideoOptionEdited,
+    isVideoAccount, isMetasoH3VideoTest, isYezonghuiVideoTest, videoProtocolAdapter, videoAdapterTextKey, videoResolutionHint, videoResolutionPlaceholder, videoRatioPlaceholder, resetVideoOptions, markVideoOptionEdited,
     videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
     videoOperation, videoOperationOptions, videoTestRatio, videoTestMediaValidation,
     testEndpoint, isGrokAccount, testTypeOptions, endpointOptions, showEndpointSelect,

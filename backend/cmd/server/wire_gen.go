@@ -203,7 +203,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	pluginHostInfo := providePluginHostInfo(buildInfo)
 	pluginKVStore := repository.NewPluginKVStore(redisClient)
 	pluginManager := service.NewPluginManager(pluginRepository, secretEncryptor, configConfig, pluginHostInfo, pluginKVStore)
-	accountTestService := service.ProvideAccountTestService(accountRepository, geminiTokenProvider, claudeTokenProvider, grokTokenProvider, antigravityGatewayService, openAIGatewayService, httpUpstream, configConfig, tlsFingerprintProfileService, settingService, pluginManager)
+	videoReferenceStore := repository.NewVideoReferenceCache(redisClient)
+	videoReferenceService := service.NewVideoReferenceService(videoReferenceStore, settingService)
+	accountTestService := service.ProvideAccountTestService(accountRepository, geminiTokenProvider, claudeTokenProvider, grokTokenProvider, antigravityGatewayService, openAIGatewayService, httpUpstream, configConfig, tlsFingerprintProfileService, settingService, pluginManager, videoReferenceService)
 	groupAvailabilityProbeRunnerService := service.ProvideGroupAvailabilityProbeRunnerService(groupAvailabilityProbeRepository, accountTestService, gatewayService, openAIGatewayService, geminiMessagesCompatService, configConfig)
 	groupHandler := admin.NewGroupHandler(adminService, dashboardService, groupCapacityService, groupAvailabilityProbeRunnerService)
 	claudeUsageFetcher := repository.NewClaudeUsageFetcher(httpUpstream)
@@ -332,6 +334,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	videoTaskRepository := repository.NewVideoTaskRepository(db)
 	videoTaskService := service.ProvideVideoTaskService(videoTaskRepository, videoUpstreamService, modelPricingResolver, usageBillingRepository, usageLogRepository, accountRepository, userGroupRateRepository, apiKeyService, billingCacheService, mediaTaskService, configConfig)
 	videoHandler := handler.ProvideVideoHandler(videoTaskService, openAIGatewayHandler)
+	videoReferenceHandler := handler.NewVideoReferenceHandler(videoReferenceService)
 	batchImageRepository := repository.NewBatchImageRepository(db)
 	batchImageQueue := repository.NewBatchImageQueue(redisClient, configConfig)
 	batchImageModelPricingResolver := service.ProvideBatchImageModelPricingResolver(modelPricingResolver)
@@ -346,7 +349,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	if err != nil {
 		return nil, err
 	}
-	creativeVideoCanvasExecutor := service.NewCreativeVideoCanvasExecutor(creativePublicService, videoTaskService, apiKeyRepository, concurrencyService, billingCacheService, subscriptionService)
+	creativeVideoCanvasExecutor := service.NewCreativeVideoCanvasExecutor(creativePublicService, videoTaskService, apiKeyRepository, concurrencyService, billingCacheService, subscriptionService, videoReferenceService)
 	creativeCanvasService := service.ProvideCreativeCanvasService(creativeCanvasRepository, creativeCanvasAssetStore, creativePublicService, creativeVideoCanvasExecutor, gatewayService)
 	creativeCanvasHandler := handler.NewCreativeCanvasHandler(creativeCanvasService)
 	handlerTeamHandler := handler.NewTeamHandler(teamService)
@@ -362,7 +365,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	dailyActivityService := service.ProvideDailyActivityService(dailyActivityRepository, apiKeyService, billingCacheService, settingService)
 	dailyActivityHandler := handler.NewDailyActivityHandler(dailyActivityService)
 	idempotencyCleanupService := service.ProvideIdempotencyCleanupService(idempotencyRepository, configConfig)
-	handlers := handler.ProvideHandlers(authHandler, userHandler, apiKeyHandler, usageHandler, redeemHandler, subscriptionHandler, announcementHandler, modelMarketplaceHandler, adminHandlers, gatewayHandler, openAIGatewayHandler, qoderGatewayHandler, handlerSettingHandler, totpHandler, passkeyHandler, handlerPaymentHandler, paymentWebhookHandler, mediaTaskHandler, mediaTaskService, geminiCachedContentService, asyncImageHandler, videoHandler, batchImageHandler, creativeHandler, creativeCanvasHandler, handlerTeamHandler, ticketHandler, intelligenceHandler, dailyActivityHandler, idempotencyCoordinator, idempotencyCleanupService)
+	handlers := handler.ProvideHandlers(authHandler, userHandler, apiKeyHandler, usageHandler, redeemHandler, subscriptionHandler, announcementHandler, modelMarketplaceHandler, adminHandlers, gatewayHandler, openAIGatewayHandler, qoderGatewayHandler, handlerSettingHandler, totpHandler, passkeyHandler, handlerPaymentHandler, paymentWebhookHandler, mediaTaskHandler, mediaTaskService, geminiCachedContentService, asyncImageHandler, videoHandler, videoReferenceHandler, batchImageHandler, creativeHandler, creativeCanvasHandler, handlerTeamHandler, ticketHandler, intelligenceHandler, dailyActivityHandler, idempotencyCoordinator, idempotencyCleanupService)
 	jwtAuthMiddleware := middleware.NewJWTAuthMiddleware(authService, userService, settingService, auditLogService)
 	adminAuthMiddleware := middleware.NewAdminAuthMiddleware(authService, userService, settingService, auditLogService)
 	apiKeyAuthMiddleware := middleware.NewAPIKeyAuthMiddleware(apiKeyService, subscriptionService, configConfig)

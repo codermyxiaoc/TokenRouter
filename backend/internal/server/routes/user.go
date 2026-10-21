@@ -18,6 +18,11 @@ func RegisterUserRoutes(
 	settingService *service.SettingService,
 	panelRateLimiter *middleware.PanelRateLimiter,
 ) {
+	// 供应商只持有单图短期票据，不能使用此公开路由签发票据或列举用户素材。
+	if h.VideoReference != nil {
+		v1.GET("/video-references/:ticket", panelRateLimiter.PublicIP(), h.VideoReference.Content)
+		v1.HEAD("/video-references/:ticket", panelRateLimiter.PublicIP(), h.VideoReference.Content)
+	}
 	// 原生 iframe 使用短期单作品票据；内容服务自行复核权限和隔离策略。
 	if h.IntelligenceTests != nil {
 		v1.GET("/intelligence-tests/preview-content/:ticket", panelRateLimiter.PublicIP(), h.IntelligenceTests.PreviewContent)

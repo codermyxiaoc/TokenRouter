@@ -29,6 +29,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/response"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
+	"github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -1188,6 +1189,9 @@ func (h *AccountHandler) Test(c *gin.Context) {
 	}
 
 	// Use AccountTestService to test the account with SSE streaming
+	if subject, ok := middleware.GetAuthSubjectFromContext(c); ok {
+		req.AuthenticatedUserID = subject.UserID
+	}
 	testType := req.TestType
 	if testType == "" {
 		testType = req.TestMode

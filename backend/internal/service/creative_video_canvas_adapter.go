@@ -50,8 +50,8 @@ func creativeVideoCanvasAdaptiveRatio(e *CreativeCanvasExecution, model *Creativ
 	return "16:9", nil
 }
 
-// 仅明确选中的秘塔 H3 适配器消费画布内部自动比例提示。普通网关没有该提示，
-// 其它协议保留 adaptive；转换后的 size 仍由原适配器产生并进入原价卡与任务快照。
+// 仅明确选择的协议消费画布内部自动比例提示。普通网关没有该提示；
+// H3 解析横竖屏，Yezonghui 省略比例让上游自动选择，其它协议保持原行为。
 func prepareCreativeVideoAdaptiveRatio(body []byte, target VideoUpstreamTarget, hint string) ([]byte, error) {
 	if hint != "16:9" && hint != "9:16" {
 		return body, nil
@@ -60,8 +60,15 @@ func prepareCreativeVideoAdaptiveRatio(body []byte, target VideoUpstreamTarget, 
 	if err != nil {
 		return nil, err
 	}
-	if adapter != VideoProtocolAdapterMetasoH3 || gjson.GetBytes(body, "ratio").String() != "adaptive" {
+	if gjson.GetBytes(body, "ratio").String() != "adaptive" {
 		return body, nil
 	}
-	return sjson.SetBytes(body, "ratio", hint)
+	switch adapter {
+	case VideoProtocolAdapterMetasoH3:
+		return sjson.SetBytes(body, "ratio", hint)
+	case VideoProtocolAdapterYezonghui:
+		return sjson.DeleteBytes(body, "ratio")
+	default:
+		return body, nil
+	}
 }

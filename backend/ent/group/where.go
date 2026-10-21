@@ -155,6 +155,11 @@ func ImageRateIndependent(v bool) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldImageRateIndependent, v))
 }
 
+// ImageSubscriptionRatePriority applies equality check predicate on the "image_subscription_rate_priority" field. It's identical to ImageSubscriptionRatePriorityEQ.
+func ImageSubscriptionRatePriority(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldImageSubscriptionRatePriority, v))
+}
+
 // ImageRateMultiplier applies equality check predicate on the "image_rate_multiplier" field. It's identical to ImageRateMultiplierEQ.
 func ImageRateMultiplier(v float64) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldImageRateMultiplier, v))
@@ -188,6 +193,11 @@ func BatchImageHoldMultiplier(v float64) predicate.Group {
 // VideoRateIndependent applies equality check predicate on the "video_rate_independent" field. It's identical to VideoRateIndependentEQ.
 func VideoRateIndependent(v bool) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldVideoRateIndependent, v))
+}
+
+// VideoSubscriptionRatePriority applies equality check predicate on the "video_subscription_rate_priority" field. It's identical to VideoSubscriptionRatePriorityEQ.
+func VideoSubscriptionRatePriority(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldVideoSubscriptionRatePriority, v))
 }
 
 // VideoRateMultiplier applies equality check predicate on the "video_rate_multiplier" field. It's identical to VideoRateMultiplierEQ.
@@ -1205,6 +1215,16 @@ func ImageRateIndependentNEQ(v bool) predicate.Group {
 	return predicate.Group(sql.FieldNEQ(FieldImageRateIndependent, v))
 }
 
+// ImageSubscriptionRatePriorityEQ applies the EQ predicate on the "image_subscription_rate_priority" field.
+func ImageSubscriptionRatePriorityEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldImageSubscriptionRatePriority, v))
+}
+
+// ImageSubscriptionRatePriorityNEQ applies the NEQ predicate on the "image_subscription_rate_priority" field.
+func ImageSubscriptionRatePriorityNEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldImageSubscriptionRatePriority, v))
+}
+
 // ImageRateMultiplierEQ applies the EQ predicate on the "image_rate_multiplier" field.
 func ImageRateMultiplierEQ(v float64) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldImageRateMultiplier, v))
@@ -1483,6 +1503,16 @@ func VideoRateIndependentEQ(v bool) predicate.Group {
 // VideoRateIndependentNEQ applies the NEQ predicate on the "video_rate_independent" field.
 func VideoRateIndependentNEQ(v bool) predicate.Group {
 	return predicate.Group(sql.FieldNEQ(FieldVideoRateIndependent, v))
+}
+
+// VideoSubscriptionRatePriorityEQ applies the EQ predicate on the "video_subscription_rate_priority" field.
+func VideoSubscriptionRatePriorityEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldVideoSubscriptionRatePriority, v))
+}
+
+// VideoSubscriptionRatePriorityNEQ applies the NEQ predicate on the "video_subscription_rate_priority" field.
+func VideoSubscriptionRatePriorityNEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldVideoSubscriptionRatePriority, v))
 }
 
 // VideoRateMultiplierEQ applies the EQ predicate on the "video_rate_multiplier" field.

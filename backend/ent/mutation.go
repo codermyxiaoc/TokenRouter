@@ -23749,6 +23749,7 @@ type GroupMutation struct {
 	allow_image_generation                  *bool
 	allow_batch_image_generation            *bool
 	image_rate_independent                  *bool
+	image_subscription_rate_priority        *bool
 	image_rate_multiplier                   *float64
 	addimage_rate_multiplier                *float64
 	image_price_1k                          *float64
@@ -23762,6 +23763,7 @@ type GroupMutation struct {
 	batch_image_hold_multiplier             *float64
 	addbatch_image_hold_multiplier          *float64
 	video_rate_independent                  *bool
+	video_subscription_rate_priority        *bool
 	video_rate_multiplier                   *float64
 	addvideo_rate_multiplier                *float64
 	video_price_480p                        *float64
@@ -24810,6 +24812,42 @@ func (m *GroupMutation) ResetImageRateIndependent() {
 	m.image_rate_independent = nil
 }
 
+// SetImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field.
+func (m *GroupMutation) SetImageSubscriptionRatePriority(b bool) {
+	m.image_subscription_rate_priority = &b
+}
+
+// ImageSubscriptionRatePriority returns the value of the "image_subscription_rate_priority" field in the mutation.
+func (m *GroupMutation) ImageSubscriptionRatePriority() (r bool, exists bool) {
+	v := m.image_subscription_rate_priority
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldImageSubscriptionRatePriority returns the old "image_subscription_rate_priority" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldImageSubscriptionRatePriority(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldImageSubscriptionRatePriority is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldImageSubscriptionRatePriority requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldImageSubscriptionRatePriority: %w", err)
+	}
+	return oldValue.ImageSubscriptionRatePriority, nil
+}
+
+// ResetImageSubscriptionRatePriority resets all changes to the "image_subscription_rate_priority" field.
+func (m *GroupMutation) ResetImageSubscriptionRatePriority() {
+	m.image_subscription_rate_priority = nil
+}
+
 // SetImageRateMultiplier sets the "image_rate_multiplier" field.
 func (m *GroupMutation) SetImageRateMultiplier(f float64) {
 	m.image_rate_multiplier = &f
@@ -25222,6 +25260,42 @@ func (m *GroupMutation) OldVideoRateIndependent(ctx context.Context) (v bool, er
 // ResetVideoRateIndependent resets all changes to the "video_rate_independent" field.
 func (m *GroupMutation) ResetVideoRateIndependent() {
 	m.video_rate_independent = nil
+}
+
+// SetVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field.
+func (m *GroupMutation) SetVideoSubscriptionRatePriority(b bool) {
+	m.video_subscription_rate_priority = &b
+}
+
+// VideoSubscriptionRatePriority returns the value of the "video_subscription_rate_priority" field in the mutation.
+func (m *GroupMutation) VideoSubscriptionRatePriority() (r bool, exists bool) {
+	v := m.video_subscription_rate_priority
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVideoSubscriptionRatePriority returns the old "video_subscription_rate_priority" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldVideoSubscriptionRatePriority(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVideoSubscriptionRatePriority is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVideoSubscriptionRatePriority requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVideoSubscriptionRatePriority: %w", err)
+	}
+	return oldValue.VideoSubscriptionRatePriority, nil
+}
+
+// ResetVideoSubscriptionRatePriority resets all changes to the "video_subscription_rate_priority" field.
+func (m *GroupMutation) ResetVideoSubscriptionRatePriority() {
+	m.video_subscription_rate_priority = nil
 }
 
 // SetVideoRateMultiplier sets the "video_rate_multiplier" field.
@@ -27448,7 +27522,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 66)
+	fields := make([]string, 0, 68)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -27515,6 +27589,9 @@ func (m *GroupMutation) Fields() []string {
 	if m.image_rate_independent != nil {
 		fields = append(fields, group.FieldImageRateIndependent)
 	}
+	if m.image_subscription_rate_priority != nil {
+		fields = append(fields, group.FieldImageSubscriptionRatePriority)
+	}
 	if m.image_rate_multiplier != nil {
 		fields = append(fields, group.FieldImageRateMultiplier)
 	}
@@ -27535,6 +27612,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.video_rate_independent != nil {
 		fields = append(fields, group.FieldVideoRateIndependent)
+	}
+	if m.video_subscription_rate_priority != nil {
+		fields = append(fields, group.FieldVideoSubscriptionRatePriority)
 	}
 	if m.video_rate_multiplier != nil {
 		fields = append(fields, group.FieldVideoRateMultiplier)
@@ -27699,6 +27779,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.AllowBatchImageGeneration()
 	case group.FieldImageRateIndependent:
 		return m.ImageRateIndependent()
+	case group.FieldImageSubscriptionRatePriority:
+		return m.ImageSubscriptionRatePriority()
 	case group.FieldImageRateMultiplier:
 		return m.ImageRateMultiplier()
 	case group.FieldImagePrice1k:
@@ -27713,6 +27795,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.BatchImageHoldMultiplier()
 	case group.FieldVideoRateIndependent:
 		return m.VideoRateIndependent()
+	case group.FieldVideoSubscriptionRatePriority:
+		return m.VideoSubscriptionRatePriority()
 	case group.FieldVideoRateMultiplier:
 		return m.VideoRateMultiplier()
 	case group.FieldVideoPrice480p:
@@ -27840,6 +27924,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldAllowBatchImageGeneration(ctx)
 	case group.FieldImageRateIndependent:
 		return m.OldImageRateIndependent(ctx)
+	case group.FieldImageSubscriptionRatePriority:
+		return m.OldImageSubscriptionRatePriority(ctx)
 	case group.FieldImageRateMultiplier:
 		return m.OldImageRateMultiplier(ctx)
 	case group.FieldImagePrice1k:
@@ -27854,6 +27940,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldBatchImageHoldMultiplier(ctx)
 	case group.FieldVideoRateIndependent:
 		return m.OldVideoRateIndependent(ctx)
+	case group.FieldVideoSubscriptionRatePriority:
+		return m.OldVideoSubscriptionRatePriority(ctx)
 	case group.FieldVideoRateMultiplier:
 		return m.OldVideoRateMultiplier(ctx)
 	case group.FieldVideoPrice480p:
@@ -28091,6 +28179,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetImageRateIndependent(v)
 		return nil
+	case group.FieldImageSubscriptionRatePriority:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetImageSubscriptionRatePriority(v)
+		return nil
 	case group.FieldImageRateMultiplier:
 		v, ok := value.(float64)
 		if !ok {
@@ -28139,6 +28234,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetVideoRateIndependent(v)
+		return nil
+	case group.FieldVideoSubscriptionRatePriority:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVideoSubscriptionRatePriority(v)
 		return nil
 	case group.FieldVideoRateMultiplier:
 		v, ok := value.(float64)
@@ -28904,6 +29006,9 @@ func (m *GroupMutation) ResetField(name string) error {
 	case group.FieldImageRateIndependent:
 		m.ResetImageRateIndependent()
 		return nil
+	case group.FieldImageSubscriptionRatePriority:
+		m.ResetImageSubscriptionRatePriority()
+		return nil
 	case group.FieldImageRateMultiplier:
 		m.ResetImageRateMultiplier()
 		return nil
@@ -28924,6 +29029,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldVideoRateIndependent:
 		m.ResetVideoRateIndependent()
+		return nil
+	case group.FieldVideoSubscriptionRatePriority:
+		m.ResetVideoSubscriptionRatePriority()
 		return nil
 	case group.FieldVideoRateMultiplier:
 		m.ResetVideoRateMultiplier()

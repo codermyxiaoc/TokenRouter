@@ -64,6 +64,8 @@ type Group struct {
 	AllowBatchImageGeneration bool `json:"allow_batch_image_generation,omitempty"`
 	// 图片生成是否使用独立倍率；false 表示共享分组有效倍率
 	ImageRateIndependent bool `json:"image_rate_independent,omitempty"`
+	// 图片独立倍率下是否优先采用套餐配置的分组倍率，缺省关闭以保留原有计费
+	ImageSubscriptionRatePriority bool `json:"image_subscription_rate_priority,omitempty"`
 	// 图片生成独立倍率，仅 image_rate_independent=true 时生效
 	ImageRateMultiplier float64 `json:"image_rate_multiplier,omitempty"`
 	// ImagePrice1k holds the value of the "image_price_1k" field.
@@ -78,6 +80,8 @@ type Group struct {
 	BatchImageHoldMultiplier float64 `json:"batch_image_hold_multiplier,omitempty"`
 	// 视频生成是否使用独立倍率；false 表示共享分组有效倍率
 	VideoRateIndependent bool `json:"video_rate_independent,omitempty"`
+	// 视频独立倍率下是否优先采用套餐配置的分组倍率，余额倍率保持原配置
+	VideoSubscriptionRatePriority bool `json:"video_subscription_rate_priority,omitempty"`
 	// 视频生成独立倍率，仅 video_rate_independent=true 时生效
 	VideoRateMultiplier float64 `json:"video_rate_multiplier,omitempty"`
 	// VideoPrice480p holds the value of the "video_price_480p" field.
@@ -271,7 +275,7 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case group.FieldI18n, group.FieldAdvancedSchedulerOverrides, group.FieldVideoModelPrices, group.FieldModelPricing, group.FieldModelRouting, group.FieldSupportedModelScopes, group.FieldAllowedClientProtocols, group.FieldMessagesDispatchModelConfig, group.FieldModelsListConfig, group.FieldAvailabilityProbeConfig, group.FieldReasoningEffortMappings:
 			values[i] = new([]byte)
-		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldIsDefault, group.FieldAllowImageGeneration, group.FieldAllowBatchImageGeneration, group.FieldImageRateIndependent, group.FieldVideoRateIndependent, group.FieldLongContextPricingEnabled, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowLive, group.FieldForceOpenaiFast, group.FieldFreeOpenaiFast, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldSessionIsolationEnabled:
+		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldIsDefault, group.FieldAllowImageGeneration, group.FieldAllowBatchImageGeneration, group.FieldImageRateIndependent, group.FieldImageSubscriptionRatePriority, group.FieldVideoRateIndependent, group.FieldVideoSubscriptionRatePriority, group.FieldLongContextPricingEnabled, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowLive, group.FieldForceOpenaiFast, group.FieldFreeOpenaiFast, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldSessionIsolationEnabled:
 			values[i] = new(sql.NullBool)
 		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldBatchImageDiscountMultiplier, group.FieldBatchImageHoldMultiplier, group.FieldVideoRateMultiplier, group.FieldVideoPrice480p, group.FieldVideoPrice720p, group.FieldVideoPrice1080p, group.FieldWebSearchPricePerCall, group.FieldSearchPricePer1k, group.FieldAudioRealtimePricePerMin, group.FieldAudioTtsPricePerMillionChars, group.FieldAudioSttPricePerHour:
 			values[i] = new(sql.NullFloat64)
@@ -441,6 +445,12 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.ImageRateIndependent = value.Bool
 			}
+		case group.FieldImageSubscriptionRatePriority:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field image_subscription_rate_priority", values[i])
+			} else if value.Valid {
+				_m.ImageSubscriptionRatePriority = value.Bool
+			}
 		case group.FieldImageRateMultiplier:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
 				return fmt.Errorf("unexpected type %T for field image_rate_multiplier", values[i])
@@ -485,6 +495,12 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field video_rate_independent", values[i])
 			} else if value.Valid {
 				_m.VideoRateIndependent = value.Bool
+			}
+		case group.FieldVideoSubscriptionRatePriority:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field video_subscription_rate_priority", values[i])
+			} else if value.Valid {
+				_m.VideoSubscriptionRatePriority = value.Bool
 			}
 		case group.FieldVideoRateMultiplier:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
@@ -890,6 +906,9 @@ func (_m *Group) String() string {
 	builder.WriteString("image_rate_independent=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ImageRateIndependent))
 	builder.WriteString(", ")
+	builder.WriteString("image_subscription_rate_priority=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ImageSubscriptionRatePriority))
+	builder.WriteString(", ")
 	builder.WriteString("image_rate_multiplier=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ImageRateMultiplier))
 	builder.WriteString(", ")
@@ -916,6 +935,9 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("video_rate_independent=")
 	builder.WriteString(fmt.Sprintf("%v", _m.VideoRateIndependent))
+	builder.WriteString(", ")
+	builder.WriteString("video_subscription_rate_priority=")
+	builder.WriteString(fmt.Sprintf("%v", _m.VideoSubscriptionRatePriority))
 	builder.WriteString(", ")
 	builder.WriteString("video_rate_multiplier=")
 	builder.WriteString(fmt.Sprintf("%v", _m.VideoRateMultiplier))

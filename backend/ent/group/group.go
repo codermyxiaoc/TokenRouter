@@ -60,6 +60,8 @@ const (
 	FieldAllowBatchImageGeneration = "allow_batch_image_generation"
 	// FieldImageRateIndependent holds the string denoting the image_rate_independent field in the database.
 	FieldImageRateIndependent = "image_rate_independent"
+	// FieldImageSubscriptionRatePriority holds the string denoting the image_subscription_rate_priority field in the database.
+	FieldImageSubscriptionRatePriority = "image_subscription_rate_priority"
 	// FieldImageRateMultiplier holds the string denoting the image_rate_multiplier field in the database.
 	FieldImageRateMultiplier = "image_rate_multiplier"
 	// FieldImagePrice1k holds the string denoting the image_price_1k field in the database.
@@ -74,6 +76,8 @@ const (
 	FieldBatchImageHoldMultiplier = "batch_image_hold_multiplier"
 	// FieldVideoRateIndependent holds the string denoting the video_rate_independent field in the database.
 	FieldVideoRateIndependent = "video_rate_independent"
+	// FieldVideoSubscriptionRatePriority holds the string denoting the video_subscription_rate_priority field in the database.
+	FieldVideoSubscriptionRatePriority = "video_subscription_rate_priority"
 	// FieldVideoRateMultiplier holds the string denoting the video_rate_multiplier field in the database.
 	FieldVideoRateMultiplier = "video_rate_multiplier"
 	// FieldVideoPrice480p holds the string denoting the video_price_480p field in the database.
@@ -252,6 +256,7 @@ var Columns = []string{
 	FieldAllowImageGeneration,
 	FieldAllowBatchImageGeneration,
 	FieldImageRateIndependent,
+	FieldImageSubscriptionRatePriority,
 	FieldImageRateMultiplier,
 	FieldImagePrice1k,
 	FieldImagePrice2k,
@@ -259,6 +264,7 @@ var Columns = []string{
 	FieldBatchImageDiscountMultiplier,
 	FieldBatchImageHoldMultiplier,
 	FieldVideoRateIndependent,
+	FieldVideoSubscriptionRatePriority,
 	FieldVideoRateMultiplier,
 	FieldVideoPrice480p,
 	FieldVideoPrice720p,
@@ -382,6 +388,8 @@ var (
 	DefaultAllowBatchImageGeneration bool
 	// DefaultImageRateIndependent holds the default value on creation for the "image_rate_independent" field.
 	DefaultImageRateIndependent bool
+	// DefaultImageSubscriptionRatePriority holds the default value on creation for the "image_subscription_rate_priority" field.
+	DefaultImageSubscriptionRatePriority bool
 	// DefaultImageRateMultiplier holds the default value on creation for the "image_rate_multiplier" field.
 	DefaultImageRateMultiplier float64
 	// DefaultBatchImageDiscountMultiplier holds the default value on creation for the "batch_image_discount_multiplier" field.
@@ -390,6 +398,8 @@ var (
 	DefaultBatchImageHoldMultiplier float64
 	// DefaultVideoRateIndependent holds the default value on creation for the "video_rate_independent" field.
 	DefaultVideoRateIndependent bool
+	// DefaultVideoSubscriptionRatePriority holds the default value on creation for the "video_subscription_rate_priority" field.
+	DefaultVideoSubscriptionRatePriority bool
 	// DefaultVideoRateMultiplier holds the default value on creation for the "video_rate_multiplier" field.
 	DefaultVideoRateMultiplier float64
 	// SearchPricePer1kValidator is a validator for the "search_price_per_1k" field. It is called by the builders before save.
@@ -560,6 +570,11 @@ func ByImageRateIndependent(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldImageRateIndependent, opts...).ToFunc()
 }
 
+// ByImageSubscriptionRatePriority orders the results by the image_subscription_rate_priority field.
+func ByImageSubscriptionRatePriority(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldImageSubscriptionRatePriority, opts...).ToFunc()
+}
+
 // ByImageRateMultiplier orders the results by the image_rate_multiplier field.
 func ByImageRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldImageRateMultiplier, opts...).ToFunc()
@@ -593,6 +608,11 @@ func ByBatchImageHoldMultiplier(opts ...sql.OrderTermOption) OrderOption {
 // ByVideoRateIndependent orders the results by the video_rate_independent field.
 func ByVideoRateIndependent(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldVideoRateIndependent, opts...).ToFunc()
+}
+
+// ByVideoSubscriptionRatePriority orders the results by the video_subscription_rate_priority field.
+func ByVideoSubscriptionRatePriority(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVideoSubscriptionRatePriority, opts...).ToFunc()
 }
 
 // ByVideoRateMultiplier orders the results by the video_rate_multiplier field.

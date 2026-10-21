@@ -69,20 +69,24 @@ type Group struct {
 	SessionIsolationEnabled bool
 
 	// 图片生成计费配置（antigravity 和 gemini 平台使用）
-	AllowImageGeneration         bool
-	AllowBatchImageGeneration    bool
-	ImageRateIndependent         bool
-	ImageRateMultiplier          float64
-	ImagePrice1K                 *float64
-	ImagePrice2K                 *float64
-	ImagePrice4K                 *float64
-	BatchImageDiscountMultiplier float64
-	BatchImageHoldMultiplier     float64
-	VideoRateIndependent         bool
-	VideoRateMultiplier          float64
-	VideoPrice480P               *float64
-	VideoPrice720P               *float64
-	VideoPrice1080P              *float64
+	AllowImageGeneration      bool
+	AllowBatchImageGeneration bool
+	ImageRateIndependent      bool
+	// 图片独立倍率开启时，允许已配置的套餐分组倍率优先；旧快照缺省为关闭。
+	ImageSubscriptionRatePriority bool
+	ImageRateMultiplier           float64
+	ImagePrice1K                  *float64
+	ImagePrice2K                  *float64
+	ImagePrice4K                  *float64
+	BatchImageDiscountMultiplier  float64
+	BatchImageHoldMultiplier      float64
+	VideoRateIndependent          bool
+	// 视频独立倍率开启时，允许已配置的套餐分组倍率优先；余额仍使用视频独立倍率。
+	VideoSubscriptionRatePriority bool
+	VideoRateMultiplier           float64
+	VideoPrice480P                *float64
+	VideoPrice720P                *float64
+	VideoPrice1080P               *float64
 	// VideoModelPrices 是按模型族和分辨率保存的可选每秒美元价格，
 	// 命中时仅对该模型优先于 VideoPrice* 平铺列。
 	VideoModelPrices map[string]map[string]float64

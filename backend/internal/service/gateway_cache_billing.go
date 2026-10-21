@@ -93,7 +93,9 @@ func (s *GatewayService) QuoteUsageCostBreakdown(ctx context.Context, input *Rec
 			at = s.usageBillingNow()
 		}
 	}
+	baseMultiplier := multiplier
 	multiplier, imageMultiplier := computePeakAwareMultipliers(key, multiplier, at)
+	imageMultiplier = resolveImageSubscriptionRateMultiplier(key, subscription, baseMultiplier)
 	model := s.recordUsageBillingModel(ctx, key, input.Result, input.ChannelUsageFields)
 	requested := input.OriginalModel
 	if requested == "" {

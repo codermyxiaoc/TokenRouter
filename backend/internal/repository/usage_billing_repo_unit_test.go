@@ -70,65 +70,80 @@ func TestReserveUsageBillingBatchImageBalance_InsufficientBalance(t *testing.T) 
 }
 
 func TestReserveUsageBillingBatchImageBilling_UsesBalanceRateAfterPartialSubscription(t *testing.T) {
-	ctx := context.Background()
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	for _, tc := range []struct {
+		name            string
+		disablePlan     bool
+		wantBalance     float64
+		wantEstimated   float64
+		wantCoveredBase float64
+		wantRate        float64
+	}{
+		{name: "media_subscription_priority", wantBalance: 1.2, wantEstimated: .4, wantCoveredBase: .4, wantRate: .5},
+		{name: "old_independent_snapshot", disablePlan: true, wantBalance: 1.8, wantEstimated: 1, wantCoveredBase: .1, wantRate: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
 
-	now := time.Now().UTC()
-	// 固定使用当前日窗口，避免午夜运行时误触发已跨日的额度重置。
-	windowStart := timezone.StartOfDay(now)
-	mock.ExpectBegin()
-	tx, err := db.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	mock.ExpectQuery(`(?s)SELECT\s+id,\s+plan_id,.*FROM user_subscriptions.*FOR UPDATE`).
-		WithArgs(int64(42), service.SubscriptionStatusActive, service.SubscriptionStatusPending, nil, int64(7)).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "plan_id", "starts_at", "expires_at",
-			"daily_window_start", "weekly_window_start", "monthly_window_start",
-			"daily_limit_usd", "weekly_limit_usd", "monthly_limit_usd",
-			"daily_usage_usd", "weekly_usage_usd", "monthly_usage_usd", "daily_reset_count", "weekly_reset_count", "monthly_reset_count", "reset_counted_at", "group_rates",
-		}).AddRow(
-			int64(11), int64(22), now.Add(-24*time.Hour), now.Add(30*24*time.Hour),
-			windowStart, windowStart, windowStart,
-			1.0, 1.0, 1.0,
-			0.8, 0.8, 0.8, int64(3), int64(2), int64(1), now, `{"7":0.5}`,
-		))
-	// 尚未到下一个重置点，原有日/周/月次数应随扣费原样保存，只有计数水位前进。
-	mock.ExpectExec(`(?s)UPDATE user_subscriptions\s+SET.*WHERE id = \$7`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 1.0, 1.0, 1.0, int64(11), int64(3), int64(2), int64(1), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(reserveBatchImageHoldSQL).
-		WithArgs(sqlmock.AnyArg(), int64(42)).
-		WillReturnRows(sqlmock.NewRows([]string{"balance", "frozen_balance"}).AddRow(3.8, 1.2))
-	mock.ExpectExec(`(?s)UPDATE batch_image_jobs\s+SET balance_hold_amount = \$2,.*estimated_cost = \$5`).
-		WithArgs("imgbatch_partial_rate", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
+			now := time.Now().UTC()
+			// 固定使用当前日窗口，避免午夜运行时误触发已跨日的额度重置。
+			windowStart := timezone.StartOfDay(now)
+			mock.ExpectBegin()
+			tx, err := db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			mock.ExpectQuery(`(?s)SELECT\s+id,\s+plan_id,.*FROM user_subscriptions.*FOR UPDATE`).
+				WithArgs(int64(42), service.SubscriptionStatusActive, service.SubscriptionStatusPending, nil, int64(7)).
+				WillReturnRows(sqlmock.NewRows([]string{
+					"id", "plan_id", "starts_at", "expires_at",
+					"daily_window_start", "weekly_window_start", "monthly_window_start",
+					"daily_limit_usd", "weekly_limit_usd", "monthly_limit_usd",
+					"daily_usage_usd", "weekly_usage_usd", "monthly_usage_usd", "daily_reset_count", "weekly_reset_count", "monthly_reset_count", "reset_counted_at", "group_rates",
+				}).AddRow(
+					int64(11), int64(22), now.Add(-24*time.Hour), now.Add(30*24*time.Hour),
+					windowStart, windowStart, windowStart,
+					1.0, 1.0, 1.0,
+					0.8, 0.8, 0.8, int64(3), int64(2), int64(1), now, `{"7":0.5}`,
+				))
+			// 尚未到下一个重置点，原有日/周/月次数应随扣费原样保存，只有计数水位前进。
+			mock.ExpectExec(`(?s)UPDATE user_subscriptions\s+SET.*WHERE id = \$7`).
+				WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 1.0, 1.0, 1.0, int64(11), int64(3), int64(2), int64(1), sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectQuery(reserveBatchImageHoldSQL).
+				WithArgs(sqlmock.AnyArg(), int64(42)).
+				WillReturnRows(sqlmock.NewRows([]string{"balance", "frozen_balance"}).AddRow(5-tc.wantBalance, tc.wantBalance))
+			mock.ExpectExec(`(?s)UPDATE batch_image_jobs\s+SET balance_hold_amount = \$2,.*estimated_cost = \$5`).
+				WithArgs("imgbatch_partial_rate", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectCommit()
 
-	groupID := int64(7)
-	result, err := reserveUsageBillingBatchImageBilling(ctx, tx, &service.BatchImageBalanceHoldCommand{
-		UserID:                          42,
-		GroupID:                         &groupID,
-		BatchID:                         "imgbatch_partial_rate",
-		HoldAmount:                      0.5,
-		PricingSnapshotVersion:          2,
-		BaseAmountUSD:                   1,
-		SubscriptionRateMultiplier:      1,
-		SubscriptionRateMultiplierScale: 1,
-		BalanceRateMultiplier:           2,
-		SettlementRateScale:             0.5,
-	})
-	require.NoError(t, err)
-	require.InDelta(t, 0.2, result.SubscriptionAmountUSD, 0.000001)
-	require.InDelta(t, 1.2, result.BalanceAmountUSD, 0.000001)
-	require.InDelta(t, 1.4, result.HoldAmountUSD, 0.000001)
-	require.InDelta(t, 0.4, result.EstimatedAmountUSD, 0.000001)
-	require.Len(t, result.BillingAllocations, 2)
-	require.InDelta(t, 0.4, result.BillingAllocations[0].BaseAmountUSD, 0.000001)
-	require.InDelta(t, 0.5, result.BillingAllocations[0].RateMultiplier, 0.000001)
-	require.NoError(t, tx.Commit())
-	require.NoError(t, mock.ExpectationsWereMet())
+			groupID := int64(7)
+			result, err := reserveUsageBillingBatchImageBilling(ctx, tx, &service.BatchImageBalanceHoldCommand{
+				UserID:                          42,
+				GroupID:                         &groupID,
+				BatchID:                         "imgbatch_partial_rate",
+				HoldAmount:                      0.5,
+				PricingSnapshotVersion:          2,
+				BaseAmountUSD:                   1,
+				SubscriptionRateMultiplier:      2,
+				SubscriptionRateMultiplierScale: 1,
+				BalanceRateMultiplier:           2,
+				SettlementRateScale:             0.5,
+				DisablePlanGroupRateMultiplier:  tc.disablePlan,
+			})
+			require.NoError(t, err)
+			require.InDelta(t, 0.2, result.SubscriptionAmountUSD, 0.000001)
+			require.InDelta(t, tc.wantBalance, result.BalanceAmountUSD, 0.000001)
+			require.InDelta(t, 0.2+tc.wantBalance, result.HoldAmountUSD, 0.000001)
+			require.InDelta(t, tc.wantEstimated, result.EstimatedAmountUSD, 0.000001)
+			require.Len(t, result.BillingAllocations, 2)
+			require.InDelta(t, tc.wantCoveredBase, result.BillingAllocations[0].BaseAmountUSD, 0.000001)
+			require.InDelta(t, tc.wantRate, result.BillingAllocations[0].RateMultiplier, 0.000001)
+			require.NoError(t, tx.Commit())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestReserveUsageBillingBatchImageBilling_StrictSubscriptionRejectsPartialHold(t *testing.T) {

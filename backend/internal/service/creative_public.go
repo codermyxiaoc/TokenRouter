@@ -1699,14 +1699,21 @@ func (s *CreativePublicService) resolveCreativePricing(ctx context.Context, user
 	effective := balanceRate
 	planGroupRateEnabled := true
 	groupID := group.ID
-	if subscription := resolveUsageSubscription(ctx, nil, nil, usageSubscriptionResolverFrom(s.BillingRepo), userID, &groupID); subscription != nil {
+	subscription := resolveUsageSubscription(ctx, nil, nil, usageSubscriptionResolverFrom(s.BillingRepo), userID, &groupID)
+	if subscription != nil {
 		effective = resolveUsageRateMultiplier(ctx, userID, &groupID, group, groupDefault, subscription, nil)
 	}
 	if group.ImageRateIndependent && validated.operation != CreativeOperationTTS {
 		effective = group.ImageRateMultiplier
 		subscriptionRate = group.ImageRateMultiplier
 		balanceRate = group.ImageRateMultiplier
-		planGroupRateEnabled = false
+		planGroupRateEnabled = group.ImageSubscriptionRatePriority
+		// 每份订阅的实际分摊由仓储处理；预估只采用最终分组的显式有效套餐倍率。
+		if planGroupRateEnabled && subscription != nil {
+			if planRate, ok := subscriptionPlanGroupRateMultiplier(subscription.Plan, groupID); ok {
+				effective = planRate
+			}
+		}
 	}
 	imagePriceConfig := &ImagePriceConfig{
 		Price1K: group.ImagePrice1K,

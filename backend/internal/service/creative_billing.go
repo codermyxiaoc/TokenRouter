@@ -93,8 +93,8 @@ func reserveCreativeBalanceHold(ctx context.Context, repo UsageBillingRepository
 	if repo == nil {
 		return ErrCreativeBillingHoldFailed.WithCause(errors.New("creative billing repository is not configured"))
 	}
-	if run.EstimatedCost <= 0 {
-		// 免费分组无需冻结，直接视为已预占（无资金动作）。
+	if run.EstimatedCost <= 0 && (!run.PlanGroupRateEnabled || run.BaseUnitPrice <= 0 || run.RequestedOutputCount <= 0) {
+		// 确定免费的合同无需冻结；允许套餐覆盖且基础金额为正时，零预估不能替代事务内资金分配。
 		run.BalanceHoldAmount = 0
 		run.SubscriptionHoldAllocations = nil
 		return nil

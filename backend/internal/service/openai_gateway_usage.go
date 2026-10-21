@@ -261,8 +261,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		rateNow = input.PricingAt
 	}
 	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, baseMultiplier, rateNow)
+	imageMultiplier = resolveImageSubscriptionRateMultiplier(apiKey, subscription, baseMultiplier)
 	peakScale, _ := computePeakAwareMultipliers(apiKey, 1, rateNow)
-	videoMultiplier := resolveVideoRateMultiplier(apiKey, baseMultiplier)
+	videoMultiplier := resolveVideoSubscriptionRateMultiplier(apiKey, subscription, baseMultiplier)
 
 	var cost *CostBreakdown
 	billingModel := openAIUsageBillingModel(result, input.ChannelUsageFields)
@@ -540,8 +541,16 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			return ErrUsageBillingSubscriptionScopeInvalid
 		}
 		// 旧视频只允许原订阅参与结算：baseMultiplier 已按创建快照中的套餐倍率解析。
-		// 复用资金倍率解析器，Token 高峰只乘一次，媒体独立倍率仍覆盖套餐倍率。
+		// Token 高峰只乘一次；媒体优先级读取创建快照，缺少套餐覆盖则保留独立倍率。
 		allocationRates = resolveUsageBillingAllocationRates(apiKey, cost.BillingMode, mediaMode, baseMultiplier, balanceMultiplier, peakScale)
+		if cost.BillingMode != string(BillingModeToken) {
+			switch mediaMode {
+			case BillingModeImage:
+				allocationRates.SubscriptionRateMultiplier = imageMultiplier
+			case BillingModeVideo:
+				allocationRates.SubscriptionRateMultiplier = videoMultiplier
+			}
+		}
 		// 报价一经落盘，数据库不能再用后来修改的套餐倍率覆盖它；普通多订阅分摊不走此分支。
 		allocationRates.DisablePlanGroupRateMultiplier = true
 	}

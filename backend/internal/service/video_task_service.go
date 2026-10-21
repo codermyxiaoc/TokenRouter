@@ -253,7 +253,7 @@ func (s *VideoTaskService) prepareTask(ctx context.Context, key *APIKey, req Vid
 	t.Hold = BatchImageBalanceHoldCommand{RequestID: "video_hold:" + t.ID, APIKeyID: key.ID, UserID: key.User.ID, ActorUserID: t.UserID, TeamID: key.TeamID, GroupID: &t.GroupID,
 		APIKeyBillingMode: APIKeyEffectiveBillingMode(key), PreferredSubscriptionID: key.PreferredSubscriptionID, BatchID: t.ID, PricingSnapshotVersion: 3,
 		BaseAmountUSD: estimate.OutputCost, VideoFixedAmountUSD: fixedImageCost, SubscriptionRateMultiplier: subRate, SubscriptionRateMultiplierScale: 1, BalanceRateMultiplier: balanceRate,
-		SettlementRateScale: 1, DisablePlanGroupRateMultiplier: key.Group.VideoRateIndependent, ReservedAt: now, RequestPayloadHash: hash, VideoEntity: true, VideoAccountID: t.AccountID, VideoLeaseToken: t.LeaseToken,
+		SettlementRateScale: 1, DisablePlanGroupRateMultiplier: key.Group.VideoRateIndependent && !key.Group.VideoSubscriptionRatePriority, ReservedAt: now, RequestPayloadHash: hash, VideoEntity: true, VideoAccountID: t.AccountID, VideoLeaseToken: t.LeaseToken,
 		VideoDeferredBilling: deferredBilling, VideoTokenPrepay: tokenPrepay, VideoPrepayDurationSeconds: prepaySeconds}
 	maxPending := int(videoCredentialNumber(selection.Account, "video_max_pending_tasks"))
 	if maxPending <= 0 {

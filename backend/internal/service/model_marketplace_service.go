@@ -29,22 +29,23 @@ const (
 )
 
 type ModelMarketplaceGroup struct {
-	I18n                       GroupI18n // 原始译文留到响应时按请求语言选择。
-	ID                         int64
-	Name                       string
-	Description                string
-	Platform                   string
-	DisplayBrand               string
-	SortOrder                  int
-	RateMultiplier             float64
-	ImageRateIndependent       bool
-	ImageRateMultiplier        float64
-	OfficialPriceRatio         *float64
-	OfficialPriceRMBEquivalent *float64
-	Capacity                   *GroupCapacitySummary
-	Availability               *GroupAvailabilitySummary
-	ModelCount                 int
-	Models                     []ModelMarketplaceModel
+	I18n                          GroupI18n // 原始译文留到响应时按请求语言选择。
+	ID                            int64
+	Name                          string
+	Description                   string
+	Platform                      string
+	DisplayBrand                  string
+	SortOrder                     int
+	RateMultiplier                float64
+	ImageRateIndependent          bool
+	ImageSubscriptionRatePriority bool
+	ImageRateMultiplier           float64
+	OfficialPriceRatio            *float64
+	OfficialPriceRMBEquivalent    *float64
+	Capacity                      *GroupCapacitySummary
+	Availability                  *GroupAvailabilitySummary
+	ModelCount                    int
+	Models                        []ModelMarketplaceModel
 }
 
 type ModelMarketplaceModel struct {
@@ -126,22 +127,23 @@ func (s *ModelMarketplaceService) ListPublic(ctx context.Context) ([]ModelMarket
 			officialPriceRMBEquivalent = discountConfig.officialPriceRMBEquivalent(group.RateMultiplier)
 		}
 		out = append(out, ModelMarketplaceGroup{
-			ID:                         group.ID,
-			Name:                       group.Name,
-			Description:                group.Description,
-			I18n:                       group.I18n,
-			Platform:                   group.Platform,
-			DisplayBrand:               marketplaceGroupDisplayBrand(group),
-			SortOrder:                  group.SortOrder,
-			RateMultiplier:             group.RateMultiplier,
-			ImageRateIndependent:       group.ImageRateIndependent,
-			ImageRateMultiplier:        group.ImageRateMultiplier,
-			OfficialPriceRatio:         officialPriceRatio,
-			OfficialPriceRMBEquivalent: officialPriceRMBEquivalent,
-			Capacity:                   marketplaceGroupCapacity(capacityMap, group.ID),
-			Availability:               marketplaceGroupAvailability(availabilityMap, group.ID),
-			ModelCount:                 len(models),
-			Models:                     models,
+			ID:                            group.ID,
+			Name:                          group.Name,
+			Description:                   group.Description,
+			I18n:                          group.I18n,
+			Platform:                      group.Platform,
+			DisplayBrand:                  marketplaceGroupDisplayBrand(group),
+			SortOrder:                     group.SortOrder,
+			RateMultiplier:                group.RateMultiplier,
+			ImageRateIndependent:          group.ImageRateIndependent,
+			ImageSubscriptionRatePriority: group.ImageSubscriptionRatePriority,
+			ImageRateMultiplier:           group.ImageRateMultiplier,
+			OfficialPriceRatio:            officialPriceRatio,
+			OfficialPriceRMBEquivalent:    officialPriceRMBEquivalent,
+			Capacity:                      marketplaceGroupCapacity(capacityMap, group.ID),
+			Availability:                  marketplaceGroupAvailability(availabilityMap, group.ID),
+			ModelCount:                    len(models),
+			Models:                        models,
 		})
 	}
 

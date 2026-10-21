@@ -110,6 +110,9 @@ func (Group) Fields() []ent.Field {
 		field.Bool("image_rate_independent").
 			Default(false).
 			Comment("图片生成是否使用独立倍率；false 表示共享分组有效倍率"),
+		field.Bool("image_subscription_rate_priority").
+			Default(false).
+			Comment("图片独立倍率下是否优先采用套餐配置的分组倍率，缺省关闭以保留原有计费"),
 		field.Float("image_rate_multiplier").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(1.0).
@@ -137,6 +140,9 @@ func (Group) Fields() []ent.Field {
 		field.Bool("video_rate_independent").
 			Default(false).
 			Comment("视频生成是否使用独立倍率；false 表示共享分组有效倍率"),
+		field.Bool("video_subscription_rate_priority").
+			Default(false).
+			Comment("视频独立倍率下是否优先采用套餐配置的分组倍率，余额倍率保持原配置"),
 		field.Float("video_rate_multiplier").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(1.0).

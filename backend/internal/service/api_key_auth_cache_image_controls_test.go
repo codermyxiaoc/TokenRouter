@@ -37,17 +37,19 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesGroupCaptureControls(t *testin
 				StickyWeightedEnabled: &stickyWeighted,
 				LBTopK:                &lbTopK,
 			},
-			Status:                  StatusActive,
-			RateMultiplier:          1,
-			SessionIsolationEnabled: true,
-			AllowImageGeneration:    true,
-			ImageRateIndependent:    true,
-			ImageRateMultiplier:     0.5,
-			VideoRateIndependent:    true,
-			VideoRateMultiplier:     0.25,
-			VideoPrice480P:          &videoPrice480P,
-			VideoPrice720P:          &videoPrice720P,
-			VideoPrice1080P:         &videoPrice1080P,
+			Status:                        StatusActive,
+			RateMultiplier:                1,
+			SessionIsolationEnabled:       true,
+			AllowImageGeneration:          true,
+			ImageRateIndependent:          true,
+			ImageSubscriptionRatePriority: true,
+			ImageRateMultiplier:           0.5,
+			VideoRateIndependent:          true,
+			VideoSubscriptionRatePriority: true,
+			VideoRateMultiplier:           0.25,
+			VideoPrice480P:                &videoPrice480P,
+			VideoPrice720P:                &videoPrice720P,
+			VideoPrice1080P:               &videoPrice1080P,
 		},
 	}
 
@@ -64,8 +66,10 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesGroupCaptureControls(t *testin
 	require.True(t, roundTrip.Group.SessionIsolationEnabled)
 	require.True(t, roundTrip.Group.AllowImageGeneration)
 	require.True(t, roundTrip.Group.ImageRateIndependent)
+	require.True(t, roundTrip.Group.ImageSubscriptionRatePriority)
 	require.InDelta(t, 0.5, roundTrip.Group.ImageRateMultiplier, 1e-12)
 	require.True(t, roundTrip.Group.VideoRateIndependent)
+	require.True(t, roundTrip.Group.VideoSubscriptionRatePriority)
 	require.InDelta(t, 0.25, roundTrip.Group.VideoRateMultiplier, 1e-12)
 	require.InDelta(t, videoPrice480P, *roundTrip.Group.VideoPrice480P, 1e-12)
 	require.InDelta(t, videoPrice720P, *roundTrip.Group.VideoPrice720P, 1e-12)

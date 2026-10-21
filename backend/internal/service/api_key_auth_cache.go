@@ -120,11 +120,13 @@ type APIKeyAuthGroupSnapshot struct {
 	AllowImageGeneration            bool                            `json:"allow_image_generation"`
 	AllowBatchImageGeneration       bool                            `json:"allow_batch_image_generation"`
 	ImageRateIndependent            bool                            `json:"image_rate_independent"`
+	ImageSubscriptionRatePriority   bool                            `json:"image_subscription_rate_priority"`
 	ImageRateMultiplier             float64                         `json:"image_rate_multiplier"`
 	ImagePrice1K                    *float64                        `json:"image_price_1k,omitempty"`
 	ImagePrice2K                    *float64                        `json:"image_price_2k,omitempty"`
 	ImagePrice4K                    *float64                        `json:"image_price_4k,omitempty"`
 	VideoRateIndependent            bool                            `json:"video_rate_independent"`
+	VideoSubscriptionRatePriority   bool                            `json:"video_subscription_rate_priority"`
 	VideoRateMultiplier             float64                         `json:"video_rate_multiplier"`
 	VideoPrice480P                  *float64                        `json:"video_price_480p,omitempty"`
 	VideoPrice720P                  *float64                        `json:"video_price_720p,omitempty"`

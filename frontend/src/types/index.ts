@@ -824,6 +824,8 @@ export interface Group {
   allow_batch_image_generation: boolean
   image_rate_independent: boolean
   image_rate_multiplier: number
+  // 独立倍率下优先使用已配置的套餐分组倍率；旧接口缺省为关闭。
+  image_subscription_rate_priority?: boolean
   batch_image_discount_multiplier: number
   batch_image_hold_multiplier: number
   image_price_1k: number | null
@@ -831,6 +833,7 @@ export interface Group {
   image_price_4k: number | null
   video_rate_independent: boolean
   video_rate_multiplier: number
+  video_subscription_rate_priority?: boolean
   video_price_480p: number | null
   video_price_720p: number | null
   video_price_1080p: number | null
@@ -1052,6 +1055,7 @@ export interface CreateGroupRequest {
   allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
   image_rate_multiplier?: number
+  image_subscription_rate_priority?: boolean
   batch_image_discount_multiplier?: number
   batch_image_hold_multiplier?: number
   image_price_1k?: number | null
@@ -1059,6 +1063,7 @@ export interface CreateGroupRequest {
   image_price_4k?: number | null
   video_rate_independent?: boolean
   video_rate_multiplier?: number
+  video_subscription_rate_priority?: boolean
   video_price_480p?: number | null
   video_price_720p?: number | null
   video_price_1080p?: number | null
@@ -1119,6 +1124,7 @@ export interface UpdateGroupRequest {
   allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
   image_rate_multiplier?: number
+  image_subscription_rate_priority?: boolean
   batch_image_discount_multiplier?: number
   batch_image_hold_multiplier?: number
   image_price_1k?: number | null
@@ -1126,6 +1132,7 @@ export interface UpdateGroupRequest {
   image_price_4k?: number | null
   video_rate_independent?: boolean
   video_rate_multiplier?: number
+  video_subscription_rate_priority?: boolean
   video_price_480p?: number | null
   video_price_720p?: number | null
   video_price_1080p?: number | null

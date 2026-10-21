@@ -65,10 +65,12 @@ type CreateGroupRequest struct {
 	AllowImageGeneration            bool                          `json:"allow_image_generation"`
 	AllowBatchImageGeneration       bool                          `json:"allow_batch_image_generation"`
 	ImageRateIndependent            bool                          `json:"image_rate_independent"`
+	ImageSubscriptionRatePriority   bool                          `json:"image_subscription_rate_priority"`
 	ImageRateMultiplier             *float64                      `json:"image_rate_multiplier"`
 	BatchImageDiscountMultiplier    *float64                      `json:"batch_image_discount_multiplier"`
 	BatchImageHoldMultiplier        *float64                      `json:"batch_image_hold_multiplier"`
 	VideoRateIndependent            bool                          `json:"video_rate_independent"`
+	VideoSubscriptionRatePriority   bool                          `json:"video_subscription_rate_priority"`
 	VideoRateMultiplier             *float64                      `json:"video_rate_multiplier"`
 	PeakRateEnabled                 bool                          `json:"peak_rate_enabled"`
 	PeakStart                       string                        `json:"peak_start"`
@@ -146,10 +148,12 @@ type UpdateGroupRequest struct {
 	AllowImageGeneration            *bool                         `json:"allow_image_generation"`
 	AllowBatchImageGeneration       *bool                         `json:"allow_batch_image_generation"`
 	ImageRateIndependent            *bool                         `json:"image_rate_independent"`
+	ImageSubscriptionRatePriority   *bool                         `json:"image_subscription_rate_priority"`
 	ImageRateMultiplier             *float64                      `json:"image_rate_multiplier"`
 	BatchImageDiscountMultiplier    *float64                      `json:"batch_image_discount_multiplier"`
 	BatchImageHoldMultiplier        *float64                      `json:"batch_image_hold_multiplier"`
 	VideoRateIndependent            *bool                         `json:"video_rate_independent"`
+	VideoSubscriptionRatePriority   *bool                         `json:"video_subscription_rate_priority"`
 	VideoRateMultiplier             *float64                      `json:"video_rate_multiplier"`
 	PeakRateEnabled                 *bool                         `json:"peak_rate_enabled"`
 	PeakStart                       *string                       `json:"peak_start"`
@@ -343,10 +347,12 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		AllowImageGeneration:            req.AllowImageGeneration,
 		AllowBatchImageGeneration:       req.AllowBatchImageGeneration,
 		ImageRateIndependent:            req.ImageRateIndependent,
+		ImageSubscriptionRatePriority:   req.ImageSubscriptionRatePriority,
 		ImageRateMultiplier:             req.ImageRateMultiplier,
 		BatchImageDiscountMultiplier:    req.BatchImageDiscountMultiplier,
 		BatchImageHoldMultiplier:        req.BatchImageHoldMultiplier,
 		VideoRateIndependent:            req.VideoRateIndependent,
+		VideoSubscriptionRatePriority:   req.VideoSubscriptionRatePriority,
 		VideoRateMultiplier:             req.VideoRateMultiplier,
 		PeakRateEnabled:                 req.PeakRateEnabled,
 		PeakStart:                       req.PeakStart,
@@ -478,10 +484,12 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		AllowImageGeneration:            req.AllowImageGeneration,
 		AllowBatchImageGeneration:       req.AllowBatchImageGeneration,
 		ImageRateIndependent:            req.ImageRateIndependent,
+		ImageSubscriptionRatePriority:   req.ImageSubscriptionRatePriority,
 		ImageRateMultiplier:             req.ImageRateMultiplier,
 		BatchImageDiscountMultiplier:    req.BatchImageDiscountMultiplier,
 		BatchImageHoldMultiplier:        req.BatchImageHoldMultiplier,
 		VideoRateIndependent:            req.VideoRateIndependent,
+		VideoSubscriptionRatePriority:   req.VideoSubscriptionRatePriority,
 		VideoRateMultiplier:             req.VideoRateMultiplier,
 		PeakRateEnabled:                 req.PeakRateEnabled,
 		PeakStart:                       req.PeakStart,

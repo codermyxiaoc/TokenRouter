@@ -1172,6 +1172,12 @@ affiliates: {
         validityHint: 'Number of days the subscription is valid when assigned to a user',
         noLimit: 'No limit'
       },
+      mediaSubscriptionRatePriority: {
+        title: 'Prefer subscription multiplier',
+        imageHint: 'When enabled, subscription charges use the plan’s valid multiplier for this group if configured, otherwise the independent image multiplier. Balance charges always use the independent image multiplier. Applies only when the independent image multiplier is enabled.',
+        videoHint: 'When enabled, subscription charges use the plan’s valid multiplier for this group if configured, otherwise the independent video multiplier. Balance charges always use the independent video multiplier. Applies only when the independent video multiplier is enabled.',
+        previewHint: 'This preview uses the independent multiplier for balance payments and plans without a group multiplier. Subscriptions with a valid group multiplier use their plan’s multiplier.',
+      },
       imagePricing: {
         title: 'Image Generation Pricing',
         description: 'Configure image generation access and base image prices. Leave empty to use default prices.',
@@ -1183,7 +1189,7 @@ affiliates: {
         batchHoldMultiplier: 'Batch hold price ratio',
         batchSectionHint: 'Batch image settings only apply to batch jobs: settlement applies the batch discount, and the upfront hold is normal image price × batch hold price ratio. Reference images also create upstream input-token usage, so a batch image discount above 0.5 is recommended.',
         batchDisabledHint: 'Enable image generation for this group before enabling batch image generation.',
-        modeHint: 'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',
+        modeHint: 'By default, image billing uses image price × current effective group multiplier. Independent mode uses the image multiplier. With subscription priority enabled, a configured plan group multiplier overrides only the subscription portion.',
         finalPricePreview: 'Final per-image price preview',
         notConfigured: 'Not configured'
       },
@@ -1196,7 +1202,7 @@ affiliates: {
         independentMultiplier: 'Use independent video multiplier',
         videoMultiplier: 'Video multiplier',
         modeHint:
-          'Videos are billed per second: per-second price × duration (1-15s, default 8s). By default the current effective group multiplier applies; independent mode uses the video multiplier instead.',
+          'Videos are billed per second: per-second price × duration (1-15s, default 8s). By default the current effective group multiplier applies; independent mode uses the video multiplier. With subscription priority enabled, a configured plan group multiplier overrides only the subscription portion.',
         finalPricePreview: 'Final per-second price preview',
         notConfigured: 'Not configured'
       },

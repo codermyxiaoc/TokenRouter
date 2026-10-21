@@ -64,6 +64,8 @@ func TestRecordUsageImageFundingRatesStaySeparate(t *testing.T) {
 			name                 string
 			userRate             float64
 			independent          bool
+			priority             bool
+			missingPlanRate      bool
 			imageRate            float64
 			wantSub, wantBalance float64
 			wantQuotedCost       float64
@@ -72,16 +74,22 @@ func TestRecordUsageImageFundingRatesStaySeparate(t *testing.T) {
 			{name: "共享图片余额免费", userRate: 0, wantSub: 4, wantBalance: 0, wantQuotedCost: 0.72},
 			{name: "独立图片半倍", userRate: 1, independent: true, imageRate: 0.5, wantSub: 0.5, wantBalance: 0.5, wantQuotedCost: 0.06},
 			{name: "独立图片免费", userRate: 1, independent: true, wantSub: 0, wantBalance: 0, wantQuotedCost: 0},
+			{name: "独立图片订阅优先余额半倍", userRate: 1, independent: true, priority: true, imageRate: 0.5, wantSub: 0.5, wantBalance: 0.5, wantQuotedCost: 0.72},
+			{name: "独立图片套餐未配倍率回退半倍", userRate: 1, independent: true, priority: true, missingPlanRate: true, imageRate: 0.5, wantSub: 0.5, wantBalance: 0.5, wantQuotedCost: 0.06},
+			{name: "独立图片余额免费订阅按套餐扣费", userRate: 1, independent: true, priority: true, wantSub: 0, wantBalance: 0, wantQuotedCost: 0.72},
 		} {
 			t.Run(gateway+"/"+tc.name, func(t *testing.T) {
 				groupID := int64(123)
 				price := 0.12
 				key := &APIKey{ID: 456, GroupID: &groupID, BillingMode: APIKeyBillingModeAuto, Group: &Group{
 					ID: groupID, RateMultiplier: 4, ImagePrice1K: &price,
-					ImageRateIndependent: tc.independent, ImageRateMultiplier: tc.imageRate,
+					ImageRateIndependent: tc.independent, ImageRateMultiplier: tc.imageRate, ImageSubscriptionRatePriority: tc.priority,
 					PeakRateEnabled: true, PeakStart: "00:00", PeakEnd: "23:59", PeakRateMultiplier: 3,
 				}}
 				sub := &UserSubscription{ID: 789, Plan: &SubscriptionPlan{ID: 999, GroupIDs: []int64{groupID}, GroupRateMultipliers: map[int64]float64{groupID: 6}}}
+				if tc.missingPlanRate {
+					sub.Plan.GroupRateMultipliers = nil
+				}
 				rateRepo := &openAIUserGroupRateRepoStub{rate: &tc.userRate}
 				usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 				billRepo := &openAIRecordUsageBillingRepoStub{}
@@ -109,7 +117,7 @@ func TestRecordUsageImageFundingRatesStaySeparate(t *testing.T) {
 				require.InDelta(t, tc.wantSub, billRepo.lastCmd.SubscriptionRateMultiplier, 1e-12)
 				require.InDelta(t, tc.wantBalance, billRepo.lastCmd.BalanceRateMultiplier, 1e-12)
 				require.Equal(t, 1.0, billRepo.lastCmd.SubscriptionRateMultiplierScale)
-				require.Equal(t, tc.independent, billRepo.lastCmd.DisablePlanGroupRateMultiplier)
+				require.Equal(t, tc.independent && !tc.priority, billRepo.lastCmd.DisablePlanGroupRateMultiplier)
 			})
 		}
 	}

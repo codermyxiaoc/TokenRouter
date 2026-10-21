@@ -326,6 +326,20 @@ func (_u *GroupUpdate) SetNillableImageRateIndependent(v *bool) *GroupUpdate {
 	return _u
 }
 
+// SetImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field.
+func (_u *GroupUpdate) SetImageSubscriptionRatePriority(v bool) *GroupUpdate {
+	_u.mutation.SetImageSubscriptionRatePriority(v)
+	return _u
+}
+
+// SetNillableImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableImageSubscriptionRatePriority(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetImageSubscriptionRatePriority(*v)
+	}
+	return _u
+}
+
 // SetImageRateMultiplier sets the "image_rate_multiplier" field.
 func (_u *GroupUpdate) SetImageRateMultiplier(v float64) *GroupUpdate {
 	_u.mutation.ResetImageRateMultiplier()
@@ -480,6 +494,20 @@ func (_u *GroupUpdate) SetVideoRateIndependent(v bool) *GroupUpdate {
 func (_u *GroupUpdate) SetNillableVideoRateIndependent(v *bool) *GroupUpdate {
 	if v != nil {
 		_u.SetVideoRateIndependent(*v)
+	}
+	return _u
+}
+
+// SetVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field.
+func (_u *GroupUpdate) SetVideoSubscriptionRatePriority(v bool) *GroupUpdate {
+	_u.mutation.SetVideoSubscriptionRatePriority(v)
+	return _u
+}
+
+// SetNillableVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableVideoSubscriptionRatePriority(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetVideoSubscriptionRatePriority(*v)
 	}
 	return _u
 }
@@ -1585,6 +1613,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.ImageRateIndependent(); ok {
 		_spec.SetField(group.FieldImageRateIndependent, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.ImageSubscriptionRatePriority(); ok {
+		_spec.SetField(group.FieldImageSubscriptionRatePriority, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.ImageRateMultiplier(); ok {
 		_spec.SetField(group.FieldImageRateMultiplier, field.TypeFloat64, value)
 	}
@@ -1632,6 +1663,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.VideoRateIndependent(); ok {
 		_spec.SetField(group.FieldVideoRateIndependent, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.VideoSubscriptionRatePriority(); ok {
+		_spec.SetField(group.FieldVideoSubscriptionRatePriority, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.VideoRateMultiplier(); ok {
 		_spec.SetField(group.FieldVideoRateMultiplier, field.TypeFloat64, value)
@@ -2464,6 +2498,20 @@ func (_u *GroupUpdateOne) SetNillableImageRateIndependent(v *bool) *GroupUpdateO
 	return _u
 }
 
+// SetImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field.
+func (_u *GroupUpdateOne) SetImageSubscriptionRatePriority(v bool) *GroupUpdateOne {
+	_u.mutation.SetImageSubscriptionRatePriority(v)
+	return _u
+}
+
+// SetNillableImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableImageSubscriptionRatePriority(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetImageSubscriptionRatePriority(*v)
+	}
+	return _u
+}
+
 // SetImageRateMultiplier sets the "image_rate_multiplier" field.
 func (_u *GroupUpdateOne) SetImageRateMultiplier(v float64) *GroupUpdateOne {
 	_u.mutation.ResetImageRateMultiplier()
@@ -2618,6 +2666,20 @@ func (_u *GroupUpdateOne) SetVideoRateIndependent(v bool) *GroupUpdateOne {
 func (_u *GroupUpdateOne) SetNillableVideoRateIndependent(v *bool) *GroupUpdateOne {
 	if v != nil {
 		_u.SetVideoRateIndependent(*v)
+	}
+	return _u
+}
+
+// SetVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field.
+func (_u *GroupUpdateOne) SetVideoSubscriptionRatePriority(v bool) *GroupUpdateOne {
+	_u.mutation.SetVideoSubscriptionRatePriority(v)
+	return _u
+}
+
+// SetNillableVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableVideoSubscriptionRatePriority(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetVideoSubscriptionRatePriority(*v)
 	}
 	return _u
 }
@@ -3753,6 +3815,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	if value, ok := _u.mutation.ImageRateIndependent(); ok {
 		_spec.SetField(group.FieldImageRateIndependent, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.ImageSubscriptionRatePriority(); ok {
+		_spec.SetField(group.FieldImageSubscriptionRatePriority, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.ImageRateMultiplier(); ok {
 		_spec.SetField(group.FieldImageRateMultiplier, field.TypeFloat64, value)
 	}
@@ -3800,6 +3865,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.VideoRateIndependent(); ok {
 		_spec.SetField(group.FieldVideoRateIndependent, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.VideoSubscriptionRatePriority(); ok {
+		_spec.SetField(group.FieldVideoSubscriptionRatePriority, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.VideoRateMultiplier(); ok {
 		_spec.SetField(group.FieldVideoRateMultiplier, field.TypeFloat64, value)

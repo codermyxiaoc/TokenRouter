@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 )
 
 func resolveUsageSubscription(
@@ -110,7 +111,7 @@ func subscriptionPlanGroupRateMultiplier(plan *SubscriptionPlan, groupID int64) 
 	if !subscriptionPlanIncludesGroup(plan, groupID) {
 		return 0, false
 	}
-	if multiplier, ok := plan.GroupRateMultipliers[groupID]; ok && multiplier > 0 {
+	if multiplier, ok := plan.GroupRateMultipliers[groupID]; ok && multiplier > 0 && !math.IsNaN(multiplier) && !math.IsInf(multiplier, 0) {
 		return multiplier, true
 	}
 	return 0, false

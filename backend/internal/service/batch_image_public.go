@@ -1190,7 +1190,13 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 			groupMultiplier = group.ImageRateMultiplier
 			subscriptionRateMultiplier = group.ImageRateMultiplier
 			balanceRateMultiplier = group.ImageRateMultiplier
-			planGroupRateEnabled = false
+			planGroupRateEnabled = group.ImageSubscriptionRatePriority
+			// 套餐优先只影响订阅报价，事务分配仍以独立倍率回退，余额始终使用独立倍率。
+			if planGroupRateEnabled && subscription != nil {
+				if planRate, ok := subscriptionPlanGroupRateMultiplier(subscription.Plan, group.ID); ok {
+					groupMultiplier = planRate
+				}
+			}
 		}
 		if groupMultiplier < 0 {
 			groupMultiplier = 0

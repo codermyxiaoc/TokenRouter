@@ -31,12 +31,13 @@ func resolveUsageBillingAllocationRates(apiKey *APIKey, billingMode string, medi
 		rates.SubscriptionRateMultiplier = resolveImageRateMultiplier(apiKey, subscriptionBase)
 		rates.BalanceRateMultiplier = resolveImageRateMultiplier(apiKey, balanceBase)
 		rates.SubscriptionRateMultiplierScale = 1
-		rates.DisablePlanGroupRateMultiplier = apiKey != nil && apiKey.Group != nil && apiKey.Group.ImageRateIndependent
+		// 默认值仍是图片独立倍率，开启优先级后由事务按每份订阅的有效覆盖值替换。
+		rates.DisablePlanGroupRateMultiplier = apiKey != nil && apiKey.Group != nil && apiKey.Group.ImageRateIndependent && !apiKey.Group.ImageSubscriptionRatePriority
 	case BillingModeVideo:
 		rates.SubscriptionRateMultiplier = resolveVideoRateMultiplier(apiKey, subscriptionBase)
 		rates.BalanceRateMultiplier = resolveVideoRateMultiplier(apiKey, balanceBase)
 		rates.SubscriptionRateMultiplierScale = 1
-		rates.DisablePlanGroupRateMultiplier = apiKey != nil && apiKey.Group != nil && apiKey.Group.VideoRateIndependent
+		rates.DisablePlanGroupRateMultiplier = apiKey != nil && apiKey.Group != nil && apiKey.Group.VideoRateIndependent && !apiKey.Group.VideoSubscriptionRatePriority
 	case BillingModePerRequest:
 		// 独立搜索和 OpenAI 音频使用无高峰的普通资金倍率，不套用图片独立倍率。
 		rates.SubscriptionRateMultiplier = subscriptionBase

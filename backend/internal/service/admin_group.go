@@ -368,10 +368,12 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		AllowImageGeneration:            allowImageGeneration,
 		AllowBatchImageGeneration:       allowBatchImageGeneration,
 		ImageRateIndependent:            input.ImageRateIndependent,
+		ImageSubscriptionRatePriority:   input.ImageSubscriptionRatePriority,
 		ImageRateMultiplier:             imageRateMultiplier,
 		BatchImageDiscountMultiplier:    batchImageDiscountMultiplier,
 		BatchImageHoldMultiplier:        batchImageHoldMultiplier,
 		VideoRateIndependent:            input.VideoRateIndependent,
+		VideoSubscriptionRatePriority:   input.VideoSubscriptionRatePriority,
 		VideoRateMultiplier:             videoRateMultiplier,
 		PeakRateEnabled:                 peakRateEnabled,
 		PeakStart:                       peakStart,
@@ -705,6 +707,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.ImageRateIndependent != nil {
 		group.ImageRateIndependent = *input.ImageRateIndependent
 	}
+	if input.ImageSubscriptionRatePriority != nil {
+		group.ImageSubscriptionRatePriority = *input.ImageSubscriptionRatePriority
+	}
 	if input.ImageRateMultiplier != nil {
 		if *input.ImageRateMultiplier < 0 {
 			return nil, errors.New("image_rate_multiplier must be >= 0")
@@ -731,6 +736,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.VideoRateIndependent != nil {
 		group.VideoRateIndependent = *input.VideoRateIndependent
+	}
+	if input.VideoSubscriptionRatePriority != nil {
+		group.VideoSubscriptionRatePriority = *input.VideoSubscriptionRatePriority
 	}
 	if input.VideoRateMultiplier != nil {
 		if *input.VideoRateMultiplier < 0 {

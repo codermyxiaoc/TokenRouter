@@ -321,6 +321,20 @@ func (_c *GroupCreate) SetNillableImageRateIndependent(v *bool) *GroupCreate {
 	return _c
 }
 
+// SetImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field.
+func (_c *GroupCreate) SetImageSubscriptionRatePriority(v bool) *GroupCreate {
+	_c.mutation.SetImageSubscriptionRatePriority(v)
+	return _c
+}
+
+// SetNillableImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableImageSubscriptionRatePriority(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetImageSubscriptionRatePriority(*v)
+	}
+	return _c
+}
+
 // SetImageRateMultiplier sets the "image_rate_multiplier" field.
 func (_c *GroupCreate) SetImageRateMultiplier(v float64) *GroupCreate {
 	_c.mutation.SetImageRateMultiplier(v)
@@ -415,6 +429,20 @@ func (_c *GroupCreate) SetVideoRateIndependent(v bool) *GroupCreate {
 func (_c *GroupCreate) SetNillableVideoRateIndependent(v *bool) *GroupCreate {
 	if v != nil {
 		_c.SetVideoRateIndependent(*v)
+	}
+	return _c
+}
+
+// SetVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field.
+func (_c *GroupCreate) SetVideoSubscriptionRatePriority(v bool) *GroupCreate {
+	_c.mutation.SetVideoSubscriptionRatePriority(v)
+	return _c
+}
+
+// SetNillableVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableVideoSubscriptionRatePriority(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetVideoSubscriptionRatePriority(*v)
 	}
 	return _c
 }
@@ -1094,6 +1122,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultImageRateIndependent
 		_c.mutation.SetImageRateIndependent(v)
 	}
+	if _, ok := _c.mutation.ImageSubscriptionRatePriority(); !ok {
+		v := group.DefaultImageSubscriptionRatePriority
+		_c.mutation.SetImageSubscriptionRatePriority(v)
+	}
 	if _, ok := _c.mutation.ImageRateMultiplier(); !ok {
 		v := group.DefaultImageRateMultiplier
 		_c.mutation.SetImageRateMultiplier(v)
@@ -1109,6 +1141,10 @@ func (_c *GroupCreate) defaults() error {
 	if _, ok := _c.mutation.VideoRateIndependent(); !ok {
 		v := group.DefaultVideoRateIndependent
 		_c.mutation.SetVideoRateIndependent(v)
+	}
+	if _, ok := _c.mutation.VideoSubscriptionRatePriority(); !ok {
+		v := group.DefaultVideoSubscriptionRatePriority
+		_c.mutation.SetVideoSubscriptionRatePriority(v)
 	}
 	if _, ok := _c.mutation.VideoRateMultiplier(); !ok {
 		v := group.DefaultVideoRateMultiplier
@@ -1304,6 +1340,9 @@ func (_c *GroupCreate) check() error {
 	if _, ok := _c.mutation.ImageRateIndependent(); !ok {
 		return &ValidationError{Name: "image_rate_independent", err: errors.New(`ent: missing required field "Group.image_rate_independent"`)}
 	}
+	if _, ok := _c.mutation.ImageSubscriptionRatePriority(); !ok {
+		return &ValidationError{Name: "image_subscription_rate_priority", err: errors.New(`ent: missing required field "Group.image_subscription_rate_priority"`)}
+	}
 	if _, ok := _c.mutation.ImageRateMultiplier(); !ok {
 		return &ValidationError{Name: "image_rate_multiplier", err: errors.New(`ent: missing required field "Group.image_rate_multiplier"`)}
 	}
@@ -1315,6 +1354,9 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.VideoRateIndependent(); !ok {
 		return &ValidationError{Name: "video_rate_independent", err: errors.New(`ent: missing required field "Group.video_rate_independent"`)}
+	}
+	if _, ok := _c.mutation.VideoSubscriptionRatePriority(); !ok {
+		return &ValidationError{Name: "video_subscription_rate_priority", err: errors.New(`ent: missing required field "Group.video_subscription_rate_priority"`)}
 	}
 	if _, ok := _c.mutation.VideoRateMultiplier(); !ok {
 		return &ValidationError{Name: "video_rate_multiplier", err: errors.New(`ent: missing required field "Group.video_rate_multiplier"`)}
@@ -1535,6 +1577,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 		_spec.SetField(group.FieldImageRateIndependent, field.TypeBool, value)
 		_node.ImageRateIndependent = value
 	}
+	if value, ok := _c.mutation.ImageSubscriptionRatePriority(); ok {
+		_spec.SetField(group.FieldImageSubscriptionRatePriority, field.TypeBool, value)
+		_node.ImageSubscriptionRatePriority = value
+	}
 	if value, ok := _c.mutation.ImageRateMultiplier(); ok {
 		_spec.SetField(group.FieldImageRateMultiplier, field.TypeFloat64, value)
 		_node.ImageRateMultiplier = value
@@ -1562,6 +1608,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.VideoRateIndependent(); ok {
 		_spec.SetField(group.FieldVideoRateIndependent, field.TypeBool, value)
 		_node.VideoRateIndependent = value
+	}
+	if value, ok := _c.mutation.VideoSubscriptionRatePriority(); ok {
+		_spec.SetField(group.FieldVideoSubscriptionRatePriority, field.TypeBool, value)
+		_node.VideoSubscriptionRatePriority = value
 	}
 	if value, ok := _c.mutation.VideoRateMultiplier(); ok {
 		_spec.SetField(group.FieldVideoRateMultiplier, field.TypeFloat64, value)
@@ -2135,6 +2185,18 @@ func (u *GroupUpsert) UpdateImageRateIndependent() *GroupUpsert {
 	return u
 }
 
+// SetImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field.
+func (u *GroupUpsert) SetImageSubscriptionRatePriority(v bool) *GroupUpsert {
+	u.Set(group.FieldImageSubscriptionRatePriority, v)
+	return u
+}
+
+// UpdateImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateImageSubscriptionRatePriority() *GroupUpsert {
+	u.SetExcluded(group.FieldImageSubscriptionRatePriority)
+	return u
+}
+
 // SetImageRateMultiplier sets the "image_rate_multiplier" field.
 func (u *GroupUpsert) SetImageRateMultiplier(v float64) *GroupUpsert {
 	u.Set(group.FieldImageRateMultiplier, v)
@@ -2270,6 +2332,18 @@ func (u *GroupUpsert) SetVideoRateIndependent(v bool) *GroupUpsert {
 // UpdateVideoRateIndependent sets the "video_rate_independent" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateVideoRateIndependent() *GroupUpsert {
 	u.SetExcluded(group.FieldVideoRateIndependent)
+	return u
+}
+
+// SetVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field.
+func (u *GroupUpsert) SetVideoSubscriptionRatePriority(v bool) *GroupUpsert {
+	u.Set(group.FieldVideoSubscriptionRatePriority, v)
+	return u
+}
+
+// UpdateVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateVideoSubscriptionRatePriority() *GroupUpsert {
+	u.SetExcluded(group.FieldVideoSubscriptionRatePriority)
 	return u
 }
 
@@ -3241,6 +3315,20 @@ func (u *GroupUpsertOne) UpdateImageRateIndependent() *GroupUpsertOne {
 	})
 }
 
+// SetImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field.
+func (u *GroupUpsertOne) SetImageSubscriptionRatePriority(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetImageSubscriptionRatePriority(v)
+	})
+}
+
+// UpdateImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateImageSubscriptionRatePriority() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateImageSubscriptionRatePriority()
+	})
+}
+
 // SetImageRateMultiplier sets the "image_rate_multiplier" field.
 func (u *GroupUpsertOne) SetImageRateMultiplier(v float64) *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
@@ -3399,6 +3487,20 @@ func (u *GroupUpsertOne) SetVideoRateIndependent(v bool) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateVideoRateIndependent() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateVideoRateIndependent()
+	})
+}
+
+// SetVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field.
+func (u *GroupUpsertOne) SetVideoSubscriptionRatePriority(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetVideoSubscriptionRatePriority(v)
+	})
+}
+
+// UpdateVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateVideoSubscriptionRatePriority() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateVideoSubscriptionRatePriority()
 	})
 }
 
@@ -4638,6 +4740,20 @@ func (u *GroupUpsertBulk) UpdateImageRateIndependent() *GroupUpsertBulk {
 	})
 }
 
+// SetImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field.
+func (u *GroupUpsertBulk) SetImageSubscriptionRatePriority(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetImageSubscriptionRatePriority(v)
+	})
+}
+
+// UpdateImageSubscriptionRatePriority sets the "image_subscription_rate_priority" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateImageSubscriptionRatePriority() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateImageSubscriptionRatePriority()
+	})
+}
+
 // SetImageRateMultiplier sets the "image_rate_multiplier" field.
 func (u *GroupUpsertBulk) SetImageRateMultiplier(v float64) *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
@@ -4796,6 +4912,20 @@ func (u *GroupUpsertBulk) SetVideoRateIndependent(v bool) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateVideoRateIndependent() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateVideoRateIndependent()
+	})
+}
+
+// SetVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field.
+func (u *GroupUpsertBulk) SetVideoSubscriptionRatePriority(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetVideoSubscriptionRatePriority(v)
+	})
+}
+
+// UpdateVideoSubscriptionRatePriority sets the "video_subscription_rate_priority" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateVideoSubscriptionRatePriority() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateVideoSubscriptionRatePriority()
 	})
 }
 

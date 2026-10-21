@@ -251,6 +251,16 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *usageBill
 	if p.shouldUpdateRateLimits() {
 		cmd.APIKeyRateLimitCost = p.Cost.ActualCost
 	}
+	// 独立免费回退也可能在事务内改用有覆盖倍率的订阅，不能以零预估关闭 Key 计数。
+	// 正数仅启用已有计数通路；基础金额模式的仓储会用最终实际扣费替换它，不收取此占位金额。
+	if mediaSubscriptionQuotaAccountingRequired(cmd, usageLog, p) {
+		if p.APIKey.Quota > 0 {
+			cmd.APIKeyQuotaCost = 1
+		}
+		if p.APIKey.HasRateLimits() {
+			cmd.APIKeyRateLimitCost = 1
+		}
+	}
 	accountQuotaCost := resolveUsageBillingAccountQuotaCost(usageLog, p)
 	if p.shouldUpdateAccountQuota(accountQuotaCost) {
 		cmd.AccountQuotaCost = accountQuotaCost
@@ -258,6 +268,18 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *usageBill
 
 	cmd.Normalize()
 	return cmd
+}
+
+// mediaSubscriptionQuotaAccountingRequired 只补足新媒体优先规则的零估价分支，保留旧命令指纹。
+func mediaSubscriptionQuotaAccountingRequired(cmd *UsageBillingCommand, usageLog *UsageLog, p *usageBillingParams) bool {
+	if p.Cost.ActualCost != 0 || cmd.BaseAmountUSD <= 0 || !p.RateMultipliersResolved ||
+		cmd.DisablePlanGroupRateMultiplier || cmd.APIKeyBillingMode == APIKeyBillingModeBalance ||
+		p.APIKeyService == nil || p.APIKey.Group == nil || usageLog == nil || p.Cost.BillingMode == string(BillingModeToken) {
+		return false
+	}
+	group := p.APIKey.Group
+	return usageLog.ImageCount > 0 && group.ImageRateIndependent && group.ImageSubscriptionRatePriority ||
+		usageLog.VideoCount > 0 && group.VideoRateIndependent && group.VideoSubscriptionRatePriority
 }
 
 // resolveUsageBillingAccountQuotaCost 让账号额度与账号统计使用同一成本口径。
@@ -733,7 +755,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		rateNow = input.PricingAt
 	}
 	opts.PricingAt = rateNow
+	baseMultiplier := multiplier
 	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, multiplier, rateNow)
+	imageMultiplier = resolveImageSubscriptionRateMultiplier(apiKey, subscription, baseMultiplier)
 	peakScale, _ := computePeakAwareMultipliers(apiKey, 1, rateNow)
 
 	// 确定计费模型

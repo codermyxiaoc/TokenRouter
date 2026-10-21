@@ -125,21 +125,22 @@ type ModelMarketplaceAvailability struct {
 }
 
 type ModelMarketplaceGroup struct {
-	ID                         int64                         `json:"id"`
-	Name                       string                        `json:"name"`
-	Description                string                        `json:"description"`
-	Platform                   string                        `json:"platform"`
-	DisplayBrand               string                        `json:"display_brand"`
-	SortOrder                  int                           `json:"sort_order"`
-	RateMultiplier             float64                       `json:"rate_multiplier"`
-	ImageRateIndependent       bool                          `json:"image_rate_independent"`
-	ImageRateMultiplier        float64                       `json:"image_rate_multiplier"`
-	OfficialPriceRatio         *float64                      `json:"official_price_ratio,omitempty"`
-	OfficialPriceRMBEquivalent *float64                      `json:"official_price_rmb_equivalent,omitempty"`
-	Capacity                   *ModelMarketplaceCapacity     `json:"capacity,omitempty"`
-	Availability               *ModelMarketplaceAvailability `json:"availability,omitempty"`
-	ModelCount                 int                           `json:"model_count"`
-	Models                     []ModelMarketplaceModel       `json:"models"`
+	ID                            int64                         `json:"id"`
+	Name                          string                        `json:"name"`
+	Description                   string                        `json:"description"`
+	Platform                      string                        `json:"platform"`
+	DisplayBrand                  string                        `json:"display_brand"`
+	SortOrder                     int                           `json:"sort_order"`
+	RateMultiplier                float64                       `json:"rate_multiplier"`
+	ImageRateIndependent          bool                          `json:"image_rate_independent"`
+	ImageSubscriptionRatePriority bool                          `json:"image_subscription_rate_priority"`
+	ImageRateMultiplier           float64                       `json:"image_rate_multiplier"`
+	OfficialPriceRatio            *float64                      `json:"official_price_ratio,omitempty"`
+	OfficialPriceRMBEquivalent    *float64                      `json:"official_price_rmb_equivalent,omitempty"`
+	Capacity                      *ModelMarketplaceCapacity     `json:"capacity,omitempty"`
+	Availability                  *ModelMarketplaceAvailability `json:"availability,omitempty"`
+	ModelCount                    int                           `json:"model_count"`
+	Models                        []ModelMarketplaceModel       `json:"models"`
 }
 
 // ModelMarketplaceGroupsFromService 按请求语言翻译展示字段，不改变模型与定价。
@@ -169,21 +170,22 @@ func ModelMarketplaceGroupsFromService(groups []service.ModelMarketplaceGroup, l
 		}
 
 		out = append(out, ModelMarketplaceGroup{
-			ID:                         group.ID,
-			Name:                       name,
-			Description:                description,
-			Platform:                   group.Platform,
-			DisplayBrand:               group.DisplayBrand,
-			SortOrder:                  group.SortOrder,
-			RateMultiplier:             group.RateMultiplier,
-			ImageRateIndependent:       group.ImageRateIndependent,
-			ImageRateMultiplier:        group.ImageRateMultiplier,
-			OfficialPriceRatio:         group.OfficialPriceRatio,
-			OfficialPriceRMBEquivalent: group.OfficialPriceRMBEquivalent,
-			Capacity:                   modelMarketplaceCapacityFromService(group.Capacity),
-			Availability:               modelMarketplaceAvailabilityFromService(group.Availability),
-			ModelCount:                 group.ModelCount,
-			Models:                     models,
+			ID:                            group.ID,
+			Name:                          name,
+			Description:                   description,
+			Platform:                      group.Platform,
+			DisplayBrand:                  group.DisplayBrand,
+			SortOrder:                     group.SortOrder,
+			RateMultiplier:                group.RateMultiplier,
+			ImageRateIndependent:          group.ImageRateIndependent,
+			ImageSubscriptionRatePriority: group.ImageSubscriptionRatePriority,
+			ImageRateMultiplier:           group.ImageRateMultiplier,
+			OfficialPriceRatio:            group.OfficialPriceRatio,
+			OfficialPriceRMBEquivalent:    group.OfficialPriceRMBEquivalent,
+			Capacity:                      modelMarketplaceCapacityFromService(group.Capacity),
+			Availability:                  modelMarketplaceAvailabilityFromService(group.Availability),
+			ModelCount:                    group.ModelCount,
+			Models:                        models,
 		})
 	}
 

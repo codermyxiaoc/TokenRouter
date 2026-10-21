@@ -288,6 +288,69 @@ describe.each(['create', 'edit'] as const)('GroupsView %s tabs', mode => {
     expect(payload).toMatchObject({ peak_rate_enabled: true, image_rate_independent: true, video_rate_independent: true, long_context_pricing_enabled: false })
   })
 
+  // 覆盖所有媒体平台，防止只给 Grok 添加开关或把图片和视频设置串联。
+  it.each([
+    ['openai', 'image'], ['gemini', 'image'], ['antigravity', 'image'], ['grok', 'image'],
+    ['grok', 'video'], ['video', 'video'],
+  ] as const)('%s 的 %s 独立倍率可单独启用订阅优先并保存', async (platform, media) => {
+    const wrapper = await open(mode, platform)
+    await tab(wrapper, 'pricing')
+    const priority = `${media}_subscription_rate_priority`
+    const independent = `${media}_rate_independent`
+    expect(wrapper.find(`[data-group-setting="${priority}"]`).exists()).toBe(false)
+    await wrapper.get(`[data-group-setting="${independent}"]`).trigger('click')
+    const toggle = wrapper.get(`[data-group-setting="${priority}"]`)
+    expect(toggle.attributes('aria-checked')).toBe('false')
+    await toggle.trigger('click')
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    expect(wrapper.get(`#${mode}-group-${media}-subscription-rate-priority-hint`).text())
+      .toBe(`admin.groups.mediaSubscriptionRatePriority.${media}Hint`)
+    if (platform !== 'video') {
+      expect(wrapper.get(`[data-testid="${mode}-${media}-subscription-price-hint"]`).isVisible()).toBe(true)
+    }
+    // 关闭独立倍率时不丢失草稿，重新打开仍保持用户选择。
+    await wrapper.get(`[data-group-setting="${independent}"]`).trigger('click')
+    expect(wrapper.find(`[data-group-setting="${priority}"]`).exists()).toBe(false)
+    await wrapper.get(`[data-group-setting="${independent}"]`).trigger('click')
+    expect(wrapper.get(`[data-group-setting="${priority}"]`).attributes('aria-checked')).toBe('true')
+    await wrapper.get(`#${mode}-group-form`).trigger('submit')
+    await flushPromises()
+    const payload = mode === 'create' ? groups.create.mock.calls[0]?.[0] : groups.update.mock.calls[0]?.[1]
+    expect(payload).toMatchObject({ [priority]: true, [independent]: true, [`${media}_rate_multiplier`]: 1,
+      [`${media === 'image' ? 'video' : 'image'}_subscription_rate_priority`]: false })
+  })
+
+  it('新建和旧配置保存时订阅倍率优先默认关闭', async () => {
+    const wrapper = await open(mode, 'grok')
+    await wrapper.get(`#${mode}-group-form`).trigger('submit')
+    await flushPromises()
+    const payload = mode === 'create' ? groups.create.mock.calls[0]?.[0] : groups.update.mock.calls[0]?.[1]
+    expect(payload).toMatchObject({ image_subscription_rate_priority: false, video_subscription_rate_priority: false })
+  })
+
+  if (mode === 'edit') {
+    // 回显服务端已保存的选择，保存 false 必须能够真正关闭开关。
+    it('回显两个订阅优先开关，并允许单独关闭图片设置', async () => {
+      const wrapper = await open(mode, 'grok', {
+        image_rate_independent: true, video_rate_independent: true,
+        image_rate_multiplier: 0.8, video_rate_multiplier: 1.2,
+        image_subscription_rate_priority: true, video_subscription_rate_priority: true,
+      })
+      await tab(wrapper, 'pricing')
+      for (const media of ['image', 'video']) {
+        expect(wrapper.get(`[data-group-setting="${media}_subscription_rate_priority"]`).attributes('aria-checked')).toBe('true')
+      }
+      await wrapper.get('[data-group-setting="image_subscription_rate_priority"]').trigger('click')
+      await tab(wrapper, 'general')
+      await wrapper.get('#edit-group-form').trigger('submit')
+      await flushPromises()
+      expect(groups.update.mock.calls[0]?.[1]).toMatchObject({
+        image_subscription_rate_priority: false, video_subscription_rate_priority: true,
+        image_rate_multiplier: 0.8, video_rate_multiplier: 1.2,
+      })
+    })
+  }
+
   it('模型系列与模型列表开关保留展示选择结果', async () => {
     const wrapper = await open(mode, 'antigravity')
     await tab(wrapper, 'platform')

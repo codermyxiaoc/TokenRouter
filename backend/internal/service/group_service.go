@@ -66,25 +66,27 @@ type GroupSortOrderUpdate struct {
 
 // CreateGroupRequest 创建分组请求
 type CreateGroupRequest struct {
-	Name                 string   `json:"name"`
-	Description          string   `json:"description"`
-	RateMultiplier       float64  `json:"rate_multiplier"`
-	IsExclusive          bool     `json:"is_exclusive"`
-	AllowImageGeneration bool     `json:"allow_image_generation"`
-	ImageRateIndependent bool     `json:"image_rate_independent"`
-	ImageRateMultiplier  *float64 `json:"image_rate_multiplier"`
+	Name                          string   `json:"name"`
+	Description                   string   `json:"description"`
+	RateMultiplier                float64  `json:"rate_multiplier"`
+	IsExclusive                   bool     `json:"is_exclusive"`
+	AllowImageGeneration          bool     `json:"allow_image_generation"`
+	ImageRateIndependent          bool     `json:"image_rate_independent"`
+	ImageSubscriptionRatePriority bool     `json:"image_subscription_rate_priority"`
+	ImageRateMultiplier           *float64 `json:"image_rate_multiplier"`
 }
 
 // UpdateGroupRequest 更新分组请求
 type UpdateGroupRequest struct {
-	Name                 *string  `json:"name"`
-	Description          *string  `json:"description"`
-	RateMultiplier       *float64 `json:"rate_multiplier"`
-	IsExclusive          *bool    `json:"is_exclusive"`
-	Status               *string  `json:"status"`
-	AllowImageGeneration *bool    `json:"allow_image_generation"`
-	ImageRateIndependent *bool    `json:"image_rate_independent"`
-	ImageRateMultiplier  *float64 `json:"image_rate_multiplier"`
+	Name                          *string  `json:"name"`
+	Description                   *string  `json:"description"`
+	RateMultiplier                *float64 `json:"rate_multiplier"`
+	IsExclusive                   *bool    `json:"is_exclusive"`
+	Status                        *string  `json:"status"`
+	AllowImageGeneration          *bool    `json:"allow_image_generation"`
+	ImageRateIndependent          *bool    `json:"image_rate_independent"`
+	ImageSubscriptionRatePriority *bool    `json:"image_subscription_rate_priority"`
+	ImageRateMultiplier           *float64 `json:"image_rate_multiplier"`
 }
 
 // GroupService 分组管理服务
@@ -121,17 +123,18 @@ func (s *GroupService) Create(ctx context.Context, req CreateGroupRequest) (*Gro
 
 	// 创建分组
 	group := &Group{
-		Name:                   req.Name,
-		Description:            req.Description,
-		Platform:               PlatformAnthropic,
-		SchedulerType:          GroupSchedulerTypeBasic,
-		AllowedClientProtocols: defaultGroupClientProtocols(PlatformAnthropic),
-		RateMultiplier:         req.RateMultiplier,
-		IsExclusive:            req.IsExclusive,
-		Status:                 StatusActive,
-		AllowImageGeneration:   req.AllowImageGeneration,
-		ImageRateIndependent:   req.ImageRateIndependent,
-		ImageRateMultiplier:    imageRateMultiplier,
+		Name:                          req.Name,
+		Description:                   req.Description,
+		Platform:                      PlatformAnthropic,
+		SchedulerType:                 GroupSchedulerTypeBasic,
+		AllowedClientProtocols:        defaultGroupClientProtocols(PlatformAnthropic),
+		RateMultiplier:                req.RateMultiplier,
+		IsExclusive:                   req.IsExclusive,
+		Status:                        StatusActive,
+		AllowImageGeneration:          req.AllowImageGeneration,
+		ImageRateIndependent:          req.ImageRateIndependent,
+		ImageSubscriptionRatePriority: req.ImageSubscriptionRatePriority,
+		ImageRateMultiplier:           imageRateMultiplier,
 	}
 
 	if err := s.groupRepo.Create(ctx, group); err != nil {
@@ -208,6 +211,9 @@ func (s *GroupService) Update(ctx context.Context, id int64, req UpdateGroupRequ
 	}
 	if req.ImageRateIndependent != nil {
 		group.ImageRateIndependent = *req.ImageRateIndependent
+	}
+	if req.ImageSubscriptionRatePriority != nil {
+		group.ImageSubscriptionRatePriority = *req.ImageSubscriptionRatePriority
 	}
 	if req.ImageRateMultiplier != nil {
 		if *req.ImageRateMultiplier < 0 {

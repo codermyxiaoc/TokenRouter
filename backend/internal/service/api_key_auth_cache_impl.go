@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 39 // v39：智能路由分组冷却配置加入快照，强制重建旧缓存。
+const apiKeyAuthSnapshotVersion = 40 // v40：媒体订阅倍率优先开关加入快照，强制重建旧缓存。
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -456,11 +456,13 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			AllowImageGeneration:            apiKey.Group.AllowImageGeneration,
 			AllowBatchImageGeneration:       apiKey.Group.AllowBatchImageGeneration,
 			ImageRateIndependent:            apiKey.Group.ImageRateIndependent,
+			ImageSubscriptionRatePriority:   apiKey.Group.ImageSubscriptionRatePriority,
 			ImageRateMultiplier:             apiKey.Group.ImageRateMultiplier,
 			ImagePrice1K:                    apiKey.Group.ImagePrice1K,
 			ImagePrice2K:                    apiKey.Group.ImagePrice2K,
 			ImagePrice4K:                    apiKey.Group.ImagePrice4K,
 			VideoRateIndependent:            apiKey.Group.VideoRateIndependent,
+			VideoSubscriptionRatePriority:   apiKey.Group.VideoSubscriptionRatePriority,
 			VideoRateMultiplier:             apiKey.Group.VideoRateMultiplier,
 			VideoPrice480P:                  apiKey.Group.VideoPrice480P,
 			VideoPrice720P:                  apiKey.Group.VideoPrice720P,
@@ -595,11 +597,13 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			AllowImageGeneration:            snapshot.Group.AllowImageGeneration,
 			AllowBatchImageGeneration:       snapshot.Group.AllowBatchImageGeneration,
 			ImageRateIndependent:            snapshot.Group.ImageRateIndependent,
+			ImageSubscriptionRatePriority:   snapshot.Group.ImageSubscriptionRatePriority,
 			ImageRateMultiplier:             snapshot.Group.ImageRateMultiplier,
 			ImagePrice1K:                    snapshot.Group.ImagePrice1K,
 			ImagePrice2K:                    snapshot.Group.ImagePrice2K,
 			ImagePrice4K:                    snapshot.Group.ImagePrice4K,
 			VideoRateIndependent:            snapshot.Group.VideoRateIndependent,
+			VideoSubscriptionRatePriority:   snapshot.Group.VideoSubscriptionRatePriority,
 			VideoRateMultiplier:             snapshot.Group.VideoRateMultiplier,
 			VideoPrice480P:                  snapshot.Group.VideoPrice480P,
 			VideoPrice720P:                  snapshot.Group.VideoPrice720P,
@@ -667,9 +671,11 @@ func authGroupSnapshotFromGroup(group *Group) *APIKeyAuthGroupSnapshot {
 		Status: group.Status, RateMultiplier: group.RateMultiplier,
 		SessionIsolationEnabled: group.SessionIsolationEnabled, AllowImageGeneration: group.AllowImageGeneration,
 		AllowBatchImageGeneration: group.AllowBatchImageGeneration, ImageRateIndependent: group.ImageRateIndependent,
-		ImageRateMultiplier: group.ImageRateMultiplier, ImagePrice1K: group.ImagePrice1K, ImagePrice2K: group.ImagePrice2K,
+		ImageSubscriptionRatePriority: group.ImageSubscriptionRatePriority,
+		ImageRateMultiplier:           group.ImageRateMultiplier, ImagePrice1K: group.ImagePrice1K, ImagePrice2K: group.ImagePrice2K,
 		ImagePrice4K: group.ImagePrice4K, VideoRateIndependent: group.VideoRateIndependent,
-		VideoRateMultiplier: group.VideoRateMultiplier, VideoPrice480P: group.VideoPrice480P,
+		VideoSubscriptionRatePriority: group.VideoSubscriptionRatePriority,
+		VideoRateMultiplier:           group.VideoRateMultiplier, VideoPrice480P: group.VideoPrice480P,
 		VideoPrice720P: group.VideoPrice720P, VideoPrice1080P: group.VideoPrice1080P,
 		VideoModelPrices: NormalizeVideoModelPrices(group.VideoModelPrices), WebSearchPricePerCall: group.WebSearchPricePerCall,
 		SearchPricePer1k: group.SearchPricePer1k, AudioRealtimePricePerMin: group.AudioRealtimePricePerMin,
@@ -701,9 +707,11 @@ func groupFromAuthSnapshot(snapshot *APIKeyAuthGroupSnapshot) *Group {
 		SessionIsolationEnabled: snapshot.SessionIsolationEnabled,
 		AllowImageGeneration:    snapshot.AllowImageGeneration, AllowBatchImageGeneration: snapshot.AllowBatchImageGeneration,
 		ImageRateIndependent: snapshot.ImageRateIndependent, ImageRateMultiplier: snapshot.ImageRateMultiplier,
-		ImagePrice1K: snapshot.ImagePrice1K, ImagePrice2K: snapshot.ImagePrice2K, ImagePrice4K: snapshot.ImagePrice4K,
+		ImageSubscriptionRatePriority: snapshot.ImageSubscriptionRatePriority,
+		ImagePrice1K:                  snapshot.ImagePrice1K, ImagePrice2K: snapshot.ImagePrice2K, ImagePrice4K: snapshot.ImagePrice4K,
 		VideoRateIndependent: snapshot.VideoRateIndependent, VideoRateMultiplier: snapshot.VideoRateMultiplier,
-		VideoPrice480P: snapshot.VideoPrice480P, VideoPrice720P: snapshot.VideoPrice720P,
+		VideoSubscriptionRatePriority: snapshot.VideoSubscriptionRatePriority,
+		VideoPrice480P:                snapshot.VideoPrice480P, VideoPrice720P: snapshot.VideoPrice720P,
 		VideoPrice1080P: snapshot.VideoPrice1080P, VideoModelPrices: NormalizeVideoModelPrices(snapshot.VideoModelPrices),
 		WebSearchPricePerCall: snapshot.WebSearchPricePerCall, SearchPricePer1k: snapshot.SearchPricePer1k,
 		AudioRealtimePricePerMin:     snapshot.AudioRealtimePricePerMin,

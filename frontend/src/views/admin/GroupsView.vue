@@ -1273,6 +1273,20 @@
                   class="input"
                   placeholder="1"
                 />
+                <!-- 套餐优先只改变订阅部分，余额继续使用上面的独立倍率。 -->
+                <div class="mt-3 flex items-center justify-between gap-4">
+                  <label for="create-group-image-subscription-rate-priority" class="min-w-0 text-sm text-gray-700 dark:text-gray-300">{{ t('admin.groups.mediaSubscriptionRatePriority.title') }}</label>
+                  <Toggle
+                    id="create-group-image-subscription-rate-priority"
+                    v-model="createForm.image_subscription_rate_priority"
+                    :aria-label="t('admin.groups.mediaSubscriptionRatePriority.title')"
+                    aria-describedby="create-group-image-subscription-rate-priority-hint"
+                    data-group-setting="image_subscription_rate_priority"
+                  />
+                </div>
+                <p id="create-group-image-subscription-rate-priority-hint" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.groups.mediaSubscriptionRatePriority.imageHint') }}
+                </p>
               </div>
               <div class="grid grid-cols-3 gap-3">
                 <div>
@@ -1324,6 +1338,9 @@
                     {{ item.label }}: {{ item.value }}
                   </div>
                 </div>
+                <p v-if="createForm.image_rate_independent && createForm.image_subscription_rate_priority" class="mt-2 text-gray-500 dark:text-gray-400" data-testid="create-image-subscription-price-hint">
+                  {{ t('admin.groups.mediaSubscriptionRatePriority.previewHint') }}
+                </p>
               </div>
               <div v-if="createForm.platform === 'gemini' && createForm.allow_image_generation" class="mt-4 border-t border-dashed border-gray-200 pt-4 dark:border-dark-700">
                 <h4 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.groups.tabs.batchPricing') }}</h4>
@@ -1399,6 +1416,20 @@
                   class="input"
                   placeholder="1"
                 />
+                <!-- 套餐优先只改变订阅部分，余额继续使用上面的独立倍率。 -->
+                <div class="mt-3 flex items-center justify-between gap-4">
+                  <label for="create-group-video-subscription-rate-priority" class="min-w-0 text-sm text-gray-700 dark:text-gray-300">{{ t('admin.groups.mediaSubscriptionRatePriority.title') }}</label>
+                  <Toggle
+                    id="create-group-video-subscription-rate-priority"
+                    v-model="createForm.video_subscription_rate_priority"
+                    :aria-label="t('admin.groups.mediaSubscriptionRatePriority.title')"
+                    aria-describedby="create-group-video-subscription-rate-priority-hint"
+                    data-group-setting="video_subscription_rate_priority"
+                  />
+                </div>
+                <p id="create-group-video-subscription-rate-priority-hint" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.groups.mediaSubscriptionRatePriority.videoHint') }}
+                </p>
               </div>
               <template v-if="createForm.platform !== 'video'">
               <div class="grid grid-cols-3 gap-3">
@@ -1490,6 +1521,9 @@
                     {{ item.label }}: {{ item.value }}
                   </div>
                 </div>
+                <p v-if="createForm.video_rate_independent && createForm.video_subscription_rate_priority" class="mt-2 text-gray-500 dark:text-gray-400" data-testid="create-video-subscription-price-hint">
+                  {{ t('admin.groups.mediaSubscriptionRatePriority.previewHint') }}
+                </p>
               </div>
               </template>
             </div>
@@ -2988,6 +3022,20 @@
                   class="input"
                   placeholder="1"
                 />
+                <!-- 套餐优先只改变订阅部分，余额继续使用上面的独立倍率。 -->
+                <div class="mt-3 flex items-center justify-between gap-4">
+                  <label for="edit-group-image-subscription-rate-priority" class="min-w-0 text-sm text-gray-700 dark:text-gray-300">{{ t('admin.groups.mediaSubscriptionRatePriority.title') }}</label>
+                  <Toggle
+                    id="edit-group-image-subscription-rate-priority"
+                    v-model="editForm.image_subscription_rate_priority"
+                    :aria-label="t('admin.groups.mediaSubscriptionRatePriority.title')"
+                    aria-describedby="edit-group-image-subscription-rate-priority-hint"
+                    data-group-setting="image_subscription_rate_priority"
+                  />
+                </div>
+                <p id="edit-group-image-subscription-rate-priority-hint" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.groups.mediaSubscriptionRatePriority.imageHint') }}
+                </p>
               </div>
               <div class="grid grid-cols-3 gap-3">
                 <div>
@@ -3039,6 +3087,9 @@
                     {{ item.label }}: {{ item.value }}
                   </div>
                 </div>
+                <p v-if="editForm.image_rate_independent && editForm.image_subscription_rate_priority" class="mt-2 text-gray-500 dark:text-gray-400" data-testid="edit-image-subscription-price-hint">
+                  {{ t('admin.groups.mediaSubscriptionRatePriority.previewHint') }}
+                </p>
               </div>
               <div v-if="editForm.platform === 'gemini' && editForm.allow_image_generation" class="mt-4 border-t border-dashed border-gray-200 pt-4 dark:border-dark-700">
                 <h4 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.groups.tabs.batchPricing') }}</h4>
@@ -3114,6 +3165,20 @@
                   class="input"
                   placeholder="1"
                 />
+                <!-- 套餐优先只改变订阅部分，余额继续使用上面的独立倍率。 -->
+                <div class="mt-3 flex items-center justify-between gap-4">
+                  <label for="edit-group-video-subscription-rate-priority" class="min-w-0 text-sm text-gray-700 dark:text-gray-300">{{ t('admin.groups.mediaSubscriptionRatePriority.title') }}</label>
+                  <Toggle
+                    id="edit-group-video-subscription-rate-priority"
+                    v-model="editForm.video_subscription_rate_priority"
+                    :aria-label="t('admin.groups.mediaSubscriptionRatePriority.title')"
+                    aria-describedby="edit-group-video-subscription-rate-priority-hint"
+                    data-group-setting="video_subscription_rate_priority"
+                  />
+                </div>
+                <p id="edit-group-video-subscription-rate-priority-hint" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.groups.mediaSubscriptionRatePriority.videoHint') }}
+                </p>
               </div>
               <template v-if="editForm.platform !== 'video'">
               <div class="grid grid-cols-3 gap-3">
@@ -3205,6 +3270,9 @@
                     {{ item.label }}: {{ item.value }}
                   </div>
                 </div>
+                <p v-if="editForm.video_rate_independent && editForm.video_subscription_rate_priority" class="mt-2 text-gray-500 dark:text-gray-400" data-testid="edit-video-subscription-price-hint">
+                  {{ t('admin.groups.mediaSubscriptionRatePriority.previewHint') }}
+                </p>
               </div>
               </template>
             </div>
@@ -4664,6 +4732,7 @@ const createForm = reactive({
   allow_batch_image_generation: false,
   image_rate_independent: false,
   image_rate_multiplier: 1,
+  image_subscription_rate_priority: false,
   batch_image_discount_multiplier: 0.5,
   batch_image_hold_multiplier: 0.6,
   image_price_1k: null as number | null,
@@ -4672,6 +4741,7 @@ const createForm = reactive({
   // 视频生成计费配置（仅 Grok 平台）
   video_rate_independent: false,
   video_rate_multiplier: 1,
+  video_subscription_rate_priority: false,
   video_price_480p: null as number | null,
   video_price_720p: null as number | null,
   video_price_1080p: null as number | null,
@@ -5159,6 +5229,7 @@ const editForm = reactive({
   allow_batch_image_generation: false,
   image_rate_independent: false,
   image_rate_multiplier: 1,
+  image_subscription_rate_priority: false,
   batch_image_discount_multiplier: 0.5,
   batch_image_hold_multiplier: 0.6,
   image_price_1k: null as number | null,
@@ -5167,6 +5238,7 @@ const editForm = reactive({
   // 视频生成计费配置（仅 Grok 平台）
   video_rate_independent: false,
   video_rate_multiplier: 1,
+  video_subscription_rate_priority: false,
   video_price_480p: null as number | null,
   video_price_720p: null as number | null,
   video_price_1080p: null as number | null,
@@ -5633,6 +5705,7 @@ const closeCreateModal = () => {
   createForm.allow_batch_image_generation = false;
   createForm.image_rate_independent = false;
   createForm.image_rate_multiplier = 1;
+  createForm.image_subscription_rate_priority = false;
   createForm.batch_image_discount_multiplier = 0.5;
   createForm.batch_image_hold_multiplier = 0.6;
   createForm.image_price_1k = null;
@@ -5640,6 +5713,7 @@ const closeCreateModal = () => {
   createForm.image_price_4k = null;
   createForm.video_rate_independent = false;
   createForm.video_rate_multiplier = 1;
+  createForm.video_subscription_rate_priority = false;
   createForm.video_price_480p = null;
   createForm.video_price_720p = null;
   createForm.video_price_1080p = null;
@@ -5889,6 +5963,7 @@ const handleEdit = async (group: AdminGroup) => {
     group.allow_batch_image_generation ?? false;
   editForm.image_rate_independent = group.image_rate_independent ?? false;
   editForm.image_rate_multiplier = group.image_rate_multiplier ?? 1;
+  editForm.image_subscription_rate_priority = group.image_subscription_rate_priority ?? false;
   editForm.batch_image_discount_multiplier =
     group.batch_image_discount_multiplier ?? 0.5;
   editForm.batch_image_hold_multiplier = group.batch_image_hold_multiplier ?? 0.6;
@@ -5897,6 +5972,7 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.image_price_4k = group.image_price_4k;
   editForm.video_rate_independent = group.video_rate_independent ?? false;
   editForm.video_rate_multiplier = group.video_rate_multiplier ?? 1;
+  editForm.video_subscription_rate_priority = group.video_subscription_rate_priority ?? false;
   editForm.video_price_480p = group.video_price_480p;
   editForm.video_price_720p = group.video_price_720p;
   editForm.video_price_1080p = group.video_price_1080p;
@@ -5997,6 +6073,8 @@ const closeEditModal = () => {
   editForm.peak_rate_multiplier = 1.0;
   editForm.video_rate_independent = false;
   editForm.video_rate_multiplier = 1;
+  editForm.video_subscription_rate_priority = false;
+  editForm.image_subscription_rate_priority = false;
   editForm.video_price_480p = null;
   editForm.video_price_720p = null;
   editForm.video_price_1080p = null;

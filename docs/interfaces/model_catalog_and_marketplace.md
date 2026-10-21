@@ -32,7 +32,7 @@ OpenAI 订阅账号（OAuth、Setup Token 及相应影子账号）按渠道映�
 
 公开市场只返回 active、非 exclusive、且至少有一个 active account 的 Group。每个 Group 在解析后没有可请求模型时也会被隐藏。排序使用 Group 的显式顺序；市场不会按临时价格或实时错误任意重排产品。
 
-展示品牌优先使用 `display_brand`，为空时回退 Group name。Group description、platform、倍率、图片独立倍率和模型数作为公开产品投影。
+展示品牌优先使用 `display_brand`，为空时回退 Group name。Group description、platform、倍率、图片独立倍率、图片订阅倍率优先标识和模型数作为公开产品投影。公开价格不含个人订阅上下文，仍展示分组参考价；启用[媒体订阅倍率优先](../domains/routing_and_billing.md#media_subscription_rate_priority)后，真实订阅费用按实际套餐覆盖与资金分配结算。
 
 分组供应商选项与市场品牌展示共用前端品牌目录。“火山引擎”是独立选项，`Volcengine`、`火山方舟` 同样识别为该品牌，使用自身图标和蓝色标签；“可灵”同样作为独立选项，兼容 `Kling`、`Kling AI` 品牌名称及可灵模型名，使用青色标签。“豆包”及其模型名称别名继续保留原品牌。火山引擎与可灵图标分别来自指定的 [Volcengine SVG](https://apis.artsapi.com/assets/icons/lobe/volcengine.svg) 和 [Kling SVG](https://apis.artsapi.com/assets/icons/lobe/kling.svg)，保留原始配色和渐变并随前端静态资源打包，不依赖浏览器加载第三方图标。`display_brand` 只控制展示和品牌筛选，不改变上游平台、视频端点选择或计费规则。
 

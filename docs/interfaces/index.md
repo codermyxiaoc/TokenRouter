@@ -14,7 +14,7 @@
 - [本地插件与宿主服务](local_plugins.md)：插件安装运行、能力授权、命名空间 KV、账号目录和只读状态 UI。读取时机：修改插件生命周期、HostService、传输绑定、插件页面或部署兼容性时读取。
 
 - [HTTP 接口边界](http_api.md)：公共、用户、管理员、支付和网关路由族及认证/错误边界。读取时机：新增或移动路由、调整中间件、认证方式或公共响应语义时读取。
-- [云端无限画布接口](cloud_canvas.md)：画布、私有素材、模型目录和图片/文本/视频/音频执行接口，以及用户隔离、幂等、素材保留和视频参考图短期交付边界。读取时机：修改无限画布 API、模型选择、执行结算或素材清理时读取。
+- [云端无限画布接口](cloud_canvas.md)：画布、私有素材、图片/文本/Video 与 Grok 视频/音频模型目录和执行接口，以及幂等与视频参考图短期交付边界。读取时机：修改无限画布 API、模型候选与端点、执行结算或素材清理时读取。
 - [配置边界](configuration.md)：默认值、YAML、环境变量、数据库运行时设置和首次初始化之间的边界。读取时机：新增配置项、修改加载优先级、设置页面或部署变量时读取。
 - [tf CLI 网页导入](tf_cli_web_import.md)：Keys 页、本机回环协议、会话证明、双重确认和浏览器安全头。读取时机：修改 Keys 导入入口、URL fragment、localhost fetch、CSP 或 tf-cli 协议时读取。
 - [CC Switch 导入](cc_switch_import.md)：Keys 页导入配置弹窗、全站模型搜索选择和应用/模型深链接映射。读取时机：修改 CCS 导入入口、模型选择、客户端应用或深链接参数时读取。
@@ -26,7 +26,7 @@
 - [OpenAI 上游](openai_upstream.md)：OAuth/API Key、Responses、Chat、Messages、Embeddings、Images、Realtime 和 Codex 传输契约。读取时机：修改 OpenAI 认证、endpoint capability、WebSocket、模型或配额调度时读取。
 - [Gemini 上游](gemini_upstream.md)：OAuth 变体、API Key、Vertex 双认证、模型同步、显式缓存资源与计费、v1beta 原生和兼容协议契约。读取时机：修改 Gemini 认证、project/tier、模型同步、协议转换、缓存资源及预扣、thought signature 或配额时读取。
 - [Antigravity 上游](antigravity_upstream.md)：Antigravity 专用端点、混合调度及模型协议边界。读取时机：修改 Antigravity 账号、OAuth、Claude/Gemini 转换或调度隔离时读取。
-- [Grok / xAI 上游](grok_upstream.md)：Grok OAuth/API Key、媒体资格、管理员多模式连接测试与 OpenAI 兼容转发契约。读取时机：修改 Grok 登录、聊天、图片、视频、语音测试、计费探测或模型配置时读取。
+- [Grok / xAI 上游](grok_upstream.md)：Grok OAuth/API Key、媒体资格、原视频任务与画布关联、管理员多模式测试和 OpenAI 兼容转发契约。读取时机：修改 Grok 登录、聊天、图片、视频及画布恢复、语音测试、计费探测或模型配置时读取。
 - [Qoder 原生上游](qoder_upstream.md)：Qoder 站点、模型别名、思考能力、上下文、计费和刷新契约。读取时机：修改 Qoder 账号、模型能力、请求转换、定价或运维探测时读取。
 - [OpenCode Zen / GO 上游](opencode_upstream.md)：模型协议路由、缓存会话、GO 用量和现有计费/智能路由边界。读取时机：修改 OpenCode 账号模式、三协议、会话头、模型目录或额度监控时读取。
 - [MiniMax 上游](minimax_upstream.md)：MiniMax API Key、按量/Coding 模式、原生与兼容文本协议、模型和额度边界。读取时机：修改 MiniMax 账号、分组、端点、调度或上游用量时读取。

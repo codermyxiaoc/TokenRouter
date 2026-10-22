@@ -29,7 +29,9 @@
 
 文本执行通过 `output_text` 返回纯文本结果；它与执行记录一起受用户归属校验，不是公开素材 URL。`CREATIVE_TEXT_SUBMISSION_UNCONFIRMED` 表示受理核对，`CREATIVE_TEXT_SETTLEMENT_PENDING` 表示已返回但用量结算仍在确认；两者保持 `running`，不能据此创建新任务。账务证据和资金回执只在后端保存，不出现在用户执行响应。相同幂等键仍只恢复原参数和原执行，不再次请求文本模型。
 
-`GET /api/v1/creative/models` 返回管理员在创作台设置中启用的图片、文本、视频和音频模型。视频条目返回端点与 `video_capabilities`：`durations` 为 1–60 整数秒，`resolutions` 为 480p/720p/1080p 与原配置档位的并集，`aspect_ratios` 为常见比例、`adaptive` 与原配置的并集。`allow_custom_resolution` 为 true，允许数字 p 分辨率（1–65536）；比例必须来自 `aspect_ratios`，不接受任意自由比例。`default_duration` 保留原时长最小值，`default_resolution`、`default_aspect_ratio` 保留原配置首项。上述扩展仅在运行时派生，不回写设置；参考图数量限制、模型权限和端点校验不变。旧目录未声明自由输入能力时，前端仍按其原白名单处理。图片条目的 `output_count` 继续表示单任务固定输出数，`output_counts` 表示画布可选总张数：普通模型为 1–8，MJ 为 4/8。
+`GET /api/v1/creative/models` 返回管理员在创作台设置中启用的图片、文本、视频和音频模型。视频条目返回端点与 `video_capabilities`。独立 Video 平台的 `durations` 为 1–60 整数秒，`resolutions` 为 480p/720p/1080p 与原配置档位的并集，`aspect_ratios` 为常见比例、`adaptive` 与原配置的并集；`allow_custom_resolution` 为 true，允许数字 p 分辨率（1–65536）。比例必须来自 `aspect_ratios`，不接受任意自由比例。`default_duration` 保留原时长最小值，`default_resolution`、`default_aspect_ratio` 保留原配置首项。上述扩展仅在运行时派生，不回写设置；参考图数量限制、模型权限和端点校验不变。旧目录未声明自由输入能力时，前端仍按其原白名单处理。图片条目的 `output_count` 继续表示单任务固定输出数，`output_counts` 表示画布可选总张数：普通模型为 1–8，MJ 为 4/8。
+
+Grok 视频条目为 `media_type=video`、`video_endpoint=grok`、`operations=[generate]`。其运行能力单独限定 `durations=1–15` 整数秒、`resolutions=[480p,720p,1080p]`，`allow_custom_resolution=false`；比例为常见预设、`adaptive` 与已配置合法预设的并集，不开放自定义比例。这与原 Grok 计费的精确范围一致，保存和提交都拒绝范围外的参数，不静默截成 15 秒或按 480p 报价。创建仍使用 `kind=video`，`params` 携带 `group_id`、请求模型名、`endpoint=grok`、提示词、时长、分辨率、比例和最多一个私有图片引用；不接受 Grok 视频编辑/扩展、视频或音频参考，也不接受 `generate_audio` 或 `watermark` 参数。自动比例 `adaptive` 在 Grok 上游请求中省略 `aspect_ratio`。用户通过统一执行和私有素材接口查询、播放与下载，不直接使用上游 URL 或凭据。
 
 音频条目为 `media_type=audio`、`model=grok-voice-tts`、`operations=[generate]`，固定一个输出。`audio_capabilities` 返回 `voices=[eve,ara,rex,sal,leo]`、`formats=[mp3,wav]`、`speed_min=0.7`、`speed_max=1.5`、`default_voice=eve`、`default_format=mp3`、`default_speed=1`、`default_language=auto` 和 `max_input_chars=15000`。候选与目录同时受管理员白名单、用户分组权限和 Grok Voice 账号能力约束。
 
@@ -48,13 +50,15 @@
 | `GET` | `/api/v1/creative/executions?canvas_id={id}` | 分页读取当前画布执行 |
 | `GET` | `/api/v1/creative/executions/{id}` | 查询单个执行和输出素材 |
 
-同一用户、同一画布和同一幂等键只能创建一个执行；不同请求体使用同键返回冲突。图片执行复用创作台原有 provider、预扣、扣费和退款账本，视频执行复用视频任务服务及其异步结算，画布层不重复记账。任务重试会先恢复已有上游任务 ID，避免重复生成；删除画布不会取消已经提交的上游任务，也不会绕过既有结算流程。
+同一用户、同一画布和同一幂等键只能创建一个执行；不同请求体使用同键返回冲突。图片执行复用创作台原有 provider、预扣、扣费和退款账本；独立 Video 视频复用视频任务服务及其预扣结算，Grok 视频复用正式 Grok 网关与 `LegacyVideoRuntime` 的完成后结算，画布层不重复记账。任务恢复先查已有发送栅栏和上游任务关联，不重发未知受理请求；删除画布不会取消已经提交的上游任务，也不会绕过既有结算流程。
 
-新执行登记沿用每用户 2 GiB 的素材与在途任务预算，视频子执行预留 512 MiB，其它子执行预留 128 MiB。已有任务预留导致暂时无法接收整批时返回 HTTP `429 CANVAS_EXECUTION_LIMIT`，提示等待已有任务完成；实际素材加本次所需预算本身已经超限时仍返回 `413 CANVAS_STORAGE_LIMIT`。拒绝发生在执行登记和生成预扣前，不留下半批任务、不自动重发；同一幂等键的已受理任务仍优先恢复，不受新的容量检查阻断。
+新执行登记沿用每用户 2 GiB 的素材与在途任务预算，视频子执行预留 512 MiB，其它子执行预留 128 MiB。已有任务预留导致暂时无法接收整批时返回 HTTP `429 CANVAS_EXECUTION_LIMIT`，提示等待已有任务完成；实际素材加本次所需预算本身已经超限时仍返回 `413 CANVAS_STORAGE_LIMIT`。拒绝发生在执行登记和上游提交前，使用预扣的媒体也不会先冻结费用；不留下半批任务、不自动重发，同一幂等键的已受理任务仍优先恢复，不受新的容量检查阻断。
 
 音频执行复用创作台任务引擎及其资金账本，声音、格式、语速与文本进入参数指纹。同步上游返回不明确时以 `running` 和 `CREATIVE_AUDIO_SUBMISSION_UNCONFIRMED` 提示核对，不能另建请求或直接当作已退款；重启恢复保留提交栅栏，不盲目重发。成功结果通过同一私有素材接口归档、播放和下载。
 
 视频执行的 `status=running` 不一定表示上游正在生成。`error_code` 可为 `CREATIVE_VIDEO_SUBMISSION_UNCONFIRMED`、`CREATIVE_VIDEO_SETTLEMENT_PENDING`、`CREATIVE_VIDEO_RELEASE_PENDING` 或 `CREATIVE_VIDEO_RECONCILIATION`，分别表示受理待确认、结算待处理、预扣释放待处理和其它任务费用核对；`error_message` 提供安全说明。这些非终态提示不表示任务失败或已经退款，客户端继续按原执行轮询，不能另建任务。正常进度和终态会更新或清除提示，终态判断仍以 `status` 为准。
+
+Grok 视频复用受理、结算与账务核对状态，但没有独立 Video 的预扣释放阶段。原任务失败且已确认 `not_billable` 时返回 `CREATIVE_GROK_VIDEO_FAILED` 和未扣费说明；原任务完成且 `settled` 后才归档并返回成功。完整恢复与原身份约束见[Grok 视频执行与恢复](../domains/cloud_canvas.md#grok_video_execution)。
 
 图片批次返回 `{batch_id, executions}`，批次 ID 为该请求幂等键。每个子执行的 `params` 包含服务端生成的 `batch_id`、从零开始的 `batch_index`、子任务总数 `batch_size` 和总输出数 `batch_output_count`，不允许客户端伪造这些内部字段。一个 MJ 四图任务对应一个子执行，八图对应两个。服务端按用户锁检查整批容量和幂等后一次提交，失败不会留下半批；响应丢失后使用原参数与原键可恢复整批，修改张数会返回冲突。轮询按批次键与节点 ID 聚合，成功图分别归档，失败子任务按原账务规则释放。
 
@@ -62,6 +66,10 @@
 ### 视频模型设置
 
 管理员视频模型候选保持请求模型名（包括账号映射别名），并返回首个可用端点的 `video_endpoint`、`video_capabilities` 作为表单实际初始值；这些值仅为端点默认参数，不保证供应商支持。保存视频设置时，缺省或空的时长、分辨率、比例集合分别补齐所选端点的既有默认值，保留已填写参数顺序与显式 `max_reference_images=0`。非法非空参数仍拒绝，错误标明分组和模型。端点、账号映射、价格和生成请求的校验不因默认补齐而放宽；切换端点不能套用另一个端点的候选默认值。
+
+`GET /api/v1/admin/settings/creative-model-candidates` 为符合条件的 Grok 分组返回视频候选，固定 `platform=grok`、`media_type=video`、`video_endpoint=grok` 和 `video_endpoints=[grok]`，默认 5 秒、720p、16:9、最多一张参考图。候选要求分组处于启用状态并开放媒体生成、存在已知具备媒体资格的可调度 OAuth/API Key 账号、映射后的最终模型明确属于 Grok 视频且价格可解析；账号/渠道模型限制、别名和定价歧义检查继续生效。候选扫描只读现有资格，不发起付费生成或上游资格探测。运行能力按 Grok 专用的 1–15 秒和三个固定分辨率派生，不把表单默认值当作上游能力保证，也不套用独立 Video 的自定义扩展。
+
+`grok` 只属于创作台 Grok 分组；保存时不能给 Grok 分组配置独立 Video 端点，也不能给独立 Video 分组配置 `grok`。该值不扩展独立 Video 账号的端点枚举。前端根据服务端 `media_type` 展示视频参数，不通过模型名称自行判定媒体类型。
 
 ## 前端交付
 

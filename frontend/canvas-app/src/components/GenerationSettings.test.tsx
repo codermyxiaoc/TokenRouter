@@ -162,6 +162,28 @@ describe('画布生成设置的能力边界与弹层交互', () => {
     expect(onChange).toHaveBeenCalledTimes(3);
   });
 
+  it('Grok 视频遵循固定分辨率与 1–15 秒目录，不允许自定义或超时长输入', () => {
+    // 仅按服务端能力收紧 Grok，其他 Video 模型的自定义档位和 60 秒范围继续由各自目录决定。
+    const onChange = vi.fn();
+    const videoModel: Model = { ...model, platform: 'grok', model: 'grok-imagine-video', media_type: 'video', video_endpoint: 'grok', video_capabilities: {
+      durations: Array.from({ length: 15 }, (_, index) => index + 1), resolutions: ['480p', '720p', '1080p'], aspect_ratios: ['16:9', 'adaptive'],
+      allow_custom_resolution: false, default_duration: 5, default_resolution: '720p', default_aspect_ratio: '16:9',
+    } };
+    act(() => root.render(<GenerationSettings open anchor={anchor} node={{ ...node, type: 'video', metadata: { seconds: '60', resolution: '768p' } }} model={videoModel} kind="video" onClose={() => {}} onChange={onChange}/>));
+    expect(button('720p').getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="自定义视频分辨率"]')?.disabled).toBe(true);
+    const seconds = document.querySelector<HTMLInputElement>('[aria-label="视频时长秒数"]')!;
+    expect([seconds.min, seconds.max, seconds.value]).toEqual(['1', '15', '5']);
+    setNumber(seconds, '16');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(seconds.value).toBe('5');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('15 秒');
+    setNumber(seconds, '15');
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({ seconds: '15' });
+    act(() => button('1080p').click());
+    expect(onChange).toHaveBeenLastCalledWith({ resolution: '1080p' });
+  });
+
   it('已有自定义分辨率回显并驱动尺寸估算，切换模型不会沿用过时输入', () => {
     const onChange = vi.fn();
     const videoModel = { ...model, media_type: 'video' as const, video_capabilities: { durations: [5], resolutions: ['480p', '720p', '1080p'], aspect_ratios: ['16:9', '4:3'], allow_custom_resolution: true } };

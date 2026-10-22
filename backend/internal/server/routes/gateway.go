@@ -313,6 +313,11 @@ func RegisterGatewayRoutes(
 			},
 		})
 	}
+	if h.CreativeCanvas != nil && h.OpenAIGateway != nil {
+		h.CreativeCanvas.ConfigureGrokVideoGateway(newCreativeGrokVideoGatewayAdapter(h.OpenAIGateway.CreativeGrokVideoTask,
+			[]gin.HandlerFunc{bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, requireCreativeGrokVideoPlatform},
+			h.OpenAIGateway.GrokVideoGeneration, h.OpenAIGateway.GrokVideoContent))
+	}
 	videoEditHandler := func(c *gin.Context) {
 		if getGroupPlatform(c) == service.PlatformGrok {
 			h.OpenAIGateway.GrokVideoEdit(c)

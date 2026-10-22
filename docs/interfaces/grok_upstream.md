@@ -60,6 +60,8 @@ JSON 图片编辑和视频生成请求可在 `image`、`images`、`reference_ima
 
 创作台的 Grok 图片 `edit` 使用 xAI 官方 JSON `POST /v1/images/edits`，而不是 OpenAI 风格 multipart：单图请求使用 `image: {"type":"image_url","url":"data:image/png;base64,..."}`，多图请求使用 `images` 数组，最多 3 张源图；请求保留 `model`、`prompt`、`resolution`、`aspect_ratio`，并设置 `response_format: "b64_json"`，响应从 `data[].b64_json` 解析为创作台输出。`generate` 仍使用 `/v1/images/generations`。
 
+创作台 Grok 视频使用专用目录端点 `grok`，通过进程内私有桥调用原正式视频生成路径；参考图来自已鉴权的画布私有素材，最多一张，以 `image: {"type":"image_url","url":"data:..."}` 发送。模型、提示词、时长和分辨率沿用正式参数，明确比例发送为 `aspect_ratio`，画布自动比例则省略该字段。该入口只提供视频生成，不扩展为编辑或延长；候选、管理员配置与参数约定见[画布视频模型设置](cloud_canvas.md#video_model_settings)。
+
 ## 媒体账号资格
 
 新的 Grok 图片或视频生成请求会执行媒体专用的账号资格检查。API Key 账号保持可用；OAuth 账号必须由 xAI 计费探测提供明确的付费资格证据。Free、禁止访问、缺少观测、观测格式错误或结论不明确的 OAuth 账号都不会承接新的媒体生成请求。尚无观测的 OAuth 账号会在第一次转发媒体请求前执行探测，导入账号时也会主动先执行计费探测。聊天请求和已有视频任务的状态查询不受这项隔离影响。当分组中没有合格账号时，媒体端点返回 HTTP `503`，错误类型为 `grok_media_no_eligible_account`。
@@ -121,6 +123,8 @@ Voice HTTP 入口包括 TTS、STT 和自定义 Voice 的创建、读取、修改
 升级自动导入最近七天尚未结束或未结算的已知任务，仅恢复原任务查询。历史缺少资金快照、原账号/付款人已不可恢复、上游已丢失任务结果的情况须人工核对，禁止猜测价格或付款用户。数据库恢复记录不保存提示词、原始响应、凭据或签名媒体地址；短期预览仍使用独立 Redis 快照。列表读取始终是只读投影，不触发上游调用或扣费。状态完成不代表账务已结算，金额关联使用记录判断。
 
 上游创建与本站持久化无法组成跨供应商事务；上游不支持幂等创建/按客户端 ID 查找时，进程在受理后、获得并保存任务 ID 前退出仍会产生未知结果。此类请求不得通过自动重发来“恢复”，需要供应商订单证据核对。
+
+创作台 Grok 视频继续使用上述原任务、原价卡和完成后账务，不转入 `VideoTaskService` 或 `video_hold/capture/release`。画布在发送前持久化执行栅栏，原 `legacy_video_tasks` 保存与画布关联在同一事务完成；查询和 content 下载核对原用户、隐藏执行 Key、分组、账号及任务，只有 `completed` 且 `settled` 的结果进入私有素材归档。画布的未知受理、重启恢复和存储失败不会重新生成或再次计费；完整契约见[Grok 视频执行与恢复](../domains/cloud_canvas.md#grok_video_execution)。
 
 ## 客户端配置
 

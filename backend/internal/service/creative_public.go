@@ -225,6 +225,11 @@ func (s *CreativePublicService) ListModels(ctx context.Context, userID int64) (*
 				return nil, audioErr
 			}
 			out.Data = append(out.Data, audio...)
+			videos, videoErr := s.creativeGrokVideoModelsForGroup(ctx, group, settings)
+			if videoErr != nil {
+				return nil, videoErr
+			}
+			out.Data = append(out.Data, videos...)
 		}
 		if group.Platform == PlatformVideo && group.IsActive() {
 			videos, videoErr := s.creativeVideoModelsForGroup(ctx, group, settings)
@@ -316,6 +321,11 @@ func (s *CreativePublicService) ListCreativeModelCandidates(ctx context.Context)
 				return nil, audioErr
 			}
 			out = append(out, audio...)
+			videos, videoErr := s.creativeGrokVideoCandidatesForGroup(ctx, group)
+			if videoErr != nil {
+				return nil, videoErr
+			}
+			out = append(out, videos...)
 		}
 		if group.Platform == PlatformVideo && group.IsActive() {
 			videos, videoErr := s.creativeVideoCandidatesForGroup(ctx, group)

@@ -68,8 +68,11 @@ func (s *CreativePublicService) NormalizeCreativeModelSettingsForSave(ctx contex
 			continue
 		}
 		if item.MediaType == "video" {
-			if group.Platform != PlatformVideo {
-				return nil, fmt.Errorf("creative video model requires a video group")
+			// Grok 使用自身持久视频任务链路，不能借此端点扩展独立 Video 账号能力。
+			if (group.Platform == PlatformGrok && item.VideoEndpoint != CreativeVideoEndpointGrok) ||
+				(group.Platform == PlatformVideo && item.VideoEndpoint == CreativeVideoEndpointGrok) ||
+				(group.Platform != PlatformVideo && group.Platform != PlatformGrok) {
+				return nil, fmt.Errorf("creative video endpoint must match its video or grok group")
 			}
 			out = append(out, item)
 			continue
@@ -143,11 +146,15 @@ func NormalizeCreativeModelSettings(input []CreativeModelSetting) ([]CreativeMod
 		}
 		var videoCapabilities *CreativeVideoCapabilities
 		if mediaType == "video" {
-			if !validVideoEndpoint(item.VideoEndpoint) {
+			if item.VideoEndpoint != CreativeVideoEndpointGrok && !validVideoEndpoint(item.VideoEndpoint) {
 				return nil, fmt.Errorf("creative video endpoint is required")
 			}
 			var capabilityErr error
-			videoCapabilities, capabilityErr = normalizeCreativeVideoCapabilities(item.VideoEndpoint, item.VideoCapabilities)
+			if item.VideoEndpoint == CreativeVideoEndpointGrok {
+				videoCapabilities, capabilityErr = normalizeCreativeGrokVideoCapabilities(item.VideoCapabilities)
+			} else {
+				videoCapabilities, capabilityErr = normalizeCreativeVideoCapabilities(item.VideoEndpoint, item.VideoCapabilities)
+			}
 			if capabilityErr != nil {
 				return nil, fmt.Errorf("creative model setting %d (group %d, model %q): %w", index, item.GroupID, model, capabilityErr)
 			}

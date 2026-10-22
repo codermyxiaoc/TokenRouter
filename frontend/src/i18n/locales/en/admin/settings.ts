@@ -122,7 +122,7 @@ export default {
           workerUsage: 'Current usage',
           modelSettings: {
             title: 'Image, Text, Video and Audio Models',
-            description: 'Only selected models can be used. Video settings provide defaults and extra presets. All video models accept custom resolution, preset aspect ratios and 1–60 seconds, subject to upstream protocol validation. Assets are retained for 7 days.',
+            description: 'Only selected models can be used. Video settings provide defaults and extra presets. Available durations, resolutions and aspect ratios depend on model capabilities and upstream protocol validation. Assets are retained for 7 days.',
             videoEndpoint: 'Video endpoint',
             videoDurations: 'Default duration (smallest value, comma separated)',
             videoResolutions: 'Default and extra resolutions (first is default)',

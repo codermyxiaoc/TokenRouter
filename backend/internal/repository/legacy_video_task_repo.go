@@ -83,6 +83,23 @@ func validateLegacyVideoTask(t *service.LegacyVideoTask) error {
 
 // Save 并发去重且保留第一次保存的完整快照；旧任务只允许补齐原本缺失的信息。
 func (r *legacyVideoTaskRepository) Save(ctx context.Context, t *service.LegacyVideoTask) error {
+	if t != nil && t.CreativeExecutionID != "" {
+		// 上游任务入库与画布关联原子提交，崩溃恢复不会丢失原账号/账务身份。
+		executionID := t.CreativeExecutionID
+		tx, err := r.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if err = saveLegacyVideoTask(ctx, tx, t); err != nil {
+			return err
+		}
+		t.CreativeExecutionID = executionID
+		if err = bindCreativeGrokVideoTask(ctx, tx, t.UserID, executionID, t); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 	return saveLegacyVideoTask(ctx, r.db, t)
 }
 

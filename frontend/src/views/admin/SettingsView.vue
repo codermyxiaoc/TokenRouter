@@ -10284,7 +10284,7 @@ const creativeModelCandidateOptions = computed(() => {
     for (const candidate of candidates) {
       options.push({
         value: creativeModelSettingKey(candidate),
-        label: `${candidate.model} / ${candidate.media_type === 'video' ? 'Video' : candidate.media_type === 'audio' ? 'Grok TTS' : candidate.media_type === 'text' ? t('admin.settings.features.creative.modelSettings.operations.text') : candidate.platform}`,
+        label: `${candidate.model} / ${candidate.media_type === 'video' ? (candidate.platform === 'grok' ? 'Grok Video' : 'Video') : candidate.media_type === 'audio' ? 'Grok TTS' : candidate.media_type === 'text' ? t('admin.settings.features.creative.modelSettings.operations.text') : candidate.platform}`,
         candidate,
       });
     }
@@ -10338,6 +10338,8 @@ function creativeVideoEndpointOptions(item: CreativeModelSetting) {
   const labels: Record<string, string> = {
     compat: 'OpenAI Videos (/v1/video/generations)', openai_videos: 'OpenAI Videos (/v1/videos)',
     seedance: 'Seedance', kling: 'Kling', wan: 'Wan', minimax: 'MiniMax', vidu: 'Vidu',
+    // Grok 仅用于创作台已有 Grok 分组，不代表独立 Video 账号新增了可配置端点。
+    grok: 'Grok Video',
   };
   return endpoints.map((value) => ({ value, label: labels[value] || value }));
 }

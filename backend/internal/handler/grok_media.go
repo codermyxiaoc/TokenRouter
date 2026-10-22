@@ -52,6 +52,14 @@ func (h *OpenAIGatewayHandler) GrokVideoContent(c *gin.Context) {
 	h.handleGrokMedia(c, service.GrokMediaEndpointVideoContent, c.Param("request_id"))
 }
 
+// CreativeGrokVideoTask 只返回原持久任务，私有桥不启动第二个轮询或扣费流程。
+func (h *OpenAIGatewayHandler) CreativeGrokVideoTask(ctx context.Context, userID, keyID int64, id string) (*service.LegacyVideoTask, error) {
+	if h == nil || h.gatewayService == nil {
+		return nil, service.ErrCanvasUnavailable
+	}
+	return h.gatewayService.CreativeGrokVideoTask(ctx, userID, keyID, id)
+}
+
 // SetMediaTaskObserver 在装配时注入列表投影存储，不改变视频网关的查询与结算流程。
 func (h *OpenAIGatewayHandler) SetMediaTaskObserver(observer service.MediaTaskObserver) {
 	h.mediaTaskObserver = observer
@@ -259,7 +267,8 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	}
 
 	// 已有任务查询只恢复归属和结算，不因创建后的余额变化阻断状态读取。
-	skipBilling := compositeIdentityLookup || (endpoint.IsSeedance() && endpoint.IsVideoLookupRequest())
+	skipBilling := compositeIdentityLookup || (endpoint.IsSeedance() && endpoint.IsVideoLookupRequest()) ||
+		(endpoint.IsVideoLookupRequest() && service.IsCreativeGrokVideoRead(c.Request.Context(), apiKey, requestID))
 	if !skipBilling {
 		if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
 			reqLog.Info("grok_media.billing_eligibility_check_failed", zap.Error(err))
@@ -483,6 +492,9 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			imageBilling.startForward(c)
 			return h.gatewayService.ForwardGrokMedia(requestCtx, c, account, endpoint, requestID, forwardBody, forwardContentType)
 		}()
+		if err != nil && endpoint == service.GrokMediaEndpointVideoContent {
+			service.MarkCreativeGrokVideoContentError(requestCtx)
+		}
 
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
@@ -640,6 +652,8 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 					BillingUserID: subject.UserID, APIKeyID: apiKey.ID, GroupID: groupID, AccountID: account.ID,
 					Pending: &pending, Model: pending.OriginalModel, Status: "queued", BillingStatus: "pending",
 					CreatedAt: createdAt, NextPollAt: time.Now().Add(5 * time.Second)}
+				// 内部发送标记只绑定精确用户、原 Key 与分组，由仓储随原任务原子落库。
+				task.CreativeExecutionID = service.CreativeGrokVideoExecutionID(requestCtx, apiKey.UserID, apiKey.ID, groupID)
 				storageErr = h.gatewayService.TrackLegacyVideoTask(persistCtx, task)
 				if storageErr != nil {
 					storageErr = h.gatewayService.TrackLegacyVideoTask(persistCtx, task)

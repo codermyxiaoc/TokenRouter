@@ -129,6 +129,8 @@ func ProvideCreativeCanvasService(repo CreativeCanvasRepository, store CreativeC
 		creative.TextCatalog = gateway
 	}
 	svc.SetExecutor("video", video)
+	// 恢复器先安装 Grok 分派，私有路由尚未就绪时等待，不能误交给 Video 执行器判失败。
+	svc.SetGrokVideoGateway(nil)
 	svc.Start()
 	return svc
 }

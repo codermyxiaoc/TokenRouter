@@ -198,6 +198,66 @@ describe('画布编辑器生成与恢复集成', () => {
     expect(createImageBatch).not.toHaveBeenCalled();
   });
 
+  it.each([0, 1])('Grok 视频按目录默认参数提交并通过私有素材播放结果（参考图=%s）', async referenceCount => {
+    // Grok 沿用统一视频表单、提交与归档结果；不能要求独立 Video 平台或把视频降为图片任务。
+    const videoModel: Model = {
+      ...model, platform: 'grok', group_name: 'Grok', model: 'grok-imagine-video', media_type: 'video',
+      operations: ['generate'], video_endpoint: 'grok', video_endpoints: ['grok'],
+      video_capabilities: {
+        resolutions: ['480p', '720p', '1080p'], durations: Array.from({ length: 15 }, (_, index) => index + 1),
+        aspect_ratios: ['16:9', '9:16', 'adaptive'], max_reference_images: 1, allow_custom_resolution: false,
+        default_duration: 5, default_resolution: '720p', default_aspect_ratio: '16:9',
+      },
+    };
+    cloudState.document!.nodes = [{ ...structuredClone(imageNode), type: 'video', title: 'Grok 视频', metadata: { prompt: '海面日出', model: '7::grok-imagine-video' } }];
+    if (referenceCount) {
+      cloudState.document!.nodes.push({ ...structuredClone(imageNode), id: 'reference-image', metadata: { asset_id: 'private-reference', expires_at: '2099-10-25T00:00:00Z' } });
+      cloudState.document!.connections = [{ id: 'reference-edge', fromNodeId: 'reference-image', toNodeId: imageNode.id }];
+    }
+    vi.mocked(listModels).mockResolvedValue([videoModel]);
+    const execution: Execution = { id: 'grok-video-execution', canvas_id: 'canvas-test', node_id: imageNode.id, kind: 'video', status: 'queued', task_id: 'grok-upstream-task', assets: [], created_at: '2026-10-18T00:00:00Z', updated_at: '2026-10-18T00:01:00Z' };
+    vi.mocked(createExecution).mockResolvedValue(execution);
+    await mount();
+    expect(button('打开生成设置').textContent).toContain('720p · 16:9 · 5s');
+    await click(button('打开生成设置'));
+    expect(document.querySelector<HTMLInputElement>('[aria-label="自定义视频分辨率"]')?.disabled).toBe(true);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="视频时长秒数"]')?.max).toBe('15');
+    await click(button('关闭设置'));
+    await click(button('生成视频'));
+    expect(createExecution).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createExecution).mock.calls[0][3]).toEqual({
+      group_id: 7, model: 'grok-imagine-video', operation: 'generate', prompt: '海面日出',
+      endpoint: 'grok', duration: 5, resolution: '720p', aspect_ratio: '16:9',
+      references: referenceCount ? [{ asset_id: 'private-reference', role: 'first_frame' }] : [],
+    });
+    vi.mocked(listExecutions).mockResolvedValue({ items: [{ ...execution, status: 'succeeded', assets: [{ ...asset('grok-video-result'), media_type: 'video', mime_type: 'video/mp4' }] }], total: 1, page: 1, page_size: 100 });
+    await act(async () => poll!());
+    expect(currentNode().metadata).toMatchObject({ status: 'success', asset_id: 'grok-video-result', execution_id: execution.id });
+    expect(host.querySelector('video')?.getAttribute('src')).toBe('blob:private-grok-video-result');
+    expect(assetURL).toHaveBeenCalledWith('grok-video-result');
+    expect(createExecution).toHaveBeenCalledTimes(1);
+    expect(createImageBatch).not.toHaveBeenCalled();
+  });
+
+  it('Grok 视频超过服务端单张参考图限制时不提交生成', async () => {
+    // 参考图数量来自候选能力，避免旧节点保留多图连线时越过 Grok 的输入合同。
+    vi.mocked(listModels).mockResolvedValue([{
+      ...model, platform: 'grok', model: 'grok-imagine-video', media_type: 'video', operations: ['generate'], video_endpoint: 'grok',
+      video_capabilities: { durations: [5], resolutions: ['720p'], aspect_ratios: ['16:9'], max_reference_images: 1 },
+    }]);
+    cloudState.document!.nodes = [
+      { ...structuredClone(imageNode), type: 'video', metadata: { prompt: '海面日出', model: '7::grok-imagine-video' } },
+      ...[1, 2].map(index => ({ ...structuredClone(imageNode), id: `reference-${index}`, metadata: { asset_id: `private-reference-${index}` } })),
+    ];
+    cloudState.document!.connections = [1, 2].map(index => ({ id: `edge-${index}`, fromNodeId: `reference-${index}`, toNodeId: imageNode.id }));
+    await mount();
+    await click(button('生成视频'));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('当前模型最多支持 1 张参考图');
+    expect(createExecution).not.toHaveBeenCalled();
+    expect(createImageBatch).not.toHaveBeenCalled();
+    expect(cloudState.flush).not.toHaveBeenCalled();
+  });
+
   it('选择多张后以当前节点提交一个批次，先保存意图，双击不会新增结果节点或重复提交', async () => {
     let finish: ((value: ExecutionBatch) => void) | undefined;
     vi.mocked(createImageBatch).mockImplementation((_canvasId, _nodeId, _params, _count, _key) => new Promise(resolve => { finish = resolve; }));

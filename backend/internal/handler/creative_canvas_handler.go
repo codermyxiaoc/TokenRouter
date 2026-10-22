@@ -29,6 +29,13 @@ func (h *CreativeCanvasHandler) ConfigureTextGateway(gateway service.CreativeTex
 		h.service.SetTextGateway(gateway)
 	}
 }
+
+// ConfigureGrokVideoGateway 只绑定原 Grok 媒体链路，不改变现有 Video 平台执行器。
+func (h *CreativeCanvasHandler) ConfigureGrokVideoGateway(gateway service.CreativeGrokVideoGateway) {
+	if h != nil && h.service != nil {
+		h.service.SetGrokVideoGateway(gateway)
+	}
+}
 func canvasUser(c *gin.Context) (int64, bool) {
 	subject, ok := middleware.GetAuthSubjectFromContext(c)
 	if !ok || subject.UserID <= 0 {

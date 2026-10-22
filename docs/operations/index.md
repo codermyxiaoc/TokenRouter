@@ -8,7 +8,7 @@
 
 ## 文档
 
-- [部署与数据库迁移](deployment_and_migrations.md)：构建产物、运行方式、首次初始化、迁移约束和升级恢复边界。读取时机：修改 Docker/二进制发布、启动装配、数据库迁移、备份或升级时读取。
+- [部署与数据库迁移](deployment_and_migrations.md)：构建产物、运行方式、首次初始化、迁移约束和升级恢复边界，含 Grok 画布视频增量迁移。读取时机：修改 Docker/二进制发布、启动装配、数据库迁移、备份、升级或新画布执行回退时读取。
 - [可观测性与数据生命周期](observability_and_data_lifecycle.md)：日志、Ops、Usage、审计、聚合、清理和备份的数据面总览与专题路由。读取时机：判断数据所有权、留存、备份范围或进入详细观测专题前读取。
 - [账号维护](account_maintenance.md)：凭据刷新、临时不可调度、账号测试、自动恢复、额度和能力探测、Claude 原生重置兑换。读取时机：修改 token refresh、账号状态、计划测试、quota/endpoint capability 探测、重置兑换或恢复策略时读取。
 - [上游传输安全](upstream_transport_security.md)：代理生命周期、连接池隔离、TLS 指纹路由、目标/重定向和 Header 安全。读取时机：修改代理、HTTP client、TLS profile/router、base URL 或直连回退时读取。

@@ -417,6 +417,8 @@ func creativeCanvasFailureMessage(code string) string {
 		return "生成参数不符合当前模型能力，请检查尺寸、比例、质量和参考图数量"
 	case "VIDEO_INVALID_OPENAI_PARAMETERS", "VIDEO_PROTOCOL_PARAMETERS_INVALID", "VIDEO_METADATA_CONFLICT":
 		return "视频端点不支持当前参数，请检查分辨率、比例、时长和参考图要求"
+	case "CREATIVE_GROK_VIDEO_PARAMETERS_UNSUPPORTED":
+		return ErrCreativeGrokVideoParameters.Message
 	case "VIDEO_PRICING_UNAVAILABLE":
 		// 缺价由原任务服务在预扣前拒绝，应提示管理员补价而不是让用户反复调整参数。
 		return "当前模型或分辨率未配置可用的视频价格，请联系管理员配置定价；本次未提交生成或预扣费用"

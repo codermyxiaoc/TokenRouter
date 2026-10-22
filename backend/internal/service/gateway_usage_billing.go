@@ -529,6 +529,10 @@ func detachUpstreamContext(ctx context.Context) (context.Context, context.Cancel
 	if HasCreativeTextUsageSink(ctx) {
 		return ctx, func() {}
 	}
+	// 画布私有下载由后台归档预算控制，关闭流时应及时取消上游连接。
+	if sink, _ := ctx.Value(creativeGrokVideoContextKey{}).(*creativeGrokVideoContext); sink != nil && sink.taskID != "" {
+		return ctx, func() {}
+	}
 	return context.WithoutCancel(ctx), func() {}
 }
 

@@ -209,6 +209,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path) ||
 			isSeedanceTaskManagementRequest(c.Request.Method, c.Request.URL.Path) ||
 			isBatchImageBillingBypassRequest(c.Request.Method, c.Request.URL.Path) ||
+			(isGrokVideoTaskRead(c.Request.Method, c.Request.URL.Path) && service.IsCreativeGrokVideoRead(c.Request.Context(), apiKey, "")) ||
 			((apiKey.IsComposite || apiKey.SmartRouting) && isGrokVideoTaskRead(c.Request.Method, c.Request.URL.Path))
 
 		// ── 4. SimpleMode → early return ─────────────────────────────

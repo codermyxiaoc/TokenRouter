@@ -16,29 +16,31 @@ var (
 // LegacyVideoTask 保存旧 Grok/Seedance 任务的恢复与结算依据，不保存请求正文、凭据或媒体地址。
 // BillingUserID 为零仅表示历史任务付款归属尚未恢复，不能据此假定由行为用户付款。
 type LegacyVideoTask struct {
-	ID                int64
-	Source            string
-	TaskID            string
-	UserID            int64
-	BillingUserID     int64
-	APIKeyID          int64
-	GroupID           int64
-	AccountID         int64
-	Model             string
-	RequestID         string
-	Pending           *GrokVideoPendingBilling
-	Status            string
-	BillingStatus     string
-	SettlementResult  json.RawMessage
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	NextPollAt        time.Time
-	LeaseToken        string
-	LeaseUntil        *time.Time
-	Attempts          int
-	LastError         string
-	CompletedAt       *time.Time
-	UpstreamDeletedAt *time.Time
+	// 仅可信画布上下文写入，创建仓储用它与原任务原子关联；不改变普通网关任务。
+	CreativeExecutionID string
+	ID                  int64
+	Source              string
+	TaskID              string
+	UserID              int64
+	BillingUserID       int64
+	APIKeyID            int64
+	GroupID             int64
+	AccountID           int64
+	Model               string
+	RequestID           string
+	Pending             *GrokVideoPendingBilling
+	Status              string
+	BillingStatus       string
+	SettlementResult    json.RawMessage
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	NextPollAt          time.Time
+	LeaseToken          string
+	LeaseUntil          *time.Time
+	Attempts            int
+	LastError           string
+	CompletedAt         *time.Time
+	UpstreamDeletedAt   *time.Time
 }
 
 // LegacyVideoTaskDeletionRepository 原子补齐历史任务并记录删除事实，不能清除已保存的结算证据。

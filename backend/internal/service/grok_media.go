@@ -835,6 +835,9 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	if endpoint == GrokMediaEndpointImagesGenerations || endpoint == GrokMediaEndpointImagesEdits {
 		markImageUpstreamAttempt(c)
 	}
+	if isGrokAsyncVideoCreateEndpoint(endpoint) {
+		MarkCreativeGrokVideoRequestSent(ctx)
+	}
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
@@ -882,6 +885,9 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 			}
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(errorBody))
+			if creativeGrokVideoDefinitelyRejected(resp.StatusCode, errorBody) {
+				MarkCreativeGrokVideoRejected(ctx, resp.StatusCode)
+			}
 			result, forwardErr := s.handleGrokMediaErrorResponse(ctx, resp, c, account, requestIDHeader, upstreamModel)
 			var failoverErr *UpstreamFailoverError
 			if errors.As(forwardErr, &failoverErr) {

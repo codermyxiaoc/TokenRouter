@@ -2533,6 +2533,42 @@ describe("admin SettingsView payment visible method controls", () => {
     wrapper.unmount();
   });
 
+  it.each(['add', 'switch'])("%s Grok video candidate keeps its endpoint, defaults and reference limit", async (action) => {
+    // Grok 图片与视频共用分组；模型切换必须依照候选类型，不能沿用图片能力或独立 Video 端点。
+    const image = { group_id: 15, model: 'grok-imagine-image', operations: ['generate', 'edit'] };
+    const video = {
+      group_id: 15, model: 'grok-imagine-video', group_name: 'Grok', platform: 'grok',
+      media_type: 'video', operations: ['generate'], video_endpoint: 'grok', video_endpoints: ['grok'],
+      video_capabilities: { durations: [5], resolutions: ['720p'], aspect_ratios: ['16:9'], max_reference_images: 1 },
+    };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: action === 'switch' ? [image] : [] });
+    getCreativeModelCandidates.mockResolvedValue([video, { ...image, group_name: 'Grok', platform: 'grok' }]);
+    const wrapper = mountView();
+    await flushPromises();
+    if (action === 'add') {
+      await wrapper.findAll('button').find(node => node.text().includes('admin.settings.features.creative.modelSettings.add'))!.trigger('click');
+    } else {
+      await wrapper.get('[data-placeholder="admin.settings.features.creative.modelSettings.selectModel"]').setValue('15::grok-imagine-video');
+    }
+    await flushPromises();
+    expect(wrapper.get('[data-placeholder="admin.settings.features.creative.modelSettings.selectModel"]').text()).toContain('grok-imagine-video / Grok Video');
+    const endpoint = wrapper.get('[data-testid="creative-video-endpoint"]');
+    expect(endpoint.findAll('option').map(option => [option.attributes('value'), option.text()])).toEqual([['grok', 'Grok Video']]);
+    expect((wrapper.get('input[placeholder="5, 10"]').element as HTMLInputElement).value).toBe('5');
+    expect((wrapper.get('input[placeholder="720p, 1080p"]').element as HTMLInputElement).value).toBe('720p');
+    expect((wrapper.get('input[placeholder="16:9, 9:16"]').element as HTMLInputElement).value).toBe('16:9');
+    expect(wrapper.get('[data-testid="creative-video-reference-limit"]').attributes('max')).toBe('1');
+    await wrapper.find('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      creative_model_settings: [{
+        group_id: 15, model: 'grok-imagine-video', media_type: 'video', operations: ['generate'],
+        video_endpoint: 'grok', video_capabilities: video.video_capabilities,
+      }],
+    }));
+    wrapper.unmount();
+  });
+
   it.each(['0', '61', '1.5', 'invalid'])("rejects invalid creative video duration %s before submitting settings", async (duration) => {
     const video = {
       group_id: 3, model: 'MiniMax-H3', media_type: 'video', operations: ['generate'], video_endpoint: 'openai_videos',

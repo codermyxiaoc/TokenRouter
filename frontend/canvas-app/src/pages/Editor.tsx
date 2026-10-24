@@ -15,6 +15,7 @@ import {ConfigComposer} from '@/components/ConfigComposer';
 import {configInputs,compileConfigPrompt,remapConfigReferences} from '@/platform/config-composer';
 import {GenerationSettings} from '@/components/GenerationSettings';
 import {GenerationStatusDetails} from '@/components/GenerationStatusDetails';
+import {ModelUsageNotes,videoModelUsageNotes,modelUsageNotesFootprint} from '@/components/ModelUsageNotes';
 import {resolveGenerationSettings} from '@/platform/generation-settings';
 import {referenceImageSizeWarning} from '@/platform/reference-image-limit';
 import {mediaUploadAccept,validateUploadFiles} from '@/platform/upload-validation';
@@ -68,7 +69,7 @@ export function Editor(){
  const makeNode=(type:string,position=center()):CanvasNodeData=>({id:randomId(),type,title:names[type],position,width:type==='group'?640:type==='image'||type==='config'?340:type==='video'?420:320,height:type==='image'?240:type==='video'?236:type==='audio'?100:type==='text'?200:type==='group'?420:240,metadata:type==='config'?{generationMode:'image'}:{}});
  // 新提交的大小提醒只影响编辑区，不能改变正在核对或运行的历史任务。
  const referenceWarning=(node:CanvasNodeData)=>node.metadata?.generation_request||node.metadata?.status==='loading'||!(node.type==='video'||node.metadata?.generationMode==='video')?undefined:referenceImageSizeWarning(models.find(m=>modelId(m)===node.metadata?.model),documentRef.current?selectedReferences(documentRef.current,node.id):[],assets);
- const panelExtra=(node:CanvasNodeData)=> (node.type==='config'?60:0)+(generationKind(node)==='audio'?24:0)+(models.some(m=>mediaType(m)===generationKind(node))?0:24)+(referenceWarning(node)?48:0);
+ const panelExtra=(node:CanvasNodeData)=> (node.type==='config'?60:0)+(generationKind(node)==='audio'?24:0)+(models.some(m=>mediaType(m)===generationKind(node))?0:24)+(referenceWarning(node)?48:0)+(generationKind(node)==='video'&&videoModelUsageNotes(models.find(m=>modelId(m)===node.metadata?.model))?modelUsageNotesFootprint(viewSize.height):0);
  const addNode=(type:string,position?:Position)=>{const node=makeNode(type,position);const withPanel=['image','video','audio','text'].includes(type);change(old=>({...old,nodes:[...old.nodes,node],viewport:!position?focusNodeLayout(node,viewSize,withPanel?composerFootprint(viewSize.height,panelExtra(node)):0):old.viewport}));setSettingsOpen(false);setSelected(new Set([node.id]));};
  const removeSelected=useCallback(()=>{const current=documentRef.current;if(current){const protectedIds=protectedGenerationNodeIds(current);if(current.nodes.some(n=>protectedIds.has(n.id)&&(selected.has(n.id)||!!n.metadata?.groupId&&selected.has(n.metadata.groupId)))){setError('任务尚未结束或提交待核对，请等待处理完成后再删除');return;}}change(old=>{const ids=new Set(selected);old.nodes.forEach(n=>{if(n.metadata?.groupId&&selected.has(n.metadata.groupId))ids.add(n.id);});return{...old,nodes:old.nodes.filter(n=>!ids.has(n.id)),connections:old.connections.filter(e=>e.id!==selectedEdge&&!ids.has(e.fromNodeId)&&!ids.has(e.toNodeId))};});setSelected(new Set());setSelectedEdge('');},[change,selected,selectedEdge]);
  const undo=useCallback(()=>{const current=documentRef.current;const prev=history.current.past.pop();if(current&&prev){history.current.future.push(snapshot(current));update(restoreHistoryDocument(prev,current));historyRender(n=>n+1);}},[update]);
@@ -319,6 +320,7 @@ export function Editor(){
          <button className="primary generate-icon" disabled={busy||cloud.conflict||!!sizeWarning||(!chosenModel&&!active.metadata?.generation_request)||(active.metadata?.status==='loading'&&!active.metadata?.generation_request)} aria-describedby={sizeWarning?'reference-size-warning':undefined} title={active.metadata?.generation_request?'核对提交':active.metadata?.status==='loading'?(active.metadata.generation_phase==='reconciliation'?'任务核对中…':'生成中…'):`生成${names[kind]}`} aria-label={active.metadata?.generation_request?'核对提交':active.metadata?.status==='loading'?(active.metadata.generation_phase==='reconciliation'?'任务核对中…':'生成中…'):`生成${names[kind]}`} onClick={()=>void execute(active)}>{active.metadata?.status==='loading'&&active.metadata.generation_phase==='reconciliation'?<Clock3 size={18}/>:busy||active.metadata?.status==='loading'?<LoaderCircle className="animate-spin" size={18}/>:<ArrowUp size={18}/>}</button>
         </div>
         {!available.length&&<p className="muted">管理员尚未开放此类模型。</p>}
+        {kind==='video'&&<ModelUsageNotes model={chosenModel} condensed={viewSize.height<600}/>}
 
        </div>
       </div>}

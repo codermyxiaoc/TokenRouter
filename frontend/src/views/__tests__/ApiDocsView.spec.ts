@@ -52,6 +52,21 @@ describe('API 文档页面', () => {
     wrapper.unmount()
   })
 
+  it('Seedance 首尾帧指南可直接打开并复制包含 adaptive 与角色的完整说明', async () => {
+    const { wrapper, router } = await render('/docs/kemei-seedance25-frames')
+    expect(wrapper.get('article').text()).toContain('doubao-seedance-2-5-260628')
+    expect(wrapper.get('article').text()).toContain('ratio 必须为 adaptive')
+    expect(wrapper.get('article').text()).toContain('first_frame')
+    await wrapper.findAll('button').find(button => button.text().includes('apiDocs.copyMarkdown'))!.trigger('click')
+    expect(copyToClipboard).toHaveBeenLastCalledWith(expect.stringContaining('"ratio": "adaptive"'))
+    expect(copyToClipboard).toHaveBeenLastCalledWith(expect.stringContaining('创建结果未知时先查原任务'))
+    await router.push('/docs/kemei-seedance25-reference')
+    await flushPromises()
+    expect(wrapper.get('article').text()).toContain('reference_image')
+    expect(wrapper.get('article').text()).toContain('"ratio": "16:9"')
+    wrapper.unmount()
+  })
+
   it('访客可读默认指南，已登录用户复用应用布局', async () => {
     const { wrapper } = await render()
     expect(wrapper.find('article').text()).toContain('从一个端点开始接入')
@@ -68,16 +83,18 @@ describe('API 文档页面', () => {
   it('搜索和自研平台选择框共同过滤目录，空结果可清除', async () => {
     const { wrapper } = await render('/docs/overview')
     const videoCatalog = wrapper.get('nav[aria-label="视频与异步任务"]')
-    // Vidu 原生端点已纳入视频文档目录，不能继续按新增前的六个协议计数。
+    // 模型指南复用已注册路径；目录按协议/模型家族分组，不能将指南数量误作新增服务端路由。
     expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual([
-      'OpenAI Videos6', 'Seedance / 火山方舟3', 'Kling / 可灵6', 'Wan / 万相2', 'MiniMax2', 'Vidu5', 'Grok / xAI5',
+      'OpenAI Videos7', 'Seedance / 火山方舟6', 'Kling / 可灵6', 'Wan / 万相2', 'MiniMax3', 'Vidu5', 'Grok / xAI5',
     ])
-    expect(videoCatalog.findAll('a')).toHaveLength(29)
+    expect(videoCatalog.findAll('a')).toHaveLength(34)
     await wrapper.get('input[placeholder="apiDocs.search"]').setValue('Vidu')
     expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['Vidu5'])
     expect(videoCatalog.findAll('a')).toHaveLength(5)
     await wrapper.get('input[placeholder="apiDocs.search"]').setValue('Kling')
-    expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['Kling / 可灵6'])
+    // 视频检索包含使用说明，取消指南中对 Kling 不支持取消的说明也应命中。
+    expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['OpenAI Videos1', 'Kling / 可灵6'])
+    expect(videoCatalog.find('a[href="/docs/video-compat-cancel"]').exists()).toBe(true)
     expect(wrapper.find('article').text()).toContain('/tasks')
     wrapper.findComponent(Select).vm.$emit('update:modelValue', 'deepseek')
     await flushPromises()

@@ -76,11 +76,14 @@ func (s *GatewayService) resolveRequestableModelsWithAccounts(
 				"platform", platform,
 				"error", err)
 			fallbackModels := mergeRequestableModelCandidates(accountCandidateModels, accounts, nil, channelPlatform)
-			if platform == PlatformOpenAI {
-				fallbackModels = FilterRetiredOpenAIModelIDs(accounts, fallbackModels)
+			// 账号快照有效，渠道读取失败也不能借默认目录或价格条目扩大该账号声明。
+			fallback := RequestableModelsResult{HadExplicitAccountModels: hadExplicitAccountModels}
+			for _, model := range fallbackModels {
+				if resolved, ok := s.resolveRequestableModel(ctx, groupID, nil, accounts, model); ok {
+					fallback.Models = append(fallback.Models, resolved)
+				}
 			}
-			fallback := requestableModelsFallback(fallbackModels, platform)
-			fallback.HadExplicitAccountModels = hadExplicitAccountModels
+			fallback.Restricted = len(fallback.Models) == 0
 			return fallback
 		}
 		if cachedPlatform := strings.TrimSpace(s.channelService.GetGroupPlatform(ctx, *groupID)); cachedPlatform != "" {
@@ -94,6 +97,7 @@ func (s *GatewayService) resolveRequestableModelsWithAccounts(
 		HadExplicitAccountModels: hadExplicitAccountModels,
 	}
 	if len(candidates) == 0 || len(accounts) == 0 {
+		result.Restricted = true
 		return result
 	}
 
@@ -104,7 +108,7 @@ func (s *GatewayService) resolveRequestableModelsWithAccounts(
 		}
 	}
 	// 账号已明确排除全部候选时，未绑定分组的入口也不能复活平台默认型号。
-	if platform == PlatformOpenAI && len(candidates) > 0 && len(result.Models) == 0 {
+	if len(result.Models) == 0 {
 		result.Restricted = true
 	}
 	return result
@@ -231,8 +235,28 @@ func mergeRequestableModelCandidates(baseModels []string, accounts []Account, ch
 				appendModels(qoder.DefaultRequestModelIDsForSite(qoder.SiteCN)...)
 			}
 		} else {
-			appendModels(defaultRequestModelIDsForPlatform(platform)...)
+			for _, model := range defaultRequestModelIDsForPlatform(platform) {
+				for i := range accounts {
+					if accountHasUnrestrictedModelScope(&accounts[i]) && (channel != nil || accountDeclaresCatalogModel(&accounts[i], model)) {
+						appendModels(model)
+						break
+					}
+				}
+			}
 		}
+	}
+	if channel == nil {
+		// 没有渠道映射时可直接过滤陈旧缓存候选；有渠道时必须等实际 C 型号解析后再判断。
+		filtered := make([]string, 0, len(candidates))
+		for _, model := range candidates {
+			for i := range accounts {
+				if accountDeclaresCatalogModel(&accounts[i], model) {
+					filtered = append(filtered, model)
+					break
+				}
+			}
+		}
+		return filtered
 	}
 	return candidates
 }
@@ -302,9 +326,11 @@ func (s *GatewayService) resolveRequestableModel(
 	requestedModel string,
 ) (RequestableModel, bool) {
 	channelMappedModel := requestedModel
+	channelMapped := false
 	billingSource := BillingModelSourceRequested
 	if groupID != nil && channel != nil && s.channelService != nil {
 		mapping := s.channelService.ResolveChannelMapping(ctx, *groupID, requestedModel)
+		channelMapped = mapping.Mapped
 		if mapped := strings.TrimSpace(mapping.MappedModel); mapped != "" {
 			channelMappedModel = mapped
 		}
@@ -324,7 +350,8 @@ func (s *GatewayService) resolveRequestableModel(
 	upstreamModels := make([]string, 0, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
-		if !s.isRoutingModelSupportedByAccountWithContext(ctx, account, channelMappedModel) {
+		if !accountDeclaresChannelCatalogModel(account, channelMappedModel, channelMapped) ||
+			!s.isRoutingModelSupportedByAccountWithContext(ctx, account, channelMappedModel) {
 			continue
 		}
 		for _, upstreamModel := range s.resolveAccountUpstreamModelsForListing(ctx, account, channelMappedModel) {

@@ -122,6 +122,11 @@ func defaultModelsListCandidateIDs(platform string) []string {
 	case PlatformMiniMax:
 		// MiniMax 新建分组应提供自己的模型目录，不能落入 Claude 默认列表。
 		return domain.DefaultMiniMaxModelIDs()
+	case PlatformDeepseek:
+		return cloneStringSlice(deepseekServableModels)
+	case PlatformKimi, PlatformZhipu:
+		// 未维护本地型号的兼容平台只采用账号或渠道声明，不填入 Claude 候选。
+		return []string{}
 	default:
 		ids := make([]string, 0, len(claude.DefaultModels))
 		for _, model := range claude.DefaultModels {

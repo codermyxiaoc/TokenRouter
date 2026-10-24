@@ -25,6 +25,68 @@ describe('公开网关文档契约', () => {
     }
   })
 
+  it('可美 Seedance 2.5 按文生、首尾帧和普通参考图分别给出可复制参数', () => {
+    // 这是供应商参数合同，不把“有图”一律当首帧，也不把首帧的固定比例示例复制给用户。
+    const guide = (id: string) => apiDocEndpoints.find(endpoint => endpoint.id === id)!
+    const text = guide('kemei-seedance25-text')
+    const frames = guide('kemei-seedance25-frames')
+    const reference = guide('kemei-seedance25-reference')
+    for (const endpoint of [text, frames, reference]) {
+      expect(endpoint.path).toBe('/v1/video/generations')
+      expect(endpoint.platforms).toEqual(['video'])
+      expect(endpoint.videoProtocol).toBe('seedance')
+      const body = JSON.parse(endpoint.requestExample!)
+      expect(body.model).toBe('doubao-seedance-2-5-260628')
+      expect(body.resolution).toBe('720p')
+      expect(body.duration).toBe(5)
+      expect(endpoint.parameters.find(parameter => parameter.name === 'resolution')!.required).toBe('conditional')
+      expect(endpoint.parameters.find(parameter => parameter.name === 'duration')!.required).toBe('conditional')
+      expect(body).not.toHaveProperty('content')
+      expect(apiDocMarkdown(endpoint, 'https://gateway.example.com')).toContain('创建结果未知时先查原任务')
+      expect(apiDocCurl(endpoint)).toContain('Authorization: Bearer $TOKENROUTER_API_KEY')
+    }
+    expect(JSON.parse(text.requestExample!)).not.toHaveProperty('images')
+    expect(JSON.parse(text.requestExample!).ratio).toBe('16:9')
+    expect(JSON.parse(frames.requestExample!)).toMatchObject({ ratio: 'adaptive', images: [{ role: 'first_frame' }, { role: 'last_frame' }] })
+    expect(JSON.parse(reference.requestExample!)).toMatchObject({ ratio: '16:9', images: [{ role: 'reference_image' }], omni_reference_task_type: 'auto' })
+    expect(filterApiDocEndpoints('doubao-seedance-2-5-260628', 'video').map(endpoint => endpoint.id)).toEqual([text.id, frames.id, reference.id])
+    expect(filterApiDocEndpoints('first-frame', 'video').some(endpoint => endpoint.id === frames.id)).toBe(true)
+  })
+
+  it('同一 videos 路径下秘塔 H3 与 Yezonghui 示例保持不同的 size 和参考图合同', () => {
+    const h3 = apiDocEndpoints.find(endpoint => endpoint.id === 'video-metaso-h3')!
+    const yezonghui = apiDocEndpoints.find(endpoint => endpoint.id === 'video-yezonghui-create')!
+    const h3Body = JSON.parse(h3.requestExample!)
+    const yBody = JSON.parse(yezonghui.requestExample!)
+    expect(h3.path).toBe('/v1/videos')
+    expect(yezonghui.path).toBe(h3.path)
+    expect(h3Body.size).toBe('1280x720')
+    expect(h3Body.input_reference.image_url).toMatch(/^https:/)
+    expect(h3Body).not.toHaveProperty('image_urls')
+    expect(yBody).toMatchObject({ seconds: '5', resolution: '720p', size: '16:9' })
+    expect(yBody.image_urls).toHaveLength(1)
+    expect(yBody).not.toHaveProperty('input_reference')
+    expect(yezonghui.notes!.join(' ')).toContain('至少 60 秒')
+    expect(yezonghui.notes!.join(' ')).toContain('没有为该方案开放取消')
+    expect(h3.notes!.join(' ')).toContain('1366x768')
+  })
+
+  it('现代 Kling 与 MiniMax 示例包含对应协议必需的输入结构，Vidu 不混淆方案默认值', () => {
+    for (const [id, kind] of [['kling-image', 'first_frame'], ['kling-omni', 'refer_image']] as const) {
+      const endpoint = apiDocEndpoints.find(item => item.id === id)!
+      const body = JSON.parse(endpoint.requestExample!)
+      expect(body.settings).toMatchObject({ duration: 5, resolution: '720p', aspect_ratio: '16:9' })
+      expect(body.contents[1]).toMatchObject({ type: kind })
+      expect(body).not.toHaveProperty('prompt')
+      expect(body).not.toHaveProperty('images')
+      expect(apiDocCurl(endpoint)).toContain(endpoint.path.replace('{model}', body.model))
+    }
+    const minimax = apiDocEndpoints.find(item => item.id === 'minimax-video-create')!
+    expect(JSON.parse(minimax.requestExample!)).toMatchObject({ ratio: '16:9', resolution: '768p', content: [{ type: 'text' }] })
+    const vidu = apiDocEndpoints.find(item => item.id === 'vidu-img2video')!
+    expect(vidu.notes!.join(' ')).toContain('官方与旧透传不继承可美默认值或 Q4 限制')
+  })
+
   it('保持稳定且唯一的文档 ID，所有平台和 JSON 示例均有效', () => {
     expect(new Set(apiDocEndpoints.map(item => item.id)).size).toBe(apiDocEndpoints.length)
     expect(apiDocEndpoints.length).toBeGreaterThan(70)
@@ -49,7 +111,7 @@ describe('公开网关文档契约', () => {
     expect(filterApiDocEndpoints('Kling POST', 'video').length).toBeGreaterThan(0)
     expect(filterApiDocEndpoints('Kling', 'deepseek')).toEqual([])
     expect(filterApiDocEndpoints('不存在的端点', null)).toEqual([])
-    expect(filterApiDocEndpoints('火山方舟', 'video').map(item => item.id)).toEqual(['ark-create', 'ark-query', 'ark-delete'])
+    expect(filterApiDocEndpoints('火山方舟', 'video').map(item => item.id)).toEqual(['kemei-seedance25-text', 'kemei-seedance25-frames', 'kemei-seedance25-reference', 'ark-create', 'ark-query', 'ark-delete'])
   })
 
   it('保留原生任务查询参数、鉴权及非 JSON 示例', () => {

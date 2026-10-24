@@ -36,3 +36,7 @@
 /* 组装面板的参考入口与原版缩略图尺寸一致，空输入时也保留明确添加动作。 */
 .config-composer .config-reference-add{display:flex;justify-content:center;align-items:center;width:48px;height:48px;flex:0 0 48px;padding:0;border:1px solid var(--border);border-radius:16px;font-size:24px;font-weight:300;background:transparent}
 .config-reference-menu[data-slot=select-content]{width:200px}
+
+/* 配置节点的说明按钮与生成按钮共用原有底行，不扩大节点边框。 */
+.config-generate-actions{display:flex;align-items:center;gap:8px;margin-top:auto;flex-shrink:0}
+.config-generate-actions .config-generate{width:auto;flex:1;min-width:0;margin-top:0}

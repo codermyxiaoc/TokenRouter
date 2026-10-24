@@ -80,6 +80,11 @@ func defaultRequestModelIDsForPlatform(platform string) []string {
 		return DefaultOpenCodeGoModelIDs()
 	case PlatformMiniMax:
 		return domain.DefaultMiniMaxModelIDs()
+	case PlatformDeepseek:
+		return cloneStringSlice(deepseekServableModels)
+	case PlatformKimi, PlatformZhipu:
+		// 没有独立维护的本地型号清单时只采用显式声明，不借用 Claude 默认目录。
+		return []string{}
 	default:
 		return claude.DefaultModelIDs()
 	}

@@ -15,7 +15,7 @@ export const apiDocCategories = [
   { id: 'tools', label: '搜索与扩展', description: '搜索工具及平台专属扩展能力' },
 ] as const
 
-// 统一入口与原生端点分别列出，不以账号平台推断厂商协议。
+// 按协议及模型家族分组；同一路径可以提供不同适配方案的模型指南，不新增服务端能力。
 export const apiDocVideoProtocols = [
   { id: 'openai', label: 'OpenAI Videos' },
   { id: 'seedance', label: 'Seedance / 火山方舟' },
@@ -46,7 +46,9 @@ export function filterApiDocEndpoints(search: string, platform: string | null): 
     if (platform && !endpoint.platforms.includes(platform)) return false
     const searchable = [endpoint.title, endpoint.summary, endpoint.method, endpoint.path, videoProtocolLabel(endpoint.videoProtocol),
       ...(endpoint.aliases ?? []), ...endpoint.platforms.map(platformLabel),
-      ...endpoint.parameters.map(parameter => parameter.name)].join(' ').toLocaleLowerCase()
+      ...endpoint.parameters.map(parameter => parameter.name),
+      // 视频型号和模式限制通常位于示例/说明中，检索时一并覆盖且不改变其它文档分类的检索范围。
+      ...(endpoint.category === 'video' ? [endpoint.requestExample ?? '', ...(endpoint.notes ?? []), ...endpoint.parameters.map(parameter => parameter.description)] : [])].join(' ').toLocaleLowerCase()
     return terms.every(term => searchable.includes(term))
   })
 }

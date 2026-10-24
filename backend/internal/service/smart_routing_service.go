@@ -72,6 +72,7 @@ func (s *SmartRoutingService) EvaluateSmartRoutingGroup(ctx context.Context, gro
 		ctx = WithOpenAIImageGenerationIntent(ctx)
 	}
 	routingModel := requestedModel
+	channelMapped := false
 	billingSource := BillingModelSourceRequested
 	var channel *Channel
 	if s.gateway.channelService != nil {
@@ -80,6 +81,11 @@ func (s *SmartRoutingService) EvaluateSmartRoutingGroup(ctx context.Context, gro
 			return result, fmt.Errorf("load smart routing channel: %w", err)
 		}
 		mapping := s.gateway.channelService.ResolveChannelMapping(ctx, group.ID, requestedModel)
+		channelMapped = mapping.Mapped
+		if channelMapped && !requestableCatalogCandidateContains(accounts, channel, platform, requestedModel) {
+			// 渠道通配只改写已知候选，不能让任意不存在的探针名称命中真实账号。
+			return result, nil
+		}
 		if mapped := strings.TrimSpace(mapping.MappedModel); mapped != "" {
 			routingModel = mapped
 		}
@@ -118,7 +124,7 @@ func (s *SmartRoutingService) EvaluateSmartRoutingGroup(ctx context.Context, gro
 	eligible := make([]*Account, 0, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
-		if !smartRoutingAccountCatalogContains(account, routingModel) ||
+		if !smartRoutingAccountCatalogContains(account, routingModel, channelMapped) ||
 			!s.gateway.isRoutingModelSupportedByAccountWithContext(ctx, account, routingModel) {
 			continue
 		}
@@ -252,9 +258,11 @@ func (s *SmartRoutingService) ResolveSmartRoutingModels(ctx context.Context, gro
 	models := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
 		routingModel := candidate
+		channelMapped := false
 		billingSource := BillingModelSourceRequested
 		if channel != nil {
 			mapping := s.gateway.channelService.ResolveChannelMapping(ctx, group.ID, candidate)
+			channelMapped = mapping.Mapped
 			if strings.TrimSpace(mapping.MappedModel) != "" {
 				routingModel = mapping.MappedModel
 			}
@@ -266,7 +274,7 @@ func (s *SmartRoutingService) ResolveSmartRoutingModels(ctx context.Context, gro
 		}
 		for i := range accounts {
 			account := &accounts[i]
-			if !smartRoutingAccountCatalogContains(account, routingModel) ||
+			if !smartRoutingAccountCatalogContains(account, routingModel, channelMapped) ||
 				!s.gateway.isRoutingModelSupportedByAccountWithContext(ctx, account, routingModel) {
 				continue
 			}
@@ -360,8 +368,14 @@ func smartRoutingGroupEndpointEligible(platform, endpoint string) bool {
 
 // smartRoutingAccountCatalogContains 只匹配账号目录中的具体模型，通配符不构成未知模型的目录证据。
 // 无显式白名单时复用模型列表的有限平台基线，不能调用 permissive IsModelSupported 推断任意型号。
-func smartRoutingAccountCatalogContains(account *Account, model string) bool {
+func smartRoutingAccountCatalogContains(account *Account, model string, channelMapped ...bool) bool {
 	if account == nil || strings.TrimSpace(model) == "" {
+		return false
+	}
+	if len(channelMapped) > 0 && channelMapped[0] && accountCatalogHasMappedTarget(account, model) {
+		return true
+	}
+	if !accountDeclaresCatalogModel(account, model) {
 		return false
 	}
 	catalog := mergeRequestableModelCandidates(account.GetConfiguredRequestModels(), []Account{*account}, nil, account.Platform)

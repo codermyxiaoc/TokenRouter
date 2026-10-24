@@ -2572,6 +2572,115 @@ describe("admin SettingsView payment visible method controls", () => {
     wrapper.unmount();
   });
 
+  it.each(['openai_videos', 'grok'])("loads, saves and clears %s video usage notes without changing capabilities", async (endpoint) => {
+    // 说明是视频配置的纯文本附加字段；保存、端点参数和清空均不能互相覆盖。
+    const caps = { durations: [5], resolutions: ['720p'], aspect_ratios: ['16:9'], max_reference_images: 1 };
+    const video = { group_id: 3, model: 'video-alias', media_type: 'video', operations: ['generate'], video_endpoint: endpoint,
+      video_capabilities: caps, usage_notes: '已有说明\n第二行' };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [video] });
+    getCreativeModelCandidates.mockResolvedValue([{ ...video, group_name: 'Video', platform: endpoint === 'grok' ? 'grok' : 'video', video_endpoints: [endpoint] }]);
+    const wrapper = mountView();
+    await flushPromises();
+    const input = wrapper.get('[data-testid="creative-video-usage-notes"]');
+    expect((input.element as HTMLTextAreaElement).value).toBe('已有说明\n第二行');
+    await input.setValue('  首帧请选择自动比例。\r\n保留\t换行与标记 <b>说明</b>  ');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({ creative_model_settings: [{
+      ...video, usage_notes: '首帧请选择自动比例。\n保留\t换行与标记 <b>说明</b>',
+    }] }));
+    await wrapper.get('[data-testid="creative-video-usage-notes"]').setValue(' \n\t ');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    const cleared = updateSettings.mock.calls.at(-1)?.[0].creative_model_settings[0];
+    expect(cleared).not.toHaveProperty('usage_notes');
+    expect(cleared.video_capabilities).toEqual(caps);
+    wrapper.unmount();
+  });
+
+  it("keeps video usage notes when unavailable or when the endpoint changes", async () => {
+    const notes = '参考图仅作首帧，比例选择自动。';
+    const video = { group_id: 3, model: 'video-alias', media_type: 'video', operations: ['generate'], video_endpoint: 'compat', usage_notes: notes };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [video] });
+    getCreativeModelCandidates.mockResolvedValue([]);
+    const wrapper = mountView();
+    await flushPromises();
+    expect((wrapper.get('[data-testid="creative-video-usage-notes"]').element as HTMLTextAreaElement).value).toBe(notes);
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({ creative_model_settings: [video] }));
+    wrapper.unmount();
+
+    getCreativeModelCandidates.mockResolvedValue([{ ...video, group_name: 'Video', platform: 'video', video_endpoints: ['compat', 'seedance'] }]);
+    const available = mountView();
+    await flushPromises();
+    await available.get('[data-testid="creative-video-endpoint"]').setValue('seedance');
+    await available.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({ creative_model_settings: [{ ...video, video_endpoint: 'seedance' }] }));
+    available.unmount();
+  });
+
+  it("isolates usage-note drafts by model and group while restoring them on return", async () => {
+    // 切换到同名不同分组也不能继承限制；切回原模型恢复本页草稿，非视频不提交说明。
+    const first = { group_id: 3, model: 'video-alias', media_type: 'video', operations: ['generate'], video_endpoint: 'compat', usage_notes: '原模型说明' };
+    const second = { ...first, group_id: 4, usage_notes: undefined };
+    const image = { group_id: 5, model: 'gpt-image-2', operations: ['generate'] };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [first] });
+    getCreativeModelCandidates.mockResolvedValue([
+      { ...first, group_name: 'First', platform: 'video', video_endpoints: ['compat'] },
+      { ...second, group_name: 'Second', platform: 'video', video_endpoints: ['compat'] },
+      { ...image, group_name: 'Images', platform: 'openai' },
+    ]);
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="creative-video-usage-notes"]').setValue('原模型未保存的说明');
+    const selector = () => wrapper.get('[data-placeholder="admin.settings.features.creative.modelSettings.selectModel"]');
+    await selector().setValue('4::video-alias');
+    expect((wrapper.get('[data-testid="creative-video-usage-notes"]').element as HTMLTextAreaElement).value).toBe('');
+    await wrapper.get('[data-testid="creative-video-usage-notes"]').setValue('另一个分组的说明');
+    await selector().setValue('5::gpt-image-2');
+    expect(wrapper.find('[data-testid="creative-video-usage-notes"]').exists()).toBe(false);
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({ creative_model_settings: [image] }));
+    await selector().setValue('3::video-alias');
+    expect((wrapper.get('[data-testid="creative-video-usage-notes"]').element as HTMLTextAreaElement).value).toBe('原模型未保存的说明');
+    await selector().setValue('4::video-alias');
+    expect((wrapper.get('[data-testid="creative-video-usage-notes"]').element as HTMLTextAreaElement).value).toBe('另一个分组的说明');
+    wrapper.unmount();
+  });
+
+  it.each(['中', '🙂'])("accepts exactly 2000 Unicode characters in video usage notes (%s)", async (char) => {
+    const video = { group_id: 3, model: 'video-alias', media_type: 'video', operations: ['generate'], video_endpoint: 'compat' };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [video] });
+    const wrapper = mountView();
+    await flushPromises();
+    const input = wrapper.get('[data-testid="creative-video-usage-notes"]');
+    await input.setValue(char.repeat(2000));
+    expect(input.attributes('maxlength')).toBeUndefined();
+    expect(input.attributes('aria-invalid')).toBe('false');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({ creative_model_settings: [{ ...video, usage_notes: char.repeat(2000) }] }));
+    wrapper.unmount();
+  });
+
+  it.each(['中'.repeat(2001), '🙂'.repeat(2001), '首帧\u0000说明', '\u000B首帧说明', '首帧说明\u000B', '\u000C首帧说明', '首帧说明\u000C'])("blocks oversized or control-character video usage notes before save", async (notes) => {
+    const video = { group_id: 3, model: 'video-alias', media_type: 'video', operations: ['generate'], video_endpoint: 'compat' };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [video] });
+    const wrapper = mountView();
+    await flushPromises();
+    const input = wrapper.get('[data-testid="creative-video-usage-notes"]');
+    await input.setValue(notes);
+    expect(input.attributes('aria-invalid')).toBe('true');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it.each(['0', '61', '1.5', 'invalid'])("rejects invalid creative video duration %s before submitting settings", async (duration) => {
     const video = {
       group_id: 3, model: 'MiniMax-H3', media_type: 'video', operations: ['generate'], video_endpoint: 'openai_videos',

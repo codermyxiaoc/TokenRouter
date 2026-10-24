@@ -101,6 +101,54 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); poll = undefined; });
 
 describe('画布编辑器生成与恢复集成', () => {
+  it('视频使用说明出现在按钮下方，详情纯文本且查看不改变节点或创建任务', async () => {
+    const notes = '首帧比例请选择自动。\n<img src=x onerror="alert(1)">\n'+ '说明正文'.repeat(80);
+    vi.mocked(listModels).mockResolvedValue([{ ...model, media_type: 'video', model: 'video-notes', usage_notes: notes, operations: ['generate'] }]);
+    cloudState.document!.nodes = [{ ...structuredClone(imageNode), type: 'video', metadata: { model: '7::video-notes', prompt: '原提示词' } }];
+    await mount();
+    const footer = host.querySelector('.composer-footer')!;
+    const preview = host.querySelector('.model-usage-notes')!;
+    expect(footer.compareDocumentPosition(preview) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(preview.textContent).toContain('首帧比例请选择自动。');
+    expect(preview.querySelector('img')).toBeNull();
+    const before = structuredClone(cloudState.document);
+    await click(button('查看视频模型使用说明'));
+    const details = document.querySelector('[role="dialog"][aria-label="视频模型使用说明"]')!;
+    expect(details.textContent).toContain(notes);
+    expect(details.querySelector('img')).toBeNull();
+    await act(async () => details.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true })));
+    await click(button('关闭使用说明'));
+    expect(document.querySelector('[role="dialog"][aria-label="视频模型使用说明"]')).toBeNull();
+    expect(cloudState.document).toEqual(before);
+    expect(createExecution).not.toHaveBeenCalled();
+    expect(createImageBatch).not.toHaveBeenCalled();
+    expect(cloudState.flush).not.toHaveBeenCalled();
+  });
+
+  it('相同视频型号按分组切换说明，换模型关闭旧详情，无说明时隐藏', async () => {
+    vi.mocked(listModels).mockResolvedValue([
+      { ...model, media_type: 'video', model: 'shared-video', usage_notes: '甲分组首帧说明' },
+      { ...model, group_id: 8, group_name: '乙分组', media_type: 'video', model: 'shared-video', usage_notes: '乙分组参考说明' },
+      { ...model, media_type: 'video', model: 'old-video' },
+    ]);
+    cloudState.document!.nodes = [{ ...structuredClone(imageNode), type: 'video', metadata: { model: '7::shared-video' } }];
+    await mount();
+    await click(button('查看视频模型使用说明'));
+    await act(async () => {
+      cloudState.document = { ...cloudState.document!, nodes: [{ ...currentNode(), metadata: { model: '8::shared-video' } }] };
+      cloudState.listeners.forEach(notify => notify());
+    });
+    expect(host.querySelector('.model-usage-notes')?.textContent).toContain('乙分组参考说明');
+    expect(host.textContent).not.toContain('甲分组首帧说明');
+    expect(document.querySelector('[role="dialog"][aria-label="视频模型使用说明"]')).toBeNull();
+    await act(async () => {
+      cloudState.document = { ...cloudState.document!, nodes: [{ ...currentNode(), metadata: { model: '7::old-video' } }] };
+      cloudState.listeners.forEach(notify => notify());
+    });
+    expect(host.querySelector('.model-usage-notes')).toBeNull();
+    expect(button('查看视频模型使用说明')).toBeNull();
+  });
+
   it('失败原因可打开完整详情，查看和关闭不移动节点或提交收费任务', async () => {
     const message = '视频模型不支持当前分辨率，请修改后重试；预扣已释放';
     currentNode().metadata = { ...currentNode().metadata, status: 'error', errorDetails: message };
@@ -153,7 +201,7 @@ describe('画布编辑器生成与恢复集成', () => {
 
   it.each([false, true])('视频参数从设置面板准确提交且只创建一个任务（自定义=%s）', async custom => {
     const videoModel: Model = {
-      ...model, model: 'video-test', media_type: 'video', video_endpoint: 'openai_videos',
+      ...model, model: 'video-test', media_type: 'video', video_endpoint: 'openai_videos', usage_notes: '首帧比例选择自动。\n这段说明不能加入提示词或生成请求。',
       video_capabilities: {
         resolutions: ['480p', '720p', '1080p'], durations: Array.from({ length: 60 }, (_, index) => index + 1),
         aspect_ratios: ['1:1', '3:4', '4:3', '16:9', '9:16', '21:9', 'adaptive'], max_reference_images: 1,
@@ -1126,6 +1174,21 @@ describe('Grok TTS 音频节点生成集成', () => {
 });
 
 describe('生成配置节点与四类模型集成', () => {
+  it('视频配置节点可以查看说明，按钮不撑出节点且不会触发生成', async () => {
+    const videoModel: Model = { ...model, media_type: 'video', model: 'config-video', usage_notes: '使用首帧时请选择自动比例。', operations: ['generate'] };
+    cloudState.document!.nodes = [{ ...structuredClone(imageNode), type: 'config', title: '生成配置', width: 340, height: 240, metadata: { generationMode: 'video', model: '7::config-video', prompt: '海边日出' } }];
+    vi.mocked(listModels).mockResolvedValue([videoModel]);
+    await mount();
+    expect(host.querySelector('.config-generate-actions .model-usage-notes-compact')).not.toBeNull();
+    const before = structuredClone(cloudState.document);
+    await click(button('查看视频模型使用说明'));
+    expect(document.querySelector('.model-usage-notes-details')?.textContent).toContain(videoModel.usage_notes);
+    await click(button('关闭使用说明'));
+    expect(cloudState.document).toEqual(before);
+    expect(createExecution).not.toHaveBeenCalled();
+    expect(createImageBatch).not.toHaveBeenCalled();
+  });
+
   const textModel: Model={...model,model:'grok-4.5',display_name:'Grok 文字',media_type:'text',operations:['generate'],max_reference_images:0,text_capabilities:{max_input_chars:8000,max_output_tokens:4096,default_max_output_tokens:1024,max_reference_images:0}};
   const config=(kind:'image'|'text'='image')=>({ ...structuredClone(imageNode),type:'config',title:'生成配置',width:340,height:240,metadata:{generationMode:kind,prompt:'写一句欢迎语',model:kind==='text'?'7::grok-4.5':'7::gpt-image-2',image_size:'2K',count:3,max_output_tokens:1024} } as CanvasNodeData);
   const result=()=>cloudState.document!.nodes.find(node=>node.id===currentNode().metadata?.generation_target_id)!;

@@ -193,7 +193,7 @@ func TestResolveRequestableModels_WildcardsMatchConcreteCandidateOnly(t *testing
 	require.NotContains(t, RequestableModelIDs(result.Models), "channel-*")
 }
 
-func TestResolveRequestableModels_UnrestrictedAccountAddsDefaultsAndMappingSource(t *testing.T) {
+func TestResolveRequestableModels_MappingWildcardAddsOnlyMatchingDefaults(t *testing.T) {
 	groupID := int64(4103)
 	account := Account{
 		ID:       63,
@@ -214,6 +214,8 @@ func TestResolveRequestableModels_UnrestrictedAccountAddsDefaultsAndMappingSourc
 	require.Contains(t, ids, "gpt-5.5")
 	require.NotContains(t, ids, "custom-alias")
 	require.NotContains(t, ids, "gpt-*")
+	// gpt-* 可以展开已知 GPT 型号，但同平台未命中的 Codex 型号不能被一并声明。
+	require.NotContains(t, ids, "codex-auto-review")
 }
 
 func TestResolveRequestableModels_QoderUsesSchedulableAccountSiteUnion(t *testing.T) {

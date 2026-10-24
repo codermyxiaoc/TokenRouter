@@ -17,6 +17,8 @@ type CreativeModelSetting struct {
 	MediaType         string                     `json:"media_type,omitempty"`
 	VideoEndpoint     VideoEndpoint              `json:"video_endpoint,omitempty"`
 	VideoCapabilities *CreativeVideoCapabilities `json:"video_capabilities,omitempty"`
+	// 使用说明只用于视频模型目录展示，不参与生成参数、定价或任务指纹。
+	UsageNotes string `json:"usage_notes,omitempty"`
 }
 
 // CreativeModelCandidate 是管理端可选择的图片、视频和音频模型候选。
@@ -140,6 +142,10 @@ func NormalizeCreativeModelSettings(input []CreativeModelSetting) ([]CreativeMod
 		if mediaType == "image" {
 			mediaType = ""
 		}
+		usageNotes, notesErr := normalizeCreativeModelUsageNotes(item.UsageNotes, mediaType)
+		if notesErr != nil {
+			return nil, fmt.Errorf("creative model setting %d (group %d, model %q): %w", index, item.GroupID, model, notesErr)
+		}
 		// TTS 是固定音频能力，不能通过图片白名单或任意模型别名扩展上游能力。
 		if (mediaType == "audio" && model != CreativeGrokTTSModel) || (mediaType != "audio" && model == CreativeGrokTTSModel) {
 			return nil, fmt.Errorf("creative audio model must use grok-voice-tts and media_type audio")
@@ -198,6 +204,7 @@ func NormalizeCreativeModelSettings(input []CreativeModelSetting) ([]CreativeMod
 			MediaType:         mediaType,
 			VideoEndpoint:     item.VideoEndpoint,
 			VideoCapabilities: videoCapabilities,
+			UsageNotes:        usageNotes,
 		})
 	}
 	return out, nil

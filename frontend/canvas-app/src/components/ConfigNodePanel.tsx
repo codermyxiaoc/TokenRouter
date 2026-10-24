@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Image, MessageSquare, Video, Music, Settings2, Play, LoaderCircle, Clock3 } from 'lucide-react';
 import { Choice } from './Choice';
 import { GenerationSettings } from './GenerationSettings';
+import { ModelUsageNotes } from './ModelUsageNotes';
 import { configInputCounts, type ConfigInput } from '@/platform/config-composer';
 import { generationSettingsSummary } from '@/platform/generation-settings';
 import { mediaType, modelId, type GenerationKind, type Model } from '@/platform/types';
@@ -32,7 +33,7 @@ export function ConfigNodePanel({ node, inputs, models, selected, busy, pending,
       <Choice compact label="配置节点模型" value={node.metadata?.model || ''} options={available.map(item => ({ value: modelId(item), label: `${item.display_name || item.model}（${item.group_name}）` }))} onChange={value => { setSettingsOpen(false); onChange({ ...clearModelParameters, model: value }); }}/>
       <button ref={setAnchor} className="config-settings-summary" type="button" aria-label="打开配置节点设置" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(value => !value)}><Settings2 size={15}/><span>{generationSettingsSummary(model, node.metadata, kind)}</span></button>
     </div>
-    <button className="primary config-generate" type="button" aria-label={label} disabled={busy || (running && !pending) || (!pending && (!model || !hasPrompt))} onPointerDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()} onClick={onGenerate}>{reconciling ? <Clock3 size={16}/> : running || busy ? <LoaderCircle size={16} className="animate-spin"/> : <Play size={16}/>}<span>{!available.length && !pending && !running ? '管理员尚未开放此类模型' : label}</span></button>
+    <div className="config-generate-actions"><button className="primary config-generate" type="button" aria-label={label} disabled={busy || (running && !pending) || (!pending && (!model || !hasPrompt))} onPointerDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()} onClick={onGenerate}>{reconciling ? <Clock3 size={16}/> : running || busy ? <LoaderCircle size={16} className="animate-spin"/> : <Play size={16}/>}<span>{!available.length && !pending && !running ? '管理员尚未开放此类模型' : label}</span></button>{kind === 'video' && <ModelUsageNotes model={model} compact/>}</div>
     <GenerationSettings open={settingsOpen} onClose={() => setSettingsOpen(false)} anchor={anchor} kind={kind} node={node} model={model} onChange={onChange}/>
   </div>;
 }

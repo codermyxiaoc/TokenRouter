@@ -7930,6 +7930,28 @@
                           <input :value="item.video_capabilities?.max_reference_images ?? ''" type="number" min="0" :max="creativeVideoReferenceMax(item)" step="1" class="input mt-1" data-testid="creative-video-reference-limit" @input="setCreativeVideoReferenceLimit(item, ($event.target as HTMLInputElement).value)" />
                         </label>
                         <p class="text-xs text-gray-500 sm:col-span-2 dark:text-dark-400">{{ t('admin.settings.features.creative.modelSettings.videoDefaultsHint') }}</p>
+                        <div class="sm:col-span-2">
+                          <label :for="`creative-video-usage-notes-${index}`" class="text-xs text-gray-600 dark:text-dark-300">
+                            {{ t('admin.settings.features.creative.modelSettings.usageNotes') }}
+                          </label>
+                          <textarea
+                            :id="`creative-video-usage-notes-${index}`"
+                            v-model="item.usage_notes"
+                            rows="4"
+                            class="input mt-1 resize-y"
+                            data-testid="creative-video-usage-notes"
+                            :placeholder="t('admin.settings.features.creative.modelSettings.usageNotesPlaceholder')"
+                            :aria-invalid="creativeUsageNotesInvalid(item.usage_notes)"
+                            :aria-describedby="`creative-video-usage-hint-${index} creative-video-usage-count-${index}${creativeUsageNotesInvalid(item.usage_notes) ? ` creative-video-usage-error-${index}` : ''}`"
+                          ></textarea>
+                          <div class="mt-1 flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-dark-400">
+                            <p :id="`creative-video-usage-hint-${index}`">{{ t('admin.settings.features.creative.modelSettings.usageNotesHint') }}</p>
+                            <span :id="`creative-video-usage-count-${index}`">{{ t('admin.settings.features.creative.modelSettings.usageNotesLength', { count: creativeUsageNotesLength(item.usage_notes), max: creativeUsageNotesMaxLength }) }}</span>
+                          </div>
+                          <p v-if="creativeUsageNotesInvalid(item.usage_notes)" :id="`creative-video-usage-error-${index}`" class="mt-1 text-xs text-red-600 dark:text-red-400" role="alert">
+                            {{ t('admin.settings.features.creative.modelSettings.usageNotesInvalid') }}
+                          </p>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -10205,6 +10227,9 @@ const creativeModelCandidates = ref<CreativeModelCandidate[]>([]);
 const creativeModelCandidatesLoading = ref(false);
 const creativeModelCandidatesError = ref(false);
 const creativeModelSettingsValidationError = ref("");
+const creativeUsageNotesMaxLength = 2000;
+// 只保留本页切换模型的草稿，说明按分组和模型归属，避免将旧模型注意事项套给新模型。
+const creativeUsageNotesDrafts = new Map<string, string>();
 type CreativeVideoDefaultField = 'durations' | 'resolutions' | 'aspect_ratios';
 // 仅跟踪本次表单自动填入的默认值；已保存或显式编辑的参数不能在切换端点时被误删。
 const creativeVideoAutomaticFields = new WeakMap<CreativeModelSetting, Set<CreativeVideoDefaultField>>();
@@ -10333,6 +10358,24 @@ function creativeCandidateForSetting(item: CreativeModelSetting): CreativeModelC
   return creativeModelCandidates.value.find((candidate) => creativeModelSettingKey(candidate) === key);
 }
 
+// 说明按 Unicode 字符计数；不用原生 maxlength 的 UTF-16 长度误截表情或补充平面文字。
+function normalizeCreativeUsageNotes(value?: string): string {
+  return (value || '').replace(/\r\n?/g, '\n').trim();
+}
+
+function creativeUsageNotesLength(value?: string): number {
+  return Array.from(normalizeCreativeUsageNotes(value)).length;
+}
+
+function creativeUsageNotesInvalid(value?: string): boolean {
+  // 控制符在 trim 前检查，避免首尾的垂直制表/换页符被吞掉，与后端拒绝规则保持一致。
+  const chars = Array.from((value || '').replace(/\r\n?/g, '\n'));
+  return creativeUsageNotesLength(value) > creativeUsageNotesMaxLength || chars.some((char) => {
+    const code = char.codePointAt(0)!;
+    return (code < 32 && code !== 9 && code !== 10) || (code >= 127 && code <= 159);
+  });
+}
+
 // 媒体能力只从服务端候选复制；切换类型时清除其他媒体的专用参数。
 function assignCreativeMediaSettings(row: CreativeModelSetting, candidate: CreativeModelCandidate) {
   row.media_type = candidate.media_type || 'image';
@@ -10426,10 +10469,14 @@ function onCreativeModelSelected(index: number, value: string | number | boolean
   if (!candidate) return;
   const row = form.creative_model_settings[index];
   if (!row) return;
+  const previousKey = creativeModelSettingKey(row);
+  if (row.media_type === 'video') creativeUsageNotesDrafts.set(previousKey, row.usage_notes || '');
   row.group_id = candidate.group_id;
   row.model = candidate.model;
   row.operations = [...candidate.operations];
   assignCreativeMediaSettings(row, candidate);
+  row.usage_notes = row.media_type === 'video'
+    ? creativeUsageNotesDrafts.get(creativeModelSettingKey(row)) : undefined;
 }
 
 function addCreativeModelSetting() {
@@ -10447,6 +10494,8 @@ function addCreativeModelSetting() {
 }
 
 function removeCreativeModelSetting(index: number) {
+  const item = form.creative_model_settings[index];
+  if (item) creativeUsageNotesDrafts.delete(creativeModelSettingKey(item));
   form.creative_model_settings.splice(index, 1);
 }
 
@@ -10485,6 +10534,7 @@ function normalizeCreativeModelSettingsForSave(): CreativeModelSetting[] | null 
         });
         return null;
       };
+      if (creativeUsageNotesInvalid(item.usage_notes)) return invalid('usageNotesInvalid');
       if (!item.video_endpoint || (candidate?.video_endpoints && !candidate.video_endpoints.includes(item.video_endpoint))) return invalid('videoEndpointInvalid');
       const caps = item.video_capabilities;
       if (caps) {
@@ -10517,6 +10567,7 @@ function normalizeCreativeModelSettingsForSave(): CreativeModelSetting[] | null 
         media_type: 'video',
         video_endpoint: item.video_endpoint,
         video_capabilities: item.video_capabilities,
+        ...(normalizeCreativeUsageNotes(item.usage_notes) ? { usage_notes: normalizeCreativeUsageNotes(item.usage_notes) } : {}),
       }
       : item.media_type === 'audio' || item.media_type === 'text'
         // 文本和音频能力由服务端派生；保存白名单不覆盖上游能力或现有分组价格。
@@ -11737,6 +11788,7 @@ async function loadSettings() {
   loadFailed.value = false;
   try {
     const settings = await adminAPI.settings.getSettings();
+    creativeUsageNotesDrafts.clear();
     settings.payment_load_balance_strategy =
       settings.payment_load_balance_strategy || "round-robin";
     // Only assign non-null values from backend (null means unconfigured, keep defaults)

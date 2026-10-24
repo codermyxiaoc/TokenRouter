@@ -10,7 +10,7 @@
 
 维护路由或协议时同时核对这里的工程参考与对应前端内容，包括 HTTP 方法、任务归属、别名、请求头、参数、响应与错误条件。不能把已注册的通配路径当作任意上游能力，也不能把厂商文档中的未注册接口加入可用清单；原生视频按各协议保真，统一入口不代表自动转换所有厂商参数。
 
-视频目录按端点协议细分为 OpenAI Videos、Seedance / 火山方舟、Kling、万相、MiniMax、Vidu 和 Grok 子标题，正文导航显示对应协议。该分类独立于账号平台资格，搜索和平台筛选后隐藏空子分类，保留原文档地址与跨平台接口归属。
+视频目录按协议与模型家族细分为 OpenAI Videos、Seedance / 火山方舟、Kling、万相、MiniMax、Vidu 和 Grok 子标题；同一真实端点可以有不同接入方案的模型指南，不代表新增服务端路由。视频检索覆盖型号示例、参数说明与使用注意事项，能够按实际模型名找到对应指南；其它分类维持原有检索范围。搜索和平台筛选后隐藏空子分类，保留原文档地址与跨平台接口归属。
 
 ## 快速约定
 
@@ -397,6 +397,44 @@ Range: bytes=0-1048575
 ```
 
 `Range` 可省略。状态为 `queued`、`in_progress`、`completed`、`failed`；失败附带 `error`。`completed` 只表示上游生成完成，`billing_status: "settled"` 才表示结算成功。受理不明或过期等待核对时额外返回 `task_status`，不要自动重新提交。内容接口仅允许已完成且已结算任务，其他状态返回 `409`；不存在或不属于当前用户/Key 返回 `404`。查询与下载复用原任务，不再次生成。此新入口不提供 `DELETE`、集合列表或 multipart。
+
+### 视频模型与接入方案调用细节
+
+选择模型前先确认账号允许的端点、协议方案与当前 Key 的模型目录。示例中的上游型号可以经站内模型映射提供给用户，但限制由映射后的实际型号决定；API 的 `model` 应填写当前 Key 可见的名称。创作台 1–60 秒及自定义分辨率是界面可编辑范围，不能据此承诺所有供应商型号支持这些参数。模型的使用说明也不替代接口参数与价格校验。
+
+| 模型或方案 | 实际创建入口与字段 | 参考图和参数注意事项 |
+| --- | --- | --- |
+| 可美 Seedance 2.5，含 `doubao-seedance-2-5-260628` | `/v1/video/generations`；扁平 `prompt`、`images`、`duration`、`resolution`、`ratio` | 文生与普通参考图可指定比例；首帧/首尾帧必须 `adaptive`。2.5 为 480p/720p/1080p、4–30 整数秒或 -1；仅说明可美合同，不推广到其他适配 |
+| Seedance 官方原生 | `/api/v3/contents/generations/tasks`；`content` | 首帧和参考图角色显式区分。官方 2.5 首尾帧比例只能省略或 adaptive；不能混用顶层 prompt/images 与 content |
+| MiniMax H3 V2 / 可美原生 | `/v2/video_generation`；`content`、`duration`、`resolution` | MiniMax V2 必填 resolution；可美文生要明确 ratio，图生不强加默认 16:9。型号变体的时长/档位仍由实际模型决定 |
+| 秘塔 H3 | `/v1/videos`；`seconds`、像素 `size`、单张 `input_reference.image_url` | 1280x720/720x1280 对应 768p；1792x1024/1024x1792 对应 2k。不能按图片短边或数学比例猜测档位 |
+| Yezonghui | `/v1/videos`；`seconds`、`resolution`、比例 `size`、`image_urls` | size 是 16:9 等比例，自动时省略；参考媒体只用 HTTP(S) 公共链接，不接受 Data URL；不能照搬 OpenAI 像素 size |
+| Kling 现代模型路径 | `/text-to-video/{model}`、`/image-to-video/{model}`、`/omni-video/{model}`；`settings` 和操作所需的 `contents` | 图生为 first_frame/last_frame；可美 Omni 为 refer_image、feature_video、base_video。可美 audio 是 off/native/original；参考视频和编辑模式有独立约束，旧 `/v1/videos/*` 仅按旧合同调用 |
+| Wan | `/api/v1/services/aigc/video-generation/video-synthesis`；`input`、`parameters` | 单图用模型支持的 input.img_url；可美多参考用 input.media。不能混用多套素材字段；分辨率和时长位于 parameters，request_id 不是任务 ID |
+| Vidu | `/ent/v2/{img2video,reference2video,text2video,start-end2video}`；`images` | 单图、参考、无图、首尾帧对应不同操作；可美默认 5 秒/540p/16:9 及 Q4 限制不套用到官方或旧透传方案 |
+| Grok / xAI | `/v1/videos/generations`；`duration`、`resolution`、`aspect_ratio`、`image.url` | 不使用 Seedance role/content 格式；本站创作台采用 1–15 秒和 480p/720p/1080p，API 扩展参数仍依实际模型和可准确计价范围 |
+
+可美当前[统一视频文档](https://token.xinhankr.com/docs/openai/doc0019)区分图片角色。单个字符串图片通常推断为首帧，两张推断为首尾帧；需要普通参考语义时应显式提供 `reference_image`，不能靠提示词中的“参考图”代替角色。首尾帧示例：
+
+```json
+{
+  "model": "doubao-seedance-2-5-260628",
+  "prompt": "人物沿海岸缓步前行，镜头平稳跟随",
+  "images": [
+    {"url": "https://media.example.com/first-frame.png", "role": "first_frame"},
+    {"url": "https://media.example.com/last-frame.png", "role": "last_frame"}
+  ],
+  "ratio": "adaptive",
+  "resolution": "720p",
+  "duration": 5
+}
+```
+
+只有首帧时移除 last_frame 项，仍保留 adaptive。需要 16:9 输出时先把首帧裁剪为 16:9；普通参考生则使用 `images: [{"url":"https://media.example.com/character.png","role":"reference_image"}]`、模型支持的固定比例及 `omni_reference_task_type: "auto"`。视频编辑 edit 与延长 extend 不是首帧模式：可美 2.5 两者都要求 adaptive，edit 还要求 duration=-1。媒体 URL、素材数量及内容限制依具体模型和本站安全门禁；不要混入另一套原生 content。
+
+`/docs/kemei-seedance25-text`、`/docs/kemei-seedance25-frames`、`/docs/kemei-seedance25-reference` 分别提供可复制的完整请求；`/docs/video-metaso-h3`、`/docs/video-yezonghui-create` 分开说明同一 `/v1/videos` 路径下的尺寸与参考图合同。既有 Kling、Wan、MiniMax、Vidu、Grok 文档补充各自结构和查询边界。新增说明描述调用者应遵守的合同，不改变网关参数适配或生成行为。
+
+创建成功后保存任务 ID，并以同一 Key 轮询对应查询接口。统一视频接口使用本站 `vid_…`，原生接口使用供应商 ID；`X-Video-Task-ID` 可关联本站账务查询。只有明确 completed 且 billing_status=settled 才能依独立 Video 的内容接口下载；HTTP 200 的 failed 不是生成成功。失败释放需检查 billing_status=released，不能从上游 error 单独推断退款。已确认失败后修正参数可使用新的幂等键创建新任务；创建超时、断线或状态 unknown 时先核对原任务，不能为刷新进度再次 POST。`duration=-1` 仍有预算和实际用量结算要求，比例不替代分辨率价格档位。
 
 ### Seedance 原生视频任务
 

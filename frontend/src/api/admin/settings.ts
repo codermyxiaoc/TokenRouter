@@ -50,6 +50,8 @@ export interface CreativeModelSetting {
   video_endpoint?: string;
   video_capabilities?: CreativeVideoCapabilities;
   audio_capabilities?: CreativeAudioCapabilities;
+  /** 视频生成面板下方展示的纯文本使用说明，最多 2000 个 Unicode 字符。 */
+  usage_notes?: string;
 }
 
 /** 管理员配置创作台模型时可选择的候选项。 */

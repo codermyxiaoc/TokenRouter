@@ -180,7 +180,7 @@ func (s *CreativePublicService) creativeGrokVideoModelsForGroup(ctx context.Cont
 		}
 		caps = creativeGrokVideoCanvasCapabilities(caps)
 		out = append(out, CreativeModelPublic{GroupID: group.ID, GroupName: group.Name, Model: candidate.Model,
-			MediaType: "video", Operations: []string{CreativeOperationGenerate}, VideoEndpoint: CreativeVideoEndpointGrok,
+			MediaType: "video", UsageNotes: setting.UsageNotes, Operations: []string{CreativeOperationGenerate}, VideoEndpoint: CreativeVideoEndpointGrok,
 			VideoCapabilities: caps, AspectRatios: caps.AspectRatios, OutputCount: 1, MaxOutputCount: 1, MaxReferenceImages: caps.MaxReferenceImages})
 	}
 	return out, nil

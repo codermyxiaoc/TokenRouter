@@ -461,7 +461,9 @@ type CreativeRunOutputPublic struct {
 
 // CreativeModelPublic 是 ListModels 返回的可用模型条目。
 type CreativeModelPublic struct {
-	MediaType          string                     `json:"media_type"`
+	MediaType string `json:"media_type"`
+	// 仅从用户可访问的已配置视频模型投影说明，不能作为上游请求参数使用。
+	UsageNotes         string                     `json:"usage_notes,omitempty"`
 	VideoEndpoint      VideoEndpoint              `json:"video_endpoint,omitempty"`
 	VideoCapabilities  *CreativeVideoCapabilities `json:"video_capabilities,omitempty"`
 	AudioCapabilities  *CreativeAudioCapabilities `json:"audio_capabilities,omitempty"`

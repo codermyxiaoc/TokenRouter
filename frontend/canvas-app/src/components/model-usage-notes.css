@@ -1,0 +1,17 @@
+/* 两行预览保留操作区空间，完整说明在可滚动弹窗中阅读，长链接也不撑宽画布。 */
+.model-usage-notes{margin-top:12px;border-top:1px solid var(--border);padding-top:10px;color:var(--muted);cursor:default;user-select:text;min-width:0}
+.model-usage-notes-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;height:20px;font-size:12px;font-weight:600}
+.model-usage-notes-heading>span{display:flex;align-items:center;gap:6px}
+.model-usage-notes-link{border:0;border-radius:5px;background:transparent;color:var(--brand);padding:2px 4px;font-size:12px;font-weight:400}
+.model-usage-notes>p{margin:6px 0 0;font-size:12px;line-height:20px;max-height:40px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere}
+.model-usage-notes.condensed{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;margin-top:8px;padding-top:8px}
+.model-usage-notes.condensed .model-usage-notes-heading{display:contents}
+.model-usage-notes.condensed .model-usage-notes-heading>span{grid-column:1;grid-row:1;font-size:12px}
+.model-usage-notes.condensed .model-usage-notes-link{grid-column:3;grid-row:1}
+.model-usage-notes.condensed>p{grid-column:2;grid-row:1;display:block;white-space:nowrap;text-overflow:ellipsis;max-height:20px;margin:0}
+.model-usage-notes-details{max-height:min(55vh,480px);overflow-y:auto;overscroll-behavior:contain;user-select:text;cursor:text}
+.model-usage-notes-details>strong{font-size:13px;overflow-wrap:anywhere}
+.model-usage-notes-details>p{margin:12px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.7}
+.model-usage-notes-action{flex-shrink:0;cursor:default}
+.model-usage-notes-compact{display:flex;align-items:center;gap:4px;height:36px;padding:0 8px;border:1px solid var(--border);border-radius:8px;background:var(--hover);font-size:11px;white-space:nowrap;cursor:pointer}
+.model-usage-notes-link:hover,.model-usage-notes-compact:hover{background:var(--hover);color:var(--brand)}

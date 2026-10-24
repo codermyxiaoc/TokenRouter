@@ -275,7 +275,7 @@ func (s *CreativePublicService) creativeVideoModelsForGroup(ctx context.Context,
 			}
 			caps = creativeVideoCanvasCapabilities(caps)
 			caps.MaxReferenceImageBytes = referenceLimits[candidate.Model][setting.VideoEndpoint]
-			out = append(out, CreativeModelPublic{GroupID: group.ID, GroupName: group.Name, Model: setting.Model, MediaType: "video", Operations: []string{CreativeOperationGenerate}, VideoEndpoint: setting.VideoEndpoint, VideoCapabilities: caps, AspectRatios: caps.AspectRatios, OutputCount: 1, MaxOutputCount: 1, MaxReferenceImages: caps.MaxReferenceImages})
+			out = append(out, CreativeModelPublic{GroupID: group.ID, GroupName: group.Name, Model: setting.Model, MediaType: "video", UsageNotes: setting.UsageNotes, Operations: []string{CreativeOperationGenerate}, VideoEndpoint: setting.VideoEndpoint, VideoCapabilities: caps, AspectRatios: caps.AspectRatios, OutputCount: 1, MaxOutputCount: 1, MaxReferenceImages: caps.MaxReferenceImages})
 		}
 	}
 	return out, nil

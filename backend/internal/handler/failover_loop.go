@@ -147,6 +147,17 @@ func (s *FailoverState) HandleFailoverError(
 		return FailoverCanceled
 	}
 	s.LastFailoverErr = failoverErr
+	if service.ImageAttemptHasPolicy(ctx) {
+		// 图片不复用文本的同号退避或耗尽后重开集合；只有明确未受理才允许备用账号。
+		decision, known := service.ImageAttemptLastDecision(ctx)
+		if failoverErr == nil || !failoverErr.ShouldRetryNextAccount() ||
+			known && !service.ImageAttemptCanSwitch(decision) || service.ImageAttemptSendCount(ctx) >= service.ImageAttemptMaxSends {
+			return FailoverExhausted
+		}
+		s.FailedAccountIDs[accountID] = struct{}{}
+		s.SwitchCount++
+		return FailoverContinue
+	}
 	if failoverErr == nil || !failoverErr.ShouldRetryNextAccount() {
 		return FailoverExhausted
 	}
@@ -221,6 +232,9 @@ func (s *FailoverState) HandleSelectionExhausted(ctx context.Context) FailoverAc
 	// 不代表账号耗尽，直接按取消终止。
 	if ctx.Err() != nil {
 		return FailoverCanceled
+	}
+	if service.ImageAttemptHasPolicy(ctx) {
+		return FailoverExhausted
 	}
 
 	if s.LastFailoverErr != nil &&

@@ -83,6 +83,29 @@ func TestSmartRoutingAccountFailureStateRequestIsolation(t *testing.T) {
 	require.False(t, IsSmartRoutingAccountExcluded(second, 100))
 }
 
+func TestSmartRoutingCooldownAdmissionKeepsEarliestRedisObservationAndScope(t *testing.T) {
+	base := WithSmartRoutingAccountFailures(context.Background())
+	first := WithSmartRoutingAccountCooldown(base, 1, 10*time.Second, "model", "/v1/responses")
+	RememberSmartRoutingCooldownAdmission(first, 5, 200)
+	RememberSmartRoutingCooldownAdmission(first, 5, 100)
+	RememberSmartRoutingCooldownAdmission(first, 5, 300)
+	started, admitted, tracked := SmartRoutingCooldownRequestInfo(first, 5)
+	require.True(t, tracked)
+	require.False(t, started.IsZero())
+	require.EqualValues(t, 100, admitted)
+	for _, other := range []context.Context{
+		WithSmartRoutingAccountCooldown(base, 2, 10*time.Second, "model", "/v1/responses"),
+		WithSmartRoutingAccountCooldown(base, 1, 10*time.Second, "other", "/v1/responses"),
+		WithSmartRoutingAccountCooldown(base, 1, 10*time.Second, "model", "/v1/messages"),
+	} {
+		_, value, ok := SmartRoutingCooldownRequestInfo(other, 5)
+		require.True(t, ok)
+		require.Zero(t, value)
+	}
+	_, value, _ := SmartRoutingCooldownRequestInfo(first, 6)
+	require.Zero(t, value)
+}
+
 func TestSmartRoutingAccountCooldownKeepsHealthyCandidatesAndCatalog(t *testing.T) {
 	first := smartRoutingTestAccount(PlatformOpenAI)
 	second := first
@@ -106,7 +129,9 @@ func TestSmartRoutingAccountCooldownKeepsHealthyCandidatesAndCatalog(t *testing.
 	require.True(t, result.HasModel)
 	require.False(t, result.Schedulable)
 	require.True(t, result.Cooling)
-	require.Equal(t, time.Minute, result.RetryAfter)
+	require.LessOrEqual(t, result.RetryAfter, time.Minute)
+	require.Greater(t, result.RetryAfter, 59*time.Second)
+	require.False(t, result.RetryAt.IsZero())
 	result, err = svc.EvaluateSmartRoutingGroup(ctx, group, "unknown", "/v1/responses")
 	require.NoError(t, err)
 	require.False(t, result.HasModel, "冷却不能捏造目录")

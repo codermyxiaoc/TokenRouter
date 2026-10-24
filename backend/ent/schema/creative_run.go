@@ -78,6 +78,9 @@ func (CreativeRun) Fields() []ent.Field {
 		// release_target_status 记录 release_pending 完成后应落入的终态。
 		field.String("release_target_status").MaxLen(20).Default("failed"),
 		field.Int("attempt_count").Default(0),
+		// 图片最多尝试两个不同账号；与首次执行的绝对截止时间一起持久化，重启不能刷新预算。
+		field.JSON("image_attempt_account_ids", []int64{}).Default(func() []int64 { return []int64{} }).SchemaType(map[string]string{dialect.Postgres: "jsonb"}),
+		field.Time("image_execution_deadline_at").Optional().Nillable().SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
 		// 额度预记标记：与 batch_image_jobs.allowance_reserved 同语义，预占时置 true，捕获/释放后复位。
 		field.Bool("allowance_reserved").Default(false),
 		// provisioning_phase 记录创建 saga 已完成的最后阶段，供崩溃恢复继续执行。

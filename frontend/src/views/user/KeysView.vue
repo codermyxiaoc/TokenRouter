@@ -1744,7 +1744,7 @@ const formData = ref({
   composite_groups: [] as Array<ReturnType<typeof newCompositeBinding>>,
   smart_routing: false,
   smart_routing_group_ids: [] as number[],
-  smart_routing_cooldown_seconds: 60 as number | '',
+  smart_routing_cooldown_seconds: 10 as number | '',
   status: 'active' as 'active' | 'inactive',
   fast_mode_policy: 'follow_request' as ApiKeyFastModePolicy,
   billing_mode: 'auto' as ApiKeyBillingMode,
@@ -2387,7 +2387,7 @@ const editKey = (key: ApiKey) => {
     smart_routing: key.smart_routing ?? false,
     smart_routing_group_ids: [...(key.smart_routing_group_ids || [])],
     // 缺省沿用服务端默认值，同时保留已保存的 0 秒。
-    smart_routing_cooldown_seconds: key.smart_routing_cooldown_seconds ?? 60,
+    smart_routing_cooldown_seconds: key.smart_routing_cooldown_seconds ?? 10,
     composite_groups: (key.composite_groups || []).map((binding) =>
       newCompositeBinding(binding.group_id, binding.prefix)
     ),
@@ -2775,7 +2775,7 @@ const closeModals = () => {
     composite_groups: [],
     smart_routing: false,
     smart_routing_group_ids: [],
-    smart_routing_cooldown_seconds: 60,
+    smart_routing_cooldown_seconds: 10,
     status: 'active',
     fast_mode_policy: 'follow_request',
     billing_mode: 'auto',

@@ -525,6 +525,9 @@ func TestSettingServiceRefreshCachedSettingsKeepsIndependentEWMAProcessDefaults(
 }
 
 func TestSettingService_UpdateSettings_AdvancedSchedulerWeightSums(t *testing.T) {
+	// 成功子例会刷新进程级调度缓存；结束后释放，避免污染后续诊断测试和重复轮次。
+	resetAdvancedSchedulerSettingCacheForTest()
+	t.Cleanup(resetAdvancedSchedulerSettingCacheForTest)
 	maxFloat := strconv.FormatFloat(math.MaxFloat64, 'g', -1, 64)
 	tests := []struct {
 		name    string

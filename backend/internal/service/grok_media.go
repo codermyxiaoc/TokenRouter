@@ -752,7 +752,17 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	requestID string,
 	body []byte,
 	contentType string,
-) (*OpenAIForwardResult, error) {
+) (result *OpenAIForwardResult, forwardErr error) {
+	isImage := endpoint == GrokMediaEndpointImagesGenerations || endpoint == GrokMediaEndpointImagesEdits
+	imageOperation := "generate"
+	if endpoint == GrokMediaEndpointImagesEdits {
+		imageOperation = "edit"
+	}
+	defer func() {
+		if isImage {
+			result, forwardErr = finalizeImageAttemptForward(ctx, result, forwardErr)
+		}
+	}()
 	startTime := time.Now()
 	if account == nil {
 		return nil, fmt.Errorf("grok account is required")
@@ -807,6 +817,10 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		bodyReader = bytes.NewReader(body)
 	}
 	upstreamCtx, releaseUpstreamCtx := legacyVideoUpstreamContext(ctx, endpoint)
+	if isImage {
+		releaseUpstreamCtx()
+		upstreamCtx, releaseUpstreamCtx = DetachImageAttemptContext(ctx)
+	}
 	defer releaseUpstreamCtx()
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, endpoint.httpMethod(), targetURL, bodyReader)
 	if err != nil {
@@ -832,7 +846,10 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamStart := time.Now()
-	if endpoint == GrokMediaEndpointImagesGenerations || endpoint == GrokMediaEndpointImagesEdits {
+	if isImage {
+		if err := BeginImageAttempt(upstreamCtx, account.ID, upstreamModel, imageOperation); err != nil {
+			return nil, err
+		}
 		markImageUpstreamAttempt(c)
 	}
 	if isGrokAsyncVideoCreateEndpoint(endpoint) {
@@ -840,6 +857,9 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	}
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+	if isImage && resp == nil && err == nil {
+		err = errors.New("image upstream returned no response")
+	}
 	if err != nil {
 		transportErr := s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		if isGrokAsyncVideoCreateEndpoint(endpoint) {
@@ -849,6 +869,9 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 				failoverErr.NextAccountAction = NextAccountStop
 				failoverErr.RetryableOnSameAccount = false
 			}
+		}
+		if isImage && ImageAttemptHasPolicy(ctx) {
+			return nil, RecordImageAttemptFailure(ctx, transportErr, ClassifyImageTransportFailure(err))
 		}
 		return nil, transportErr
 	}
@@ -861,7 +884,19 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		setOpsUpstreamError(c, resp.StatusCode, "Grok video create redirect was not followed; submission outcome is unknown", "")
 		return nil, fmt.Errorf("grok video create redirect: submission outcome is unknown")
 	}
+	if isImage && resp.Body == nil {
+		resp.Body = http.NoBody
+	}
 	if resp.StatusCode >= 400 {
+		if isImage && ImageAttemptHasPolicy(ctx) {
+			errorBody, readErr := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
+			if readErr != nil {
+				return nil, imageAttemptUnknownFailure(ctx, readErr)
+			}
+			_ = resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(errorBody))
+			return s.imageAttemptHTTPFailure(ctx, c, account, resp, errorBody, upstreamModel)
+		}
 		if isGrokAsyncVideoCreateEndpoint(endpoint) {
 			// 错误包也可能带已受理的任务；先完整读取、持久保存归属，再允许客户端看到原响应。
 			errorBody, readErr := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
@@ -908,7 +943,10 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	if err != nil {
 		return nil, err
 	}
-	if endpoint == GrokMediaEndpointImagesGenerations || endpoint == GrokMediaEndpointImagesEdits {
+	if isImage {
+		if ImageAttemptHasPolicy(ctx) {
+			RecordImageAttemptDecision(ctx, ClassifyImageHTTPFailure(resp.StatusCode, respBody))
+		}
 		if countOpenAIResponseImageOutputsFromJSONBytes(respBody) <= 0 {
 			setOpsUpstreamError(c, http.StatusBadGateway, "xAI upstream returned no image output", truncateString(string(respBody), 512))
 			return nil, &UpstreamFailoverError{

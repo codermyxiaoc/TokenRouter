@@ -40,7 +40,7 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 	}
 	token, _, err := e.gateway.GetAccessToken(ctx, account)
 	if err != nil {
-		return nil, creativeHTTPStatusError(0, err.Error())
+		return nil, creativeImageAccountPreparationFailure(ctx, err)
 	}
 	targetURL, err := e.creativeOpenAIURL(account, endpoint)
 	if err != nil {
@@ -53,7 +53,7 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
 	authHeaders, err := e.gateway.buildOpenAIAuthenticationHeaders(ctx, account, token)
 	if err != nil {
-		return nil, creativeHTTPStatusError(0, err.Error())
+		return nil, creativeImageAccountPreparationFailure(ctx, err)
 	}
 	for key, values := range authHeaders {
 		for _, value := range values {
@@ -66,14 +66,12 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 	// 账号级请求头覆写最后应用，配置值优先于内置默认头。
 	account.ApplyHeaderOverrides(req.Header)
 
+	if err := BeginImageAttempt(ctx, account.ID, upstreamModel, run.Operation); err != nil {
+		return nil, err
+	}
 	resp, err := e.gateway.httpUpstream.DoWithTLS(req, accountProxyURL(account), account.ID, account.Concurrency, e.gateway.resolveOpenAITLSProfile(account))
 	if err != nil {
-		if midjourney {
-			// POST 发送后断连不能证明未生图，必须保留预占，禁止重复生成。
-			logCreativeImageUnconfirmed(ctx, run.RunID, account.ID, "transport", 0)
-			return nil, creativeResultUnconfirmedError()
-		}
-		return nil, creativeHTTPStatusError(0, err.Error())
+		return nil, creativeImageTransportFailure(ctx, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var respBody []byte
@@ -84,34 +82,32 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 		respBody, err = readCreativeUpstreamBody(resp.Body, 64<<20)
 	}
 	if err != nil {
-		if midjourney {
-			logCreativeImageUnconfirmed(ctx, run.RunID, account.ID, "response_body", resp.StatusCode)
-			return nil, creativeResultUnconfirmedError()
-		}
-		return nil, creativeHTTPStatusError(0, err.Error())
-	}
-	if midjourney && (resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode >= 500 || resp.StatusCode < 200 || resp.StatusCode >= 300 && resp.StatusCode < 400) {
-		logCreativeImageUnconfirmed(ctx, run.RunID, account.ID, "http_status_unconfirmed", resp.StatusCode)
-		return nil, creativeResultUnconfirmedError()
+		return nil, creativeImageReadFailure(ctx)
 	}
 	if resp.StatusCode >= 400 {
 		// 只记状态与固定阶段，区分真实 HTTP 拒绝和成功响应后的解析失败，不落原包或供应商消息。
 		logger.L().Warn("creative.openai_image_failed", zap.String("run_id", run.RunID), zap.Int64("account_id", account.ID), zap.String("stage", "http_status"), zap.Int("upstream_status", resp.StatusCode))
-		return nil, creativeHTTPResponseError(resp.StatusCode, respBody)
+		return nil, creativeImageHTTPFailure(ctx, resp.StatusCode, respBody)
 	}
 	if midjourney {
 		outputs, parseErr := parseCreativeMidjourneyImageOutputs(ctx, respBody, creativeMidjourneyImageDownloader)
 		if parseErr != nil {
 			logCreativeImageUnconfirmed(ctx, run.RunID, account.ID, "response_parse", resp.StatusCode)
 		}
-		return outputs, parseErr
+		if parseErr != nil {
+			return nil, creativeImageOutputFailure(ctx, resp.StatusCode, respBody, parseErr)
+		}
+		return outputs, nil
 	}
 	outputs, err := parseCreativeOpenAIImageOutputs(respBody)
 	if err != nil {
 		// 对外继续沿用原安全错误；后台保留真实 HTTP 状态，不能将本地解码失败误诊为上游502。
 		logger.L().Warn("creative.openai_image_failed", zap.String("run_id", run.RunID), zap.Int64("account_id", account.ID), zap.String("stage", "response_parse"), zap.Int("upstream_status", resp.StatusCode))
 	}
-	return outputs, err
+	if err != nil {
+		return nil, creativeImageOutputFailure(ctx, resp.StatusCode, respBody, err)
+	}
+	return outputs, nil
 }
 
 // 未知结果不会抛出 worker 错误；独立记录固定阶段，供管理员用任务编号核对，

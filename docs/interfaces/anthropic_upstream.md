@@ -29,7 +29,12 @@ Claude 浏览器 OAuth 固定从 `https://claude.com/cai/oauth/authorize` 发起
 
 `upstream` 和其它历史类型即使能被通用导入器保存，也没有 Anthropic 平台的正式 token provider 契约。完整分类见[上游账号能力矩阵](upstream_account_matrix.md)。所有 base URL、代理和自定义 Header 仍受[上游传输安全](../operations/upstream_transport_security.md)约束。
 
+<a id="anthropic_protocol_dispatch"></a>
 ## 协议分派
+
+Anthropic 的 Chat/Responses 兼容流在客户端断开后继续有界读取上游，合并累计用量后交给原账本结算；没有配置读超时时，断连后的读间隔上限为 180 秒。上游未给合法终态就结束、读取失败或闲置超时，不再伪装为正常完成，在线客户端收到协议内错误事件；已有实际用量仍按观测结果处理。显式上游流错误只在尚无业务输出和可计费用量时具备重试资格，不能因下游断开而重放生成。显式 `event:error` 优先于先前的停止标记与断连状态，不能被记录为成功；在线错误沿用原不计费合同，但已观测用量仍会阻止重放。断连后的排水错误保留用量和失败事实，只交原账本结算一次，不再补写客户端响应。
+
+兼容流按 SSE 事件读取，接受注释、`id` 字段、多行 `data` 与 CRLF；完整 JSON 仍及时交付，兼容省略事件间空行的历史格式。`event:error` 是权威错误标签，载荷缺少或写入冲突的 `type` 不能把它变成成功。聚合后的单个事件同样受 `MaxLineSize` 与 4096 行上限约束，不能用多行绕过大小限制；读错误在尾部事件分派后仍保留。
 
 Anthropic 原生入口是 `POST /v1/messages` 和 `POST /v1/messages/count_tokens`。同一 Anthropic 分组还可从 OpenAI Chat Completions 和 Responses 入口进入：处理器先把客户端形状归一化为 Anthropic 请求，按 attempt 选账号并转发，再把非流或 SSE 结果恢复成原协议。
 

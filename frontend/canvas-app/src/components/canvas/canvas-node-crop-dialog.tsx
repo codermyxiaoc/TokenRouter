@@ -174,7 +174,7 @@ function moveCrop(crop: CanvasImageCropRect, dx: number, dy: number): CanvasImag
 }
 
 function resizeCrop(crop: CanvasImageCropRect, dx: number, dy: number, handle: ResizeHandle, aspectRatio: number | null, box: DOMRect): CanvasImageCropRect {
-    let next = { ...crop };
+    const next = { ...crop };
     if (handle.includes("e")) next.width = crop.width + dx;
     if (handle.includes("s")) next.height = crop.height + dy;
     if (handle.includes("w")) {

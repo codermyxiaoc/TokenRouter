@@ -101,6 +101,8 @@ func resolveCodexOutboundIdentity(candidateUA string) codexOutboundIdentity {
 	if !ok {
 		originator, pairedUA = openai.CodexDefaultOriginator, codexCLIUserAgent
 	}
+	// 旧 TUI 身份成对归一，避免只替换 originator 导致身份校验失败。
+	originator, pairedUA, _ = openai.NormalizeCodexClientIdentityToCLI(originator, pairedUA)
 	version := codexClientVersionFromUA(canonical)
 	if rebuilt := replaceCodexUserAgentVersion(pairedUA, version); rebuilt != "" {
 		pairedUA = rebuilt
@@ -168,7 +170,7 @@ func applyOpenAICodexProbeHeaders(h http.Header) {
 // enforceCodexIdentityHeaders 收口 OAuth（ChatGPT 内部接口）出站请求的客户端身份头。
 // 上游要求 originator 与 User-Agent 首段配套且为官方客户端标识，version 头（若携带）
 // 不低于 0.144.0，任一不满足即 404（issue #3901）。以最终 User-Agent 为准推导配套
-// originator；推导不出官方身份（第三方 UA / UA 缺失）时整体回退为默认 Codex TUI 身份。
+// originator；推导不出官方身份（第三方 UA / UA 缺失）时整体回退为默认 Codex CLI 身份。
 //
 // 仅对携带 originator 的请求生效；需要从缺失身份头恢复的调用方应先调用
 // ensureCodexIdentityHeaders。
@@ -180,6 +182,16 @@ func enforceCodexIdentityHeaders(h http.Header) {
 // enforceCodexIdentityHeadersWithUA 保留官方 UA 的客户端名与设备指纹，
 // 仅在无法配对或版本过旧时回退到 canonical 身份；overrideUA 供账号级配置调用方使用。
 func enforceCodexIdentityHeadersWithUA(h http.Header, overrideUA string) {
+	enforceCodexIdentityHeadersConfigured(h, overrideUA, false)
+}
+
+// TLS 路由是管理员显式身份配置；仍校验身份配对，但不迁移其指定的 TUI 指纹。
+func enforceCodexIdentityHeadersForRouting(h http.Header, routerMatch ...TLSFingerprintRouterMatchResult) {
+	preserveTUI := len(routerMatch) > 0 && routerMatch[0].Matched && strings.TrimSpace(routerMatch[0].UpstreamUserAgent) != ""
+	enforceCodexIdentityHeadersConfigured(h, "", preserveTUI)
+}
+
+func enforceCodexIdentityHeadersConfigured(h http.Header, overrideUA string, preserveTUI bool) {
 	if h == nil || h.Get("originator") == "" {
 		return
 	}
@@ -192,6 +204,9 @@ func enforceCodexIdentityHeadersWithUA(h http.Header, overrideUA string) {
 	if !ok {
 		identity := resolveCodexOutboundIdentity("")
 		originator, pairedUA = identity.originator, identity.userAgent
+	}
+	if !preserveTUI {
+		originator, pairedUA, _ = openai.NormalizeCodexClientIdentityToCLI(originator, pairedUA)
 	}
 	h.Set("user-agent", pairedUA)
 	h.Set("originator", originator)

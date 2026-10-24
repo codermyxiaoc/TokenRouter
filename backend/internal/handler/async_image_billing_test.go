@@ -146,7 +146,8 @@ func TestAsyncImageBillingHandlers(t *testing.T) {
 			{name: "明确拒绝释放", statuses: []int{400}, wantEvents: []string{"reserve", "upstream", "release"}},
 			{name: "传输未知保留预占", transportErr: errors.New("local simulated response interrupted"), wantEvents: []string{"reserve", "upstream", "reconciliation"}},
 			{name: "捕获失败待核对", captureErr: errors.New("local simulated capture failure"), wantEvents: []string{"reserve", "upstream", "capture", "reconciliation"}},
-			{name: "切换账号仅预占一次", statuses: []int{503, 200}, wantEvents: []string{"reserve", "upstream", "upstream", "capture"}},
+			{name: "明确限流切换账号仅预占一次", statuses: []int{429, 200}, wantEvents: []string{"reserve", "upstream", "upstream", "capture"}},
+			{name: "普通5xx未知不重发", statuses: []int{503, 200}, wantEvents: []string{"reserve", "upstream", "reconciliation"}},
 			{name: "空成功响应不能扣费或重放", responseBody: `{"data":[]}`, wantEvents: []string{"reserve", "upstream", "reconciliation"}},
 			{name: "运行中改价沿用预占报价", changePrice: true, wantEvents: []string{"reserve", "upstream", "capture"}},
 		} {

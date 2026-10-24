@@ -210,10 +210,9 @@ func shouldAliasDeepSeekResponsesInputImages(account *Account) bool {
 	return targetsDeepSeekAPIHost(account)
 }
 
-// aliasDeepSeekResponsesInputImages 把图片 part 改写成 DeepSeek 能反序列化
-// 的形状：type=input_image，同时带字符串字段 image_url 与 url。
-// 文档与部分 400 提 image_url；线上 serde 要求 url。只发其中一个都会踩坑。
-// 仅有 file_id、没有可用 URL 的 part 原样保留。
+// aliasDeepSeekResponsesInputImages 把图片 part 改写成 DeepSeek 官方形状：
+// type=input_image，同时只保留字符串字段 image_url。仅有 file_id、没有可用
+// URL 的 part 原样保留。
 func aliasDeepSeekResponsesInputImages(input any) (any, bool) {
 	items, ok := asDeepSeekResponsesSlice(input)
 	if !ok {
@@ -295,18 +294,18 @@ func aliasDeepSeekResponsesImagePart(part map[string]any) bool {
 		part["image_url"] = imageURL
 		changed = true
 	}
-	if current, ok := part["url"].(string); !ok || strings.TrimSpace(current) != imageURL {
-		part["url"] = imageURL
+	if _, exists := part["url"]; exists {
+		delete(part, "url")
 		changed = true
 	}
 	return changed
 }
 
 func extractDeepSeekResponsesImageURL(part map[string]any) string {
-	if imageURL := deepSeekResponsesURLValue(part["url"]); imageURL != "" {
+	if imageURL := deepSeekResponsesURLValue(part["image_url"]); imageURL != "" {
 		return imageURL
 	}
-	if imageURL := deepSeekResponsesURLValue(part["image_url"]); imageURL != "" {
+	if imageURL := deepSeekResponsesURLValue(part["url"]); imageURL != "" {
 		return imageURL
 	}
 	if imageURL := deepSeekResponsesURLValue(part["image"]); imageURL != "" {

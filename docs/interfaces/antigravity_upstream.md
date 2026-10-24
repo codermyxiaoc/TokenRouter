@@ -108,6 +108,11 @@ Argon 及 Claude 5.5 high/medium/low 档位加入本地目录。Claude 5.5 档�
 
 ## 失败与恢复
 
+响应解包按 `response` 字段判断包装与直接格式；包装响应没有 `candidates` 时仍保留其缓存/Token 用量，直接 Gemini SSE 同样保留正文及计量。
+
+流式计量遇到空 `usageMetadata` 或只有总计的心跳时保留此前的输入、输出与缓存累计值；有明确分项的快照（包括显式零值）按最新值替换，不逐帧累加。
+
+
 - 短 `RetryInfo` 可以在同账号做一次受限等待；长模型限流标记模型/账号并请求调度层切换。
 - 单账号模式允许有总等待上限的退避重试，多账号模式优先切换；Context 取消立即停止。
 - `MODEL_CAPACITY_EXHAUSTED` 被视为共享模型容量，使用全局去重和有界重试，不能通过快速轮换账号放大上游压力。
@@ -120,3 +125,6 @@ Gemini 原生错误响应统一构造 `application/json` 的 code/status/message
 修改适配器时应覆盖非流/流、Claude/Gemini/OpenAI 三种客户端形状、工具/thinking、单/多账号限流、混合调度关闭后的快照失效和用量归属测试。
 
 相关文档：[上游账号能力矩阵](upstream_account_matrix.md)、[网关请求生命周期](../architecture/gateway_request_lifecycle.md)、[路由与结算](../domains/routing_and_billing.md)、[HTTP 接口边界](http_api.md)、[接口目录](index.md)。
+
+
+Gemini/Antigravity 生图请求在账号映射完成、确定最终图片模型或 IMAGE 输出模态后挂载[图片执行策略](openai_upstream.md#image_attempt_routing)。同组至多两个不同账号，每账号一次生成发送，共享首次截止时间；普通文本、countTokens 与管理员指定账号探测保留原行为。带参考图使用 edit 健康范围，纯文生图使用 generate。已有图片策略的请求不进入文本同账号退避、容量循环或跨组重放；已获得 HTTP 成功后即使正文读取失败也不能换号重新生成。冷却候选只影响选择，不计真实生成发送次数。

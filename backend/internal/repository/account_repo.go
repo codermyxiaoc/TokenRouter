@@ -475,6 +475,9 @@ func (r *accountRepository) updateAccount(ctx context.Context, account *service.
 	if err != nil {
 		return translatePersistenceError(err, service.ErrAccountNotFound, nil)
 	}
+	if err = advanceChanshuiManualAccountRevision(ctx, client, []int64{account.ID}); err != nil {
+		return err
+	}
 	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
 		return err
 	}
@@ -2442,6 +2445,11 @@ func (r *accountRepository) UpdateSessionWindowEnd(ctx context.Context, id int64
 }
 
 func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {
+	if service.HasChanshuiManualAccountState(ctx) {
+		// 管理员调度操作复用原子批量事务，状态与恢复资格必须同时提交或回滚。
+		_, err := r.BulkUpdate(ctx, []int64{id}, service.AccountBulkUpdate{Schedulable: &schedulable})
+		return err
+	}
 	_, err := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
 		SetSchedulable(schedulable).
@@ -2907,6 +2915,9 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		return 0, err
 	}
 	if rows > 0 {
+		if err = advanceChanshuiManualAccountRevision(ctx, exec, ids); err != nil {
+			return 0, err
+		}
 		payload := map[string]any{"account_ids": ids}
 		if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventAccountBulkChanged, nil, nil, payload); err != nil {
 			return 0, err

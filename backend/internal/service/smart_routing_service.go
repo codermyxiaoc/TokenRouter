@@ -18,6 +18,8 @@ type SmartRoutingGroupAvailability struct {
 	// Cooling 只在匹配模型、入口及续接归属的账号全部冷却时成立。
 	Cooling    bool
 	RetryAfter time.Duration
+	// RetryAt 固定本次观测到的最早到期时刻，逐组检查不得将剩余时长重新起算。
+	RetryAt time.Time
 }
 
 // SmartRoutingGroupResolver 只判断一个分组；密钥权限、候选顺序和选定后的计费由鉴权层负责。
@@ -128,12 +130,12 @@ func (s *SmartRoutingService) EvaluateSmartRoutingGroup(ctx context.Context, gro
 		if requiredAccountID > 0 && requiredAccountID != account.ID {
 			continue
 		}
-		if ttl := cooling[account.ID]; ttl > 0 {
+		if until := cooling[account.ID]; until.After(time.Now()) {
 			// 冷却本身已有同模型/入口的失败证据，不能被调度硬过滤隐藏成无目录。
 			matchingAccounts++
 			coolingAccounts++
-			if result.RetryAfter == 0 || ttl < result.RetryAfter {
-				result.RetryAfter = ttl
+			if result.RetryAt.IsZero() || until.Before(result.RetryAt) {
+				result.RetryAt = until
 			}
 			continue
 		}
@@ -180,6 +182,12 @@ func (s *SmartRoutingService) EvaluateSmartRoutingGroup(ctx context.Context, gro
 	}
 	if len(eligible) == 0 {
 		result.Cooling = matchingAccounts > 0 && matchingAccounts == coolingAccounts
+		if !result.RetryAt.IsZero() {
+			result.RetryAfter = time.Until(result.RetryAt)
+			if result.RetryAfter < 0 {
+				result.RetryAfter = 0
+			}
+		}
 		return result, nil
 	}
 	concurrency := s.gateway.concurrencyService

@@ -43,6 +43,7 @@ func WithForwardGeminiSession(groupID int64, sessionHash string) ForwardGeminiOp
 }
 
 func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte, isStickySession bool, options ...ForwardGeminiOption) (*ForwardResult, error) {
+	beginGeminiImageOutputObservation(c)
 	startTime := time.Now()
 	forwardOpts := forwardGeminiOptions{}
 	for _, apply := range options {
@@ -93,6 +94,14 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	if mappedModel == "" {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 		return nil, s.writeGoogleError(c, http.StatusForbidden, fmt.Sprintf("model %s not in whitelist", originalModel))
+	}
+	if geminiImageGenerationDenied(c, body, originalModel, mappedModel) {
+		return nil, s.writeGoogleError(c, http.StatusBadRequest, ImageGenerationPermissionMessage())
+	}
+	var imagePolicyErr error
+	ctx, imagePolicyErr = prepareGeminiImageAttempt(ctx, c, s.imageCooldownStore(), account, body, mappedModel, originalModel)
+	if imagePolicyErr != nil {
+		return nil, imagePolicyErr
 	}
 	billingModel := mappedModel
 
@@ -174,6 +183,12 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		sessionHash:     forwardOpts.sessionHash,
 	})
 	if err != nil {
+		if ImageAttemptHasPolicy(ctx) {
+			var imageFailure *UpstreamFailoverError
+			if errors.As(err, &imageFailure) || ctx.Err() != nil {
+				return nil, err
+			}
+		}
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
 		if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
 			return nil, &UpstreamFailoverError{
@@ -438,6 +453,9 @@ handleSuccess:
 	if isImageGenerationModel(mappedModel) {
 		// Gemini 图片生成 API 每次请求只生成一张图片（API 限制）
 		imageCount = 1
+	}
+	if ImageAttemptHasPolicy(ctx) {
+		imageCount = resolveGeminiImageCount(c, originalModel, mappedModel)
 	}
 
 	return &ForwardResult{

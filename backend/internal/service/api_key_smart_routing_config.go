@@ -3,8 +3,8 @@ package service
 import infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 
 const (
-	// DefaultSmartRoutingCooldownSeconds 统一新建 Key 与数据库存量记录的冷却默认值。
-	DefaultSmartRoutingCooldownSeconds = 60
+	// DefaultSmartRoutingCooldownSeconds 用于新建 Key 的缺省冷却；已有显式或历史存量值不覆盖。
+	DefaultSmartRoutingCooldownSeconds = 10
 	// MaxSmartRoutingCooldownSeconds 限制错误分组最长回避一小时。
 	MaxSmartRoutingCooldownSeconds = 3600
 )

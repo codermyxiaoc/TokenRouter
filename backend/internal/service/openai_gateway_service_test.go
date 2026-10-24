@@ -3379,7 +3379,7 @@ func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t 
 	gin.SetMode(gin.TestMode)
 
 	// 上游要求 originator 与最终 User-Agent 首段配套（issue #3901）：
-	// originator 一律由最终 UA 推导；推导不出官方身份时整体回退默认 Codex TUI 身份。
+	// originator 一律由最终 UA 推导；推导不出官方身份时整体回退默认 Codex CLI 身份。
 	tests := []struct {
 		name           string
 		userAgent      string
@@ -3392,8 +3392,8 @@ func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t 
 			name:           "mismatched originator repaired from ua",
 			userAgent:      "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
 			originator:     "codex_cli_rs",
-			wantOriginator: "codex-tui",
-			wantUA:         "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
+			wantOriginator: "codex_cli_rs",
+			wantUA:         "codex_cli_rs/0.140.2 (Mac OS X 14.0; arm64) iTerm",
 		},
 		{name: "official originator without ua falls back to default identity", originator: "codex_vscode", wantOriginator: openai.CodexDefaultOriginator, wantUA: codexCLIUserAgent},
 		{name: "third-party ua masked to default identity", userAgent: "luna/1.2.0", wantOriginator: openai.CodexDefaultOriginator, wantUA: codexCLIUserAgent},
@@ -3477,8 +3477,9 @@ func TestOpenAIBuildUpstreamRequestRouterEmptyUAUsesAccountFallback(t *testing.T
 
 	req, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, []byte(`{"model":"gpt-5"}`), "token", false, "", false, TLSFingerprintRouterMatchResult{Matched: true})
 	require.NoError(t, err)
-	require.Equal(t, "codex-tui/9.8.0 account-fallback", req.Header.Get("User-Agent"))
-	require.Equal(t, "codex-tui", req.Header.Get("originator"))
+	// 路由没有指定 UA 时仍走账号旧 TUI 的成对迁移，保留原设备与版本。
+	require.Equal(t, "codex_cli_rs/9.8.0 account-fallback", req.Header.Get("User-Agent"))
+	require.Equal(t, "codex_cli_rs", req.Header.Get("originator"))
 }
 
 // ==================== P1-08 修复：model 替换性能优化测试 ====================

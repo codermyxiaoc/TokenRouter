@@ -2000,3 +2000,30 @@ func TestComputeTokenBreakdown_NonExplicitZeroImagePrice_FallsBackToOutput(t *te
 	// 文本输出令牌 = 200 - 50 = 150
 	require.InDelta(t, 150*15e-6, bd.OutputCost, 1e-12)
 }
+
+// Fast 的精确别名与标准卡分开，阈值包含 20 万 token 边界。
+func TestGetModelPricing_Grok47FastFallbackDoesNotOverrideStandard(t *testing.T) {
+	svc := newTestBillingService()
+	for _, model := range []string{
+		"grok-4.7-fast", "grok-4.7-build-fast",
+		"xai/grok-4.7-fast", "x-ai/grok-4.7-fast", "grok/grok-4.7-fast",
+		"xai/grok-4.7-build-fast", "x-ai/grok-4.7-build-fast", "grok/grok-4.7-build-fast",
+	} {
+		p, err := svc.GetModelPricing(model)
+		require.NoError(t, err)
+		require.InDelta(t, 4e-6, p.InputPricePerToken, 1e-12)
+		require.InDelta(t, 1e-6, p.CacheReadPricePerToken, 1e-12)
+		require.InDelta(t, 12e-6, p.OutputPricePerToken, 1e-12)
+		require.Equal(t, 200000, p.LongContextInputThreshold)
+		require.True(t, p.LongContextThresholdInclusive)
+		require.Equal(t, 1.5, p.LongContextInputMultiplier)
+		require.Equal(t, 1.5, p.LongContextOutputMultiplier)
+	}
+	for _, model := range []string{"grok-4.7", "grok-4.7-latest", "grok-4.7-fast-beta", "x-ai/grok-4.7-fast-beta", "xai/grok-4.7-build-fast-beta", "grok/grok-4.7-build-fast-beta"} {
+		p, err := svc.GetModelPricing(model)
+		require.NoError(t, err)
+		require.InDelta(t, 2e-6, p.InputPricePerToken, 1e-12)
+		require.InDelta(t, 0.5e-6, p.CacheReadPricePerToken, 1e-12)
+		require.InDelta(t, 6e-6, p.OutputPricePerToken, 1e-12)
+	}
+}

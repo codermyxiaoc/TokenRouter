@@ -724,76 +724,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		if err != nil {
 			var sseErr *sseStreamErrorEventError
 			if errors.As(err, &sseErr) {
-
-				body := []byte(sseErr.RawData)
-				semanticStatus := http.StatusForbidden
-				var semanticDecision UpstreamErrorDecision
-				if c.Writer.Size() == writerSizeBeforeStream && gjson.GetBytes(body, "error.type").String() == "overloaded_error" {
-					semanticStatus = 529
-					syntheticResp := &http.Response{
-						StatusCode: semanticStatus,
-						Header:     resp.Header.Clone(),
-						Body:       io.NopCloser(bytes.NewReader(body)),
-					}
-					semanticDecision = s.handleFailoverSideEffects(ctx, syntheticResp, account, reqModel)
-					_ = syntheticResp.Body.Close()
-				}
-				upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))
-
-				upstreamDetail := ""
-				if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
-					maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
-					if maxBytes <= 0 {
-						maxBytes = 2048
-					}
-					upstreamDetail = truncateString(sseErr.RawData, maxBytes)
-				}
-
-				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-					Platform:           account.Platform,
-					AccountID:          account.ID,
-					AccountName:        account.Name,
-					UpstreamStatusCode: semanticStatus,
-					UpstreamRequestID:  resp.Header.Get("x-request-id"),
-					Kind:               "stream_error",
-					Message:            upstreamMsg,
-					Detail:             upstreamDetail,
-				})
-
-				logger.LegacyPrintf("service.gateway",
-					"[Forward] SSE error event in stream: Account=%d(%s) RequestID=%s Body=%s",
-					account.ID, account.Name, resp.Header.Get("x-request-id"),
-					truncateString(sseErr.RawData, 1000),
-				)
-
-				decision := semanticDecision
-				if semanticStatus != 529 {
-					decision = upstreamErrorDecisionWithoutPersistence(account, http.StatusForbidden)
-					// 已经写出部分响应后不能再改变账号调度状态；避免把一个
-					// 无法重试的流内错误写入持久化错误策略。
-					if c.Writer.Size() == writerSizeBeforeStream && s.rateLimitService != nil {
-						decision = s.rateLimitService.ApplyUpstreamError(ctx, account, http.StatusForbidden, resp.Header, body, reqModel)
-					}
-				}
-				if decision.ShouldReturnGenericError() && !c.Writer.Written() {
-					MarkResponseCommitted(c)
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"type": "error",
-						"error": gin.H{
-							"type":    "upstream_error",
-							"message": "Upstream gateway error",
-						},
-					})
-					return nil, fmt.Errorf("upstream SSE error not in custom error codes")
-				}
-				if !c.Writer.Written() && decision.ShouldFailover(account, semanticStatus, true) {
-					return nil, &UpstreamFailoverError{
-						StatusCode:             semanticStatus,
-						ResponseBody:           body,
-						RetryableOnSameAccount: decision.RetryableOnSameAccount(account, semanticStatus),
-					}
-				}
-				return nil, err
+				return nil, s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, reqModel, c.Writer.Size() != writerSizeBeforeStream)
 			}
 			requestSpeed := gjson.GetBytes(lastWireBody, "speed").String()
 			if partial := partialStreamUsageResult(resp, streamResult, originalModel, mappedModel, startTime, requestSpeed, err); partial != nil {
@@ -1000,4 +931,78 @@ func (s *GatewayService) needsUpstreamChannelRestrictionCheck(ctx context.Contex
 		return false
 	}
 	return ch.BillingModelSource == BillingModelSourceUpstream
+}
+
+// sseStreamErrorEventFailover 统一原生及兼容入口的流内错误，保留显式错误码与账号处罚策略。
+// 已写出业务内容时不再切换账号或修改账号调度状态。
+func (s *GatewayService) sseStreamErrorEventFailover(ctx context.Context, c *gin.Context, account *Account, resp *http.Response, rawData, model string, outputStarted bool) error {
+	body := []byte(rawData)
+	semanticStatus := http.StatusForbidden
+	var semanticDecision UpstreamErrorDecision
+	if !outputStarted && gjson.GetBytes(body, "error.type").String() == "overloaded_error" {
+		semanticStatus = 529
+		syntheticResp := &http.Response{
+			StatusCode: semanticStatus,
+			Header:     resp.Header.Clone(),
+			Body:       io.NopCloser(bytes.NewReader(body)),
+		}
+		semanticDecision = s.handleFailoverSideEffects(ctx, syntheticResp, account, model)
+		_ = syntheticResp.Body.Close()
+	}
+	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))
+
+	upstreamDetail := ""
+	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+		maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = 2048
+		}
+		upstreamDetail = truncateString(rawData, maxBytes)
+	}
+
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform:           account.Platform,
+		AccountID:          account.ID,
+		AccountName:        account.Name,
+		UpstreamStatusCode: semanticStatus,
+		UpstreamRequestID:  resp.Header.Get("x-request-id"),
+		Kind:               "stream_error",
+		Message:            upstreamMsg,
+		Detail:             upstreamDetail,
+	})
+
+	logger.LegacyPrintf("service.gateway",
+		"[Forward] SSE error event in stream: Account=%d(%s) RequestID=%s Body=%s",
+		account.ID, account.Name, resp.Header.Get("x-request-id"),
+		truncateString(rawData, 1000),
+	)
+
+	decision := semanticDecision
+	if semanticStatus != 529 {
+		decision = upstreamErrorDecisionWithoutPersistence(account, http.StatusForbidden)
+		// 已经写出部分响应后不能再改变账号调度状态；避免把一个
+		// 无法重试的流内错误写入持久化错误策略。
+		if !outputStarted && s.rateLimitService != nil {
+			decision = s.rateLimitService.ApplyUpstreamError(ctx, account, http.StatusForbidden, resp.Header, body, model)
+		}
+	}
+	if !outputStarted && decision.ShouldReturnGenericError() && !c.Writer.Written() {
+		MarkResponseCommitted(c)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"type": "error",
+			"error": gin.H{
+				"type":    "upstream_error",
+				"message": "Upstream gateway error",
+			},
+		})
+		return fmt.Errorf("upstream SSE error not in custom error codes")
+	}
+	if !outputStarted && !c.Writer.Written() && decision.ShouldFailover(account, semanticStatus, true) {
+		return &UpstreamFailoverError{
+			StatusCode:             semanticStatus,
+			ResponseBody:           body,
+			RetryableOnSameAccount: decision.RetryableOnSameAccount(account, semanticStatus),
+		}
+	}
+	return &sseStreamErrorEventError{RawData: rawData}
 }

@@ -115,7 +115,9 @@ provision 恢复在拿到锁后重新读取任务状态，不使用等锁前的�
 
 worker 从 Redis 预留任务后先读取用户最新并发配置，并通过现有用户并发槽位执行一次非阻塞准入；随后由平台对应的现有账号调度器选择账号并预占账号槽位。两类槽位任一暂时不可用时，任务保持 `queued`，不增加执行次数、不改变计费预占，按约 1 秒短延迟重排以释放 worker。只有用户和账号都准入后才幂等推进 `running`，provider 返回结果后在结算前持久化真实执行账号；执行前检查任务是否已处于 `cancelled`。历史竞态任务若 provider 已成功，仍按实际成功输出捕获费用并记录用量，但终态保持 `cancelled`，绝不回写为 `succeeded`。
 
-执行错误的重试边界：网络层错误、429 与 5xx 视为可重试，按 `max_execute_attempts`（默认 3，含首次）递增尝试并重排；其余 4xx 不可重试直接进入 `release_pending`。上游调用前，worker 在现有 `provisioning_phase` 中持久化 `provider_inflight` 执行栅栏；只有执行器明确返回可重试错误后才能写入 `provider_retry` 授权再次执行。创建补偿 outbox 仅能更新 `queued` 的创建阶段，不能覆盖执行栅栏。
+图片执行在同一分组最多使用两个不同账号，每账号至多发送一次；首次执行保存 `image_attempt_account_ids` 和 `image_execution_deadline_at`，备用账号沿用首次执行的总时限（默认 300 秒），重启、重新领取和管理员改超时都不刷新预算。本地并发排队和冷却候选不消耗发送预算。只有明确未发送的连接建立失败，或认证、限流、账号额度、模型不可用等确定拒绝，才在释放当前槽位后立即选备用账号，不再等待旧的 60 秒重排。参数、参考图及内容审核拒绝直接失败释放且不处罚账号；纯取消不写账号故障。音频继续使用原有执行器与重试契约，不套用图片预算。
+
+上游调用前，worker 原子保存账号、总时限和 `provider_inflight` 栅栏；只有有明确未受理证据的结果才以版本及账号条件打开 `provider_retry`。泛 5xx、写入后断连/超时、HTTP 200 读体或解析失败一律不能自动重生；已有任务 ID、用量、文本或图片输出的证据优先于错误码，也不能降级为可重试拒绝。账号故障写入按“账号 + 最终映射模型 + generate/edit/inpaint”隔离的短冷却；其它模型、操作和正常的存储/结算恢复不受影响。旧执行计数缺少账号证据的任务保持核对，不因升级获得新发送资格。创建补偿 outbox 仅能更新 `queued` 的创建阶段，不能覆盖执行栅栏。
 
 provider 返回成功后，真实输出的索引、状态、MIME、长度、过期时间与 `provider_succeeded`、结算 outbox 同事务写入 PostgreSQL，再把图片字节保存到 Redis；数据库仍不存图片或提示词。后续只重试结果核对和结算，不重新调用 provider。若图片缓存明确丢失，按已确认的成功输出数量结算，并原子进入 `result_lost`，不展示假成功；Redis 暂时不可用时保持结算等待。若成功事实尚未落库就发生进程退出或数据库故障，且无法从已保存的完整输出元数据恢复，则保留 `running` 与原预占，错误码为 `PROVIDER_RESULT_UNCONFIRMED`，约每 15 分钟低频核对并等待管理员处理，不推断失败、不释放款、不重发生成。结算失败保持 `settlement_pending`，绝不 ACK 非终态任务。
 
@@ -187,7 +189,7 @@ creative_settle:{run_id}    写 usage_logs 的结算记录 ID
 
 参数能力依据各提供商官方文档维护：[OpenAI Image Generation](https://developers.openai.com/api/docs/guides/image-generation)、[Gemini Generate Content API](https://ai.google.dev/api/generate-content?hl=en)、[Gemini 图片生成](https://ai.google.dev/gemini-api/docs/generate-content/image-generation?hl=en) 和 [xAI Image Generation](https://docs.x.ai/developers/model-capabilities/images/generation)。
 
-执行器按分组平台直接构造上游 HTTP 请求，不经过本地 HTTP 回环；执行超时为 `creative.execute_timeout_seconds`（默认 300 秒）。单张输出不超过 32 MiB，同一任务内按 sha256 去重重复输出：
+执行器按分组平台直接构造上游 HTTP 请求，不经过本地 HTTP 回环；图片任务首次执行及备用账号共享 `creative.execute_timeout_seconds` 总时限（默认 300 秒）。单张输出不超过 32 MiB，同一任务内按 sha256 去重重复输出：
 
 - `openai`（GPT Image）：`generate` 走 `/v1/images/generations`（JSON）；`edit`/`inpaint` 走 `/v1/images/edits`（multipart，多源图 + mask）。内部固定 `output_format: "png"`、单张 `n=1`；仅 DALL-E 路径发送 `response_format: "b64_json"`，GPT Image 路径省略该字段。
 - `grok`：`generate` 走 `/v1/images/generations`；`edit` 走 `/v1/images/edits` 的 JSON 契约，单张源图放入 `image: {type: "image_url", url: "data:image/...;base64,..."}`，多张放入 `images` 数组，最多 3 张；两条路径都透传分辨率、比例和 `grok-imagine-image-2.0` 的质量，并固定请求单张 `n=1` 与 `response_format: "b64_json"`；`inpaint` 直接拒绝。
@@ -212,7 +214,7 @@ Midjourney 是展示品牌和图片模型族，复用 OpenAI API Key 平台，�
 
 执行器支持 `data[].b64_json` 和 `data[].url`，每张最多 32 MiB，最多四个结果。MJ 响应总量上限为四张 32 MiB 图片的 Base64 编码长度加 1 MiB JSON 余量，严格检测越界，越界保留待核对和预占、不重发；非 MJ 的响应读取上限保持不变。图片链接通过仅公网的下载器读取，不携带上游 Authorization/Cookie；禁止私网、DNS 重绑定、非法重定向和非 HTTP(S) 地址。图片每边最多 8192 像素、总计最多 16 Mi 像素，先检查尺寸再完整解码，拒绝 HTML/SVG 伪装及截断图片。重复字节按现有规则去重；部分有效产物只按实际有效张数捕获并释放余款。响应没有 token usage 不影响按张计费。
 
-MJ 请求发送后连接中断、408/5xx、成功响应无法读取或完全没有可确认图片时，保持 `provider_inflight` 和预占并进入既有待核对恢复路径，不自动重发生成、不凭未知结果退款。除 408 外的确定性 4xx 沿用失败释放，429 沿用有限重试。已保存成功输出的结算、用量写入及崩溃恢复继续使用既有幂等 outbox；捕获数量不得超过任务持久预占数量。排队后配置若从单张 GPT 改成 MJ，因原任务没有四张预占而在调用前拒绝，避免超额扣款。
+MJ 请求发送后连接中断、408/泛 5xx、成功响应无法读取或完全没有可确认图片时，保持 `provider_inflight` 和预占并进入既有待核对恢复路径，不自动重发生成、不凭未知结果退款。确定的参数或审核拒绝失败释放；认证、限流及账号模型问题可在同一总时限内立即换一个同组账号，遵循上述两账号上限。已保存成功输出的结算、用量写入及崩溃恢复继续使用既有幂等 outbox；捕获数量不得超过任务持久预占数量。排队后配置若从单张 GPT 改成 MJ，因原任务没有四张预占而在调用前拒绝，避免超额扣款。
 
 上述未知分支记录 `creative.openai_image_result_unconfirmed` 安全诊断事件：仅包含原任务/账号编号、固定失败阶段、HTTP 状态和执行上下文是否超时，不记录提示词、响应原文或素材地址。执行上下文始终有截止时间；运行配置未提供有效值时回退五分钟。同步 Images 接口没有远端任务查询 ID，因此存量未知任务仍需运营凭原任务编号核对，更新日志和界面不能恢复已经丢失的响应。
 
@@ -256,13 +258,13 @@ creative:
   recovery_interval_seconds: 300
   delayed_move_limit: 100
   recover_limit: 100
-  execute_timeout_seconds: 300        # 单次上游执行调用超时
+  execute_timeout_seconds: 300        # 图片任务首次及备用账号共享的执行总时限
   max_execute_attempts: 3             # provider 瞬时错误最大执行次数（含首次）
 ```
 
 校验约束：`max_total_input_bytes` 不得小于 `max_asset_bytes`；启用队列时所有队列键非空。创作台按持久化的固定输出张数乘以所选尺寸单价预占（MJ 四张，其余单张）。与批量图片不同，创作台的 `enabled` 与 `queue_enabled` 默认开启，但缺少 Redis 时任务创建会失败。
 
-除进程配置外，创作台还有数据库运行时开关 `creative_enabled`（默认 true，管理端"功能特性"页可切换，经公开设置下发给前端）以及 `creative_worker_count`（默认 128，要求为正整数，管理端保存后热更新当前 worker 池）：仅当进程配置 `creative.enabled` 与运行时开关同时开启时创作台才可用，管理服务 `enabled()` 判定在请求期读取该开关。创作台不使用 HTTP 网关的进程级图片 limiter；实际执行并发由 worker 池、用户 Redis 并发槽位和账号调度器的账号槽位共同约束。
+除进程配置外，创作台还有数据库运行时开关 `creative_enabled`（默认 true，管理端系统设置的独立“创作台”标签页可切换，经公开设置下发给前端）以及 `creative_worker_count`（默认 128，要求为正整数，管理端保存后热更新当前 worker 池）：仅当进程配置 `creative.enabled` 与运行时开关同时开启时创作台才可用，管理服务 `enabled()` 判定在请求期读取该开关。创作台不使用 HTTP 网关的进程级图片 limiter；实际执行并发由 worker 池、用户 Redis 并发槽位和账号调度器的账号槽位共同约束。
 
 ## 运维检查清单
 

@@ -19,6 +19,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/antigravity"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 // antigravityRetryLoopParams 重试循环的参数
@@ -506,6 +507,10 @@ func (s *AntigravityGatewayService) antigravityRetryLoop(p antigravityRetryLoopP
 		return nil, errors.New("no antigravity forward base url configured")
 	}
 	availableURLs := []string{baseURL}
+	if ImageAttemptHasPolicy(p.ctx) {
+		// 生图共用一次发送预算，不进入文本的同号、容量或 URL 回退循环。
+		return s.antigravitySingleImageAttempt(p, baseURL)
+	}
 
 	var resp *http.Response
 	var usedBaseURL string
@@ -712,6 +717,55 @@ urlFallbackLoop:
 	return &antigravityRetryLoopResult{resp: resp}, nil
 }
 
+// 只执行一次已授权的图片 POST。错误返回给外层选备用账号，响应体与策略证据保持原样。
+func (s *AntigravityGatewayService) antigravitySingleImageAttempt(p antigravityRetryLoopParams, baseURL string) (*antigravityRetryLoopResult, error) {
+	req, err := antigravity.NewAPIRequestWithURL(p.ctx, baseURL, p.action, p.accessToken, p.body)
+	if err != nil {
+		return nil, err
+	}
+	applyAccountTestUserAgent(req)
+	finalModel := strings.TrimSpace(gjson.GetBytes(p.body, "model").String())
+	if finalModel == "" {
+		finalModel = resolveFinalAntigravityModelKey(p.ctx, p.account, p.requestedModel)
+	}
+	resp, err := doGeminiImageAwareRequest(p.ctx, p.httpUpstream, req, p.proxyURL, p.account, s.cache, finalModel, GeminiImageAttemptOperation(p.body))
+	if err != nil {
+		if p.ctx.Err() != nil {
+			return nil, err
+		}
+		decision, known := ImageAttemptDecisionForError(err)
+		if !known {
+			decision = ClassifyImageTransportFailure(err)
+		}
+		var existing *UpstreamFailoverError
+		if errors.As(err, &existing) {
+			return nil, err
+		}
+		appendOpsUpstreamError(p.c, OpsUpstreamErrorEvent{Platform: p.account.Platform, AccountID: p.account.ID, AccountName: p.account.Name, Kind: "request_error", Message: sanitizeUpstreamErrorMessage(err.Error())})
+		return nil, RecordImageAttemptFailure(p.ctx, &UpstreamFailoverError{StatusCode: http.StatusBadGateway, ResponseBody: geminiTransportFailoverBody}, decision)
+	}
+	if resp.StatusCode < 400 {
+		return &antigravityRetryLoopResult{resp: resp}, nil
+	}
+	body := s.readUpstreamErrorBody(resp)
+	_ = resp.Body.Close()
+	decision, _ := ImageAttemptLastDecision(p.ctx)
+	status := resp.StatusCode
+	if handled, outStatus, policyErr := s.applyErrorPolicy(p, status, resp.Header, body); handled {
+		if policyErr != nil {
+			return nil, WrapImageAttemptError(policyErr, decision)
+		}
+		status = outStatus
+	}
+	appendOpsUpstreamError(p.c, OpsUpstreamErrorEvent{Platform: p.account.Platform, AccountID: p.account.ID, AccountName: p.account.Name, UpstreamStatusCode: resp.StatusCode, Kind: "failover", Message: sanitizeUpstreamErrorMessage(extractAntigravityErrorMessage(body))})
+	setOpsUpstreamError(p.c, resp.StatusCode, sanitizeUpstreamErrorMessage(extractAntigravityErrorMessage(body)), "")
+	failure := &UpstreamFailoverError{StatusCode: status, ResponseBody: body, ResponseHeaders: resp.Header.Clone()}
+	if !ImageAttemptCanSwitch(decision) {
+		failure.NextAccountAction = NextAccountStop
+	}
+	return nil, WrapImageAttemptError(failure, decision)
+}
+
 // shouldRetryAntigravityError 判断是否应该重试
 func shouldRetryAntigravityError(statusCode int) bool {
 	switch statusCode {
@@ -847,10 +901,12 @@ func sleepAntigravityBackoffWithContext(ctx context.Context, attempt int) bool {
 	}
 }
 
-// isSingleAccountRetry 检查 context 中是否设置了单账号退避重试标记
+// isSingleAccountRetry 检查是否处于单账号退避重试模式：显式标记优先，否则使用请求挂载的延迟判定。
 func isSingleAccountRetry(ctx context.Context) bool {
-	v, _ := SingleAccountRetryFromContext(ctx)
-	return v
+	if v, ok := SingleAccountRetryFromContext(ctx); ok {
+		return v
+	}
+	return singleAccountRetryProbeResult(ctx)
 }
 
 // setModelRateLimitByModelName 使用官方模型 ID 设置模型级限流

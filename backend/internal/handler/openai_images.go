@@ -25,6 +25,9 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	defer h.recoverResponsesPanic(c, &streamStarted)
 
 	requestStart := time.Now()
+	imageCtx, imageCancel := service.WithImageAttemptPolicy(c.Request.Context(), service.DefaultPublicImageAttemptTimeout)
+	defer imageCancel()
+	c.Request = c.Request.WithContext(imageCtx)
 
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
@@ -156,6 +159,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
 	failedAccountIDs := make(map[int64]struct{})
+	var shortestImageCooldown time.Duration
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	stopJSONKeepalive := func() {}
@@ -174,7 +178,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			parsed.RequiredCapability,
 		)
 		if err != nil {
-			if failoverClientGone(c) {
+			if imageAttemptDeadlineExceeded(c, requestCtx) || failoverClientGone(c) {
 				reqLog.Info("openai.images.account_select_aborted_client_disconnected", zap.Error(err))
 				return
 			}
@@ -182,6 +186,11 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				zap.Error(err),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
+			if shortestImageCooldown > 0 && errors.Is(err, service.ErrNoAvailableAccounts) {
+				c.Header("Retry-After", strconv.Itoa(max(1, int((shortestImageCooldown+time.Second-1)/time.Second))))
+				h.errorResponse(c, http.StatusServiceUnavailable, "image_models_cooling_down", "Compatible image accounts are temporarily cooling down")
+				return
+			}
 			if len(failedAccountIDs) == 0 {
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, requestModel, requestModel, service.PlatformOpenAI)
 				if !cls.ModelNotFound {
@@ -224,6 +233,18 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		)
 
 		account := selection.Account
+		finalImageModel := service.ImageAttemptAccountModel(requestCtx, account, routingModel)
+		imageOperation := service.ImageAttemptOperation(parsed)
+		if cooldown := h.gatewayService.ImageModelCooldownRemaining(requestCtx, account.ID, finalImageModel, imageOperation); cooldown > 0 {
+			if shortestImageCooldown == 0 || cooldown < shortestImageCooldown {
+				shortestImageCooldown = cooldown
+			}
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			failedAccountIDs[account.ID] = struct{}{}
+			continue
+		}
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai.images.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
@@ -276,7 +297,8 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			}()
 			tlsRouterMatch := h.gatewayService.MatchOpenAITLSFingerprintRouterForRequest(c, account)
 			if err := h.gatewayService.EnforceOpenAIClientPolicyForRequest(requestCtx, c, account, body, tlsRouterMatch); err != nil {
-				return nil, err
+				// 本地策略拒绝发生在当前账号发送前，不能沿用前一账号的故障决策处罚当前账号。
+				return nil, service.WrapImageAttemptError(err, service.ImageAttemptDecision{Outcome: service.ImageAttemptNotSent, Reason: "image_local_policy_rejected"})
 			}
 			imageBilling.startForward(c)
 			return h.gatewayService.ForwardImages(requestCtx, c, account, body, parsed, routingModel, tlsRouterMatch)
@@ -300,6 +322,17 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 					zap.Error(err),
 				)
 			} else {
+				if service.ImageAttemptHasPolicy(requestCtx) {
+					if h.retryImageOnDifferentAccount(c, requestCtx, account, finalImageModel, imageOperation, err, writerSizeBeforeForward) {
+						failedAccountIDs[account.ID] = struct{}{}
+						h.gatewayService.RecordOpenAIAccountSwitchForSelection(selection)
+						if !errors.As(err, &lastFailoverErr) {
+							lastFailoverErr = &service.UpstreamFailoverError{StatusCode: http.StatusBadGateway}
+						}
+						continue
+					}
+					return
+				}
 				if imageBilling.reservation != nil && imageBilling.uncertain {
 					// 已发出的图片请求结果未知时停止自动重放，避免一次预占触发重复生成。
 					h.ensureOpenAIForwardErrorResponse(c, streamStarted, err)
@@ -338,7 +371,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, true)
 						return
 					}
-					if failoverClientGone(c) {
+					if imageAttemptDeadlineExceeded(c, requestCtx) || failoverClientGone(c) {
 						reqLog.Info("openai.images.failover_aborted_client_disconnected",
 							zap.Int64("account_id", account.ID),
 							zap.Int("upstream_status", failoverErr.StatusCode),

@@ -11,6 +11,7 @@
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
 - [平台额度事务化升级](#transactional_platform_quotas)：切换额度统计权威来源、旧实例及缓存处理时读取。
+- [v3.29 检测与图片安全路由](#v3_29_upgrade)：升级掺水检测、Sub2API 0.2.18 同步、智能路由冷却和图片安全换号时读取。
 - [v3.28 Grok 画布视频升级](#creative_grok_video_upgrade)：部署迁移 316、启用创作台 Grok 视频或回退在途执行时读取。
 - [v3.27 失败媒体账务处理与智能路由扩容](#v3_27_upgrade)：升级管理员资金处理、可配置过期释放、迁移 315 或智能路由 20 组上限时读取。
 - [v3.26 媒体订阅倍率优先](#v3_26_upgrade)：升级图片/视频订阅倍率开关、迁移 314、鉴权缓存或回退冻结计费策略时读取。
@@ -74,7 +75,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.28`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.29`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -89,11 +90,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.28`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.29`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.28 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.29 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -102,6 +103,8 @@
 ## 初始化与启动
 
 进程入口先判断是否需要 setup。未安装时可使用 Web setup、`--setup` CLI 或容器的 `AUTO_SETUP`；setup 测试 PostgreSQL/Redis，执行迁移，创建首个管理员，写入配置，最后创建只读安装锁。安装锁用于阻止重新初始化攻击，不能用删除它的方式修复普通配置问题。
+
+PostgreSQL 连接探测、迁移和首个管理员创建共用连接参数构造规则。密码为空时省略该参数，保证驱动仍使用配置的数据库名，不将后续 `dbname` 解析为密码后回落到用户名对应的数据库；常规密码认证不变。
 
 首次安装不提供固定管理员邮箱或密码。未配置邮箱时生成随机 `admin-…@sub2api.local`，未配置密码时生成随机密码；显式邮箱需通过登录邮箱校验，密码长度为 8–72 字节。仅在数据库没有用户且确需创建首个管理员时校验，已有部署中的历史环境变量不能阻断启动，也不修改已有账号。
 
@@ -189,7 +192,16 @@ Gemini 缓存费用复用本站持久资金合同，使用 `gemini_cache` 报价
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.28`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，该发布包含的最高迁移为 `316_creative_grok_video.sql`。从 v3.27 升级新增迁移 316，接入 Grok 创作台与画布视频，保留已有迁移与历史账本；更早版本仍须遵循对应迁移与恢复边界。
+当前发布版本为 `v0.1.278-ct-v3.29`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `320_creative_image_attempt_budget.sql`。从 v3.28 升级新增迁移 317–320，包含管理员掺水检测与账号恢复、智能路由新默认值和图片执行预算；保留历史配置与账本，更早版本仍须遵循对应迁移与恢复边界。
+
+<a id="v3_29_upgrade"></a>
+### v3.29 检测与图片安全路由升级
+
+本版包含 Sub2API 0.2.18 的兼容同步、管理员掺水检测、创作台独立设置标签，以及智能路由和图片安全换号修复。新建 Key 的智能路由默认冷却为 10 秒，存量 0、60 和自定义值保持；图片按实际账号、最终模型与操作短冷却，单请求同组至多尝试两个不同账号且共享首次执行截止。只有确定未受理才换号，未知、已有任务、用量或产物均不重生；普通文本与现有视频/音频保持各自流程。
+
+从 v3.28 升级新增 `317_chanshui_tests.sql`、`318_chanshui_account_recovery.sql`、`319_smart_routing_default_cooldown.sql`、`320_creative_image_attempt_budget.sql`。掺水检测默认关闭，仅管理员可配置；测试直接使用选定上游账号，会把该账号地址与密钥交给检测服务，产生上游用量。自动停用和恢复仅影响选中账号，完整且有效的检测结果才参与判断，详细边界见[掺水检测](../domains/chanshui_tests.md)。
+
+升级前备份数据库、配置与稳定密钥，排空并停止所有旧应用和 worker，再由新实例迁移和统一接流量。旧版图片 `provider_retry` 不能证明未受理，升级后未完成图片保留为待核对，不重新生成、不重算资金。新旧 worker 不得混跑同一队列；回退前先停新提交、核对在途及待结算任务，保留新增表和资金账本，不用旧备份覆盖已发生的资金变更。发布镜像不等于已更新生产服务器。
 
 <a id="creative_grok_video_upgrade"></a>
 ### v3.28 Grok 画布视频升级
@@ -685,6 +697,12 @@ WS 池和 Responses 内存优化本身不新增数据库迁移。OAuth/API Key �
 
 迁移 `257_creative_run_durable_settlement.sql` 为 `creative_runs` 增加 provisioning、provider 成功记录、settlement/release 重试与 reconciler 字段，创建 `creative_run_outbox`，并为每个用户/分组的 active `creative_studio` 托管 Key 增加部分唯一索引。它把既有 queued/running 任务回填为可继续入队的阶段，不改变 Redis 图片 TTL 边界。发布时应先执行迁移，再部署兼容旧状态的应用版本并启动 outbox/transient reconciler；观察 `settlement_pending`、`release_pending`、lease lost、result lost 和 outbox lag 后，再调高恢复告警阈值。
 
+迁移 `320_creative_image_attempt_budget.sql` 增加图片已尝试账号集合（最多两个）和首次执行绝对截止时间。旧图片 `provider_inflight`/`provider_retry` 记录回填已知账号；旧版 `provider_retry` 也可能来自网络中断或泛 5xx，无法证明未受理，因此未完成图片任务统一保留为 `provider_inflight` 待核对，不再自动生成。不修改语音、已完成结果、既有账本、分组权限或 317/318 掺水检测迁移。新任务的截止时间由首次 `started_at` 与执行预算计算一次，再持久保存。
+
+该迁移虽然只新增列，但旧 worker 不理解新两账号/总时限约束，不能与新 worker 混跑处理同一队列。升级前排空并停止全部旧 worker，备份 PostgreSQL，再由新实例执行迁移和恢复队列。验证同任务最多两个不同账号、限流后立即切换、未知超时不重发、成功后存储/结算失败只恢复结果，并检查重复领取只结算一次。回退应用前同样停止新 worker；旧应用不保证遵守新增预算，仍在运行或待核对的任务需先核对处理。
+
 升级完成后至少检查 `/health`、登录/API Key 鉴权、一个非流和流式网关请求、用量结算、关键后台任务及迁移表。保留旧产物和升级前备份，直到这些检查完成。
 
 相关文档：[系统架构](../architecture/system_architecture.md)、[配置边界](../interfaces/configuration.md)、[运维目录](index.md)。
+
+迁移 `319_smart_routing_default_cooldown.sql` 仅把新建 API Key 的冷却列默认值设为 10 秒；所有已有值，包括 0、60 和自定义值均保留。不要修改历史迁移 271/272，也不要批量回写存量用户配置。

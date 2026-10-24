@@ -247,6 +247,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 				inner, parseErr := s.unwrapV1InternalResponse([]byte(payload))
 				if parseErr == nil && inner != nil {
 					payload = string(inner)
+					observeGeminiImageOutputs(c, inner)
 				}
 
 				// 解析 usage
@@ -417,6 +418,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 				continue
 			}
 
+			observeGeminiImageOutputs(c, inner)
 			var parsed map[string]any
 			if err := json.Unmarshal(inner, &parsed); err != nil {
 				continue

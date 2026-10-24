@@ -195,6 +195,7 @@ type SystemSettings struct {
 	// CreativeEnabled 控制创作台页面入口与 API 访问（进程配置 creative.enabled 仍为前置条件）。
 	CreativeEnabled     bool
 	IntelligenceEnabled bool
+	ChanshuiEnabled     bool // 掺水检测只进入管理员设置，不注入公开配置。
 	// RiskControlEnabled 控制风控中心入口和网关内容审计总开关。
 	RiskControlEnabled                   bool
 	CyberSessionBlockEnabled             bool

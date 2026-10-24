@@ -424,6 +424,9 @@ func NewOpenAIGatewayHandler(
 // POST /openai/v1/responses
 // @project-doc docs/interfaces/openai_upstream.md#openai_protocol_dispatch
 func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
+	defer finishImageAttemptRequest(c, func() {
+		h.errorResponse(c, http.StatusGatewayTimeout, "image_execution_timeout", "Image generation deadline exceeded; result is unconfirmed, do not automatically resubmit")
+	})
 	// 局部兜底：确保该 handler 内部任何 panic 都不会击穿到进程级。
 	streamStarted := false
 	defer h.recoverResponsesPanic(c, &streamStarted)
@@ -596,7 +599,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	if imageIntent {
 		// 生图家族限流依赖上下文标记，必须使用渠道映射后的显式意图结果。
 		selectionCtx = service.WithOpenAIImageGenerationIntent(selectionCtx)
+		if openAICompatibleRequestPlatform(apiKey) == service.PlatformOpenAI {
+			selectionCtx, _ = service.WithImageAttemptPolicy(selectionCtx, service.DefaultPublicImageAttemptTimeout)
+		}
 	}
+	c.Request = c.Request.WithContext(selectionCtx)
 	if imageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
 		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
 		h.errorResponse(c, http.StatusForbidden, "permission_error", service.ImageGenerationPermissionMessage())
@@ -677,6 +684,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	var passthroughFailoverState openAIPassthroughFailoverState
+	var imageCooldownDeadline time.Time
+	imageCooldownRechecked := false
 	slotRetry := &accountSlotReschedule{excluded: failedAccountIDs, switches: &switchCount, maximum: maxAccountSwitches, requiredAccount: previousResponseID != ""}
 
 	// 生图意图的 /v1/responses 请求必须调度到确实支持 Responses API 的账号，否则
@@ -698,6 +707,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if !openAIRequestAllowsFailoverReplay(c) {
 			return
 		}
+		if service.ImageAttemptHasPolicy(c.Request.Context()) {
+			// 账号映射也可能在首次转发才识别图片；后续选号必须继续使用首次截止时间。
+			selectionCtx = c.Request.Context()
+		}
 		// Select account supporting the requested model
 		reqLog.Debug("openai.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
@@ -716,6 +729,18 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("openai.account_select_aborted_client_disconnected", zap.Error(err))
+				return
+			}
+			if service.ImageAttemptHasPolicy(c.Request.Context()) && service.ImageAttemptSendCount(c.Request.Context()) == 0 && !imageCooldownDeadline.IsZero() {
+				remaining := time.Until(imageCooldownDeadline)
+				if remaining <= 0 && !imageCooldownRechecked {
+					// 扫描期间可能刚好到期；只重新选号一次，不发送额外探测生成。
+					clear(failedAccountIDs)
+					imageCooldownDeadline, imageCooldownRechecked = time.Time{}, true
+					continue
+				}
+				c.Header("Retry-After", strconv.Itoa(max(1, int((max(0, remaining)+time.Second-1)/time.Second))))
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "image_models_cooling_down", "Compatible image accounts are temporarily cooling down", streamStarted)
 				return
 			}
 			if lastFailoverErr == nil && slotRetry.writeExhausted(func(status int, errType, code, message string) {
@@ -883,6 +908,22 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			})
 		}
 		if err != nil {
+			if service.ImageAttemptHasPolicy(c.Request.Context()) && (result == nil || result.ImageCount == 0) {
+				if until, cooling := service.ImageModelCooldownDeadline(err); cooling && (imageCooldownDeadline.IsZero() || until.Before(imageCooldownDeadline)) {
+					imageCooldownDeadline = until
+				}
+				// 保留真实用量的结算；已受理/输出过内容的失败不能重新生成。
+				submitResponsesUsage(result)
+				if h.retryResponsesImageOnDifferentAccount(c, account, err, writerSizeBeforeForward, streamStarted) {
+					failedAccountIDs[account.ID] = struct{}{}
+					h.gatewayService.RecordOpenAIAccountSwitchForSelection(selection)
+					if !errors.As(err, &lastFailoverErr) {
+						lastFailoverErr = &service.UpstreamFailoverError{StatusCode: http.StatusBadGateway}
+					}
+					continue
+				}
+				return
+			}
 			if result != nil && result.ImageCount > 0 {
 				reqLog.Warn("openai.forward_partial_error_with_image_result",
 					zap.Int64("account_id", account.ID),

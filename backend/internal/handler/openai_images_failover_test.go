@@ -91,7 +91,7 @@ func (u *openAIImagesFailoverHTTPUpstream) calls() []int64 {
 	return append([]int64(nil), u.accountIDs...)
 }
 
-func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhenExhausted(t *testing.T) {
+func TestOpenAIGatewayHandlerImages_AcceptanceUnknownDoesNotFailOver(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	groupID := int64(3130)
 	accounts := []service.Account{
@@ -193,16 +193,15 @@ func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhen
 	require.Equal(t, "1536x1024", loggedFields["img_size"])
 	require.NotContains(t, loggedFields, "prompt")
 
-	require.Equal(t, []int64{1, 2}, upstream.calls())
+	require.Equal(t, []int64{1}, upstream.calls())
 	require.Equal(t, http.StatusBadGateway, rec.Code)
-	require.Equal(t, "upstream_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
-	require.Equal(t, "Upstream service temporarily unavailable", gjson.GetBytes(rec.Body.Bytes(), "error.message").String())
+	require.Equal(t, "image_result_unconfirmed", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+	require.Contains(t, gjson.GetBytes(rec.Body.Bytes(), "error.message").String(), "unconfirmed")
 
 	rawEvents, ok := c.Get(service.OpsUpstreamErrorsKey)
 	require.True(t, ok)
 	events, ok := rawEvents.([]*service.OpsUpstreamErrorEvent)
 	require.True(t, ok)
-	require.Len(t, events, 2)
-	require.Equal(t, "failover", events[0].Kind)
-	require.Equal(t, "failover", events[1].Kind)
+	require.Len(t, events, 1)
+	require.Equal(t, "request_error", events[0].Kind)
 }

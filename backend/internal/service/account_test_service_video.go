@@ -546,8 +546,8 @@ func (s *AccountTestService) emitVideoAccountTestResult(c *gin.Context, ctx cont
 		if parseErr != nil || location == "" {
 			return s.sendErrorAndEnd(c, "Video content returned an invalid redirect")
 		}
+		// 下载器共享安全连接池，单次账号测试不关闭其它媒体任务的空闲连接。
 		client := defaultImageDownloadHTTPClient()
-		defer client.CloseIdleConnections()
 		response, err = openPublicVideoContent(ctx, client, base.ResolveReference(next).String(), "")
 		if err != nil {
 			return s.sendErrorAndEnd(c, "Video content redirect could not be downloaded safely")

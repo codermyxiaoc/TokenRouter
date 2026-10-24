@@ -57,7 +57,7 @@ func TestCacheFailoverStressSharedCooldownIsolation(t *testing.T) {
 				return err
 			}
 			values, err := cache.GetSmartRoutingAccountCooldowns(ctx, 11, []int64{21, 22}, "model", "/v1/responses")
-			if err != nil || values[21] != 40*time.Second || values[22] != 0 {
+			if err != nil || values[21] <= 0 || values[21] > 40*time.Second || values[22] != 0 {
 				return fmt.Errorf("worker=%d cooldown=%v err=%v", id, values, err)
 			}
 			for _, scope := range []struct {

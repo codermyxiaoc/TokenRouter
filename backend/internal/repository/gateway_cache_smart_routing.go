@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
@@ -34,116 +33,6 @@ func (c *gatewayCache) smartRoutingRedisClient() *redis.Client {
 		}
 	})
 	return c.smartRoutingRedis
-}
-
-// 账号冷却本地降级有固定容量；不能因 Redis 故障把未知账号判为不可用。
-type smartRoutingLocalAccountCooldowns struct {
-	mu      sync.Mutex
-	entries map[string]time.Time
-}
-
-func (c *smartRoutingLocalAccountCooldowns) get(key string, now time.Time) time.Duration {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if until := c.entries[key]; until.After(now) {
-		return until.Sub(now)
-	}
-	delete(c.entries, key)
-	return 0
-}
-
-func (c *smartRoutingLocalAccountCooldowns) observe(key string, ttl time.Duration, now time.Time, onlyAbsent bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if ttl <= 0 {
-		delete(c.entries, key)
-		return
-	}
-	if onlyAbsent && c.entries[key].After(now) {
-		return
-	}
-	if c.entries == nil {
-		c.entries = make(map[string]time.Time)
-	}
-	if _, exists := c.entries[key]; !exists && len(c.entries) >= smartRoutingLocalCooldownLimit {
-		var oldest string
-		var expiry time.Time
-		for candidate, until := range c.entries {
-			if !until.After(now) {
-				delete(c.entries, candidate)
-				continue
-			}
-			if expiry.IsZero() || until.Before(expiry) {
-				oldest, expiry = candidate, until
-			}
-		}
-		if len(c.entries) >= smartRoutingLocalCooldownLimit {
-			delete(c.entries, oldest)
-		}
-	}
-	c.entries[key] = now.Add(ttl)
-}
-
-func smartRoutingAccountCooldownKey(keyID, accountID int64, model, endpoint string) string {
-	// 模型和端点只进入摘要，既限制 Redis 键长度，也避免分隔符碰撞。
-	digest := sha256.Sum256([]byte(fmt.Sprintf("%d:%s%s", len(model), model, endpoint)))
-	return fmt.Sprintf("smart_routing:account_cooldown:%d:%d:%x", keyID, accountID, digest)
-}
-
-func (c *gatewayCache) GetSmartRoutingAccountCooldowns(ctx context.Context, keyID int64, accountIDs []int64, model, endpoint string) (map[int64]time.Duration, error) {
-	remaining := make(map[int64]time.Duration)
-	if c == nil || keyID <= 0 {
-		return remaining, nil
-	}
-	if c.rdb == nil {
-		for _, id := range accountIDs {
-			remaining[id] = c.smartRoutingAccountCooldowns.get(smartRoutingAccountCooldownKey(keyID, id, model, endpoint), time.Now())
-		}
-		return remaining, errors.New("smart routing Redis unavailable")
-	}
-	pipe := c.smartRoutingRedisClient().Pipeline()
-	commands := make(map[int64]*redis.DurationCmd, len(accountIDs))
-	for _, id := range accountIDs {
-		if id > 0 {
-			commands[id] = pipe.PTTL(ctx, smartRoutingAccountCooldownKey(keyID, id, model, endpoint))
-		}
-	}
-	_, err := pipe.Exec(ctx)
-	for id, command := range commands {
-		key := smartRoutingAccountCooldownKey(keyID, id, model, endpoint)
-		ttl, commandErr := command.Result()
-		if commandErr != nil {
-			remaining[id] = c.smartRoutingAccountCooldowns.get(key, time.Now())
-			continue
-		}
-		remaining[id] = max(0, ttl)
-		c.smartRoutingAccountCooldowns.observe(key, remaining[id], time.Now(), false)
-	}
-	return remaining, err
-}
-
-// 首次失败开启一个有界窗口；同一批在途失败不能不断把恢复时间往后推。
-func (c *gatewayCache) CooldownSmartRoutingAccounts(ctx context.Context, keyID int64, accountIDs []int64, model, endpoint string, duration time.Duration) error {
-	if c == nil || keyID <= 0 || duration <= 0 {
-		return nil
-	}
-	duration = min(duration, time.Hour)
-	for _, id := range accountIDs {
-		if id > 0 {
-			c.smartRoutingAccountCooldowns.observe(smartRoutingAccountCooldownKey(keyID, id, model, endpoint), duration, time.Now(), true)
-		}
-	}
-	if c.rdb == nil {
-		return errors.New("smart routing Redis unavailable")
-	}
-	pipe := c.smartRoutingRedisClient().Pipeline()
-	for _, id := range accountIDs {
-		if id > 0 {
-			pipe.SetNX(ctx, smartRoutingAccountCooldownKey(keyID, id, model, endpoint), "1", duration)
-		}
-	}
-	_, err := pipe.Exec(ctx)
-	return err
 }
 
 // 本地降级只保留本实例已观测的真实失败；容量固定，过期清理无需后台 goroutine。

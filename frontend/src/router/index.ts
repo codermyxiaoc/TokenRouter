@@ -404,6 +404,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresIntelligence: true, hidePageHeading: true, title: 'Model quality checks', titleKey: 'intelligence.title' }
   },
   {
+    path: '/admin/chanshui-tests',
+    name: 'AdminChanshuiTests',
+    component: () => import('@/views/admin/ChanshuiTestsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, requiresChanshui: true, hidePageHeading: true, title: 'Model integrity checks', titleKey: 'chanshui.title' }
+  },
+  {
     path: '/admin/intelligence-tests',
     name: 'AdminIntelligenceTests',
     component: () => import('@/views/admin/IntelligenceTestsView.vue'),
@@ -976,6 +982,15 @@ router.beforeEach(async (to, _from, next) => {
     return
   }
 
+
+  // 掺水检测不暴露公共开关；角色校验通过后再读取管理员私有设置。
+  if (to.meta.requiresChanshui) {
+    await adminSettingsStore.refreshChanshuiEnabled()
+    if (!adminSettingsStore.chanshuiEnabled) {
+      next('/admin/settings?tab=features')
+      return
+    }
+  }
 
   // 公共设置可能尚未加载（App.vue 的 onMounted 异步拉取晚于首次导航，且纯静态部署
   // 无 __APP_CONFIG__ 注入）。此时 cachedPublicSettings 为空会把页面功能开关

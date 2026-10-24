@@ -25,7 +25,7 @@ Codex 凭据导入的去重身份同时包含 workspace/account ID 与 user ID�
 
 OAuth 补全账号元数据时，ID token 中的个人 `chatgpt_plan_type` 是个人套餐的权威来源。`accounts/check` 可能按 access token 的 `poid` 命中另一个 workspace；仅当该记录的账号 ID 与个人 `chatgpt_account_id` 一致时，才能把它的 `entitlement.expires_at` 与个人套餐组合。账号不一致时，到期时间必须改从个人 `/backend-api/subscriptions` 的 `active_until` 获取；若套餐本身来自 `accounts/check`，套餐和到期时间仍保持来自同一条记录。
 
-OAuth 账号可受 Codex CLI-only、允许客户端、agent identity、privacy status 和 OAuth passthrough 策略限制。OAuth 出站的 `originator` 必须与最终 User-Agent 首段配对；客户端未提供可识别官方身份或身份修复失败时统一回退 `codex-tui`，PAT、模型/额度探测、Alpha Search、HTTP 与 WebSocket 走同一默认身份。客户端或 TLS 路由显式提供且可配对的官方身份继续保留，历史 `codex_cli_rs` 仍只作为兼容识别值。API Key 账号不应借用 OAuth-only 的内部端点或身份元数据。Header override、代理、base URL 和 TLS 配置属于出站安全边界，不能覆盖受保护认证头或绕过目标校验。
+OAuth 账号可受 Codex CLI-only、允许客户端、agent identity、privacy status 和 OAuth passthrough 策略限制。OAuth 出站的 `originator` 必须与最终 User-Agent 首段配对；客户端未提供可识别官方身份或身份修复失败时统一回退 `codex_cli_rs`，PAT、模型/额度探测、Alpha Search、HTTP 与 WebSocket 走同一默认身份。普通历史 TUI 身份成对迁移为 CLI 并清理旧尾部标识；客户端其它可配对官方身份和 TLS 路由显式身份仍保留，不能覆盖管理员刻意设置的 TLS UA。API Key 账号不应借用 OAuth-only 的内部端点或身份元数据。Header override、代理、base URL 和 TLS 配置属于出站安全边界，不能覆盖受保护认证头或绕过目标校验。
 
 身份解析在修剪空白前验证原始 User-Agent 的 HTTP Header 合法性；含 CR/LF 或非法控制字节的候选、规范身份和 override 均不能参与配对，继续使用已有合法身份或默认 Codex 身份。后台显示的 Pro、Business 套餐分级只是对原始 `plan_type` 的展示映射，不改写凭据或账号调度资格。
 
@@ -61,7 +61,9 @@ OpenAI API Key 的 Messages 入口可启用搜索模拟，复用现有全局搜�
 
 OAuth/Codex 凭据的 Images 请求在最终账号模型映射之后选择通道。精确登记的 `gpt-image-1.5`、`gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst` 以及后两者的 `2026-09-08` 快照使用 `/backend-api/codex/images/generations|edits`；其它已有图片型号保留 Responses 兼容通道，不根据前缀放行未来未知型号。API Key 的 Images 路径保持既有行为。生成/编辑 JSON、multipart 图片与 mask 统一经现有输入校验构造原生载荷，复用 Codex 认证、代理和当前 TLS 路由。
 
-只有原生端点明确返回 404/405 才允许同账号一次 Responses 回退。429/5xx 继续既有故障转移策略，不切到另一种协议重复生成；网络结果不确定、HTTP 200 后读取中断、非法结果或未产出完整图片时记录错误，不盲目重放。JSON/SSE 的实际图片与部分用量继续计入原结算路径，图片尺寸优先按真实输出识别，客户端断连仍按既有媒体排水规则处理。
+公开 Images 同步及异步后台执行共用图片尝试策略：一个逻辑请求仅在同组最多向两个不同账号各发送一次，禁止叠加池模式同号重试、OAuth 原生到 Responses 回退及其它隐式重发。首次执行固定 900 秒总截止，已有更短截止优先，换号不延长；异步任务原 30 分钟受理/执行外层预算及独立存储预算保留。管理员指定账号测试未挂载此策略，仍只验证被选中的账号，保留其已有明确端点兼容边界。
+
+仅确定未连接的 DNS/dial 错误和明确未受理的上游拒绝可快速切至备用账号；普通 5xx、408、发送后断连、HTTP 200 后读体失败、已有任务/图片/用量或实际模型输出时不得重新生成。参数与审核拒绝不冷却账号。可信上游故障按账号、最终上游模型及 generate/edit/inpaint 写入十秒共享冷却，后续请求跳过该组合，重复写入不延长窗口；全部候选冷却时立即返回 503 与 Retry-After，不等待冷却。图片及部分用量仍按原账本结算，存储失败只恢复存储/账务；没有资金预占的同步与 Token 图片同样受禁止重放保护。
 
 图片输入缓存是总缓存输入 token 的子集，独立图片缓存价受渠道显式价格、区间缓存倍率和整体价格倍率约束；显式零价不能被兜底价覆盖。日期型号在缺少精确目录价时先匹配基名目录，最后才用内置静态价。统计存储复用已有图片用量字段，无新增迁移，按张渠道计费不切换成 token 计费。
 
@@ -288,6 +290,8 @@ HTTP Responses（原生与透传）及 WS→HTTP 桥接统一把已观测到的�
 <a id="openai_stream_failover_observation"></a>
 ### 流式首输出与恢复观测
 
+已知 `queued`、metadata 和无语义的完成标记可作为安全前导；工具 delta 必须同时缺少有效调用身份、名称、参数及未知字段才视为空，重复 JSON 字段和未知结构仍阻止重放。短暂 `server_is_overloaded` 的 `Retry-After`/`Retry-After-Ms` 重试提示最多等待八秒；有限正数字在转为整数时长前裁剪，避免极大值溢出后立即重试，`NaN`、无穷大及非正数字忽略并继续查找其它有效提示，不因前导事件提前消耗重试资格；已有语义输出或实际用量的请求继续禁止重放。
+
 原生 Responses 与透传流在首个需保留的输出前暂存前导，已知纯 `ping`/`heartbeat`/`keepalive` 和没有内容的文本、推理或转写 delta 可继续缓冲。判空采用字段和类型白名单；带用量、工具、加密状态、未知字段或未知事件时保守处理，不能将“没有可见文字”直接等同于可重放。显式流错误已经观测到非零上游用量时不再切换账号，仍执行原有账号限流/健康处理；已有正文、工具和状态输出的请求同样保留原禁止重放边界。缺少终态的 EOF、读取错误、首输出超时及前导缓冲/扫描上限同样以已观测令牌和完整图片为重放边界；即使尚未写出正文，已有上游消耗也不得再切换账号。原生和透传 HTTP 转发会把失败前的用量、图片及请求/模型/档位元数据交给既有 handler 结算，同时返回失败，不建立成功粘性或刷新成功配额快照。无业务输出、无实际用量的请求仍保留原故障转移资格。
 
 网关生成的排队与保活心跳统一排除在业务输出计数之外，保持真实 HTTP 提交状态。同一响应多次启动保活时保留历史计数，新分组的独立写入器重置计数，详见[智能路由换组边界](../domains/smart_routing_api_keys.md#group_failover)。
@@ -306,3 +310,17 @@ Responses/Messages 转 Chat Completions 共用的扫描器先识别流内 `error
 智能路由 Chat 桥每轮记录 `smart routing chat stream finished`，带请求关联上下文、分组/账号、终态类别、标准 `finish_reason`、是否输出/观测用量及客户端断连/取消标志。这些安全元数据用于区分 HTTP 200 下的正常完成与中途失败，不包含模型正文或工具参数；`finish_reason` 和 `[DONE]` 仅反映上游所报终态，不保证客户端已收到全部内容。
 
 相关文档：[网关请求生命周期](../architecture/gateway_request_lifecycle.md)、[账号调度与缓存一致性](../architecture/account_scheduling_and_cache.md)、[模型目录与市场](model_catalog_and_marketplace.md)。
+
+
+<a id="image_attempt_routing"></a>
+## 图片安全换号与账号模型冷却
+
+公开 Images 同步请求与异步任务的同步路由重入共用一次图片执行策略。原单次生成预算保持（公开入口默认 15 分钟，并取已有请求截止时间中较早者），备用账号不能刷新它；每个请求最多向同一分组的两个不同账号各发送一次生成 POST。同号重试、OAuth 端点回退、Grok 底层回退以及 HTTP POST 重定向不能叠加额外生成。管理员指定账号测试没有自动换号。
+
+只有可证明未发送的 DNS/连接建立错误或完整的确定拒绝（账号认证、模型不可用、明确限流等），且没有任务、用量、文本或图片产物证据，才允许立即选择备用账号。参数/参考图/内容审核错误直接返回且不处罚账号。泛 5xx、发送后超时/断线、成功响应读取中断、截断的错误响应均保留结果未确认，不自动重新生成；此规则独立于是否存在资金预占。已返回图片优先交原结果与结算流程，下载、R2 和账务失败只恢复对应阶段。
+
+HTTP `/v1/responses` 的显式 `image_generation` 工具同样使用这份策略，覆盖普通转发和自动透传；账号映射后才识别为图片模型时也沿用原请求预算。冷却归属实际发送的图片工具模型，并按输入参考图或蒙版区分生成、编辑和局部重绘，不把故障归入文本主模型。生成失败不会进入文本请求的同号重试、字段修复重发、身份恢复重发或模型回退。已返回图片或实际用量继续走 Responses 原结算与部分结果收尾。交互式 Responses WebSocket 不在此次 HTTP 图片策略改造范围内。
+
+已分类的账号故障以“账号 ID + 实际发送的最终模型 + generate/edit/inpaint”写入默认 10 秒的共享冷却，同窗口不续期；映射别名不能绕过同一模型的健康状态，普通文本、其他模型和其他图片操作不受影响。下一次请求跳过该范围内的冷却账号，当前请求仍保存失败集合；全冷却立即返回 503 和 Retry-After，不原地等待恢复。供应商已有的认证、配额和模型限流策略仍独立生效。
+
+站内幂等账本防止同一任务重复结算，不能把两个独立生成请求变成上游同一次请求。创作台/画布的持久任务预算见[创作台任务](../domains/creative_studio.md)，异步存储失败和资金核对见[异步图片](../domains/media_tasks.md)。

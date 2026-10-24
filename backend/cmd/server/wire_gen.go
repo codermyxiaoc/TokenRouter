@@ -361,11 +361,14 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	intelligenceRepository := repository.NewIntelligenceRepository(db)
 	intelligenceService := service.ProvideIntelligenceService(intelligenceRepository, apiKeyRepository, groupRepository, apiKeyService, settingService)
 	intelligenceHandler := handler.ProvideIntelligenceHandler(intelligenceService, configConfig, userRepository, settingService)
+	chanshuiRepository := repository.NewChanshuiRepository(db)
+	chanshuiService := service.ProvideChanshuiService(chanshuiRepository, accountRepository, settingService, schedulerSnapshotService)
+	chanshuiHandler := handler.NewChanshuiHandler(chanshuiService)
 	dailyActivityRepository := repository.NewDailyActivityRepository(db)
 	dailyActivityService := service.ProvideDailyActivityService(dailyActivityRepository, apiKeyService, billingCacheService, settingService)
 	dailyActivityHandler := handler.NewDailyActivityHandler(dailyActivityService)
 	idempotencyCleanupService := service.ProvideIdempotencyCleanupService(idempotencyRepository, configConfig)
-	handlers := handler.ProvideHandlers(authHandler, userHandler, apiKeyHandler, usageHandler, redeemHandler, subscriptionHandler, announcementHandler, modelMarketplaceHandler, adminHandlers, gatewayHandler, openAIGatewayHandler, qoderGatewayHandler, handlerSettingHandler, totpHandler, passkeyHandler, handlerPaymentHandler, paymentWebhookHandler, mediaTaskHandler, mediaTaskService, geminiCachedContentService, asyncImageHandler, videoHandler, videoReferenceHandler, batchImageHandler, creativeHandler, creativeCanvasHandler, handlerTeamHandler, ticketHandler, intelligenceHandler, dailyActivityHandler, idempotencyCoordinator, idempotencyCleanupService)
+	handlers := handler.ProvideHandlers(authHandler, userHandler, apiKeyHandler, usageHandler, redeemHandler, subscriptionHandler, announcementHandler, modelMarketplaceHandler, adminHandlers, gatewayHandler, openAIGatewayHandler, qoderGatewayHandler, handlerSettingHandler, totpHandler, passkeyHandler, handlerPaymentHandler, paymentWebhookHandler, mediaTaskHandler, mediaTaskService, geminiCachedContentService, asyncImageHandler, videoHandler, videoReferenceHandler, batchImageHandler, creativeHandler, creativeCanvasHandler, handlerTeamHandler, ticketHandler, intelligenceHandler, chanshuiHandler, dailyActivityHandler, idempotencyCoordinator, idempotencyCleanupService)
 	jwtAuthMiddleware := middleware.NewJWTAuthMiddleware(authService, userService, settingService, auditLogService)
 	adminAuthMiddleware := middleware.NewAdminAuthMiddleware(authService, userService, settingService, auditLogService)
 	apiKeyAuthMiddleware := middleware.NewAPIKeyAuthMiddleware(apiKeyService, subscriptionService, configConfig)
@@ -394,7 +397,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, leaderLockCache, db)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
 	cnProviderBalanceCheckService := service.ProvideCNProviderBalanceCheckService(accountRepository, upstreamUsageService, configConfig, leaderLockCache, db)
-	v3 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, claudeCodeVersionSyncService, proxyExpiryService, subscriptionExpiryService, announcementExpiryService, usageCleanupService, idempotencyCleanupService, geminiCachedContentService, batchImageCleanupService, batchImageWorkerRuntime, creativeWorkerRuntime, creativeCanvasService, imageTaskService, videoTaskService, legacyVideoRuntime, mediaTaskReconciliationRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, qoderOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, groupAvailabilityProbeRunnerService, backupService, paymentOrderExpiryService, userPlatformQuotaUsageFlusher, tlsFingerprintCollectorService, tlsFingerprintProfileService, tlsFingerprintRouterService, ollamaCloudUsageService, auditLogService, cnProviderBalanceCheckService, upstreamBillingProbeService, ticketRuntime, intelligenceService, pluginManager)
+	v3 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, claudeCodeVersionSyncService, proxyExpiryService, subscriptionExpiryService, announcementExpiryService, usageCleanupService, idempotencyCleanupService, geminiCachedContentService, batchImageCleanupService, batchImageWorkerRuntime, creativeWorkerRuntime, creativeCanvasService, imageTaskService, videoTaskService, legacyVideoRuntime, mediaTaskReconciliationRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, qoderOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, groupAvailabilityProbeRunnerService, backupService, paymentOrderExpiryService, userPlatformQuotaUsageFlusher, tlsFingerprintCollectorService, tlsFingerprintProfileService, tlsFingerprintRouterService, ollamaCloudUsageService, auditLogService, cnProviderBalanceCheckService, upstreamBillingProbeService, ticketRuntime, intelligenceService, chanshuiService, pluginManager)
 	application := &Application{
 		Server:        httpServer,
 		PluginManager: pluginManager,
@@ -484,6 +487,7 @@ func provideCleanup(
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ticketRuntime *service.TicketRuntime,
 	intelligenceTests *service.IntelligenceService,
+	chanshuiTests *service.ChanshuiService,
 	pluginManager *service.PluginManager,
 ) func() {
 	return func() {
@@ -520,6 +524,12 @@ func provideCleanup(
 			{"TicketRuntime", func() error {
 				if ticketRuntime != nil {
 					ticketRuntime.Stop()
+				}
+				return nil
+			}},
+			{"ChanshuiService", func() error {
+				if chanshuiTests != nil {
+					chanshuiTests.Stop()
 				}
 				return nil
 			}},

@@ -586,6 +586,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyTeamEnabled] = strconv.FormatBool(settings.TeamEnabled)
 	updates[SettingKeyCreativeEnabled] = strconv.FormatBool(settings.CreativeEnabled)
 	updates[SettingKeyIntelligenceEnabled] = strconv.FormatBool(settings.IntelligenceEnabled)
+	updates[SettingKeyChanshuiEnabled] = strconv.FormatBool(settings.ChanshuiEnabled)
 
 	// 风控中心总开关：控制菜单入口和网关内容审计是否执行。
 	updates[SettingKeyRiskControlEnabled] = strconv.FormatBool(settings.RiskControlEnabled)

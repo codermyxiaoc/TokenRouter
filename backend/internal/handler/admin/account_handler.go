@@ -715,7 +715,9 @@ func (h *AccountHandler) List(c *gin.Context) {
 
 	h.enrichShadowParents(c.Request.Context(), result)
 
-	etag := buildAccountsListETag(result, total, page, pageSize, platform, accountType, status, search, lite)
+	// 响应与 ETag 使用同一投影，详情字段变化不应让轻量列表无谓失效。
+	responseItems := accountListResponseItems(result, lite)
+	etag := buildAccountsListETag(responseItems, total, page, pageSize, platform, accountType, status, search, lite)
 	if etag != "" {
 		c.Header("ETag", etag)
 		c.Header("Vary", "If-None-Match")
@@ -725,26 +727,26 @@ func (h *AccountHandler) List(c *gin.Context) {
 		}
 	}
 
-	response.Paginated(c, result, total, page, pageSize)
+	response.Paginated(c, responseItems, total, page, pageSize)
 }
 
 func buildAccountsListETag(
-	items []AccountWithConcurrency,
+	items any,
 	total int64,
 	page, pageSize int,
 	platform, accountType, status, search string,
 	lite bool,
 ) string {
 	payload := struct {
-		Total       int64                    `json:"total"`
-		Page        int                      `json:"page"`
-		PageSize    int                      `json:"page_size"`
-		Platform    string                   `json:"platform"`
-		AccountType string                   `json:"type"`
-		Status      string                   `json:"status"`
-		Search      string                   `json:"search"`
-		Lite        bool                     `json:"lite"`
-		Items       []AccountWithConcurrency `json:"items"`
+		Total       int64  `json:"total"`
+		Page        int    `json:"page"`
+		PageSize    int    `json:"page_size"`
+		Platform    string `json:"platform"`
+		AccountType string `json:"type"`
+		Status      string `json:"status"`
+		Search      string `json:"search"`
+		Lite        bool   `json:"lite"`
+		Items       any    `json:"items"`
 	}{
 		Total:       total,
 		Page:        page,

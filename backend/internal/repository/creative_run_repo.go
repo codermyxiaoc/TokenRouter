@@ -808,6 +808,8 @@ func creativeRunEntityToService(entity *dbent.CreativeRun) *service.CreativeRun 
 		ErrorMessage:                entity.ErrorMessage,
 		ReleaseTargetStatus:         entity.ReleaseTargetStatus,
 		AttemptCount:                entity.AttemptCount,
+		ImageAttemptAccountIDs:      append([]int64(nil), entity.ImageAttemptAccountIds...),
+		ImageExecutionDeadlineAt:    entity.ImageExecutionDeadlineAt,
 		SettlementAttemptCount:      entity.SettlementAttemptCount,
 		ReleaseAttemptCount:         entity.ReleaseAttemptCount,
 		ProvisioningPhase:           entity.ProvisioningPhase,

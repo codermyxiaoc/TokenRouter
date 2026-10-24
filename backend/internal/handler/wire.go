@@ -184,6 +184,7 @@ func ProvideHandlers(
 	teamHandler *TeamHandler,
 	ticketHandler *TicketHandler,
 	intelligenceHandler *IntelligenceHandler,
+	chanshuiHandler *ChanshuiHandler,
 	dailyActivityHandler *DailyActivityHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
@@ -219,6 +220,7 @@ func ProvideHandlers(
 		Team:              teamHandler,
 		Ticket:            ticketHandler,
 		IntelligenceTests: intelligenceHandler,
+		ChanshuiTests:     chanshuiHandler,
 		DailyActivities:   dailyActivityHandler,
 	}
 }
@@ -252,6 +254,7 @@ var ProviderSet = wire.NewSet(
 	NewTeamHandler,
 	NewTicketHandler,
 	ProvideIntelligenceHandler,
+	NewChanshuiHandler,
 	NewDailyActivityHandler,
 
 	// Admin handlers

@@ -9,6 +9,7 @@ export default {
         general: 'General',
         agreement: 'Agreement',
         features: 'Features',
+        creative: 'Creative Studio',
         security: 'Security',
         users: 'Users',
         gateway: 'Gateway',
@@ -627,8 +628,8 @@ export default {
         antigravityUserAgentVersionPlaceholder: '1.23.2',
         antigravityUserAgentVersionHint: 'Leave empty to use ANTIGRAVITY_USER_AGENT_VERSION or the built-in default 1.23.2; when set, the admin setting takes precedence.',
         openaiCodexUserAgent: 'OpenAI Codex UA',
-        openaiCodexUserAgentPlaceholder: 'codex-tui/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color (codex-tui; 0.144.1)',
-        openaiCodexUserAgentHint: 'Used to bypass Cloudflare browser-UA challenges on the OpenAI upstream. Only applies when the client User-Agent is detected as a browser (Mozilla/...). Leave empty to use the built-in codex-tui default.',
+        openaiCodexUserAgentPlaceholder: 'codex_cli_rs/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color',
+        openaiCodexUserAgentHint: 'Used for browser-UA challenges on the OpenAI upstream. Applies when the client User-Agent is a browser (Mozilla/...); other clients keep the existing identity policy. Leave empty to use the built-in Codex CLI default.',
         openaiAllowClaudeCodeCodexPlugin: "Allow using the Codex plugin in Claude Code",
         openaiAllowClaudeCodeCodexPluginDesc:
           "Global switch; only affects OpenAI OAuth accounts that have 'Codex official clients only' enabled. When on, all such accounts additionally allow requests from the Claude Code Codex plugin (exact match on originator=Claude Code) without per-account config; upstream requests remain pass-through.",

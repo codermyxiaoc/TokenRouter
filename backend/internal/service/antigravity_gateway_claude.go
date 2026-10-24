@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -57,8 +58,16 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 		return nil, s.writeClaudeError(c, http.StatusForbidden, "permission_error", fmt.Sprintf("model %s not in whitelist", claudeReq.Model))
 	}
+	if geminiImageGenerationDenied(c, nil, originalModel, mappedModel) {
+		return nil, s.writeClaudeError(c, http.StatusBadRequest, "invalid_request_error", ImageGenerationPermissionMessage())
+	}
 	billingModel := mappedModel
 
+	var imagePolicyErr error
+	ctx, imagePolicyErr = prepareGeminiImageAttempt(ctx, c, s.imageCooldownStore(), account, body, mappedModel, originalModel)
+	if imagePolicyErr != nil {
+		return nil, imagePolicyErr
+	}
 	// 获取 access_token
 	if s.tokenProvider == nil {
 		return nil, s.writeClaudeError(c, http.StatusBadGateway, "api_error", "Antigravity token provider not configured")
@@ -118,6 +127,12 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		sessionHash:     "",              // Forward 方法没有 sessionHash，由上层处理粘性会话清除
 	})
 	if err != nil {
+		if ImageAttemptHasPolicy(ctx) {
+			var imageFailure *UpstreamFailoverError
+			if errors.As(err, &imageFailure) || ctx.Err() != nil {
+				return nil, err
+			}
+		}
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
 		if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
 			return nil, &UpstreamFailoverError{

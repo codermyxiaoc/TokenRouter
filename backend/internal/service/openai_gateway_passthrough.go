@@ -232,6 +232,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		imageSizeTier = imageCfg.SizeTier
 		imageInputSize = imageCfg.InputSize
 	}
+	ctx = prepareOpenAIResponsesImageAttempt(ctx, c, account, body, policyModel)
 
 	logger.LegacyPrintf("service.openai_gateway",
 		"[OpenAI 自动透传] 命中自动透传分支: account=%d name=%s type=%s model=%s stream=%v",
@@ -286,7 +287,11 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			actualModel = reqModel
 		}
 		SetOpsUpstreamModel(c, actualModel)
-		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+		upstreamCtx, releaseUpstreamCtx := DetachImageAttemptContext(ctx)
+		if ImageAttemptHasPolicy(ctx) {
+			defer releaseUpstreamCtx()
+			releaseUpstreamCtx = func() {}
+		}
 		upstreamReq, buildErr := s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token, tlsRouterMatch...)
 		releaseUpstreamCtx()
 		if buildErr != nil {
@@ -294,9 +299,12 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 
 		upstreamStart := time.Now()
-		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
+		resp, err = s.doOpenAIResponsesImageAwareRequest(ctx, c, upstreamReq, proxyURL, account, body, actualModel, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if err != nil {
+			if ImageAttemptHasPolicy(ctx) {
+				return nil, err
+			}
 			// 未收到 HTTP 响应时交给外层切换账号，持久故障仍由统一处理器临时摘除。
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 		}
@@ -366,6 +374,10 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		if reqStream {
 			result, handleErr := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
 			if handleErr != nil && (result == nil || !openAIStreamHasBillableResult(result.usage, result.imageCount)) {
+				if ImageAttemptHasPolicy(ctx) {
+					_ = resp.Body.Close()
+					return nil, handleErr
+				}
 				if retryBody, fallbackModel, retry := s.applyOpenAIPassthroughCompactFallbackFromSignal(
 					c, account, requestedModel, body, handleErr, compactModelFallbackRetried, resp,
 				); retry {
@@ -394,7 +406,14 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			imageOutputSizes = result.imageOutputSizes
 		} else {
 			result, handleErr := s.handleNonStreamingResponsePassthrough(ctx, resp, c, account, reqModel, upstreamPassthroughModel)
-			if handleErr != nil {
+			if handleErr != nil && ImageAttemptHasPolicy(ctx) && result != nil && openAIStreamHasBillableResult(result.usage, result.imageCount) {
+				// 失败 JSON 的真实图片或 Token 用量仍需结算，不能在错误分支丢掉部分结果。
+				streamErr = handleErr
+			} else if handleErr != nil {
+				if ImageAttemptHasPolicy(ctx) {
+					_ = resp.Body.Close()
+					return nil, handleErr
+				}
 				if retryBody, fallbackModel, retry := s.applyOpenAIPassthroughCompactFallbackFromSignal(
 					c, account, requestedModel, body, handleErr, compactModelFallbackRetried, resp,
 				); retry {
@@ -623,7 +642,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// 终态收口：透传路径的 OAuth 与非透传完全一致，同样强制统一出站身份
 	// （User-Agent / originator / version 同源自洽），客户端自报身份不会到达上游。
 	if account.UsesOpenAICodexProtocol() {
-		enforceCodexIdentityHeadersWithUA(req.Header, "")
+		enforceCodexIdentityHeadersForRouting(req.Header, routerMatch...)
 	}
 
 	if req.Header.Get("content-type") == "" {
@@ -1018,7 +1037,7 @@ func openAIStreamClientOutputStarted(c *gin.Context, localStarted bool) bool {
 
 func openAIStreamEventIsPreamble(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
-	case "response.created", "response.in_progress":
+	case "response.created", "response.queued", "response.in_progress", "response.metadata":
 		return true
 	default:
 		return false
@@ -1080,7 +1099,7 @@ func openAIStreamAddedEventStartsClientOutput(payload []byte, eventType string) 
 		default:
 			return true
 		}
-	case "response.content_part.added":
+	case "response.content_part.added", "response.content_part.done":
 		part := gjson.GetBytes(payload, "part")
 		if !part.Exists() || !part.IsObject() {
 			return true
@@ -1093,7 +1112,7 @@ func openAIStreamAddedEventStartsClientOutput(payload []byte, eventType string) 
 		default:
 			return true
 		}
-	case "response.reasoning_summary_part.added":
+	case "response.reasoning_summary_part.added", "response.reasoning_summary_part.done":
 		part := gjson.GetBytes(payload, "part")
 		if !part.Exists() || !part.IsObject() || strings.TrimSpace(part.Get("type").String()) != "summary_text" {
 			return true
@@ -1123,7 +1142,8 @@ func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 		// （content_policy / invalid_request 等）维持原样转发，保留上游错误细节。
 		payload := []byte(trimmed)
 		return !openAIStreamFailedEventShouldFailover(payload, extractOpenAISSEErrorMessage(payload))
-	case "response.output_item.added", "response.content_part.added", "response.reasoning_summary_part.added":
+	case "response.output_item.added", "response.content_part.added", "response.reasoning_summary_part.added",
+		"response.content_part.done", "response.reasoning_summary_part.done":
 		return openAIStreamAddedEventStartsClientOutput([]byte(trimmed), eventType)
 	}
 	return !openAIStreamEventIsPreamble(eventType)
@@ -2422,6 +2442,8 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	}
 	observeOpenAIServiceTierInContext(c, body, "response.completed")
 
+	imageFailure := responsesImageJSONFailure(ctx, body)
+	imageCount := countOpenAIResponseImageOutputsFromJSONBytes(body)
 	usage := &OpenAIUsage{}
 	usageParsed := false
 	if len(body) > 0 {
@@ -2434,7 +2456,12 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 
 		usage = s.parseSSEUsageFromBody(string(body))
 	}
-	logOpenAISuccessMissingUsage(ctx, c, account, resp, usage, "json", false)
+	if imageFailure != nil && !openAIStreamHasBillableResult(usage, imageCount) {
+		return nil, imageFailure
+	}
+	if imageFailure == nil {
+		logOpenAISuccessMissingUsage(ctx, c, account, resp, usage, "json", false)
+	}
 
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 
@@ -2454,16 +2481,21 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if err != nil {
 		return nil, fmt.Errorf("restore OpenAI Responses client tools: %w", err)
 	}
-	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
-		c.Data(resp.StatusCode, contentType, body)
+	if imageFailure == nil || imageCount > 0 {
+		if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+			c.Data(resp.StatusCode, contentType, body)
+		}
+		if imageFailure != nil {
+			MarkResponseCommitted(c)
+		}
 	}
 	return &openaiNonStreamingResultPassthrough{
 		OpenAIUsage:      usage,
 		usage:            usage,
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
-		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
+		imageCount:       imageCount,
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
-	}, nil
+	}, imageFailure
 }
 
 // handlePassthroughSSEToJSON converts an SSE response body into a JSON

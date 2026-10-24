@@ -370,6 +370,29 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 		return w.deferUnconfirmedExecution(ctx, run)
 	}
 
+	if run.Operation != CreativeOperationTTS {
+		// 历史任务已有执行计数却缺少账号证据，不能升级后重新获得两次发送资格。
+		if run.AttemptCount > 0 && len(run.ImageAttemptAccountIDs) == 0 && (run.AccountID == nil || *run.AccountID <= 0) {
+			if err := w.service.MarkRunning(ctx, runID, 0); err != nil {
+				return CreativeProcessResult{}, err
+			}
+			if err := w.repo.SetCreativeRunProvisioningPhase(ctx, runID, CreativeProvisioningPhaseProviderInflight); err != nil {
+				return CreativeProcessResult{}, err
+			}
+			current, err := w.repo.GetCreativeRunByRunID(ctx, runID)
+			if err != nil {
+				return CreativeProcessResult{}, err
+			}
+			return w.deferUnconfirmedExecution(ctx, current)
+		}
+		if len(run.ImageAttemptAccountIDs) >= ImageAttemptMaxSends || run.AttemptCount >= ImageAttemptMaxSends || run.ImageExecutionDeadlineAt != nil && !time.Now().Before(*run.ImageExecutionDeadlineAt) {
+			if err := w.service.FailRun(ctx, runID, "IMAGE_EXECUTION_BUDGET_EXHAUSTED", "图片生成的备用账号或总等待时间已用完"); err != nil {
+				return CreativeProcessResult{}, err
+			}
+			return CreativeProcessResult{Terminal: true}, nil
+		}
+	}
+
 	payload, err := w.loadPayload(ctx, runID)
 	if err != nil {
 		if errors.Is(err, ErrCreativeTransientUnavailable) {
@@ -420,6 +443,14 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 		return CreativeProcessResult{RequeueAfter: defaultCreativeConcurrencyRequeueDelay}, nil
 	}
 	if err != nil {
+		if run.Operation != CreativeOperationTTS {
+			var local *CreativeUpstreamError
+			if errors.Is(err, ErrCreativeImageBudgetExhausted) || errors.As(err, &local) && !local.Retryable {
+				return w.failCreativeImageRun(ctx, runID, err)
+			}
+			// 本地依赖/选号排队没有发出请求，不增加图片尝试次数。
+			return CreativeProcessResult{RequeueAfter: defaultCreativeConcurrencyRequeueDelay}, nil
+		}
 		return w.handleExecuteError(ctx, runID, err)
 	}
 	if execution == nil || execution.Account == nil {
@@ -446,7 +477,7 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 		return CreativeProcessResult{}, err
 	}
 	// 先持久化实际账号，再调用 provider，确保结果元数据已落库时可恢复结算。
-	if execution.Account.ID > 0 {
+	if run.Operation == CreativeOperationTTS && execution.Account.ID > 0 {
 		if err := w.repo.SetCreativeRunAccountID(ctx, runID, execution.Account.ID, time.Now()); err != nil {
 			return CreativeProcessResult{}, err
 		}
@@ -467,8 +498,23 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 	}
 
 	// 栅栏必须先于上游请求持久化；即使随后进程退出或成功结果落库失败，也不能再发一次生成。
-	if err := w.repo.SetCreativeRunProvisioningPhase(ctx, runID, CreativeProvisioningPhaseProviderInflight); err != nil {
-		return CreativeProcessResult{}, err
+	if current.Operation == CreativeOperationTTS {
+		if err := w.repo.SetCreativeRunProvisioningPhase(ctx, runID, CreativeProvisioningPhaseProviderInflight); err != nil {
+			return CreativeProcessResult{}, err
+		}
+	} else {
+		attempts, ok := w.repo.(CreativeImageAttemptRepository)
+		if !ok {
+			return CreativeProcessResult{}, errors.New("creative image attempt persistence is unavailable")
+		}
+		claimed, claimErr := attempts.BeginCreativeImageAttempt(ctx, runID, execution.Account.ID, w.creativeImageExecutionBudget(), time.Now())
+		if errors.Is(claimErr, ErrCreativeImageBudgetExhausted) {
+			return w.failCreativeImageRun(ctx, runID, claimErr)
+		}
+		if claimErr != nil {
+			return CreativeProcessResult{}, claimErr
+		}
+		current = claimed
 	}
 	result, err := w.executor.Execute(ctx, *current, *payload, execution)
 	releaseSlots()
@@ -476,6 +522,9 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 		return CreativeProcessResult{}, ErrCreativeLeaseLost
 	}
 	if err != nil {
+		if current.Operation != CreativeOperationTTS {
+			return w.handleCreativeImageFailure(ctx, current, execution.Account.ID, err)
+		}
 		if isCreativeResultUnconfirmedError(err) {
 			// 上游可能已生成但产物尚未确认：保持执行栅栏和预占，禁止重发或自动退款。
 			return w.deferUnconfirmedExecution(ctx, current)

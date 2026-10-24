@@ -727,6 +727,8 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
     { path: '/admin/intelligence-tests', label: t('intelligence.adminTitle'), icon: ChartIcon, featureFlag: flagIntelligenceAccess },
+    // 掺水检测入口仅在管理员已保存开启总开关后显示。
+    { path: '/admin/chanshui-tests', label: t('chanshui.title'), icon: ChartIcon, featureFlag: () => adminSettingsStore.chanshuiEnabled === true },
     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
     { path: '/admin/tickets', label: t('nav.ticketManagement'), icon: TicketIcon, featureFlag: flagTicketAccess },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },

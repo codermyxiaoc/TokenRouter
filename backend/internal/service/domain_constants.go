@@ -248,6 +248,7 @@ const (
 	SettingKeyAffiliateAdminRechargeEnabled       = "affiliate_admin_recharge_enabled" // 管理员充值是否产生返利
 	SettingKeyTeamEnabled                         = "team_enabled"                     // 是否显示团队功能相关页面
 	SettingKeyCreativeEnabled                     = "creative_enabled"                 // 创作台功能开关
+	SettingKeyChanshuiEnabled                     = "chanshui_enabled"                 // 仅管理员可见的掺水检测，默认关闭。
 	SettingKeyIntelligenceEnabled                 = "intelligence_enabled"             // 降智检测默认关闭，开启后才允许发起检测。
 	SettingKeyCreativeModelSettings               = "creative_model_settings"          // 创作台生图模型与能力白名单（JSON）
 	SettingKeyCreativeWorkerCount                 = "creative_worker_count"            // 创作台 worker 数量（正整数）

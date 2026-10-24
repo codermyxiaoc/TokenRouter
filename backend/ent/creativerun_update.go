@@ -573,6 +573,38 @@ func (_u *CreativeRunUpdate) AddAttemptCount(v int) *CreativeRunUpdate {
 	return _u
 }
 
+// SetImageAttemptAccountIds sets the "image_attempt_account_ids" field.
+func (_u *CreativeRunUpdate) SetImageAttemptAccountIds(v []int64) *CreativeRunUpdate {
+	_u.mutation.SetImageAttemptAccountIds(v)
+	return _u
+}
+
+// AppendImageAttemptAccountIds appends value to the "image_attempt_account_ids" field.
+func (_u *CreativeRunUpdate) AppendImageAttemptAccountIds(v []int64) *CreativeRunUpdate {
+	_u.mutation.AppendImageAttemptAccountIds(v)
+	return _u
+}
+
+// SetImageExecutionDeadlineAt sets the "image_execution_deadline_at" field.
+func (_u *CreativeRunUpdate) SetImageExecutionDeadlineAt(v time.Time) *CreativeRunUpdate {
+	_u.mutation.SetImageExecutionDeadlineAt(v)
+	return _u
+}
+
+// SetNillableImageExecutionDeadlineAt sets the "image_execution_deadline_at" field if the given value is not nil.
+func (_u *CreativeRunUpdate) SetNillableImageExecutionDeadlineAt(v *time.Time) *CreativeRunUpdate {
+	if v != nil {
+		_u.SetImageExecutionDeadlineAt(*v)
+	}
+	return _u
+}
+
+// ClearImageExecutionDeadlineAt clears the value of the "image_execution_deadline_at" field.
+func (_u *CreativeRunUpdate) ClearImageExecutionDeadlineAt() *CreativeRunUpdate {
+	_u.mutation.ClearImageExecutionDeadlineAt()
+	return _u
+}
+
 // SetAllowanceReserved sets the "allowance_reserved" field.
 func (_u *CreativeRunUpdate) SetAllowanceReserved(v bool) *CreativeRunUpdate {
 	_u.mutation.SetAllowanceReserved(v)
@@ -1066,6 +1098,20 @@ func (_u *CreativeRunUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if value, ok := _u.mutation.AddedAttemptCount(); ok {
 		_spec.AddField(creativerun.FieldAttemptCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.ImageAttemptAccountIds(); ok {
+		_spec.SetField(creativerun.FieldImageAttemptAccountIds, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedImageAttemptAccountIds(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, creativerun.FieldImageAttemptAccountIds, value)
+		})
+	}
+	if value, ok := _u.mutation.ImageExecutionDeadlineAt(); ok {
+		_spec.SetField(creativerun.FieldImageExecutionDeadlineAt, field.TypeTime, value)
+	}
+	if _u.mutation.ImageExecutionDeadlineAtCleared() {
+		_spec.ClearField(creativerun.FieldImageExecutionDeadlineAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.AllowanceReserved(); ok {
 		_spec.SetField(creativerun.FieldAllowanceReserved, field.TypeBool, value)
@@ -1690,6 +1736,38 @@ func (_u *CreativeRunUpdateOne) AddAttemptCount(v int) *CreativeRunUpdateOne {
 	return _u
 }
 
+// SetImageAttemptAccountIds sets the "image_attempt_account_ids" field.
+func (_u *CreativeRunUpdateOne) SetImageAttemptAccountIds(v []int64) *CreativeRunUpdateOne {
+	_u.mutation.SetImageAttemptAccountIds(v)
+	return _u
+}
+
+// AppendImageAttemptAccountIds appends value to the "image_attempt_account_ids" field.
+func (_u *CreativeRunUpdateOne) AppendImageAttemptAccountIds(v []int64) *CreativeRunUpdateOne {
+	_u.mutation.AppendImageAttemptAccountIds(v)
+	return _u
+}
+
+// SetImageExecutionDeadlineAt sets the "image_execution_deadline_at" field.
+func (_u *CreativeRunUpdateOne) SetImageExecutionDeadlineAt(v time.Time) *CreativeRunUpdateOne {
+	_u.mutation.SetImageExecutionDeadlineAt(v)
+	return _u
+}
+
+// SetNillableImageExecutionDeadlineAt sets the "image_execution_deadline_at" field if the given value is not nil.
+func (_u *CreativeRunUpdateOne) SetNillableImageExecutionDeadlineAt(v *time.Time) *CreativeRunUpdateOne {
+	if v != nil {
+		_u.SetImageExecutionDeadlineAt(*v)
+	}
+	return _u
+}
+
+// ClearImageExecutionDeadlineAt clears the value of the "image_execution_deadline_at" field.
+func (_u *CreativeRunUpdateOne) ClearImageExecutionDeadlineAt() *CreativeRunUpdateOne {
+	_u.mutation.ClearImageExecutionDeadlineAt()
+	return _u
+}
+
 // SetAllowanceReserved sets the "allowance_reserved" field.
 func (_u *CreativeRunUpdateOne) SetAllowanceReserved(v bool) *CreativeRunUpdateOne {
 	_u.mutation.SetAllowanceReserved(v)
@@ -2213,6 +2291,20 @@ func (_u *CreativeRunUpdateOne) sqlSave(ctx context.Context) (_node *CreativeRun
 	}
 	if value, ok := _u.mutation.AddedAttemptCount(); ok {
 		_spec.AddField(creativerun.FieldAttemptCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.ImageAttemptAccountIds(); ok {
+		_spec.SetField(creativerun.FieldImageAttemptAccountIds, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedImageAttemptAccountIds(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, creativerun.FieldImageAttemptAccountIds, value)
+		})
+	}
+	if value, ok := _u.mutation.ImageExecutionDeadlineAt(); ok {
+		_spec.SetField(creativerun.FieldImageExecutionDeadlineAt, field.TypeTime, value)
+	}
+	if _u.mutation.ImageExecutionDeadlineAtCleared() {
+		_spec.ClearField(creativerun.FieldImageExecutionDeadlineAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.AllowanceReserved(); ok {
 		_spec.SetField(creativerun.FieldAllowanceReserved, field.TypeBool, value)

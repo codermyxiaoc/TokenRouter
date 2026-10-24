@@ -113,22 +113,25 @@ func (e *CreativeExecutor) executeGemini(ctx context.Context, run CreativeRun, p
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if err := e.applyGeminiAuth(ctx, req, account); err != nil {
-		return nil, err
+		return nil, creativeImageAccountPreparationFailure(ctx, err)
 	}
 	// 账号级请求头覆写最后应用，配置值优先于内置默认头。
 	account.ApplyHeaderOverrides(req.Header)
 
+	if err := BeginImageAttempt(ctx, account.ID, upstreamModel, run.Operation); err != nil {
+		return nil, err
+	}
 	resp, err := e.gateway.httpUpstream.Do(req, accountProxyURL(account), account.ID, account.Concurrency)
 	if err != nil {
-		return nil, creativeHTTPStatusError(0, err.Error())
+		return nil, creativeImageTransportFailure(ctx, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	respBody, err := readCreativeUpstreamBody(resp.Body, 64<<20)
 	if err != nil {
-		return nil, creativeHTTPStatusError(0, err.Error())
+		return nil, creativeImageReadFailure(ctx)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, creativeHTTPResponseError(resp.StatusCode, respBody)
+		return nil, creativeImageHTTPFailure(ctx, resp.StatusCode, respBody)
 	}
 	// Code Assist 模式的响应包裹在 response 字段内。
 	if account.Type == AccountTypeOAuth && projectID != "" {
@@ -137,7 +140,11 @@ func (e *CreativeExecutor) executeGemini(ctx context.Context, run CreativeRun, p
 			return nil, creativeHTTPStatusError(http.StatusBadGateway, err.Error())
 		}
 	}
-	return parseCreativeGeminiImageOutputs(respBody)
+	outputs, parseErr := parseCreativeGeminiImageOutputs(respBody)
+	if parseErr != nil {
+		return nil, creativeImageOutputFailure(ctx, resp.StatusCode, respBody, parseErr)
+	}
+	return outputs, nil
 }
 
 // validateGeminiBaseURL 校验 Gemini base URL；失败时直接返回错误，禁止改变数据发送目标。

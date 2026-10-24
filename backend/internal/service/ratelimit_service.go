@@ -1118,6 +1118,11 @@ func buildForbiddenErrorMessage(prefix string, upstreamMsg string, responseBody 
 // OpenAI、国产供应商与 OpenCode 账号的 403 使用 HTML 豁免和累计冷却；
 // 其他平台保持原有 SetError 行为。
 func (s *RateLimitService) handle403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
+	// 边缘客户端身份拦截不是账号凭据故障，所有平台均保留健康账号。
+	if isCloudflareBotBlockResponse(responseBody) {
+		slog.Warn("403_cloudflare_bot_block_skips_account_penalty", "account_id", account.ID, "platform", account.Platform)
+		return false
+	}
 	if account.Platform == PlatformAntigravity {
 		return s.handleAntigravity403(ctx, account, upstreamMsg, responseBody)
 	}
@@ -1148,11 +1153,6 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 }
 
 func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
-	// CF 1010 是边缘客户端身份拦截，不能消耗健康账号的凭据错误次数。
-	if isCloudflareBotBlockResponse(responseBody) {
-		slog.Warn("openai_403_cloudflare_bot_block_skips_account_penalty", "account_id", account.ID, "platform", account.Platform)
-		return false
-	}
 	// 上游代理或 CDN 在请求到达 OpenAI API 前拦截时，可能返回 HTML 403，
 	// 这只能证明当前链路或端点被阻断，不能证明账号凭据或权限失效。
 	// 若继续计数或写账号状态，同一个错误请求会在 failover 中逐个处罚账号，
@@ -1269,7 +1269,61 @@ func (s *RateLimitService) getOpenAI403CooldownSettings(ctx context.Context, acc
 
 // isCloudflareBotBlockResponse 识别边缘机器人拦截，避免把出口或客户端身份问题计为账号封禁。
 func isCloudflareBotBlockResponse(body []byte) bool {
-	return strings.Contains(strings.ToLower(strings.TrimSpace(string(body))), "error code: 1010")
+	normalized := strings.ToLower(strings.TrimSpace(string(body)))
+	var payload any
+	if json.Unmarshal(body, &payload) == nil {
+		return containsCloudflareBotBlockCode(payload)
+	}
+	return strings.Contains(normalized, "error code: 1010")
+}
+
+func containsCloudflareBotBlockCode(value any) bool {
+	switch node := value.(type) {
+	case map[string]any:
+		cloudflareError := false
+		for key, child := range node {
+			if strings.EqualFold(key, "cloudflare_error") {
+				if is, ok := child.(bool); ok && is {
+					cloudflareError = true
+				}
+			}
+		}
+		for key, child := range node {
+			if strings.EqualFold(key, "error_name") {
+				if name, ok := child.(string); ok && strings.EqualFold(strings.TrimSpace(name), "browser_signature_banned") {
+					return true
+				}
+			}
+			if cloudflareError && (strings.EqualFold(key, "code") || strings.EqualFold(key, "error_code")) {
+				if isCloudflareBotBlockCode(child) {
+					return true
+				}
+			}
+			if containsCloudflareBotBlockCode(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range node {
+			if containsCloudflareBotBlockCode(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isCloudflareBotBlockCode(value any) bool {
+	switch code := value.(type) {
+	case float64:
+		return code == 1010
+	case json.Number:
+		return code == "1010"
+	case string:
+		return strings.TrimSpace(code) == "1010"
+	default:
+		return false
+	}
 }
 
 // handleAntigravity403 处理 Antigravity 平台的 403 错误

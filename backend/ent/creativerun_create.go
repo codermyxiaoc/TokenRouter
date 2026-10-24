@@ -413,6 +413,26 @@ func (_c *CreativeRunCreate) SetNillableAttemptCount(v *int) *CreativeRunCreate 
 	return _c
 }
 
+// SetImageAttemptAccountIds sets the "image_attempt_account_ids" field.
+func (_c *CreativeRunCreate) SetImageAttemptAccountIds(v []int64) *CreativeRunCreate {
+	_c.mutation.SetImageAttemptAccountIds(v)
+	return _c
+}
+
+// SetImageExecutionDeadlineAt sets the "image_execution_deadline_at" field.
+func (_c *CreativeRunCreate) SetImageExecutionDeadlineAt(v time.Time) *CreativeRunCreate {
+	_c.mutation.SetImageExecutionDeadlineAt(v)
+	return _c
+}
+
+// SetNillableImageExecutionDeadlineAt sets the "image_execution_deadline_at" field if the given value is not nil.
+func (_c *CreativeRunCreate) SetNillableImageExecutionDeadlineAt(v *time.Time) *CreativeRunCreate {
+	if v != nil {
+		_c.SetImageExecutionDeadlineAt(*v)
+	}
+	return _c
+}
+
 // SetAllowanceReserved sets the "allowance_reserved" field.
 func (_c *CreativeRunCreate) SetAllowanceReserved(v bool) *CreativeRunCreate {
 	_c.mutation.SetAllowanceReserved(v)
@@ -674,6 +694,10 @@ func (_c *CreativeRunCreate) defaults() {
 		v := creativerun.DefaultAttemptCount
 		_c.mutation.SetAttemptCount(v)
 	}
+	if _, ok := _c.mutation.ImageAttemptAccountIds(); !ok {
+		v := creativerun.DefaultImageAttemptAccountIds()
+		_c.mutation.SetImageAttemptAccountIds(v)
+	}
 	if _, ok := _c.mutation.AllowanceReserved(); !ok {
 		v := creativerun.DefaultAllowanceReserved
 		_c.mutation.SetAllowanceReserved(v)
@@ -850,6 +874,9 @@ func (_c *CreativeRunCreate) check() error {
 	}
 	if _, ok := _c.mutation.AttemptCount(); !ok {
 		return &ValidationError{Name: "attempt_count", err: errors.New(`ent: missing required field "CreativeRun.attempt_count"`)}
+	}
+	if _, ok := _c.mutation.ImageAttemptAccountIds(); !ok {
+		return &ValidationError{Name: "image_attempt_account_ids", err: errors.New(`ent: missing required field "CreativeRun.image_attempt_account_ids"`)}
 	}
 	if _, ok := _c.mutation.AllowanceReserved(); !ok {
 		return &ValidationError{Name: "allowance_reserved", err: errors.New(`ent: missing required field "CreativeRun.allowance_reserved"`)}
@@ -1029,6 +1056,14 @@ func (_c *CreativeRunCreate) createSpec() (*CreativeRun, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.AttemptCount(); ok {
 		_spec.SetField(creativerun.FieldAttemptCount, field.TypeInt, value)
 		_node.AttemptCount = value
+	}
+	if value, ok := _c.mutation.ImageAttemptAccountIds(); ok {
+		_spec.SetField(creativerun.FieldImageAttemptAccountIds, field.TypeJSON, value)
+		_node.ImageAttemptAccountIds = value
+	}
+	if value, ok := _c.mutation.ImageExecutionDeadlineAt(); ok {
+		_spec.SetField(creativerun.FieldImageExecutionDeadlineAt, field.TypeTime, value)
+		_node.ImageExecutionDeadlineAt = &value
 	}
 	if value, ok := _c.mutation.AllowanceReserved(); ok {
 		_spec.SetField(creativerun.FieldAllowanceReserved, field.TypeBool, value)
@@ -1603,6 +1638,36 @@ func (u *CreativeRunUpsert) UpdateAttemptCount() *CreativeRunUpsert {
 // AddAttemptCount adds v to the "attempt_count" field.
 func (u *CreativeRunUpsert) AddAttemptCount(v int) *CreativeRunUpsert {
 	u.Add(creativerun.FieldAttemptCount, v)
+	return u
+}
+
+// SetImageAttemptAccountIds sets the "image_attempt_account_ids" field.
+func (u *CreativeRunUpsert) SetImageAttemptAccountIds(v []int64) *CreativeRunUpsert {
+	u.Set(creativerun.FieldImageAttemptAccountIds, v)
+	return u
+}
+
+// UpdateImageAttemptAccountIds sets the "image_attempt_account_ids" field to the value that was provided on create.
+func (u *CreativeRunUpsert) UpdateImageAttemptAccountIds() *CreativeRunUpsert {
+	u.SetExcluded(creativerun.FieldImageAttemptAccountIds)
+	return u
+}
+
+// SetImageExecutionDeadlineAt sets the "image_execution_deadline_at" field.
+func (u *CreativeRunUpsert) SetImageExecutionDeadlineAt(v time.Time) *CreativeRunUpsert {
+	u.Set(creativerun.FieldImageExecutionDeadlineAt, v)
+	return u
+}
+
+// UpdateImageExecutionDeadlineAt sets the "image_execution_deadline_at" field to the value that was provided on create.
+func (u *CreativeRunUpsert) UpdateImageExecutionDeadlineAt() *CreativeRunUpsert {
+	u.SetExcluded(creativerun.FieldImageExecutionDeadlineAt)
+	return u
+}
+
+// ClearImageExecutionDeadlineAt clears the value of the "image_execution_deadline_at" field.
+func (u *CreativeRunUpsert) ClearImageExecutionDeadlineAt() *CreativeRunUpsert {
+	u.SetNull(creativerun.FieldImageExecutionDeadlineAt)
 	return u
 }
 
@@ -2400,6 +2465,41 @@ func (u *CreativeRunUpsertOne) AddAttemptCount(v int) *CreativeRunUpsertOne {
 func (u *CreativeRunUpsertOne) UpdateAttemptCount() *CreativeRunUpsertOne {
 	return u.Update(func(s *CreativeRunUpsert) {
 		s.UpdateAttemptCount()
+	})
+}
+
+// SetImageAttemptAccountIds sets the "image_attempt_account_ids" field.
+func (u *CreativeRunUpsertOne) SetImageAttemptAccountIds(v []int64) *CreativeRunUpsertOne {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.SetImageAttemptAccountIds(v)
+	})
+}
+
+// UpdateImageAttemptAccountIds sets the "image_attempt_account_ids" field to the value that was provided on create.
+func (u *CreativeRunUpsertOne) UpdateImageAttemptAccountIds() *CreativeRunUpsertOne {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.UpdateImageAttemptAccountIds()
+	})
+}
+
+// SetImageExecutionDeadlineAt sets the "image_execution_deadline_at" field.
+func (u *CreativeRunUpsertOne) SetImageExecutionDeadlineAt(v time.Time) *CreativeRunUpsertOne {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.SetImageExecutionDeadlineAt(v)
+	})
+}
+
+// UpdateImageExecutionDeadlineAt sets the "image_execution_deadline_at" field to the value that was provided on create.
+func (u *CreativeRunUpsertOne) UpdateImageExecutionDeadlineAt() *CreativeRunUpsertOne {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.UpdateImageExecutionDeadlineAt()
+	})
+}
+
+// ClearImageExecutionDeadlineAt clears the value of the "image_execution_deadline_at" field.
+func (u *CreativeRunUpsertOne) ClearImageExecutionDeadlineAt() *CreativeRunUpsertOne {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.ClearImageExecutionDeadlineAt()
 	})
 }
 
@@ -3394,6 +3494,41 @@ func (u *CreativeRunUpsertBulk) AddAttemptCount(v int) *CreativeRunUpsertBulk {
 func (u *CreativeRunUpsertBulk) UpdateAttemptCount() *CreativeRunUpsertBulk {
 	return u.Update(func(s *CreativeRunUpsert) {
 		s.UpdateAttemptCount()
+	})
+}
+
+// SetImageAttemptAccountIds sets the "image_attempt_account_ids" field.
+func (u *CreativeRunUpsertBulk) SetImageAttemptAccountIds(v []int64) *CreativeRunUpsertBulk {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.SetImageAttemptAccountIds(v)
+	})
+}
+
+// UpdateImageAttemptAccountIds sets the "image_attempt_account_ids" field to the value that was provided on create.
+func (u *CreativeRunUpsertBulk) UpdateImageAttemptAccountIds() *CreativeRunUpsertBulk {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.UpdateImageAttemptAccountIds()
+	})
+}
+
+// SetImageExecutionDeadlineAt sets the "image_execution_deadline_at" field.
+func (u *CreativeRunUpsertBulk) SetImageExecutionDeadlineAt(v time.Time) *CreativeRunUpsertBulk {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.SetImageExecutionDeadlineAt(v)
+	})
+}
+
+// UpdateImageExecutionDeadlineAt sets the "image_execution_deadline_at" field to the value that was provided on create.
+func (u *CreativeRunUpsertBulk) UpdateImageExecutionDeadlineAt() *CreativeRunUpsertBulk {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.UpdateImageExecutionDeadlineAt()
+	})
+}
+
+// ClearImageExecutionDeadlineAt clears the value of the "image_execution_deadline_at" field.
+func (u *CreativeRunUpsertBulk) ClearImageExecutionDeadlineAt() *CreativeRunUpsertBulk {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.ClearImageExecutionDeadlineAt()
 	})
 }
 

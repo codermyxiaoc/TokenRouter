@@ -214,6 +214,11 @@ func AttemptCount(v int) predicate.CreativeRun {
 	return predicate.CreativeRun(sql.FieldEQ(FieldAttemptCount, v))
 }
 
+// ImageExecutionDeadlineAt applies equality check predicate on the "image_execution_deadline_at" field. It's identical to ImageExecutionDeadlineAtEQ.
+func ImageExecutionDeadlineAt(v time.Time) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldEQ(FieldImageExecutionDeadlineAt, v))
+}
+
 // AllowanceReserved applies equality check predicate on the "allowance_reserved" field. It's identical to AllowanceReservedEQ.
 func AllowanceReserved(v bool) predicate.CreativeRun {
 	return predicate.CreativeRun(sql.FieldEQ(FieldAllowanceReserved, v))
@@ -1987,6 +1992,56 @@ func AttemptCountLT(v int) predicate.CreativeRun {
 // AttemptCountLTE applies the LTE predicate on the "attempt_count" field.
 func AttemptCountLTE(v int) predicate.CreativeRun {
 	return predicate.CreativeRun(sql.FieldLTE(FieldAttemptCount, v))
+}
+
+// ImageExecutionDeadlineAtEQ applies the EQ predicate on the "image_execution_deadline_at" field.
+func ImageExecutionDeadlineAtEQ(v time.Time) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldEQ(FieldImageExecutionDeadlineAt, v))
+}
+
+// ImageExecutionDeadlineAtNEQ applies the NEQ predicate on the "image_execution_deadline_at" field.
+func ImageExecutionDeadlineAtNEQ(v time.Time) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldNEQ(FieldImageExecutionDeadlineAt, v))
+}
+
+// ImageExecutionDeadlineAtIn applies the In predicate on the "image_execution_deadline_at" field.
+func ImageExecutionDeadlineAtIn(vs ...time.Time) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldIn(FieldImageExecutionDeadlineAt, vs...))
+}
+
+// ImageExecutionDeadlineAtNotIn applies the NotIn predicate on the "image_execution_deadline_at" field.
+func ImageExecutionDeadlineAtNotIn(vs ...time.Time) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldNotIn(FieldImageExecutionDeadlineAt, vs...))
+}
+
+// ImageExecutionDeadlineAtGT applies the GT predicate on the "image_execution_deadline_at" field.
+func ImageExecutionDeadlineAtGT(v time.Time) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldGT(FieldImageExecutionDeadlineAt, v))
+}
+
+// ImageExecutionDeadlineAtGTE applies the GTE predicate on the "image_execution_deadline_at" field.
+func ImageExecutionDeadlineAtGTE(v time.Time) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldGTE(FieldImageExecutionDeadlineAt, v))
+}
+
+// ImageExecutionDeadlineAtLT applies the LT predicate on the "image_execution_deadline_at" field.
+func ImageExecutionDeadlineAtLT(v time.Time) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldLT(FieldImageExecutionDeadlineAt, v))
+}
+
+// ImageExecutionDeadlineAtLTE applies the LTE predicate on the "image_execution_deadline_at" field.
+func ImageExecutionDeadlineAtLTE(v time.Time) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldLTE(FieldImageExecutionDeadlineAt, v))
+}
+
+// ImageExecutionDeadlineAtIsNil applies the IsNil predicate on the "image_execution_deadline_at" field.
+func ImageExecutionDeadlineAtIsNil() predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldIsNull(FieldImageExecutionDeadlineAt))
+}
+
+// ImageExecutionDeadlineAtNotNil applies the NotNil predicate on the "image_execution_deadline_at" field.
+func ImageExecutionDeadlineAtNotNil() predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldNotNull(FieldImageExecutionDeadlineAt))
 }
 
 // AllowanceReservedEQ applies the EQ predicate on the "allowance_reserved" field.

@@ -1431,6 +1431,10 @@ func buildModelLookupCandidates(model string) []string {
 		if xai.IsGrokTextResponsesModelID(model) {
 			alias = xai.ResolveGrokTextResponsesModelID(model, grokOptions.DefaultText)
 		}
+		// 仅在计价目录展开 Fast 同产品名称；完整型号的管理员显式价格仍优先。
+		if model == "grok-4.7-build-fast" {
+			alias = "grok-4.7-fast"
+		}
 		if alias == model {
 			continue
 		}

@@ -136,6 +136,7 @@ func provideCleanup(
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ticketRuntime *service.TicketRuntime,
 	intelligenceTests *service.IntelligenceService,
+	chanshuiTests *service.ChanshuiService,
 	pluginManager *service.PluginManager,
 ) func() {
 	return func() {
@@ -173,6 +174,12 @@ func provideCleanup(
 			{"TicketRuntime", func() error {
 				if ticketRuntime != nil {
 					ticketRuntime.Stop()
+				}
+				return nil
+			}},
+			{"ChanshuiService", func() error {
+				if chanshuiTests != nil {
+					chanshuiTests.Stop()
 				}
 				return nil
 			}},

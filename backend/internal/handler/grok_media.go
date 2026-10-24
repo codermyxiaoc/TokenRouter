@@ -20,6 +20,9 @@ import (
 
 // GrokImages 通过 Grok 分组处理 xAI 图片生成和编辑。
 func (h *OpenAIGatewayHandler) GrokImages(c *gin.Context) {
+	ctx, cancel := service.WithImageAttemptPolicy(c.Request.Context(), service.DefaultPublicImageAttemptTimeout)
+	defer cancel()
+	c.Request = c.Request.WithContext(ctx)
 	endpoint := service.GrokMediaEndpointImagesGenerations
 	if strings.Contains(c.Request.URL.Path, "/images/edits") {
 		endpoint = service.GrokMediaEndpointImagesEdits
@@ -309,6 +312,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	imageBilling := &asyncImageBillingState{gateway: h.gatewayService}
 	defer imageBilling.finish(c, reqLog)
 	failedAccountIDs := make(map[int64]struct{})
+	var shortestImageCooldown time.Duration
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
@@ -343,7 +347,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 
 	for {
 		releaseAccount()
-		if failoverClientGone(c) {
+		if imageAttemptDeadlineExceeded(c, requestCtx) || failoverClientGone(c) {
 			return
 		}
 		var selection *service.AccountSelectionResult
@@ -363,8 +367,13 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			accountReleaseFunc = selection.ReleaseFunc
 		}
 		if err != nil {
-			if failoverClientGone(c) {
+			if imageAttemptDeadlineExceeded(c, requestCtx) || failoverClientGone(c) {
 				reqLog.Info("grok_media.account_select_aborted_client_disconnected", zap.Error(err))
+				return
+			}
+			if shortestImageCooldown > 0 && errors.Is(err, service.ErrNoAvailableAccounts) {
+				c.Header("Retry-After", strconv.Itoa(max(1, int((shortestImageCooldown+time.Second-1)/time.Second))))
+				h.errorResponse(c, http.StatusServiceUnavailable, "image_models_cooling_down", "Compatible image accounts are temporarily cooling down")
 				return
 			}
 			if boundLookupAccountID > 0 && errors.Is(err, service.ErrNoAvailableAccounts) {
@@ -409,7 +418,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
 			return
 		}
-		if failoverClientGone(c) {
+		if imageAttemptDeadlineExceeded(c, requestCtx) || failoverClientGone(c) {
 			return
 		}
 		if boundLookupAccountID > 0 && selection.Account.ID != boundLookupAccountID {
@@ -431,6 +440,25 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		)
 
 		account := selection.Account
+		finalImageModel, imageOperation := "", "generate"
+		if endpoint == service.GrokMediaEndpointImagesEdits {
+			imageOperation = "edit"
+		}
+		if service.ImageAttemptHasPolicy(requestCtx) {
+			mappedModel := routingModel
+			if channelMapping.MappedModel != "" {
+				mappedModel = channelMapping.MappedModel
+			}
+			finalImageModel = service.ImageAttemptAccountModel(requestCtx, account, mappedModel)
+			if cooldown := h.gatewayService.ImageModelCooldownRemaining(requestCtx, account.ID, finalImageModel, imageOperation); cooldown > 0 {
+				if shortestImageCooldown == 0 || cooldown < shortestImageCooldown {
+					shortestImageCooldown = cooldown
+				}
+				releaseAccount()
+				failedAccountIDs[account.ID] = struct{}{}
+				continue
+			}
+		}
 		if endpoint.IsGenerationRequest() && !endpoint.IsSeedance() {
 			eligible, eligibilityReason, eligibilityErr := h.ensureGrokMediaAccountEligibility(requestCtx, account)
 			if !eligible {
@@ -451,7 +479,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				continue
 			}
 		}
-		if failoverClientGone(c) {
+		if imageAttemptDeadlineExceeded(c, requestCtx) || failoverClientGone(c) {
 			return
 		}
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
@@ -508,6 +536,17 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			imageBilling.forwardFailed(c, err)
 		}
 		if err != nil && (result == nil || result.ImageCount <= 0) {
+			if service.ImageAttemptHasPolicy(requestCtx) {
+				if h.retryImageOnDifferentAccount(c, requestCtx, account, finalImageModel, imageOperation, err, writerSizeBeforeForward) {
+					failedAccountIDs[account.ID] = struct{}{}
+					h.gatewayService.RecordOpenAIAccountSwitchForSelection(selection)
+					if !errors.As(err, &lastFailoverErr) {
+						lastFailoverErr = &service.UpstreamFailoverError{StatusCode: http.StatusBadGateway}
+					}
+					continue
+				}
+				return
+			}
 			if imageBilling.reservation != nil && imageBilling.uncertain {
 				// 传输中断不能证明上游未生成，保留预占并停止切号，避免重复生成。
 				if !service.IsResponseCommitted(c) && c.Writer.Size() == writerSizeBeforeForward {
@@ -518,7 +557,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			}
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
-				if failoverClientGone(c) {
+				if imageAttemptDeadlineExceeded(c, requestCtx) || failoverClientGone(c) {
 					reqLog.Info("grok_media.failover_aborted_client_disconnected",
 						zap.Int64("account_id", account.ID),
 						zap.Int("upstream_status", failoverErr.StatusCode),

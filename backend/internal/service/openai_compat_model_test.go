@@ -1286,11 +1286,11 @@ func TestForwardAsAnthropic_OAuthRestoresCodexIdentityHeaders(t *testing.T) {
 		wantOriginator string
 	}{
 		{
-			name:           "官方UA逐字保留并重新配对",
+			name:           "历史TUI身份成对迁移CLI",
 			userAgent:      tuiUA,
 			originator:     "opencode",
-			wantUserAgent:  tuiUA,
-			wantOriginator: "codex-tui",
+			wantUserAgent:  "codex_cli_rs/9.9.9 (Mac OS X 14.0; arm64) iTerm",
+			wantOriginator: "codex_cli_rs",
 		},
 		{
 			name:           "第三方UA回退为默认Codex身份",

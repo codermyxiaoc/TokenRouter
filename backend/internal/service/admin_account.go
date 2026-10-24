@@ -519,6 +519,9 @@ func normalizeGrokMediaEligibilityUpdateExtra(account *Account, input *UpdateAcc
 }
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if err := normalizeAccountQuotaLimits(accountExtra); err != nil {
+		return nil, err
+	}
 	// 受管会话状态由系统维护，废弃字段不得通过通用账号接口写入。
 	DiscardDeprecatedAccountExtra(accountExtra)
 	if err := NormalizeUpstreamUsageExtra(accountExtra); err != nil {
@@ -600,6 +603,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		return nil, switchErr
 	}
 	accountExtra := maps.Clone(input.Extra)
+	if err := normalizeAccountQuotaLimits(accountExtra); err != nil {
+		return nil, err
+	}
 	DiscardDeprecatedAccountExtra(accountExtra)
 	if err := NormalizeUpstreamUsageExtra(accountExtra); err != nil {
 		return nil, err
@@ -709,6 +715,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	originalQoderPAT := strings.TrimSpace(account.GetCredential("pat"))
 	normalizedExtra, shouldReplaceExtra := NormalizeDeprecatedAccountExtraUpdate(input.Extra)
 	if shouldReplaceExtra {
+		if err := normalizeAccountQuotaLimits(normalizedExtra); err != nil {
+			return nil, err
+		}
 		if isOpenAIAPIKeyAccount(account) && hasOpenAIConfigurationPatch(nil, normalizedExtra) {
 			if err := normalizeOpenAIAPIKeyConfigurationPatch(nil, normalizedExtra); err != nil {
 				return nil, err
@@ -969,10 +978,15 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		return nil, err
 	}
 	var persistErr error
+	persistCtx := ctx
+	if input.Status != "" {
+		// 重复提交同一状态仍是人工处置意图，不能由后续检测自动撤销。
+		persistCtx = WithChanshuiManualAccountState(ctx)
+	}
 	if writer, ok := s.accountRepo.(accountBillingSettingsWriter); ok {
-		persistErr = writer.UpdateWithAccountBillingSettings(ctx, account, probeEnabled, rateSyncEnabled, input.RateMultiplier)
+		persistErr = writer.UpdateWithAccountBillingSettings(persistCtx, account, probeEnabled, rateSyncEnabled, input.RateMultiplier)
 	} else {
-		persistErr = s.accountRepo.Update(ctx, account)
+		persistErr = s.accountRepo.Update(persistCtx, account)
 	}
 	if persistErr != nil {
 		return nil, persistErr
@@ -1004,6 +1018,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对账号 Extra JSONB 做 key 级合并，避免覆盖运行态或持久化配置键。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
+	if err := normalizeAccountQuotaLimits(updates); err != nil {
+		return err
+	}
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
 	delete(updates, UpstreamBillingRateSyncEnabledExtraKey)
 
@@ -1044,6 +1061,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		return nil, switchErr
 	}
 	input.Extra = maps.Clone(input.Extra)
+	if err := normalizeAccountQuotaLimits(input.Extra); err != nil {
+		return nil, err
+	}
 	delete(input.Extra, UpstreamBillingProbeEnabledExtraKey)
 	delete(input.Extra, UpstreamBillingRateSyncEnabledExtraKey)
 
@@ -1273,7 +1293,11 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 
 	// Run bulk update for column/jsonb fields first.
-	if _, err := s.accountRepo.BulkUpdate(ctx, input.AccountIDs, repoUpdates); err != nil {
+	persistCtx := ctx
+	if input.Status != "" || input.Schedulable != nil {
+		persistCtx = WithChanshuiManualAccountState(ctx)
+	}
+	if _, err := s.accountRepo.BulkUpdate(persistCtx, input.AccountIDs, repoUpdates); err != nil {
 		return nil, err
 	}
 
@@ -1416,7 +1440,7 @@ func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorM
 }
 
 func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error) {
-	if err := s.accountRepo.SetSchedulable(ctx, id, schedulable); err != nil {
+	if err := s.accountRepo.SetSchedulable(WithChanshuiManualAccountState(ctx), id, schedulable); err != nil {
 		return nil, err
 	}
 	updated, err := s.accountRepo.GetByID(ctx, id)

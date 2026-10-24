@@ -13,7 +13,7 @@ func TestSmartRoutingCooldownSchema(t *testing.T) {
 		if descriptor.Name != "smart_routing_cooldown_seconds" {
 			continue
 		}
-		require.Equal(t, 60, descriptor.Default)
+		require.Equal(t, 10, descriptor.Default)
 		for _, seconds := range []int{-1, 0, 60, 3600, 3601} {
 			valid := true
 			for _, validator := range descriptor.Validators {

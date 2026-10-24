@@ -188,6 +188,7 @@ type SystemSettings struct {
 	DefaultBalance                       float64                      `json:"default_balance"`
 	TeamEnabled                          bool                         `json:"team_enabled"`         // 团队功能页面开关
 	CreativeEnabled                      bool                         `json:"creative_enabled"`     // 创作台功能开关
+	ChanshuiEnabled                      bool                         `json:"chanshui_enabled"`     // 仅管理员配置。
 	IntelligenceEnabled                  bool                         `json:"intelligence_enabled"` // 降智检测功能开关
 	RiskControlEnabled                   bool                         `json:"risk_control_enabled"` // 风控中心功能开关
 	CyberSessionBlockEnabled             bool                         `json:"cyber_session_block_enabled"`

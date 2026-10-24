@@ -113,99 +113,120 @@ func resolveSmartRoutingAPIKeyRequest(c *gin.Context, apiKeyService *service.API
 		}
 	}
 	forcedPlatform, _ := GetForcePlatformFromContext(c)
-	hasModel := false
-	matchingGroups, coolingGroups := 0, 0
-	var retryAfter time.Duration
-	for index := range apiKey.CompositeGroups {
-		binding := &apiKey.CompositeGroups[index]
-		group := binding.Group
-		if group == nil || !group.IsActive() || apiKey.User == nil || !apiKey.User.CanBindGroup(group.ID, group.IsExclusive) {
-			continue
-		}
-		if execution != nil && execution.continuationGroupID > 0 && execution.continuationGroupID != group.ID {
-			continue
-		}
-		if forcedPlatform != "" && group.Platform != forcedPlatform {
-			continue
-		}
-		if isSeedanceCreateRequest(c.Request.Method, c.Request.URL.Path) && group.Platform != service.PlatformOpenAI && group.Platform != service.PlatformVideo {
-			continue
-		}
-		if execution != nil && execution.visited[group.ID] {
-			continue
-		}
-		availability, checkErr := resolver.EvaluateSmartRoutingGroup(requestCtx, group, model, c.Request.URL.Path)
-		if checkErr != nil {
-			// 基础设施故障不能冒充无账号，否则会意外切换计费分组。
-			return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_UNAVAILABLE", "Unable to check routing candidates")
-		}
-		if !availability.HasModel {
-			continue
-		}
-		hasModel = true
-		matchingGroups++
-		if accountCooldown && availability.Cooling {
-			if execution != nil && execution.continuationRequiresSameCandidate() {
-				c.Set("ops_routing_capacity_limited", true)
-				c.Header("Retry-After", strconv.Itoa(max(1, int(math.Ceil(availability.RetryAfter.Seconds())))))
-				return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_CONTINUATION_GROUP_COOLING", "Service temporarily unavailable: the continuation account is cooling down")
+	for refresh := 0; refresh < 2; refresh++ {
+		hasModel := false
+		matchingGroups, coolingGroups := 0, 0
+		var retryAt time.Time
+		needsRecheck := false
+		for index := range apiKey.CompositeGroups {
+			binding := &apiKey.CompositeGroups[index]
+			group := binding.Group
+			if group == nil || !group.IsActive() || apiKey.User == nil || !apiKey.User.CanBindGroup(group.ID, group.IsExclusive) {
+				continue
 			}
-			coolingGroups++
-			if retryAfter == 0 || availability.RetryAfter < retryAfter {
-				retryAfter = availability.RetryAfter
+			if execution != nil && execution.continuationGroupID > 0 && execution.continuationGroupID != group.ID {
+				continue
 			}
-			continue
-		}
-		if !accountCooldown && execution != nil && execution.cooldown > 0 {
-			if cache, ok := resolver.(smartRoutingCooldownResolver); ok {
-				ttl, cacheErr := cache.GetSmartRoutingCooldown(requestCtx, apiKey.ID, group.ID)
-				if cacheErr != nil {
-					slog.Warn("smart routing cooldown read failed", "key_id", apiKey.ID, "group_id", group.ID, "error", cacheErr)
-				} else if ttl > 0 {
-					// 远端续接与压缩上下文不能因候选冷却而被发送到另一供应商。
-					if execution.continuationRequiresSameCandidate() {
-						c.Set("ops_routing_capacity_limited", true)
-						c.Header("Retry-After", strconv.Itoa(int(math.Ceil(ttl.Seconds()))))
-						return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_CONTINUATION_GROUP_COOLING", "Service temporarily unavailable: the continuation routing candidate is cooling down")
-					}
-					coolingGroups++
-					if retryAfter == 0 || ttl < retryAfter {
-						retryAfter = ttl
+			if forcedPlatform != "" && group.Platform != forcedPlatform {
+				continue
+			}
+			if isSeedanceCreateRequest(c.Request.Method, c.Request.URL.Path) && group.Platform != service.PlatformOpenAI && group.Platform != service.PlatformVideo {
+				continue
+			}
+			if execution != nil && execution.visited[group.ID] {
+				continue
+			}
+			availability, checkErr := resolver.EvaluateSmartRoutingGroup(requestCtx, group, model, c.Request.URL.Path)
+			if checkErr != nil {
+				// 基础设施故障不能冒充无账号，否则会意外切换计费分组。
+				return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_UNAVAILABLE", "Unable to check routing candidates")
+			}
+			if !availability.HasModel {
+				continue
+			}
+			hasModel = true
+			matchingGroups++
+			if accountCooldown && availability.Cooling {
+				until := availability.RetryAt
+				if until.IsZero() {
+					until = time.Now().Add(availability.RetryAfter)
+				}
+				if !until.After(time.Now()) {
+					if refresh == 0 {
+						needsRecheck = true
+						break
 					}
 					continue
 				}
+				if execution != nil && execution.continuationRequiresSameCandidate() {
+					c.Set("ops_routing_capacity_limited", true)
+					c.Header("Retry-After", strconv.Itoa(max(1, int(math.Ceil(time.Until(until).Seconds())))))
+					return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_CONTINUATION_GROUP_COOLING", "Service temporarily unavailable: the continuation account is cooling down")
+				}
+				coolingGroups++
+				if retryAt.IsZero() || until.Before(retryAt) {
+					retryAt = until
+				}
+				continue
 			}
+			if !accountCooldown && execution != nil && execution.cooldown > 0 {
+				if cache, ok := resolver.(smartRoutingCooldownResolver); ok {
+					readAt := time.Now()
+					ttl, cacheErr := cache.GetSmartRoutingCooldown(requestCtx, apiKey.ID, group.ID)
+					if cacheErr != nil {
+						slog.Warn("smart routing cooldown read failed", "key_id", apiKey.ID, "group_id", group.ID, "error", cacheErr)
+					} else if ttl > 0 && readAt.Add(ttl).After(time.Now()) {
+						until := readAt.Add(ttl)
+						// 远端续接与压缩上下文不能因候选冷却而被发送到另一供应商。
+						if execution.continuationRequiresSameCandidate() {
+							c.Set("ops_routing_capacity_limited", true)
+							c.Header("Retry-After", strconv.Itoa(max(1, int(math.Ceil(time.Until(until).Seconds())))))
+							return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_CONTINUATION_GROUP_COOLING", "Service temporarily unavailable: the continuation routing candidate is cooling down")
+						}
+						coolingGroups++
+						if retryAt.IsZero() || until.Before(retryAt) {
+							retryAt = until
+						}
+						continue
+					}
+				}
+			}
+			if !availability.Schedulable {
+				// 归属未知的远端历史也不能借容量不足漂移到其它供应商。
+				if accountCooldown && execution != nil && execution.continuationRequiresSameCandidate() {
+					c.Set("ops_routing_capacity_limited", true)
+					return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_NO_AVAILABLE_ACCOUNTS", "No schedulable account for this continuation")
+				}
+				continue
+			}
+			selected, selectErr := apiKeyService.SelectCompositeGroupForRequest(c.Request.Context(), apiKey, binding)
+			if selectErr != nil {
+				return nil, selectErr
+			}
+			c.Request = c.Request.WithContext(service.WithSmartRoutingScope(requestCtx))
+			if execution != nil {
+				execution.groupID = group.ID
+			}
+			return selected, nil
 		}
-		if !availability.Schedulable {
-			// 归属未知的远端历史也不能借容量不足漂移到其它供应商。
-			if accountCooldown && execution != nil && execution.continuationRequiresSameCandidate() {
-				c.Set("ops_routing_capacity_limited", true)
-				return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_NO_AVAILABLE_ACCOUNTS", "No schedulable account for this continuation")
-			}
+		// 目录/Redis 检查可能跨越到期点；仅重新评估一次，不调用上游或重复已尝试分组。
+		if refresh == 0 && (needsRecheck || !retryAt.IsZero() && !retryAt.After(time.Now())) {
 			continue
 		}
-		selected, selectErr := apiKeyService.SelectCompositeGroupForRequest(c.Request.Context(), apiKey, binding)
-		if selectErr != nil {
-			return nil, selectErr
-		}
-		c.Request = c.Request.WithContext(service.WithSmartRoutingScope(requestCtx))
 		if execution != nil {
-			execution.groupID = group.ID
+			execution.selectionExhausted = true
 		}
-		return selected, nil
-	}
-	if execution != nil {
-		execution.selectionExhausted = true
-	}
-	if hasModel {
-		c.Set("ops_routing_capacity_limited", true)
-		if matchingGroups == coolingGroups {
-			c.Header("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
-			return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_ALL_GROUPS_COOLING", "Service temporarily unavailable: routing candidates are cooling down")
+		if hasModel {
+			c.Set("ops_routing_capacity_limited", true)
+			if matchingGroups == coolingGroups && retryAt.After(time.Now()) {
+				c.Header("Retry-After", strconv.Itoa(max(1, int(math.Ceil(time.Until(retryAt).Seconds())))))
+				return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_ALL_GROUPS_COOLING", "Service temporarily unavailable: routing candidates are cooling down")
+			}
+			return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_NO_AVAILABLE_ACCOUNTS", "No schedulable accounts in the routing candidates")
 		}
-		return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_NO_AVAILABLE_ACCOUNTS", "No schedulable accounts in the routing candidates")
+		return nil, infraerrors.New(http.StatusNotFound, "SMART_ROUTING_MODEL_NOT_FOUND", "The requested model is not available in the routing candidates")
 	}
-	return nil, infraerrors.New(http.StatusNotFound, "SMART_ROUTING_MODEL_NOT_FOUND", "The requested model is not available in the routing candidates")
+	return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_UNAVAILABLE", "Routing state changed; retry the request")
 }
 
 // smartRoutingRequestModel 严格要求非空字符串模型；探针和缺省模型不能借用首组。

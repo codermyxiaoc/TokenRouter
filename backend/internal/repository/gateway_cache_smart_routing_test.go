@@ -128,7 +128,8 @@ func TestSmartRoutingAccountCooldownScopeAndBoundedRecovery(t *testing.T) {
 	require.NoError(t, first.CooldownSmartRoutingAccounts(ctx, 11, []int64{21}, "model-a", "/v1/responses", time.Minute))
 	remaining, err := second.GetSmartRoutingAccountCooldowns(ctx, 11, []int64{21, 22}, "model-a", "/v1/responses")
 	require.NoError(t, err)
-	require.Equal(t, time.Minute, remaining[21])
+	require.LessOrEqual(t, remaining[21], time.Minute)
+	require.Greater(t, remaining[21], 59*time.Second)
 	require.Zero(t, remaining[22])
 	for _, test := range []struct {
 		key             int64
@@ -142,7 +143,8 @@ func TestSmartRoutingAccountCooldownScopeAndBoundedRecovery(t *testing.T) {
 	require.NoError(t, second.CooldownSmartRoutingAccounts(ctx, 11, []int64{21}, "model-a", "/v1/responses", time.Minute))
 	remaining, err = first.GetSmartRoutingAccountCooldowns(ctx, 11, []int64{21}, "model-a", "/v1/responses")
 	require.NoError(t, err)
-	require.Equal(t, 40*time.Second, remaining[21], "同批在途失败不延长已经开始的冷却")
+	require.LessOrEqual(t, remaining[21], 40*time.Second, "不能把读取耗时加入剩余时间")
+	require.Greater(t, remaining[21], 39*time.Second)
 	server.FastForward(40 * time.Second)
 	remaining, err = second.GetSmartRoutingAccountCooldowns(ctx, 11, []int64{21}, "model-a", "/v1/responses")
 	require.NoError(t, err)
@@ -160,7 +162,7 @@ func TestSmartRoutingAccountCooldownLocalFallbackBoundedAndUnknownOpen(t *testin
 	require.Zero(t, remaining[3])
 	now := time.Now()
 	for id := int64(10); id < smartRoutingLocalCooldownLimit+30; id++ {
-		cache.smartRoutingAccountCooldowns.observe(smartRoutingAccountCooldownKey(1, id, "model", "endpoint"), time.Minute, now, true)
+		cache.smartRoutingAccountCooldowns.failed(smartRoutingAccountCooldownKey(1, id, "model", "endpoint"), time.Minute, now, time.Time{}, 0)
 	}
 	require.LessOrEqual(t, len(cache.smartRoutingAccountCooldowns.entries), smartRoutingLocalCooldownLimit)
 	require.NotEqual(t, smartRoutingAccountCooldownKey(1, 2, "ab", "c"), smartRoutingAccountCooldownKey(1, 2, "a", "bc"))

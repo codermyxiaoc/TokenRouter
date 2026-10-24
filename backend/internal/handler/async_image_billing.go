@@ -70,6 +70,9 @@ func asyncImageFailureDefinitelyRejected(c *gin.Context, err error, eventStart i
 	if err == nil {
 		return false
 	}
+	if decision, ok := service.ImageAttemptDecisionForError(err); ok {
+		return decision.Outcome == service.ImageAttemptNotSent || decision.Outcome == service.ImageAttemptRejected
+	}
 	if _, _, readFailure := service.OpenAIUpstreamStreamReadErrorDetails(err); readFailure {
 		return false
 	}

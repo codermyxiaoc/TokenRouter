@@ -130,6 +130,8 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 
 声明倍率探测仅恢复管理员功能：`GET|PUT /api/v1/admin/accounts/upstream-billing-probe-settings` 维护全局周期，`POST /api/v1/admin/accounts/:id/upstream-billing-probe` 主动探测，账号开关沿用创建/编辑接口。详见[上游声明倍率探测](upstream_billing_probe.md)。公开的 `GET /v1/sub2api/billing` 仍未注册，也没有 API Key 非消费请求豁免；旧的嵌套 `/upstream-billing-probe/settings`、批量和独立 PUT 开关路由不作为兼容入口恢复。
 
+`GET /api/v1/admin/accounts?lite=1` 使用账号列表投影：账号配额、运行状态、调度评分保持，嵌套 `groups` 与 `account_groups.group` 仅返回徽章需要的编号、名称、平台、品牌、倍率和状态，不携带完整分组策略或价卡。ETag 按实际投影生成；未传 lite 的完整列表及详情继续返回完整结构。
+
 账号批量删除使用 `POST /api/v1/admin/accounts/batch-delete`，请求体为 `account_ids`。服务端先去除非正数和重复 ID，再以最多 5 路并发执行删除；同批选择父账号及其影子账号时只删除根账号一次，并将级联影响映射回逐账号结果。响应返回稳定排序的 `success_ids`、`failed_ids` 和错误明细，单项失败不会取消其它账号。管理端“全选筛选结果”先以同一筛选快照分页读取轻量 ID，任何分页缺失或重复都保留原选择，不得提交部分集合。
 
 管理员分组接口新增 `POST /api/v1/admin/groups/:id/availability-probe/test`，请求体为 `{availability_probe_config: {...}}`，要求分组已保存且 active、提交的探测配置 enabled。接口在同一事务内领取租约并仅更新该探测配置，按提交快照执行一次后通过标准响应封装返回 `{group_id, account_id?, model_id, protocol, status, success, latency_ms, error_message?, started_at, finished_at}`；不会整行覆盖分组的倍率、定价或路由配置。上游探测失败但观测保存成功仍返回 HTTP 200 和 `success=false`；配置非法返回 400，已有探测在执行或手动槽位已满返回 409 `GROUP_AVAILABILITY_PROBE_BUSY`，忙碌时不保存本次配置。存储故障返回错误而不宣称记录成功。该入口只对管理员开放；结果与定时探测共用渠道状态历史，详见 [容量与可用性](model_catalog_and_marketplace.md#group_availability_probe)。

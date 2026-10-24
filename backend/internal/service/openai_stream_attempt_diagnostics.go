@@ -14,9 +14,15 @@ import (
 // @project-doc docs/interfaces/openai_upstream.md#openai_stream_failover_observation
 func openAIStreamSafeEmptyEvent(payload string, eventType string) bool {
 	heartbeat := eventType == "ping" || eventType == "heartbeat" || eventType == "keepalive"
+	contentField := "delta"
 	switch eventType {
 	case "ping", "heartbeat", "keepalive":
-	case "response.output_text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta", "response.audio_transcript.delta":
+	case "response.output_text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta", "response.audio_transcript.delta",
+		"response.function_call_arguments.delta", "response.custom_tool_call_input.delta", "response.refusal.delta":
+	case "response.output_text.done", "response.reasoning_summary_text.done", "response.reasoning_text.done":
+		contentField = "text"
+	case "response.refusal.done":
+		contentField = "refusal"
 	default:
 		return false
 	}
@@ -28,7 +34,7 @@ func openAIStreamSafeEmptyEvent(payload string, eventType string) bool {
 		return false
 	}
 	if !heartbeat {
-		delta := value.Get("delta")
+		delta := value.Get(contentField)
 		if !delta.Exists() || delta.Type != gjson.String || delta.String() != "" {
 			return false
 		}
@@ -44,9 +50,9 @@ func openAIStreamSafeEmptyEvent(payload string, eventType string) bool {
 		case "sequence_number":
 			bit = 2
 			safe = openAIStreamSafeIndex(field)
-		case "delta":
+		case "delta", "text", "refusal":
 			bit = 4
-			safe = !heartbeat && field.Type == gjson.String && field.String() == ""
+			safe = !heartbeat && key.String() == contentField && field.Type == gjson.String && field.String() == ""
 		case "item_id":
 			bit = 8
 			safe = !heartbeat && field.Type == gjson.String

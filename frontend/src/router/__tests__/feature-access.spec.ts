@@ -36,6 +36,12 @@ const appStore = vi.hoisted(() => ({
   fetchPublicSettings: vi.fn(),
 }))
 
+const adminSettingsStore = vi.hoisted(() => ({
+  customMenuItems: [],
+  chanshuiEnabled: false,
+  refreshChanshuiEnabled: vi.fn(),
+}))
+
 vi.mock('vue-router', () => ({
   createWebHistory: vi.fn(() => ({})),
   createRouter: vi.fn((options) => {
@@ -59,7 +65,7 @@ vi.mock('@/stores/app', () => ({
 }))
 
 vi.mock('@/stores/adminSettings', () => ({
-  useAdminSettingsStore: () => ({ customMenuItems: [] }),
+  useAdminSettingsStore: () => adminSettingsStore,
 }))
 
 vi.mock('@/stores/adminCompliance', () => ({
@@ -126,6 +132,8 @@ describe('feature route guard', () => {
     appStore.publicSettingsLoaded = false
     appStore.cachedPublicSettings = null
     appStore.fetchPublicSettings.mockReset()
+    adminSettingsStore.chanshuiEnabled = false
+    adminSettingsStore.refreshChanshuiEnabled.mockReset().mockResolvedValue(undefined)
   })
 
   it('daily activities loads settings but keeps personal history accessible when disabled', async () => {
@@ -270,6 +278,76 @@ describe('feature route guard', () => {
     await navigation
     expect(appStore.fetchPublicSettings).toHaveBeenCalledOnce()
     expect(next).toHaveBeenCalledWith()
+  })
+
+  it('restricts model integrity checks to administrators without a public feature flag', async () => {
+    const route = routerHarness.routes.find(item => item.path === '/admin/chanshui-tests')!
+    expect(route.meta?.requiresAdmin).toBe(true)
+    expect(route.meta?.requiresAuth).toBe(true)
+    expect(route.meta?.requiresChanshui).toBe(true)
+    expect(routerHarness.routes.some(item => item.path === '/chanshui-tests')).toBe(false)
+    const { navigation, next } = runGuard(route.meta!, route.path)
+    await navigation
+    expect(next).toHaveBeenCalledWith('/dashboard')
+    expect(adminSettingsStore.refreshChanshuiEnabled).not.toHaveBeenCalled()
+    expect(appStore.fetchPublicSettings).not.toHaveBeenCalled()
+  })
+
+  it('未登录访问掺水页先登录，不读取管理员设置', async () => {
+    authStore.isAuthenticated = false
+    const route = routerHarness.routes.find(item => item.path === '/admin/chanshui-tests')!
+    const { navigation, next } = runGuard(route.meta!, route.path)
+    await navigation
+    expect(next).toHaveBeenCalledWith({ path: '/login', query: { redirect: route.path } })
+    expect(adminSettingsStore.refreshChanshuiEnabled).not.toHaveBeenCalled()
+    expect(appStore.fetchPublicSettings).not.toHaveBeenCalled()
+  })
+
+  it('掺水开关关闭时直接地址退回功能设置', async () => {
+    authStore.isAdmin = true
+    const route = routerHarness.routes.find(item => item.path === '/admin/chanshui-tests')!
+    const { navigation, next } = runGuard(route.meta!, route.path)
+    await navigation
+    expect(adminSettingsStore.refreshChanshuiEnabled).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith('/admin/settings?tab=features')
+    expect(appStore.fetchPublicSettings).not.toHaveBeenCalled()
+  })
+
+  it('等待私有开关刷新后允许已开启的掺水页，不依赖公共设置', async () => {
+    authStore.isAdmin = true
+    const deferred = createDeferred<void>()
+    adminSettingsStore.refreshChanshuiEnabled.mockImplementation(async () => {
+      await deferred.promise
+      adminSettingsStore.chanshuiEnabled = true
+    })
+    const route = routerHarness.routes.find(item => item.path === '/admin/chanshui-tests')!
+    const allowed = runGuard(route.meta!, route.path)
+    expect(allowed.next).not.toHaveBeenCalled()
+    deferred.resolve()
+    await allowed.navigation
+    expect(allowed.next).toHaveBeenCalledWith()
+    expect(appStore.fetchPublicSettings).not.toHaveBeenCalled()
+  })
+
+  it('已打开过的掺水页再次进入时重新核对开关', async () => {
+    authStore.isAdmin = true
+    adminSettingsStore.chanshuiEnabled = true
+    adminSettingsStore.refreshChanshuiEnabled.mockImplementation(async () => {
+      adminSettingsStore.chanshuiEnabled = false
+    })
+    const route = routerHarness.routes.find(item => item.path === '/admin/chanshui-tests')!
+    const { navigation, next } = runGuard(route.meta!, route.path)
+    await navigation
+    expect(next).toHaveBeenCalledWith('/admin/settings?tab=features')
+  })
+
+  it('掺水关闭时系统设置仍可进入以重新开启', async () => {
+    authStore.isAdmin = true
+    const route = routerHarness.routes.find(item => item.path === '/admin/settings')!
+    const { navigation, next } = runGuard(route.meta!, route.path)
+    await navigation
+    expect(next).toHaveBeenCalledWith()
+    expect(adminSettingsStore.refreshChanshuiEnabled).not.toHaveBeenCalled()
   })
 
   it('keeps intelligence administration reachable while the feature is off', async () => {

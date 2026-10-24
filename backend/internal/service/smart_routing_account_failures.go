@@ -15,6 +15,13 @@ type smartRoutingAccountFailures struct {
 	failed            map[int64]struct{}
 	cooling           map[int64]time.Time
 	requiredAccountID int64
+	startedAt         time.Time
+	admissions        map[smartRoutingCooldownAdmissionKey]int64
+}
+
+type smartRoutingCooldownAdmissionKey struct {
+	keyID, accountID int64
+	model, endpoint  string
 }
 
 type smartRoutingAccountCooldownContext struct {
@@ -34,7 +41,45 @@ func WithSmartRoutingAccountFailures(ctx context.Context) context.Context {
 	}
 	return context.WithValue(ctx, smartRoutingAccountFailuresKey{}, &smartRoutingAccountFailures{
 		failed: make(map[int64]struct{}), cooling: make(map[int64]time.Time),
+		startedAt: time.Now(), admissions: make(map[smartRoutingCooldownAdmissionKey]int64),
 	})
+}
+
+// RememberSmartRoutingCooldownAdmission 保存首次候选读取时的 Redis 时钟，不使用实例墙钟比先后。
+// 按 Key/账号/模型/入口隔离，换组仍属于同一请求，不刷新入场时间以重开已处理窗口。
+func RememberSmartRoutingCooldownAdmission(ctx context.Context, accountID, redisMillis int64) {
+	if ctx == nil || redisMillis <= 0 {
+		return
+	}
+	state, _ := ctx.Value(smartRoutingAccountFailuresKey{}).(*smartRoutingAccountFailures)
+	config, _ := ctx.Value(smartRoutingAccountCooldownContextKey{}).(smartRoutingAccountCooldownContext)
+	if state == nil || config.keyID <= 0 {
+		return
+	}
+	key := smartRoutingCooldownAdmissionKey{config.keyID, accountID, config.model, config.endpoint}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.admissions == nil {
+		state.admissions = make(map[smartRoutingCooldownAdmissionKey]int64)
+	}
+	if previous, exists := state.admissions[key]; !exists || redisMillis < previous {
+		state.admissions[key] = redisMillis
+	}
+}
+
+// SmartRoutingCooldownRequestInfo 区分请求入场时间未知与非请求调用；未知不能借失败写重开旧窗口。
+func SmartRoutingCooldownRequestInfo(ctx context.Context, accountID int64) (time.Time, int64, bool) {
+	if ctx == nil {
+		return time.Time{}, 0, false
+	}
+	state, _ := ctx.Value(smartRoutingAccountFailuresKey{}).(*smartRoutingAccountFailures)
+	config, _ := ctx.Value(smartRoutingAccountCooldownContextKey{}).(smartRoutingAccountCooldownContext)
+	if state == nil || config.keyID <= 0 {
+		return time.Time{}, 0, false
+	}
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	return state.startedAt, state.admissions[smartRoutingCooldownAdmissionKey{config.keyID, accountID, config.model, config.endpoint}], true
 }
 
 // WithSmartRoutingAccountCooldown 传递本次已鉴权的冷却维度，不写入共享 Key 快照。
@@ -112,7 +157,7 @@ func IsSmartRoutingAccountExcluded(ctx context.Context, accountID int64) bool {
 		state.requiredAccountID > 0 && state.requiredAccountID != accountID
 }
 
-func setSmartRoutingAccountCooldowns(ctx context.Context, accountIDs []int64, cooling map[int64]time.Duration) {
+func setSmartRoutingAccountCooldowns(ctx context.Context, accountIDs []int64, cooling map[int64]time.Time) {
 	state, _ := ctx.Value(smartRoutingAccountFailuresKey{}).(*smartRoutingAccountFailures)
 	if state == nil {
 		return
@@ -121,8 +166,8 @@ func setSmartRoutingAccountCooldowns(ctx context.Context, accountIDs []int64, co
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	for _, id := range accountIDs {
-		if ttl := cooling[id]; ttl > 0 {
-			state.cooling[id] = now.Add(ttl)
+		if until := cooling[id]; until.After(now) {
+			state.cooling[id] = until
 		} else {
 			delete(state.cooling, id)
 		}

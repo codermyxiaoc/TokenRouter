@@ -87,7 +87,8 @@ import GroupBadge from '@/components/common/GroupBadge.vue'
 import type { Group } from '@/types'
 
 interface Props {
-  groups: Group[] | null | undefined
+  // 账号轻量列表只传徽章摘要；该组件不依赖分组说明、路由或定价明细。
+  groups: Pick<Group, 'id' | 'name' | 'platform' | 'display_brand' | 'rate_multiplier'>[] | null | undefined
   maxDisplay?: number
 }
 

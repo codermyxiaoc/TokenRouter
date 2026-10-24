@@ -31,6 +31,8 @@ Code Assist/Google One 需要有效 project；AI Studio 的 project 可选并使
 <a id="gemini_protocol_dispatch"></a>
 ## 协议分派
 
+Gemini、Antigravity 及混合分组的原生与 Messages/Chat/Responses 兼容入口统一执行 `allow_image_generation`，识别请求的图片响应模态及映射后的图片型号，关闭时返回客户端协议形状的 400 并在上游调用前拒绝。已绑定缓存或智能/复合 Key 仍按实际选组检查，不能借模型别名绕过。同步保留 fork 现有分组默认值及管理员已保存值，不采用上游 246 将所有 Gemini/Antigravity 分组重新开启的回填；需要图片能力时由管理员显式开启。
+
 Gemini SDK/CLI 使用 `/v1beta/models`、`/v1beta/models/{model}` 和 `{model}:{action}` 形状，保持 Google 请求、流和错误语义。Anthropic Messages、Count Tokens、OpenAI Responses 与 Chat Completions 入口则先归一化，再由 Gemini 兼容服务转换为上游请求，响应恢复为原客户端协议。
 
 Gemini 分组支持 Messages、Responses、Chat 和 Gemini GenerateContent，新建时默认只启用 GenerateContent；四项都可关闭，迁移前已有分组启用四项。GenerateContent、StreamGenerateContent 和 CountTokens 的 POST 动作受 Gemini 协议开关控制，模型列表 GET 不受影响。
@@ -47,7 +49,7 @@ Antigravity 专用 `/antigravity/v1beta/*` 强制选择 Antigravity 账号，其
 
 可请求模型由分组、渠道和账号能力共同解析。客户端模型依次经过 Key 重定向、渠道映射和账号映射；Vertex 或 AI Studio 的最终模型标识与计费模型可以不同。模型列表不能仅回显默认常量，也不能展示没有可调度账号支持的目标。
 
-兼容层维护 thinking/推理字段、tool/schema、图片输入、usage、finish reason 和 Gemini thought signature。工具 schema 会递归移除 Gemini 不支持的字段；INTEGER 的整数 `exclusiveMinimum` 转换为加一后的包含式 `minimum`，且不覆盖更严格的既有下界，无法等价转换的独占下界只清理不伪造。需要跨轮次的 signature、session 和 cache 连续性时，粘性会话优先复用账号；切换账号必须重新评估可继续性，不能把另一个账号的内部状态当作通用上下文。
+兼容层维护 thinking/推理字段、tool/schema、图片输入、usage、finish reason 和 Gemini thought signature。工具 schema 会递归移除 Gemini 不支持的字段；`const` 与标准注解转换/清理遵循原工具参数结构，不把元数据作为额外必填参数；INTEGER 的整数 `exclusiveMinimum` 转换为加一后的包含式 `minimum`，且不覆盖更严格的既有下界，无法等价转换的独占下界只清理不伪造。需要跨轮次的 signature、session 和 cache 连续性时，粘性会话优先复用账号；切换账号必须重新评估可继续性，不能把另一个账号的内部状态当作通用上下文。
 
 Messages/Chat 兼容请求按模型代际转发思考意图：Gemini 2.5 使用 `thinkingBudget`，3 及后续适用模型使用 `thinkingLevel`；显式模型档位不被兼容字段覆盖，图片、音频等不支持思考参数的型号不强加配置。开启思考的流请求可返回摘要：Messages 使用独立 thinking block，Chat/Responses 沿用原有 reasoning 输出。历史 thinking/redacted_thinking 与 Chat reasoning 内容从历史剔除，不作为普通提示词重新发送；未知字段和工具参数整数精度保留。原生显式 thinkingLevel 和兼容入口实际转发的档位进入计费记录，预算值本身不猜测收费档位。
 
@@ -83,6 +85,8 @@ AI Studio 官方 API Key 与 Vertex Service Account JSON 账号按各自认证�
 
 ## 配额与调度
 
+Vertex `service_account`（包含 Service Account JSON 与 Vertex API Key 认证）支持账号总额、日额、周额上限，与 API Key/Bedrock 共用账号成本口径、超限停调和通知。它不因此加入仅针对 API Key/Bedrock 的池模式，也不改变 AI Studio 本地模拟配额或用户资金计费。
+
 Gemini tier、上游配额和按模型 reset 信息作为账号资格与容量信号。普通账号的 429 响应可以更新账号或模型的 `rate_limited_until`，后续调度在恢复时间前过滤该候选；公共池账号由请求级同账号重试或切号消化 429，不写默认本地账号限流，但管理员显式配置的自定义错误策略仍然优先。实时配额查询失败不应伪造剩余额度。
 
 显式配置 `provider_type=third_party` 的账号保留本站原有第三方冷却规则（默认 5 分钟）；旧账号仅凭非官方 Base URL 被识别为第三方时，优先使用响应明确给出的重试时间，没有重试时间则遵守全局 429 秒级兜底设置（默认 5 秒，可关闭）。两类第三方都不从 Google 每日配额文案推断午夜恢复，官方 AI Studio 与 Vertex 各自规则不变。
@@ -90,6 +94,8 @@ Gemini tier、上游配额和按模型 reset 信息作为账号资格与容量�
 显式开启 mixed scheduling 的 Antigravity 账号可以加入 Gemini 分组候选，但仍需满足目标分组、模型、endpoint、额度、并发和凭据约束。普通 Gemini 请求保持 Gemini 协议和计费归属；专用 Antigravity 路由不混入 Gemini 账号。
 
 ## 错误与诊断
+
+流式读取因客户端断开而中止时，原生及兼容入口按已经观测到的累计 token/图片用量结算，不以缺少最终分片抹掉已发生的用量；未观测到用量不虚构消费。后续空 `usageMetadata`、非对象或只有 `totalTokenCount` 的心跳不会覆盖先前已收到的分项累计值；显式零值仍有效，累计快照取最新值而不逐帧叠加。明确取消且没有上游结果的请求静默按 499 收尾，不记为账号失败。缓存命中高于总输入的被拦截响应将非缓存输入限制为零，避免负 token 和负费用；Antigravity 同样保留下限。
 
 原生路径会解析 HTTP 2xx 的错误信封、流内错误和空响应，将真实的 429/5xx 等语义状态登记到运维。模型正常 finishReason 不等同于上游故障；promptFeedback.blockReason 和内容过滤类 finishReason 按请求级 400 分类，不计入账号 SLA，Google error 信封则保留自身上游语义状态。已有失败 attempt 仍单独保留恢复记录，不因最终请求级拒绝覆盖；非流正文/聚合结果使用 NonStream 标记，不能误记为流式。诊断采集不改变原生响应字节、HTTP 状态或用量，也不为已经输出的流新增重放动作。
 
@@ -104,3 +110,8 @@ Gemini 原生入口返回 Google 形状，Anthropic/OpenAI 入口返回对应客
 相关文档：[网关请求生命周期](../architecture/gateway_request_lifecycle.md)、[账号调度与缓存一致性](../architecture/account_scheduling_and_cache.md)、[账号维护](../operations/account_maintenance.md)。
 
 Vertex 共享容量型 429（RESOURCE_EXHAUSTED、无配额详情且提示稍后重试）仅沿用有界同号退避，不写配额耗尽冷却；带 QuotaFailure/RetryInfo、配额或 provisioned throughput 信息的错误保留原处理。每个实际 HTTP 错误响应的显式错误策略检查结果在重试循环和最终处理间复用，避免首次 401 暂停因重复检查误升级为永久 error。Vertex 服务账号换 token 明确返回 `invalid_grant` 且账号不存在时，停止该账号调度并记录 account_auth 事件，再请求换号；其它 OAuth、网络或取消错误不能按账号不存在处理。
+
+
+Gemini/Antigravity 生图请求在账号映射完成、确定最终图片模型或 IMAGE 输出模态后挂载[图片执行策略](openai_upstream.md#image_attempt_routing)。同组至多两个不同账号，每账号一次生成发送，共享首次截止时间；普通文本、countTokens 与管理员指定账号探测保留原行为。带参考图使用 edit 健康范围，纯文生图使用 generate。已有图片策略的请求不进入文本同账号退避、容量循环或跨组重放；已获得 HTTP 成功后即使正文读取失败也不能换号重新生成。冷却候选只影响选择，不计真实生成发送次数。
+
+策略生效时只按实际观测到的图片产物计张数，包含有效图片类型的 inlineData 和 fileData；没有图片不能仅凭模型名称按一张扣费。已有 token 用量仍按原有规则结算。读取超过执行截止时间会记录模型短冷却，主动取消不会处罚账号。

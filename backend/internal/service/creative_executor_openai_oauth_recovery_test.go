@@ -25,9 +25,6 @@ func TestCreativeCodexResponsesCompletedImageSurvivesLaterFailure(t *testing.T) 
 			var paths []string
 			upstream := &directImagesHTTPUpstreamStub{do: func(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
 				paths = append(paths, req.URL.Path)
-				if len(paths) == 1 {
-					return &http.Response{StatusCode: 404, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"endpoint not found"}}`))}, nil
-				}
 				var tail io.Reader
 				switch failure {
 				case "failed":
@@ -41,13 +38,14 @@ func TestCreativeCodexResponsesCompletedImageSurvivesLaterFailure(t *testing.T) 
 			}}
 			executor := &CreativeExecutor{gateway: newOpenAIImagesTestService(upstream)}
 			account := directImagesTestAccount()
-			result, err := executor.Execute(context.Background(), CreativeRun{ID: 1, RunID: "crun_recovered", APIKeyID: 42, Operation: CreativeOperationGenerate}, CreativeRunPayload{Prompt: "private prompt"}, &CreativeExecution{Account: account, UpstreamModel: "gpt-image-2"})
+			// 直接选择 Responses 模型；安全策略不再允许同号先直调失败再隐式补发。
+			result, err := executor.Execute(context.Background(), CreativeRun{ID: 1, RunID: "crun_recovered", APIKeyID: 42, Operation: CreativeOperationGenerate}, CreativeRunPayload{Prompt: "private prompt"}, &CreativeExecution{Account: account, UpstreamModel: "gpt-image-1"})
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.Equal(t, account.ID, result.AccountID)
 			require.Len(t, result.Outputs, 1, "完整产出进入现有单张保存与结算流程")
 			require.Equal(t, expected, result.Outputs[0].Bytes)
-			require.Equal(t, []string{"/backend-api/codex/images/generations", "/backend-api/codex/responses"}, paths)
+			require.Equal(t, []string{"/backend-api/codex/responses"}, paths)
 		})
 	}
 }
@@ -59,9 +57,6 @@ func TestCreativeCodexResponsesNoCompleteImageKeepsFailurePolicy(t *testing.T) {
 			calls := 0
 			upstream := &directImagesHTTPUpstreamStub{do: func(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
 				calls++
-				if calls == 1 {
-					return &http.Response{StatusCode: 405, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
-				}
 				var tail io.Reader = strings.NewReader("data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"type\":\"server_error\"}}}\n\n")
 				if readInterrupted {
 					tail = &openAIImagesReadErrorBody{err: io.ErrUnexpectedEOF}
@@ -70,11 +65,11 @@ func TestCreativeCodexResponsesNoCompleteImageKeepsFailurePolicy(t *testing.T) {
 				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(io.MultiReader(strings.NewReader(preview), tail))}, nil
 			}}
 			executor := &CreativeExecutor{gateway: newOpenAIImagesTestService(upstream)}
-			result, err := executor.Execute(context.Background(), CreativeRun{ID: 1, Operation: CreativeOperationGenerate}, CreativeRunPayload{Prompt: "draw"}, &CreativeExecution{Account: directImagesTestAccount(), UpstreamModel: "gpt-image-2"})
+			result, err := executor.Execute(context.Background(), CreativeRun{ID: 1, Operation: CreativeOperationGenerate}, CreativeRunPayload{Prompt: "draw"}, &CreativeExecution{Account: directImagesTestAccount(), UpstreamModel: "gpt-image-1"})
 			require.Error(t, err)
 			require.Nil(t, result)
-			require.Equal(t, !readInterrupted, executor.IsRetryable(err), "明确上游拒绝有限重试，传输结果未知不重放")
-			require.Equal(t, 2, calls)
+			require.False(t, executor.IsRetryable(err), "已接收预览或传输结果未知，均不得重新生成")
+			require.Equal(t, 1, calls)
 		})
 	}
 }

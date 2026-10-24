@@ -1551,7 +1551,7 @@ func (p *usageBillingParams) shouldDeductAPIKeyQuota() bool {
 }
 
 func (p *usageBillingParams) shouldUpdateAccountQuota(accountQuotaCost float64) bool {
-	return accountQuotaCost > 0 && p.Account.IsAPIKeyOrBedrock() && p.Account.HasAnyQuotaLimit()
+	return accountQuotaCost > 0 && p.Account.SupportsAccountQuota() && p.Account.HasAnyQuotaLimit()
 }
 
 func (p *usageBillingParams) shouldUpdateRateLimits() bool {

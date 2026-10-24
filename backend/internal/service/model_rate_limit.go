@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"time"
 
@@ -206,17 +207,10 @@ func (a *Account) modelRateLimitResetAt(scope string) *time.Time {
 	return &resetAt
 }
 
+// 限流快照采用写时复制，避免污染其它请求共用的账号元数据。
 func setAccountModelRateLimitSnapshot(account *Account, scope string, resetAt time.Time, reason string, now time.Time) {
 	if account == nil || strings.TrimSpace(scope) == "" {
 		return
-	}
-	if account.Extra == nil {
-		account.Extra = make(map[string]any)
-	}
-	limits, ok := account.Extra[modelRateLimitsKey].(map[string]any)
-	if !ok {
-		limits = make(map[string]any)
-		account.Extra[modelRateLimitsKey] = limits
 	}
 	payload := map[string]any{
 		"rate_limited_at":     now.UTC().Format(time.RFC3339),
@@ -225,5 +219,14 @@ func setAccountModelRateLimitSnapshot(account *Account, scope string, resetAt ti
 	if reason = strings.TrimSpace(reason); reason != "" {
 		payload["reason"] = reason
 	}
+
+	oldLimits, _ := account.Extra[modelRateLimitsKey].(map[string]any)
+	limits := make(map[string]any, len(oldLimits)+1)
+	maps.Copy(limits, oldLimits)
 	limits[scope] = payload
+
+	extra := make(map[string]any, len(account.Extra)+1)
+	maps.Copy(extra, account.Extra)
+	extra[modelRateLimitsKey] = limits
+	account.Extra = extra
 }

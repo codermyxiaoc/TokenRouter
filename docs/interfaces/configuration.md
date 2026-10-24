@@ -65,7 +65,7 @@ OpenAI WS 的 `oauth_max_conns_factor` 与 `apikey_max_conns_factor` 缺省为 5
 
 创作台（Creative Studio）属于启动时进程配置 `creative`：功能与队列开关、临时数据 TTL（`transient_ttl_seconds`，默认 1800 秒）、上传与 prompt 限制（`max_asset_bytes` 默认 32 MiB、`max_total_input_bytes` 默认 64 MiB 且不得小于单文件上限、`max_prompt_chars` 默认 8000）、上游执行参数（`execute_timeout_seconds`、`max_execute_attempts`）和 `creative:queue:*` 队列键/TTL 都在启动校验，修改后需要重启。创作台每次任务固定生成一张图片，预占价格按所选尺寸单价计算。与 `batch_image` 不同，`enabled` 与 `queue_enabled` 默认开启，但临时存储与队列依赖 Redis，Redis 不可用时任务创建 fail-close。完整键清单见 `deploy/config.example.yaml` 和[创作台](../domains/creative_studio.md)。
 
-创作台的 worker 数量不属于进程配置，而是数据库运行时设置 `creative_worker_count`：默认 128，仅允许大于 0 的整数，不设置硬上限；缺失或历史脏值按 128 处理。管理员在“功能特性 - 创作台”保存后，本实例立即扩缩 worker 池，缩容采用优雅排空，不中断正在执行的上游请求；该设置无需迁移，也不通过公开设置接口暴露。
+创作台的 worker 数量不属于进程配置，而是数据库运行时设置 `creative_worker_count`：默认 128，仅允许大于 0 的整数，不设置硬上限；缺失或历史脏值按 128 处理。管理员在系统设置的独立“创作台”标签页维护开关、worker 数量和模型配置；保存后，本实例立即扩缩 worker 池，缩容采用优雅排空，不中断正在执行的上游请求；该设置无需迁移，也不通过公开设置接口暴露。
 
 加载完成后会做字符串规范化、枚举回退、派生默认、文件读取和完整 `Validate`。无效安全 header、URL、数值范围、模式组合或必要 secret 会让启动失败；不应等到某个请求首次使用时才发现。自动生成的 TOTP key 只适合开发，`EncryptionKeyConfigured=false` 会阻止后台把 TOTP 当成生产可用配置。
 
@@ -84,6 +84,8 @@ setup 使用 `DATA_DIR > 可写 /app/data > 当前目录` 选择 `config.yaml` �
 主服务使用 `LoadForBootstrap`，只在引导阶段允许 `jwt.secret` 暂时为空。数据库 repository 初始化会从 `security_secrets` 读取既有 JWT secret，或原子生成并持久化一个新 secret，然后重新执行完整配置校验。多个实例不能各自使用临时随机 JWT key；显式配置与数据库已有 secret 不一致时，以已持久化的安全边界处理，避免滚动部署让会话随机失效。
 
 ## 数据库运行时设置
+
+`chanshui_enabled` 是仅管理员可见的掺水检测总开关，默认关闭；不进入公开设置、HTML 注入或普通用户菜单。关闭隐藏管理员检测入口与页面，阻止新提交、自动停用与自动恢复；已提交任务继续在后台查询，配置和历史保留，重新开启后可查看。检测按上游账号配置模型、协议、定时与停用阈值，不借用用户 API Key 或分组；详见[掺水检测](../domains/chanshui_tests.md)。
 
 媒体任务后台设置 `media_task_reconciliation_timeout_minutes` 控制失败待核对账本的自动释放期限，默认 60 分钟，范围 1–10080；管理员设置使用可选整数进行部分更新，省略或 null 保留原值。维护器每轮动态读取，缺键使用默认，读取失败或非法持久值跳过处理；只作用于失败且尚有待处理资金合同的任务，与图片保存期无关。修改对历史失败待核对任务同样生效，详见[失败任务账务处理](../domains/media_tasks.md#media_task_reconciliation)。
 

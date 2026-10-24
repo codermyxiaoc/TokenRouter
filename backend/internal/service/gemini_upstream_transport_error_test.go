@@ -106,6 +106,8 @@ func TestGeminiForwardNative_ClientCanceledReturnsOriginalError(t *testing.T) {
 	require.False(t, errors.As(err, &failoverErr), "客户端断开不应换号")
 	require.Equal(t, 1, httpStub.calls)
 	require.Zero(t, repo.calls, "客户端断开不摘号")
+	_, hasUpstreamError := c.Get(OpsUpstreamErrorsKey)
+	require.False(t, hasUpstreamError, "纯取消不能伪造上游故障")
 	require.False(t, c.Writer.Written())
 }
 
@@ -156,4 +158,21 @@ func TestGeminiForwardAsChatCompletions_TransportErrorFailsOverWithoutRetry(t *t
 	require.Equal(t, 1, httpStub.calls, "不应在同账号上重试")
 	require.Zero(t, repo.calls)
 	require.False(t, c.Writer.Written(), "换号场景不应写客户端响应")
+}
+
+// 取消当前请求不会覆盖先前一次真实上游尝试的诊断。
+func TestGeminiTransportError_ClientCancellationPreservesEarlierFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := newGeminiNativeTestContext(t)
+	account := geminiPoolModeAPIKeyAccount()
+	previous := &OpsUpstreamErrorEvent{Platform: PlatformGemini, AccountID: account.ID, Kind: "http_error", UpstreamStatusCode: http.StatusServiceUnavailable, Message: "earlier failure"}
+	c.Set(OpsUpstreamErrorsKey, []*OpsUpstreamErrorEvent{previous})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc, _, repo := newGeminiTransportErrorService(context.Canceled)
+	err := svc.handleUpstreamTransportError(ctx, c, account, errors.New("read interrupted"))
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, repo.calls)
+	events, _ := c.Get(OpsUpstreamErrorsKey)
+	require.Equal(t, []*OpsUpstreamErrorEvent{previous}, events)
 }

@@ -326,6 +326,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		TeamEnabled:                                      settings.TeamEnabled,
 		CreativeEnabled:                                  settings.CreativeEnabled,
 		IntelligenceEnabled:                              settings.IntelligenceEnabled,
+		ChanshuiEnabled:                                  settings.ChanshuiEnabled,
 		CreativeModelSettings:                            settings.CreativeModelSettings,
 		CreativeWorkerCount:                              settings.CreativeWorkerCount,
 		MediaTaskReconciliationTimeoutMinutes:            settings.MediaTaskReconciliationTimeoutMinutes,

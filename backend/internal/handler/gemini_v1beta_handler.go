@@ -267,6 +267,7 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 // POST /v1beta/models/{model}:streamGenerateContent?alt=sse
 // @project-doc docs/interfaces/gemini_upstream.md#gemini_protocol_dispatch
 func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
+	defer finishImageAttemptRequest(c, func() { googleError(c, http.StatusGatewayTimeout, "Image generation timed out") })
 	apiKey, ok := middleware.GetAPIKeyFromContext(c)
 	if !ok || apiKey == nil {
 		googleError(c, http.StatusUnauthorized, "Invalid API key")
@@ -338,6 +339,10 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, modelName)
 	reqModel := modelName // 保存映射前的原始模型名
+	if action != "countTokens" && geminiImageGenerationRejected(c, apiKey, body, reqModel, channelMapping.MappedModel) {
+		googleError(c, http.StatusBadRequest, service.ImageGenerationPermissionMessage())
+		return
+	}
 	if channelMapping.Mapped {
 		modelName = channelMapping.MappedModel
 	}
@@ -512,12 +517,8 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 	fs := NewFailoverState(maxAccountSwitches, hasBoundSession)
 	slotRetry := &accountSlotReschedule{excluded: fs.FailedAccountIDs, switches: &fs.SwitchCount, maximum: fs.MaxSwitches, requiredAccount: cachedContentBinding != nil}
 
-	// 单账号分组提前设置 SingleAccountRetry 标记，让 Service 层首次 503 就不设模型限流标记。
-	// 避免单账号分组收到 503 (MODEL_CAPACITY_EXHAUSTED) 时设 29s 限流，导致后续请求连续快速失败。
-	if h.gatewayService.IsSingleAntigravityAccountGroup(c.Request.Context(), apiKey.GroupID) {
-		ctx := service.WithSingleAccountRetry(c.Request.Context(), true, h.metadataBridgeEnabled())
-		c.Request = c.Request.WithContext(ctx)
-	}
+	// 只有 Antigravity 账号实际需要同号重试或限流预检查时才读取快照。
+	c.Request = c.Request.WithContext(h.gatewayService.WithSingleAntigravityAccountGroupProbe(c.Request.Context(), apiKey.GroupID))
 
 	for {
 		// 通用调度器会自行执行 R -> C，这里必须传原始模型，避免把 C 再做一次渠道映射。
@@ -710,6 +711,12 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		}
 		if accountReleaseFunc != nil {
 			accountReleaseFunc()
+		}
+		// Gemini 客户端取消且尚无可结算结果时静默结束，不把本地断连记作账号失败。
+		// 已收集用量的中断由转发层返回 result，仍继续下方结算。
+		if account.Platform == service.PlatformGemini && err != nil && result == nil && errors.Is(c.Request.Context().Err(), context.Canceled) {
+			failoverClientGone(c)
+			return
 		}
 		unbilledUpstreamFailure := err == nil && smartRoutingGeminiFailureWithoutUsage(c, apiKey, result)
 		// HTTP 200 的带内错误也属于失败，普通 Key 与智能路由必须使用同一调度健康标准。

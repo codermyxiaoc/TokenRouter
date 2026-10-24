@@ -155,7 +155,12 @@ func TestServerTimingConnectorRecordsDriverCallsWithoutRowLifetime(t *testing.T)
 	ctx := servertiming.WithCollector(context.Background(), collector)
 
 	wrapped := newServerTimingConnector(timingFakeConnector{conn: newTimingFakeConn()})
+	// 外层计时包住驱动及采集开销，作为 DB 区间总和的实际可观测上界。
+	// 不假设 Sleep 的实际时长或应用耗时与数据库耗时的大小关系。
+	var driverElapsed time.Duration
+	callStartedAt := time.Now()
 	rawConn, err := wrapped.Connect(ctx)
+	driverElapsed += time.Since(callStartedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,24 +169,40 @@ func TestServerTimingConnectorRecordsDriverCallsWithoutRowLifetime(t *testing.T)
 		t.Fatalf("Connect() returned %T, want *serverTimingConn", rawConn)
 	}
 
-	if _, err := conn.ExecContext(ctx, "sensitive update", nil); err != nil {
+	callStartedAt = time.Now()
+	_, err = conn.ExecContext(ctx, "sensitive update", nil)
+	driverElapsed += time.Since(callStartedAt)
+	if err != nil {
 		t.Fatal(err)
 	}
+	callStartedAt = time.Now()
 	rows, err := conn.QueryContext(ctx, "sensitive select", nil)
+	driverElapsed += time.Since(callStartedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	values := make([]driver.Value, 1)
-	if err := rows.Next(values); err != nil {
+	callStartedAt = time.Now()
+	err = rows.Next(values)
+	driverElapsed += time.Since(callStartedAt)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	// 两次读取行之间的应用处理必须继续计入应用耗时。
+	processingStartedAt := time.Now()
 	time.Sleep(30 * time.Millisecond)
-	if err := rows.Next(values); err != io.EOF {
+	processingElapsed := time.Since(processingStartedAt)
+	callStartedAt = time.Now()
+	err = rows.Next(values)
+	driverElapsed += time.Since(callStartedAt)
+	if err != io.EOF {
 		t.Fatalf("rows.Next() = %v, want EOF", err)
 	}
-	if err := rows.Close(); err != nil {
+	callStartedAt = time.Now()
+	err = rows.Close()
+	driverElapsed += time.Since(callStartedAt)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -192,8 +213,16 @@ func TestServerTimingConnectorRecordsDriverCallsWithoutRowLifetime(t *testing.T)
 	if strings.Contains(header, "sensitive") {
 		t.Fatalf("SQL text leaked into header: %q", header)
 	}
-	if app, db := metricDuration(t, header, "app"), metricDuration(t, header, "db"); app <= db {
-		t.Fatalf("row processing gap was counted as DB time: app=%.1fms db=%.1fms header=%q", app, db, header)
+	app, db := metricDuration(t, header, "app"), metricDuration(t, header, "db")
+	// Header 只保留一位毫秒小数；容差仅覆盖其舍入，不掩盖操作间的应用间隔。
+	const roundingToleranceMS = 0.1
+	driverMS := float64(driverElapsed) / float64(time.Millisecond)
+	processingMS := float64(processingElapsed) / float64(time.Millisecond)
+	if db <= 0 || db > driverMS+roundingToleranceMS {
+		t.Fatalf("DB time exceeds measured driver calls: db=%.1fms calls=%.3fms header=%q", db, driverMS, header)
+	}
+	if app+roundingToleranceMS < processingMS {
+		t.Fatalf("row processing gap was not retained as application time: app=%.1fms gap=%.3fms header=%q", app, processingMS, header)
 	}
 }
 

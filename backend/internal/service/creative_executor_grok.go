@@ -32,11 +32,11 @@ func (e *CreativeExecutor) executeGrok(ctx context.Context, run CreativeRun, pay
 	}
 	targetURL, err := buildGrokMediaURL(account, e.cfg, endpoint, "")
 	if err != nil {
-		return nil, creativeHTTPStatusError(0, err.Error())
+		return nil, creativeImageAccountPreparationFailure(ctx, err)
 	}
 	token, _, err := e.gateway.GetAccessToken(ctx, account)
 	if err != nil {
-		return nil, creativeHTTPStatusError(0, err.Error())
+		return nil, creativeImageAccountPreparationFailure(ctx, err)
 	}
 	request := buildCreativeGrokRequest(run, payload, upstreamModel)
 	if run.Operation == CreativeOperationEdit {
@@ -60,19 +60,26 @@ func (e *CreativeExecutor) executeGrok(ctx context.Context, run CreativeRun, pay
 	// 账号级请求头覆写最后应用，配置值优先于内置默认头。
 	account.ApplyHeaderOverrides(req.Header)
 
+	if err := BeginImageAttempt(ctx, account.ID, upstreamModel, run.Operation); err != nil {
+		return nil, err
+	}
 	resp, err := e.gateway.httpUpstream.Do(req, accountProxyURL(account), account.ID, account.Concurrency)
 	if err != nil {
-		return nil, creativeHTTPStatusError(0, err.Error())
+		return nil, creativeImageTransportFailure(ctx, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	respBody, err := readCreativeUpstreamBody(resp.Body, 64<<20)
 	if err != nil {
-		return nil, creativeHTTPStatusError(0, err.Error())
+		return nil, creativeImageReadFailure(ctx)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, creativeHTTPResponseError(resp.StatusCode, respBody)
+		return nil, creativeImageHTTPFailure(ctx, resp.StatusCode, respBody)
 	}
-	return parseCreativeOpenAIImageOutputs(respBody)
+	outputs, parseErr := parseCreativeOpenAIImageOutputs(respBody)
+	if parseErr != nil {
+		return nil, creativeImageOutputFailure(ctx, resp.StatusCode, respBody, parseErr)
+	}
+	return outputs, nil
 }
 
 // buildCreativeGrokRequest 构造 xAI images/generations 请求体。

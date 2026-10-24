@@ -153,3 +153,38 @@ describe('admin AccountsView priority column preferences', () => {
     expect(JSON.parse(localStorage.getItem('account-hidden-columns') || '[]')).not.toContain('priority')
   })
 })
+
+
+describe('admin AccountsView filter persistence', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    listAccounts.mockReset().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
+  })
+
+  it('restores validated platform and status without persisting search terms', async () => {
+    localStorage.setItem('account-filter-values', JSON.stringify({ platform: 'anthropic', status: 'inactive', search: 'secret' }))
+    const wrapper = mountView()
+    await flushPromises()
+    expect(listAccounts).toHaveBeenCalledWith(1, 20, expect.objectContaining({ platform: 'anthropic', status: 'inactive', search: '' }), expect.anything())
+    wrapper.unmount()
+  })
+
+  it.each(['null', '[]', '{', '{"platform":"not-a-platform","status":"wrong"}'])('ignores invalid stored filters %s', async (raw) => {
+    localStorage.setItem('account-filter-values', raw)
+    const wrapper = mountView()
+    await flushPromises()
+    expect(listAccounts).toHaveBeenCalledWith(1, 20, expect.objectContaining({ platform: '', status: '' }), expect.anything())
+    wrapper.unmount()
+  })
+
+  it('persists changed filters when the existing filter control reloads', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const filter = wrapper.findComponent({ name: 'AccountTableFilters' })
+    filter.vm.$emit('update:filters', { platform: 'openai', status: 'error' })
+    filter.vm.$emit('change')
+    await flushPromises()
+    expect(JSON.parse(localStorage.getItem('account-filter-values') || '{}')).toEqual({ platform: 'openai', status: 'error' })
+    wrapper.unmount()
+  })
+})

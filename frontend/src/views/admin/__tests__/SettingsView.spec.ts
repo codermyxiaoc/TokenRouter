@@ -110,6 +110,7 @@ const {
 }));
 
 const localeRef = vi.hoisted(() => ({ value: "zh-CN" }));
+const adminSettingsState = vi.hoisted(() => ({ value: { chanshuiEnabled: false } }));
 
 vi.mock("@/api", () => ({
   adminAPI: {
@@ -174,11 +175,12 @@ vi.mock("@/stores", () => ({
   }),
 }));
 
-vi.mock("@/stores/adminSettings", () => ({
-  useAdminSettingsStore: () => ({
-    fetch: adminSettingsFetch,
-  }),
-}));
+vi.mock("@/stores/adminSettings", async () => {
+  const { reactive } = await import('vue');
+  const store = reactive({ chanshuiEnabled: false, fetch: adminSettingsFetch });
+  adminSettingsState.value = store;
+  return { useAdminSettingsStore: () => store };
+});
 
 vi.mock("@/composables/useClipboard", () => ({
   useClipboard: () => ({
@@ -707,6 +709,7 @@ function mountView() {
     global: {
       stubs: {
         AppLayout: AppLayoutStub,
+        RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
         Select: SelectStub,
         Toggle: ToggleStub,
         Icon: true,
@@ -3385,6 +3388,39 @@ describe("admin SettingsView platform quota matrix", () => {
     // 不管输入是什么，提交值应为 null（而非 "" 或 NaN）
     expect(quotas["anthropic"]?.["daily"]).toBe(null);
   });
+  it.each([undefined, true])("掺水检测仅通过管理员设置加载和保存开关 %s", async (enabled) => {
+    adminSettingsState.value.chanshuiEnabled = enabled === true;
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse, ...(enabled === undefined ? {} : { chanshui_enabled: enabled }) });
+    const wrapper = mountView();
+    await flushPromises();
+    const toggle = wrapper.get<HTMLInputElement>('[data-testid="chanshui-enabled-toggle"]');
+    expect(toggle.element.checked).toBe(enabled ?? false);
+    expect(wrapper.get('[data-testid="chanshui-settings"]').text().includes('chanshui.manage')).toBe(enabled === true);
+    await toggle.setValue(true);
+    // 开启草稿尚未保存时不能展示尚不可访问的页面入口。
+    expect(wrapper.get('[data-testid="chanshui-settings"]').text().includes('chanshui.manage')).toBe(enabled === true);
+    await wrapper.find('form').trigger('submit.prevent');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ chanshui_enabled: true }));
+    expect(wrapper.get('[data-testid="chanshui-settings"]').text()).toContain('chanshui.manage');
+    wrapper.unmount();
+  });
+
+  it('关闭掺水开关成功保存后立即隐藏管理链接', async () => {
+    adminSettingsState.value.chanshuiEnabled = true;
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse, chanshui_enabled: true });
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="chanshui-enabled-toggle"]').setValue(false);
+    expect(wrapper.get('[data-testid="chanshui-settings"]').text()).toContain('chanshui.manage');
+    await wrapper.find('form').trigger('submit.prevent');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ chanshui_enabled: false }));
+    expect(adminSettingsState.value.chanshuiEnabled).toBe(false);
+    expect(wrapper.get('[data-testid="chanshui-settings"]').text()).not.toContain('chanshui.manage');
+    wrapper.unmount();
+  });
+
   it.each([undefined, 120])("媒体账务处理期限加载默认值或已保存值 %s 并提交", async (minutes) => {
     getSettings.mockResolvedValueOnce({ ...baseSettingsResponse, ...(minutes === undefined ? {} : { media_task_reconciliation_timeout_minutes: minutes }) });
     const wrapper = mountView();

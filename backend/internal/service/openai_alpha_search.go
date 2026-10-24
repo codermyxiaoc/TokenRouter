@@ -279,7 +279,7 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(c
 	}
 	s.applyOpenAIUpstreamUserAgent(ctx, c, account, req, true, tlsRouterMatch...)
 	applyCodexAccountIdentityHeaders(req.Header, codexAccountIdentitySource(c, account), apiKeyID)
-	enforceCodexIdentityHeadersWithUA(req.Header, "")
+	enforceCodexIdentityHeadersForRouting(req.Header, tlsRouterMatch...)
 	account.ApplyHeaderOverrides(req.Header)
 	return req, nil
 }
@@ -412,7 +412,7 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(
 		}
 		req.Header.Set("Originator", resolveOpenAIUpstreamOriginator(c, true, tlsRouterMatch...))
 		s.applyOpenAIUpstreamUserAgent(ctx, c, account, req, true, tlsRouterMatch...)
-		enforceCodexIdentityHeadersWithUA(req.Header, "")
+		enforceCodexIdentityHeadersForRouting(req.Header, tlsRouterMatch...)
 	}
 
 	account.ApplyHeaderOverrides(req.Header)

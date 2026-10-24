@@ -57,6 +57,8 @@ OpenAI/Grok 是通用核心的能力适配者：在高级分组中，OpenAI 额�
 <a id="scheduler_snapshot_consistency"></a>
 ## 快照一致性
 
+Redis 调度快照解码结果可在进程内复用，读取前仍核对 ready/active、全局与平台随机修订号，mixed 桶额外核对 Antigravity 修订号；最多复用 10 秒，闲置 100 秒清理。`last_used` 每次读取以最新热数据覆盖，不缓存为固定排序依据。返回给调用方的 Credentials/Extra 嵌套 JSON、分组切片及标量指针均复制，不能修改常驻母本。普通 Account 的模型映射读取保持无共享写入，只有发布前准备的快照使用不可变解析结果；限流快照更新使用写时复制。
+
 `SchedulerSnapshotService` 在进程内保存 bucket 快照和账号投影。启动时执行初始重建，运行中消费调度 outbox，并周期性做全量重建以修复漏通知或外部写入。账号状态热更新可以先写入本地投影，再通过 outbox/失效广播传播到其它实例。
 
 一致性保护包括：

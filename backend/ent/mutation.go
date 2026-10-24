@@ -17043,6 +17043,9 @@ type CreativeRunMutation struct {
 	release_target_status               *string
 	attempt_count                       *int
 	addattempt_count                    *int
+	image_attempt_account_ids           *[]int64
+	appendimage_attempt_account_ids     []int64
+	image_execution_deadline_at         *time.Time
 	allowance_reserved                  *bool
 	provisioning_phase                  *string
 	provider_result_recorded_at         *time.Time
@@ -18718,6 +18721,106 @@ func (m *CreativeRunMutation) ResetAttemptCount() {
 	m.addattempt_count = nil
 }
 
+// SetImageAttemptAccountIds sets the "image_attempt_account_ids" field.
+func (m *CreativeRunMutation) SetImageAttemptAccountIds(i []int64) {
+	m.image_attempt_account_ids = &i
+	m.appendimage_attempt_account_ids = nil
+}
+
+// ImageAttemptAccountIds returns the value of the "image_attempt_account_ids" field in the mutation.
+func (m *CreativeRunMutation) ImageAttemptAccountIds() (r []int64, exists bool) {
+	v := m.image_attempt_account_ids
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldImageAttemptAccountIds returns the old "image_attempt_account_ids" field's value of the CreativeRun entity.
+// If the CreativeRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CreativeRunMutation) OldImageAttemptAccountIds(ctx context.Context) (v []int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldImageAttemptAccountIds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldImageAttemptAccountIds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldImageAttemptAccountIds: %w", err)
+	}
+	return oldValue.ImageAttemptAccountIds, nil
+}
+
+// AppendImageAttemptAccountIds adds i to the "image_attempt_account_ids" field.
+func (m *CreativeRunMutation) AppendImageAttemptAccountIds(i []int64) {
+	m.appendimage_attempt_account_ids = append(m.appendimage_attempt_account_ids, i...)
+}
+
+// AppendedImageAttemptAccountIds returns the list of values that were appended to the "image_attempt_account_ids" field in this mutation.
+func (m *CreativeRunMutation) AppendedImageAttemptAccountIds() ([]int64, bool) {
+	if len(m.appendimage_attempt_account_ids) == 0 {
+		return nil, false
+	}
+	return m.appendimage_attempt_account_ids, true
+}
+
+// ResetImageAttemptAccountIds resets all changes to the "image_attempt_account_ids" field.
+func (m *CreativeRunMutation) ResetImageAttemptAccountIds() {
+	m.image_attempt_account_ids = nil
+	m.appendimage_attempt_account_ids = nil
+}
+
+// SetImageExecutionDeadlineAt sets the "image_execution_deadline_at" field.
+func (m *CreativeRunMutation) SetImageExecutionDeadlineAt(t time.Time) {
+	m.image_execution_deadline_at = &t
+}
+
+// ImageExecutionDeadlineAt returns the value of the "image_execution_deadline_at" field in the mutation.
+func (m *CreativeRunMutation) ImageExecutionDeadlineAt() (r time.Time, exists bool) {
+	v := m.image_execution_deadline_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldImageExecutionDeadlineAt returns the old "image_execution_deadline_at" field's value of the CreativeRun entity.
+// If the CreativeRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CreativeRunMutation) OldImageExecutionDeadlineAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldImageExecutionDeadlineAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldImageExecutionDeadlineAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldImageExecutionDeadlineAt: %w", err)
+	}
+	return oldValue.ImageExecutionDeadlineAt, nil
+}
+
+// ClearImageExecutionDeadlineAt clears the value of the "image_execution_deadline_at" field.
+func (m *CreativeRunMutation) ClearImageExecutionDeadlineAt() {
+	m.image_execution_deadline_at = nil
+	m.clearedFields[creativerun.FieldImageExecutionDeadlineAt] = struct{}{}
+}
+
+// ImageExecutionDeadlineAtCleared returns if the "image_execution_deadline_at" field was cleared in this mutation.
+func (m *CreativeRunMutation) ImageExecutionDeadlineAtCleared() bool {
+	_, ok := m.clearedFields[creativerun.FieldImageExecutionDeadlineAt]
+	return ok
+}
+
+// ResetImageExecutionDeadlineAt resets all changes to the "image_execution_deadline_at" field.
+func (m *CreativeRunMutation) ResetImageExecutionDeadlineAt() {
+	m.image_execution_deadline_at = nil
+	delete(m.clearedFields, creativerun.FieldImageExecutionDeadlineAt)
+}
+
 // SetAllowanceReserved sets the "allowance_reserved" field.
 func (m *CreativeRunMutation) SetAllowanceReserved(b bool) {
 	m.allowance_reserved = &b
@@ -19286,7 +19389,7 @@ func (m *CreativeRunMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *CreativeRunMutation) Fields() []string {
-	fields := make([]string, 0, 44)
+	fields := make([]string, 0, 46)
 	if m.created_at != nil {
 		fields = append(fields, creativerun.FieldCreatedAt)
 	}
@@ -19385,6 +19488,12 @@ func (m *CreativeRunMutation) Fields() []string {
 	}
 	if m.attempt_count != nil {
 		fields = append(fields, creativerun.FieldAttemptCount)
+	}
+	if m.image_attempt_account_ids != nil {
+		fields = append(fields, creativerun.FieldImageAttemptAccountIds)
+	}
+	if m.image_execution_deadline_at != nil {
+		fields = append(fields, creativerun.FieldImageExecutionDeadlineAt)
 	}
 	if m.allowance_reserved != nil {
 		fields = append(fields, creativerun.FieldAllowanceReserved)
@@ -19493,6 +19602,10 @@ func (m *CreativeRunMutation) Field(name string) (ent.Value, bool) {
 		return m.ReleaseTargetStatus()
 	case creativerun.FieldAttemptCount:
 		return m.AttemptCount()
+	case creativerun.FieldImageAttemptAccountIds:
+		return m.ImageAttemptAccountIds()
+	case creativerun.FieldImageExecutionDeadlineAt:
+		return m.ImageExecutionDeadlineAt()
 	case creativerun.FieldAllowanceReserved:
 		return m.AllowanceReserved()
 	case creativerun.FieldProvisioningPhase:
@@ -19590,6 +19703,10 @@ func (m *CreativeRunMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldReleaseTargetStatus(ctx)
 	case creativerun.FieldAttemptCount:
 		return m.OldAttemptCount(ctx)
+	case creativerun.FieldImageAttemptAccountIds:
+		return m.OldImageAttemptAccountIds(ctx)
+	case creativerun.FieldImageExecutionDeadlineAt:
+		return m.OldImageExecutionDeadlineAt(ctx)
 	case creativerun.FieldAllowanceReserved:
 		return m.OldAllowanceReserved(ctx)
 	case creativerun.FieldProvisioningPhase:
@@ -19851,6 +19968,20 @@ func (m *CreativeRunMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetAttemptCount(v)
+		return nil
+	case creativerun.FieldImageAttemptAccountIds:
+		v, ok := value.([]int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetImageAttemptAccountIds(v)
+		return nil
+	case creativerun.FieldImageExecutionDeadlineAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetImageExecutionDeadlineAt(v)
 		return nil
 	case creativerun.FieldAllowanceReserved:
 		v, ok := value.(bool)
@@ -20175,6 +20306,9 @@ func (m *CreativeRunMutation) ClearedFields() []string {
 	if m.FieldCleared(creativerun.FieldErrorMessage) {
 		fields = append(fields, creativerun.FieldErrorMessage)
 	}
+	if m.FieldCleared(creativerun.FieldImageExecutionDeadlineAt) {
+		fields = append(fields, creativerun.FieldImageExecutionDeadlineAt)
+	}
 	if m.FieldCleared(creativerun.FieldProviderResultRecordedAt) {
 		fields = append(fields, creativerun.FieldProviderResultRecordedAt)
 	}
@@ -20227,6 +20361,9 @@ func (m *CreativeRunMutation) ClearField(name string) error {
 		return nil
 	case creativerun.FieldErrorMessage:
 		m.ClearErrorMessage()
+		return nil
+	case creativerun.FieldImageExecutionDeadlineAt:
+		m.ClearImageExecutionDeadlineAt()
 		return nil
 	case creativerun.FieldProviderResultRecordedAt:
 		m.ClearProviderResultRecordedAt()
@@ -20352,6 +20489,12 @@ func (m *CreativeRunMutation) ResetField(name string) error {
 		return nil
 	case creativerun.FieldAttemptCount:
 		m.ResetAttemptCount()
+		return nil
+	case creativerun.FieldImageAttemptAccountIds:
+		m.ResetImageAttemptAccountIds()
+		return nil
+	case creativerun.FieldImageExecutionDeadlineAt:
+		m.ResetImageExecutionDeadlineAt()
 		return nil
 	case creativerun.FieldAllowanceReserved:
 		m.ResetAllowanceReserved()

@@ -763,6 +763,7 @@ export interface SystemSettings {
   team_enabled: boolean;
   creative_enabled: boolean;
   intelligence_enabled: boolean;
+  chanshui_enabled: boolean;
   creative_model_settings: CreativeModelSetting[];
   creative_worker_count: number;
   media_task_reconciliation_timeout_minutes: number;
@@ -1093,6 +1094,7 @@ export interface UpdateSettingsRequest {
   team_enabled?: boolean;
   creative_enabled?: boolean;
   intelligence_enabled?: boolean;
+  chanshui_enabled?: boolean;
   creative_worker_count?: number;
   media_task_reconciliation_timeout_minutes?: number;
   risk_control_enabled?: boolean;

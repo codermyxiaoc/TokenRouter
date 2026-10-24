@@ -31,6 +31,7 @@ func RegisterAdminRoutes(
 		// 工单处理和设置沿用管理员认证与操作审计。
 		registerAdminTicketRoutes(admin, h)
 		registerAdminIntelligenceRoutes(admin, h)
+		registerAdminChanshuiRoutes(admin, h)
 		registerAdminDailyActivityRoutes(admin, h)
 		registerMediaTaskRoutes(admin, h, true)
 

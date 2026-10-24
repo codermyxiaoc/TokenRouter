@@ -103,7 +103,7 @@ func runSmartRoutingAuthentication(c *gin.Context, resolver service.SmartRouting
 		// 总尝试数包含首组，随候选上限统一调整，避免后半段候选只能保存却不能执行。
 		canRetry := terminal != nil && len(guards) > 0 && attempts < service.MaxSmartRoutingGroups-1 &&
 			!w.committed && state.attempt.CanReplay() && current.Request.Context().Err() == nil &&
-			state.replayBlockReason == "" && failed
+			state.replayBlockReason == "" && !service.ImageAttemptHasPolicy(current.Request.Context()) && failed
 		// 只冷却真实失败账号，0 只关闭跨请求冷却，不影响本次失败集合与换组。
 		if cache, ok := resolver.(smartRoutingAccountCooldownResolver); ok && cache.UsesSmartRoutingAccountCooldown() {
 			if len(failedAccountIDs) > 0 && state.cooldown > 0 {

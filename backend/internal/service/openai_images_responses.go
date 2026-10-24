@@ -1820,7 +1820,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		account.Type,
 		len(parsed.Uploads),
 	)
-	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+	upstreamCtx, releaseUpstreamCtx := DetachImageAttemptContext(ctx)
 	defer releaseUpstreamCtx()
 
 	token, _, err := s.GetAccessToken(upstreamCtx, account)
@@ -1866,9 +1866,15 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamStart := time.Now()
+	if err := BeginImageAttempt(upstreamCtx, account.ID, upstreamModel, ImageAttemptOperation(parsed)); err != nil {
+		return nil, err
+	}
 	markImageUpstreamAttempt(c)
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+	if resp == nil && err == nil {
+		err = errors.New("image upstream returned no response")
+	}
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
@@ -1881,12 +1887,32 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 			Kind:               "request_error",
 			Message:            safeErr,
 		})
+		if ImageAttemptHasPolicy(ctx) {
+			return nil, RecordImageAttemptFailure(ctx, fmt.Errorf("upstream request failed: %s", safeErr), ClassifyImageTransportFailure(err))
+		}
 		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
+	if resp.Body == nil {
+		resp.Body = http.NoBody
+	}
 	if resp.StatusCode >= 400 {
-		respBody := s.readUpstreamErrorBody(resp)
+		var respBody []byte
+		if ImageAttemptHasPolicy(ctx) {
+			var readErr error
+			respBody, readErr = readImageAttemptErrorBody(resp)
+			if readErr != nil {
+				_ = resp.Body.Close()
+				return nil, imageAttemptUnknownFailure(ctx, readErr)
+			}
+		} else {
+			respBody = s.readUpstreamErrorBody(resp)
+		}
 		_ = resp.Body.Close()
 		respBody = s.redactAgentIdentitySensitiveBody(upstreamCtx, account, respBody)
+		if ImageAttemptHasPolicy(ctx) {
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			return s.imageAttemptHTTPFailure(ctx, c, account, resp, respBody, upstreamModel)
+		}
 		// 只在端点明确不存在时切换一次协议；网络失败、限流和服务错误不触发二次生成。
 		if direct && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) {
 			return s.forwardOpenAIImagesOAuth(withOpenAIImagesForceResponses(ctx), c, account, parsed, channelMappedModel, tlsRouterMatch...)
@@ -1965,6 +1991,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		} else {
 			usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesOAuthStreamingResponse(resp, c, startTime, parsed.ResponseFormat, openAIImagesStreamPrefix(parsed), requestModel)
 		}
+		if ImageAttemptHasPolicy(ctx) && (usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.ImageOutputTokens > 0 || usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0) {
+			RecordImageAttemptDecision(ctx, ImageAttemptDecision{Outcome: ImageAttemptAccepted, Reason: "image_usage_observed"})
+		}
 		if err != nil {
 			if direct {
 				err = s.handleCodexDirectImagesResponseError(upstreamCtx, c, account, upstreamModel, upstreamReq.URL.String(), resp, writerSizeBeforeResponse, err)
@@ -2006,6 +2035,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 			usage, imageCount, imageOutputSizes, err = s.handleCodexDirectImagesNonStreamingResponse(resp, c, parsed)
 		} else {
 			usage, imageCount, imageOutputSizes, err = s.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, parsed.ResponseFormat, requestModel)
+		}
+		if ImageAttemptHasPolicy(ctx) && (usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.ImageOutputTokens > 0 || usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0) {
+			RecordImageAttemptDecision(ctx, ImageAttemptDecision{Outcome: ImageAttemptAccepted, Reason: "image_usage_observed"})
 		}
 		if err != nil {
 			if direct {
@@ -2097,6 +2129,26 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthResponseError(
 	writerSizeBeforeResponse int,
 	err error,
 ) error {
+	if ImageAttemptHasPolicy(ctx) {
+		decision := ImageAttemptDecision{Outcome: ImageAttemptUnknown, AttemptFault: true, Reason: "image_result_unconfirmed"}
+		var imageErr *OpenAIImagesUpstreamError
+		if errors.As(err, &imageErr) {
+			if imageErr.SynthesizedFromModelText {
+				return RecordImageAttemptFailure(ctx, err, ImageAttemptDecision{Outcome: ImageAttemptAccepted, Reason: "image_non_image_output"})
+			}
+			classified := ClassifyImageHTTPFailure(imageErr.StatusCode, openAIImagesUpstreamErrorResponseBody(imageErr))
+			// 明确参数/审核拒绝不处罚账号；其余 HTTP200 后错误不能证明生成未受理。
+			if classified.Outcome == ImageAttemptRejected && !classified.AttemptFault && !classified.RetryDifferentAccount {
+				decision = classified
+				if !IsResponseCommitted(c) && OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeResponse {
+					writeOpenAIImagesUpstreamErrorResponse(c, imageErr)
+				}
+			}
+		}
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Platform: account.Platform, AccountID: account.ID, AccountName: account.Name, UpstreamStatusCode: http.StatusBadGateway, UpstreamURL: upstreamURL, Kind: "request_error", Message: "Image generation result is unconfirmed"})
+		return RecordImageAttemptFailure(ctx, err, decision)
+	}
+
 	responseWritten := c != nil && c.Writer != nil && OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeResponse
 	if code, message, ok := OpenAIUpstreamStreamReadErrorDetails(err); ok {
 		// HTTP 已成功但响应体传输中断时，仅在尚未输出真实图片内容前允许重试；

@@ -54,7 +54,8 @@ func TestCreativeImageHTTPFailuresPreserveStructuredReason(t *testing.T) {
 				require.Equal(t, creativeProviderFailureMessage(tc.code), message)
 				require.NotContains(t, err.Error(), "private-secret")
 				require.NotContains(t, message, "private-secret")
-				require.Equal(t, tc.status == 429 || tc.status >= 500, IsRetryableCreativeError(err))
+				// 明确429/模型404允许备用账号，泛5xx不能再生成；展示原因与受理判断分开。
+				require.Equal(t, tc.status == 429 || tc.status == 404, IsRetryableCreativeError(err))
 			})
 		}
 	}

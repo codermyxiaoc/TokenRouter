@@ -83,6 +83,10 @@ func resolveGeminiImageCount(c *gin.Context, originalModel, mappedModel string) 
 	if observed := observedGeminiImageOutputs(c); observed > 0 {
 		return observed
 	}
+	// 安全图片任务不能因模型名推断成功张数，审核拒绝/空响应没有可收费图片证据。
+	if c != nil && c.Request != nil && ImageAttemptHasPolicy(c.Request.Context()) {
+		return 0
+	}
 	if isImageGenerationModel(originalModel) || isImageGenerationModel(mappedModel) {
 		return 1
 	}
@@ -99,7 +103,7 @@ func countGeminiInlineImageOutputs(payload []byte) int {
 	count := 0
 	gjson.GetBytes(payload, "candidates").ForEach(func(_, candidate gjson.Result) bool {
 		candidate.Get("content.parts").ForEach(func(_, part gjson.Result) bool {
-			if geminiPartIsInlineImage(part) {
+			if geminiPartIsInlineImage(part) || geminiPartIsFileImage(part) {
 				count++
 			}
 			return true
@@ -107,6 +111,22 @@ func countGeminiInlineImageOutputs(payload []byte) int {
 		return true
 	})
 	return count
+}
+
+func geminiPartIsFileImage(part gjson.Result) bool {
+	file := part.Get("fileData")
+	if !file.Exists() {
+		file = part.Get("file_data")
+	}
+	mime := file.Get("mimeType").String()
+	if mime == "" {
+		mime = file.Get("mime_type").String()
+	}
+	uri := file.Get("fileUri").String()
+	if uri == "" {
+		uri = file.Get("file_uri").String()
+	}
+	return isGeminiInlineImageMIMEType(strings.ToLower(strings.TrimSpace(mime))) && strings.TrimSpace(uri) != ""
 }
 
 func geminiPartIsInlineImage(part gjson.Result) bool {

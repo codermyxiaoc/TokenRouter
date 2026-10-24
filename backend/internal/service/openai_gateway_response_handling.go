@@ -1602,8 +1602,13 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		}
 	}
 
+	imageFailure := responsesImageJSONFailure(ctx, body)
+	imageCount := countOpenAIResponseImageOutputsFromJSONBytes(body)
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
-	if !usageOK {
+	if imageFailure != nil && !openAIStreamHasBillableResult(&usageValue, imageCount) {
+		return nil, imageFailure
+	}
+	if !usageOK && imageFailure == nil {
 		if bodyLooksLikeSSE {
 			observeOpenAISSEBody(c, string(body))
 			return s.handleSSEToJSON(ctx, resp, c, account, body, originalModel, mappedModel)
@@ -1640,18 +1645,24 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		}
 	}
 
-	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
-		c.Data(resp.StatusCode, contentType, body)
+	if imageFailure == nil || imageCount > 0 {
+		if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+			c.Data(resp.StatusCode, contentType, body)
+		}
+		if imageFailure != nil {
+			// 失败包已有真实图片，保留完整产物并阻止 handler 再追加一份错误 JSON。
+			MarkResponseCommitted(c)
+		}
 	}
 
 	return &openaiNonStreamingResult{
 		OpenAIUsage:      usage,
 		usage:            usage,
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
-		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
+		imageCount:       imageCount,
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
 		searchCount:      countGrokNativeSearchCallsFromJSONBytes(body),
-	}, nil
+	}, imageFailure
 }
 
 func isEventStreamResponse(header http.Header) bool {

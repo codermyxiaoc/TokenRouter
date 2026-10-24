@@ -51,6 +51,9 @@ func TestSchedulerCacheSeedanceEligibilityAndLegacySnapshotRebuild(t *testing.T)
 	legacyPayload, err := json.Marshal(legacy)
 	require.NoError(t, err)
 	require.NoError(t, rdb.Set(ctx, schedulerAccountMetaKey(strconv.FormatInt(accounts[0].ID, 10)), legacyPayload, 0).Err())
+	// 升级兼容检查模拟新进程首次读取旧 Redis 数据；既有实例对绕过修订号的外部写入
+	// 有明确的十秒复用上限，不能把它误当成需要立即失效的正常 SetAccount 写入。
+	cache = NewSchedulerCache(rdb)
 	snapshot, hit, err := cache.GetSnapshot(ctx, bucket)
 	require.NoError(t, err)
 	require.True(t, hit)

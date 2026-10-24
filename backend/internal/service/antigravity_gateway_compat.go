@@ -242,6 +242,14 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 		message := fmt.Sprintf("model %s not in whitelist", request.originalModel)
 		return nil, s.writeAntigravityCompatError(c, http.StatusForbidden, "permission_error", message)
 	}
+	if geminiImageGenerationDenied(c, nil, request.originalModel, mappedModel) {
+		return nil, s.writeAntigravityCompatError(c, http.StatusBadRequest, "invalid_request_error", ImageGenerationPermissionMessage())
+	}
+	var imagePolicyErr error
+	ctx, imagePolicyErr = prepareGeminiImageAttempt(modelCtx, c, s.imageCooldownStore(), account, nil, mappedModel, request.originalModel)
+	if imagePolicyErr != nil {
+		return nil, imagePolicyErr
+	}
 	if s.tokenProvider == nil {
 		return nil, s.writeAntigravityCompatError(c, http.StatusBadGateway, "api_error", "Antigravity token provider not configured")
 	}
@@ -266,7 +274,7 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 	request.reasoningEffort = ApplyThinkingEnabledFallback(request.reasoningEffort, request.originalBody, mappedModel)
 	return &antigravityCompatUpstreamCall{
 		request:      request,
-		ctx:          modelCtx,
+		ctx:          ctx,
 		billingModel: mappedModel,
 		prefix:       logPrefix(getSessionID(c), account.Name),
 		proxyURL:     antigravityCompatProxyURL(account),
@@ -382,6 +390,13 @@ func antigravityCompatProxyURL(account *Account) string {
 }
 
 func (s *AntigravityGatewayService) handleAntigravityCompatTransportError(c *gin.Context, err error) error {
+	if ImageAttemptHasPolicy(c.Request.Context()) {
+		var imageFailure *UpstreamFailoverError
+		if errors.As(err, &imageFailure) || c.Request.Context().Err() != nil {
+			return err
+		}
+	}
+
 	if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
 		return &UpstreamFailoverError{
 			StatusCode:        http.StatusServiceUnavailable,

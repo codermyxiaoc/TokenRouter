@@ -7501,6 +7501,14 @@
               <Toggle v-model="form.intelligence_enabled" data-testid="intelligence-enabled-toggle" />
             </div>
           </div>
+          <!-- 掺水检测仅使用管理员设置；关闭总开关仍保留配置入口。 -->
+          <div class="card" data-testid="chanshui-settings">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"><h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('chanshui.title') }}</h2></div>
+            <div class="flex items-center justify-between gap-4 p-6">
+              <div><label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('chanshui.settingsEnabled') }}</label><p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ t('chanshui.settingsHint') }}</p><RouterLink v-if="adminSettingsStore.chanshuiEnabled" to="/admin/chanshui-tests" class="mt-2 inline-block text-sm text-primary-600 hover:underline">{{ t('chanshui.manage') }}</RouterLink></div>
+              <Toggle v-model="form.chanshui_enabled" data-testid="chanshui-enabled-toggle" />
+            </div>
+          </div>
           <!-- 账务处理期限独立于媒体保存期，旧失败任务也按失败时间计算。 -->
           <div class="card" data-testid="media-task-reconciliation-settings">
             <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
@@ -7552,192 +7560,6 @@
                   </p>
                 </div>
                 <Toggle v-model="form.team_enabled" />
-              </div>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t("admin.settings.features.creative.title") }}
-              </h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t("admin.settings.features.creative.description") }}
-              </p>
-            </div>
-            <div class="p-6">
-              <div class="flex items-center justify-between gap-4">
-                <div>
-                  <label class="font-medium text-gray-900 dark:text-white">
-                    {{ t("admin.settings.features.creative.enabled") }}
-                  </label>
-                  <p class="text-sm text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.features.creative.enabledHint") }}
-                  </p>
-                </div>
-                <Toggle v-model="form.creative_enabled" />
-              </div>
-
-              <div class="mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-gray-100 pt-5 dark:border-dark-700">
-                <div>
-                  <label class="font-medium text-gray-900 dark:text-white" for="creative-worker-count">
-                    {{ t("admin.settings.features.creative.workerCount") }}
-                  </label>
-                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.features.creative.workerCountHint") }}
-                  </p>
-                </div>
-                <input
-                  id="creative-worker-count"
-                  v-model.number="form.creative_worker_count"
-                  type="number"
-                  min="1"
-                  step="1"
-                  required
-                  class="input w-32"
-                />
-              </div>
-
-              <!-- 当前 worker 使用情况：进度条 + 忙碌/总数，数据来自运行时状态轮询。 -->
-              <div class="mt-4">
-                <p class="mb-1.5 text-sm text-gray-500 dark:text-gray-400">
-                  {{ t("admin.settings.features.creative.workerUsage") }}
-                </p>
-                <div class="flex items-center gap-3">
-                  <div class="h-2.5 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
-                    <div
-                      class="h-full rounded-full bg-emerald-500 transition-all duration-300"
-                      :style="{ width: `${creativeWorkerUsagePercent}%` }"
-                    ></div>
-                  </div>
-                  <span class="shrink-0 text-sm tabular-nums text-gray-900 dark:text-white">
-                    {{ creativeWorkerUsageText }}
-                  </span>
-                </div>
-              </div>
-
-              <div class="mt-6 border-t border-gray-100 pt-5 dark:border-dark-700">
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h3 class="font-medium text-gray-900 dark:text-white">
-                      {{ t("admin.settings.features.creative.modelSettings.title") }}
-                    </h3>
-                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                      {{ t("admin.settings.features.creative.modelSettings.description") }}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    class="btn btn-primary inline-flex items-center gap-1.5"
-                    :disabled="creativeModelCandidatesLoading || !creativeModelCandidates.some((candidate) => !form.creative_model_settings.some((item) => creativeModelSettingKey(item) === creativeModelSettingKey(candidate)))"
-                    @click="addCreativeModelSetting"
-                  >
-                    <Icon name="plus" size="sm" />
-                    {{ t("admin.settings.features.creative.modelSettings.add") }}
-                  </button>
-                </div>
-
-                <p v-if="creativeModelCandidatesLoading" class="mt-4 text-sm text-gray-500 dark:text-gray-400">
-                  {{ t("admin.settings.features.creative.modelSettings.loading") }}
-                </p>
-                <p v-else-if="creativeModelCandidatesError" class="mt-4 text-sm text-amber-600 dark:text-amber-400">
-                  {{ t("admin.settings.features.creative.modelSettings.loadError") }}
-                </p>
-
-                <!-- 模型能力列表：列头与行共用同一网格分栏，模型选择、能力开关、删除操作对齐，避免行内松散留白。 -->
-                <div
-                  v-if="form.creative_model_settings.length > 0"
-                  class="mt-4 overflow-hidden rounded-xl border border-gray-200 dark:border-dark-600"
-                >
-                  <div
-                    class="hidden items-center gap-4 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs font-medium text-gray-500 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto] dark:border-dark-700 dark:bg-dark-800/60 dark:text-dark-300"
-                  >
-                    <span>{{ t("admin.settings.features.creative.modelSettings.modelColumn") }}</span>
-                    <span>{{ t("admin.settings.features.creative.modelSettings.operationsColumn") }}</span>
-                    <span class="w-9" aria-hidden="true"></span>
-                  </div>
-                  <div class="divide-y divide-gray-100 dark:divide-dark-700">
-                    <div
-                      v-for="(item, index) in form.creative_model_settings"
-                      :key="`${creativeModelSettingKey(item)}-${index}`"
-                      class="grid grid-cols-1 items-center gap-3 px-4 py-3 transition-colors hover:bg-gray-50 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:gap-4 dark:hover:bg-dark-800/40"
-                    >
-                      <div class="min-w-0">
-                        <Select
-                          :model-value="creativeModelSettingKey(item)"
-                          :options="creativeModelOptionsForRow(index)"
-                          :placeholder="t('admin.settings.features.creative.modelSettings.selectModel')"
-                          :searchable="'auto'"
-                          class="w-full sm:max-w-xs"
-                          @change="onCreativeModelSelected(index, $event)"
-                        />
-                        <p v-if="!creativeCandidateForSetting(item)" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
-                          {{ t("admin.settings.features.creative.modelSettings.unavailableHint") }}
-                        </p>
-                      </div>
-                      <!-- 能力开关：胶囊按钮替代原生复选框，选中态带对勾，禁用态沿用“至少保留一项能力”等约束。 -->
-                      <div class="flex flex-wrap items-center gap-2">
-                        <button
-                          v-for="operation in item.media_type && item.media_type !== 'image' ? ['generate'] : creativeOperationChoices"
-                          :key="operation"
-                          type="button"
-                          class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
-                          :class="[
-                            item.operations.includes(operation)
-                              ? 'border-primary-500/60 bg-primary-50 text-primary-700 dark:border-primary-500/50 dark:bg-primary-500/10 dark:text-primary-300'
-                              : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:text-gray-900 dark:border-dark-600 dark:text-dark-300 dark:hover:border-dark-400 dark:hover:text-dark-100',
-                            creativeOperationCheckboxDisabled(index, operation) && 'cursor-not-allowed opacity-50',
-                          ]"
-                          :disabled="creativeOperationCheckboxDisabled(index, operation)"
-                          :aria-pressed="item.operations.includes(operation)"
-                          @click="toggleCreativeOperation(index, operation, !item.operations.includes(operation))"
-                        >
-                          <Icon v-if="item.operations.includes(operation)" name="check" size="xs" />
-                          {{ t(`admin.settings.features.creative.modelSettings.operations.${item.media_type && item.media_type !== 'image' ? item.media_type : operation}`) }}
-                        </button>
-                      </div>
-                      <button
-                        type="button"
-                        class="btn-icon justify-self-start text-gray-500 hover:text-red-600 sm:justify-self-end dark:text-dark-300 dark:hover:text-red-400"
-                        :aria-label="t('admin.settings.features.creative.modelSettings.remove')"
-                        :title="t('admin.settings.features.creative.modelSettings.remove')"
-                        @click="removeCreativeModelSetting(index)"
-                      >
-                        <Icon name="trash" size="sm" />
-                      </button>
-                      <div v-if="item.media_type === 'video'" class="grid grid-cols-1 gap-3 sm:col-span-3 sm:grid-cols-2">
-                        <label class="text-xs text-gray-600 dark:text-dark-300">
-                          {{ t('admin.settings.features.creative.modelSettings.videoEndpoint') }}
-                          <Select :model-value="item.video_endpoint" :options="creativeVideoEndpointOptions(item)" class="mt-1" data-testid="creative-video-endpoint" @change="onCreativeVideoEndpointChanged(item, $event)" />
-                        </label>
-                        <label class="text-xs text-gray-600 dark:text-dark-300">
-                          {{ t('admin.settings.features.creative.modelSettings.videoDurations') }}
-                          <input :value="item.video_capabilities?.durations.join(', ')" class="input mt-1" placeholder="5, 10" @change="setCreativeVideoCapability(item, 'durations', ($event.target as HTMLInputElement).value)" />
-                        </label>
-                        <label class="text-xs text-gray-600 dark:text-dark-300">
-                          {{ t('admin.settings.features.creative.modelSettings.videoResolutions') }}
-                          <input :value="item.video_capabilities?.resolutions.join(', ')" class="input mt-1" placeholder="720p, 1080p" @change="setCreativeVideoCapability(item, 'resolutions', ($event.target as HTMLInputElement).value)" />
-                        </label>
-                        <label class="text-xs text-gray-600 dark:text-dark-300">
-                          {{ t('admin.settings.features.creative.modelSettings.videoRatios') }}
-                          <input :value="item.video_capabilities?.aspect_ratios.join(', ')" class="input mt-1" placeholder="16:9, 9:16" @change="setCreativeVideoCapability(item, 'aspect_ratios', ($event.target as HTMLInputElement).value)" />
-                        </label>
-                        <label class="text-xs text-gray-600 dark:text-dark-300">
-                          {{ t('admin.settings.features.creative.modelSettings.videoReferences') }}
-                          <input :value="item.video_capabilities?.max_reference_images ?? ''" type="number" min="0" :max="creativeVideoReferenceMax(item)" step="1" class="input mt-1" data-testid="creative-video-reference-limit" @input="setCreativeVideoReferenceLimit(item, ($event.target as HTMLInputElement).value)" />
-                        </label>
-                        <p class="text-xs text-gray-500 sm:col-span-2 dark:text-dark-400">{{ t('admin.settings.features.creative.modelSettings.videoDefaultsHint') }}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <p
-                  v-else
-                  class="mt-4 flex items-center justify-center gap-2 rounded-xl border border-dashed border-gray-200 px-4 py-6 text-sm text-gray-500 dark:border-dark-600 dark:text-dark-300"
-                >
-                  <Icon name="infoCircle" size="sm" />
-                  {{ t("admin.settings.features.creative.modelSettings.empty") }}
-                </p>
               </div>
             </div>
           </div>
@@ -7934,6 +7756,195 @@
           </div>
         </div>
         <!-- /分页：功能特性 -->
+
+        <!-- 创作台独立分页，沿用同一表单以保留跨分页编辑的配置。 -->
+        <div v-show="activeTab === 'creative'" class="space-y-6" data-testid="creative-settings-panel">
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.features.creative.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.features.creative.description") }}
+              </p>
+            </div>
+            <div class="p-6">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white">
+                    {{ t("admin.settings.features.creative.enabled") }}
+                  </label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.features.creative.enabledHint") }}
+                  </p>
+                </div>
+                <Toggle v-model="form.creative_enabled" />
+              </div>
+
+              <div class="mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-gray-100 pt-5 dark:border-dark-700">
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white" for="creative-worker-count">
+                    {{ t("admin.settings.features.creative.workerCount") }}
+                  </label>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.features.creative.workerCountHint") }}
+                  </p>
+                </div>
+                <input
+                  id="creative-worker-count"
+                  v-model.number="form.creative_worker_count"
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  class="input w-32"
+                />
+              </div>
+
+              <!-- 当前 worker 使用情况：进度条 + 忙碌/总数，数据来自运行时状态轮询。 -->
+              <div class="mt-4">
+                <p class="mb-1.5 text-sm text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.features.creative.workerUsage") }}
+                </p>
+                <div class="flex items-center gap-3">
+                  <div class="h-2.5 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
+                    <div
+                      class="h-full rounded-full bg-emerald-500 transition-all duration-300"
+                      :style="{ width: `${creativeWorkerUsagePercent}%` }"
+                    ></div>
+                  </div>
+                  <span class="shrink-0 text-sm tabular-nums text-gray-900 dark:text-white">
+                    {{ creativeWorkerUsageText }}
+                  </span>
+                </div>
+              </div>
+
+              <div class="mt-6 border-t border-gray-100 pt-5 dark:border-dark-700">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 class="font-medium text-gray-900 dark:text-white">
+                      {{ t("admin.settings.features.creative.modelSettings.title") }}
+                    </h3>
+                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.features.creative.modelSettings.description") }}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn btn-primary inline-flex items-center gap-1.5"
+                    :disabled="creativeModelCandidatesLoading || !creativeModelCandidates.some((candidate) => !form.creative_model_settings.some((item) => creativeModelSettingKey(item) === creativeModelSettingKey(candidate)))"
+                    @click="addCreativeModelSetting"
+                  >
+                    <Icon name="plus" size="sm" />
+                    {{ t("admin.settings.features.creative.modelSettings.add") }}
+                  </button>
+                </div>
+
+                <p v-if="creativeModelCandidatesLoading" class="mt-4 text-sm text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.features.creative.modelSettings.loading") }}
+                </p>
+                <p v-else-if="creativeModelCandidatesError" class="mt-4 text-sm text-amber-600 dark:text-amber-400">
+                  {{ t("admin.settings.features.creative.modelSettings.loadError") }}
+                </p>
+
+                <!-- 模型能力列表：列头与行共用同一网格分栏，模型选择、能力开关、删除操作对齐，避免行内松散留白。 -->
+                <div
+                  v-if="form.creative_model_settings.length > 0"
+                  class="mt-4 overflow-hidden rounded-xl border border-gray-200 dark:border-dark-600"
+                >
+                  <div
+                    class="hidden items-center gap-4 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs font-medium text-gray-500 sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto] dark:border-dark-700 dark:bg-dark-800/60 dark:text-dark-300"
+                  >
+                    <span>{{ t("admin.settings.features.creative.modelSettings.modelColumn") }}</span>
+                    <span>{{ t("admin.settings.features.creative.modelSettings.operationsColumn") }}</span>
+                    <span class="w-9" aria-hidden="true"></span>
+                  </div>
+                  <div class="divide-y divide-gray-100 dark:divide-dark-700">
+                    <div
+                      v-for="(item, index) in form.creative_model_settings"
+                      :key="`${creativeModelSettingKey(item)}-${index}`"
+                      class="grid grid-cols-1 items-center gap-3 px-4 py-3 transition-colors hover:bg-gray-50 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:gap-4 dark:hover:bg-dark-800/40"
+                    >
+                      <div class="min-w-0">
+                        <Select
+                          :model-value="creativeModelSettingKey(item)"
+                          :options="creativeModelOptionsForRow(index)"
+                          :placeholder="t('admin.settings.features.creative.modelSettings.selectModel')"
+                          :searchable="'auto'"
+                          class="w-full sm:max-w-xs"
+                          @change="onCreativeModelSelected(index, $event)"
+                        />
+                        <p v-if="!creativeCandidateForSetting(item)" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                          {{ t("admin.settings.features.creative.modelSettings.unavailableHint") }}
+                        </p>
+                      </div>
+                      <!-- 能力开关：胶囊按钮替代原生复选框，选中态带对勾，禁用态沿用“至少保留一项能力”等约束。 -->
+                      <div class="flex flex-wrap items-center gap-2">
+                        <button
+                          v-for="operation in item.media_type && item.media_type !== 'image' ? ['generate'] : creativeOperationChoices"
+                          :key="operation"
+                          type="button"
+                          class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+                          :class="[
+                            item.operations.includes(operation)
+                              ? 'border-primary-500/60 bg-primary-50 text-primary-700 dark:border-primary-500/50 dark:bg-primary-500/10 dark:text-primary-300'
+                              : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:text-gray-900 dark:border-dark-600 dark:text-dark-300 dark:hover:border-dark-400 dark:hover:text-dark-100',
+                            creativeOperationCheckboxDisabled(index, operation) && 'cursor-not-allowed opacity-50',
+                          ]"
+                          :disabled="creativeOperationCheckboxDisabled(index, operation)"
+                          :aria-pressed="item.operations.includes(operation)"
+                          @click="toggleCreativeOperation(index, operation, !item.operations.includes(operation))"
+                        >
+                          <Icon v-if="item.operations.includes(operation)" name="check" size="xs" />
+                          {{ t(`admin.settings.features.creative.modelSettings.operations.${item.media_type && item.media_type !== 'image' ? item.media_type : operation}`) }}
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        class="btn-icon justify-self-start text-gray-500 hover:text-red-600 sm:justify-self-end dark:text-dark-300 dark:hover:text-red-400"
+                        :aria-label="t('admin.settings.features.creative.modelSettings.remove')"
+                        :title="t('admin.settings.features.creative.modelSettings.remove')"
+                        @click="removeCreativeModelSetting(index)"
+                      >
+                        <Icon name="trash" size="sm" />
+                      </button>
+                      <div v-if="item.media_type === 'video'" class="grid grid-cols-1 gap-3 sm:col-span-3 sm:grid-cols-2">
+                        <label class="text-xs text-gray-600 dark:text-dark-300">
+                          {{ t('admin.settings.features.creative.modelSettings.videoEndpoint') }}
+                          <Select :model-value="item.video_endpoint" :options="creativeVideoEndpointOptions(item)" class="mt-1" data-testid="creative-video-endpoint" @change="onCreativeVideoEndpointChanged(item, $event)" />
+                        </label>
+                        <label class="text-xs text-gray-600 dark:text-dark-300">
+                          {{ t('admin.settings.features.creative.modelSettings.videoDurations') }}
+                          <input :value="item.video_capabilities?.durations.join(', ')" class="input mt-1" placeholder="5, 10" @change="setCreativeVideoCapability(item, 'durations', ($event.target as HTMLInputElement).value)" />
+                        </label>
+                        <label class="text-xs text-gray-600 dark:text-dark-300">
+                          {{ t('admin.settings.features.creative.modelSettings.videoResolutions') }}
+                          <input :value="item.video_capabilities?.resolutions.join(', ')" class="input mt-1" placeholder="720p, 1080p" @change="setCreativeVideoCapability(item, 'resolutions', ($event.target as HTMLInputElement).value)" />
+                        </label>
+                        <label class="text-xs text-gray-600 dark:text-dark-300">
+                          {{ t('admin.settings.features.creative.modelSettings.videoRatios') }}
+                          <input :value="item.video_capabilities?.aspect_ratios.join(', ')" class="input mt-1" placeholder="16:9, 9:16" @change="setCreativeVideoCapability(item, 'aspect_ratios', ($event.target as HTMLInputElement).value)" />
+                        </label>
+                        <label class="text-xs text-gray-600 dark:text-dark-300">
+                          {{ t('admin.settings.features.creative.modelSettings.videoReferences') }}
+                          <input :value="item.video_capabilities?.max_reference_images ?? ''" type="number" min="0" :max="creativeVideoReferenceMax(item)" step="1" class="input mt-1" data-testid="creative-video-reference-limit" @input="setCreativeVideoReferenceLimit(item, ($event.target as HTMLInputElement).value)" />
+                        </label>
+                        <p class="text-xs text-gray-500 sm:col-span-2 dark:text-dark-400">{{ t('admin.settings.features.creative.modelSettings.videoDefaultsHint') }}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <p
+                  v-else
+                  class="mt-4 flex items-center justify-center gap-2 rounded-xl border border-dashed border-gray-200 px-4 py-6 text-sm text-gray-500 dark:border-dark-600 dark:text-dark-300"
+                >
+                  <Icon name="infoCircle" size="sm" />
+                  {{ t("admin.settings.features.creative.modelSettings.empty") }}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <!-- Tab: Email -->
         <!-- Tab: Payment -->
@@ -9223,6 +9234,7 @@ type SettingsTab =
   | "general"
   | "agreement"
   | "features"
+  | "creative"
   | "security"
   | "users"
   | "gateway"
@@ -9235,6 +9247,7 @@ const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
   { key: "agreement" as SettingsTab, icon: "document" as const },
   { key: "features" as SettingsTab, icon: "bolt" as const },
+  { key: "creative" as SettingsTab, icon: "sparkles" as const },
   { key: "security" as SettingsTab, icon: "shield" as const },
   { key: "users" as SettingsTab, icon: "user" as const },
   { key: "gateway" as SettingsTab, icon: "server" as const },
@@ -10161,6 +10174,7 @@ const form = reactive<SettingsForm>({
   team_enabled: true,
   creative_enabled: true,
   intelligence_enabled: false,
+  chanshui_enabled: false,
   creative_model_settings: [] as CreativeModelSetting[],
   creative_worker_count: 128,
   media_task_reconciliation_timeout_minutes: 60,
@@ -10253,7 +10267,7 @@ function stopCreativeWorkerStatusPolling() {
 watch(
   activeTab,
   (tab) => {
-    if (tab === "features") {
+    if (tab === "creative") {
       startCreativeWorkerStatusPolling();
     } else {
       stopCreativeWorkerStatusPolling();
@@ -11964,6 +11978,7 @@ async function saveSettings() {
     }
     const normalizedCreativeWorkerCount = Math.floor(Number(form.creative_worker_count));
     if (!Number.isSafeInteger(normalizedCreativeWorkerCount) || normalizedCreativeWorkerCount <= 0) {
+      activeTab.value = "creative";
       appStore.showError(t("admin.settings.features.creative.workerCountInvalid"));
       return;
     }
@@ -12074,6 +12089,7 @@ async function saveSettings() {
     );
     const normalizedCreativeModelSettings = normalizeCreativeModelSettingsForSave();
     if (!normalizedCreativeModelSettings) {
+      activeTab.value = "creative";
       appStore.showError(
         creativeModelSettingsValidationError.value || t("admin.settings.features.creative.modelSettings.validationError"),
       );
@@ -12448,6 +12464,7 @@ async function saveSettings() {
       team_enabled: form.team_enabled,
       creative_enabled: form.creative_enabled,
       intelligence_enabled: form.intelligence_enabled,
+      chanshui_enabled: form.chanshui_enabled,
       creative_model_settings: normalizedCreativeModelSettings,
       creative_worker_count: normalizedCreativeWorkerCount,
       media_task_reconciliation_timeout_minutes: normalizedMediaTaskTimeout,
@@ -12588,6 +12605,8 @@ async function saveSettings() {
     const updated = await settingsStepUp.run(() =>
       adminAPI.settings.updateSettings(payload),
     );
+    // 保存成功后立即同步管理员菜单，未保存的开关草稿不开放页面。
+    adminSettingsStore.chanshuiEnabled = updated.chanshui_enabled === true;
     for (const [key, value] of Object.entries(updated)) {
       if (key === "openai_fast_policy_settings") continue;
       if (value !== null && value !== undefined) {

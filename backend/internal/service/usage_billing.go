@@ -23,13 +23,13 @@ type UsageBillingCommand struct {
 	// QuotaPlatform 冻结本次额度归属；不改变已有资金指纹，避免升级后重放原命令失效。
 	QuotaPlatform string `json:",omitempty"`
 	// LegacyVideoTaskID 将旧视频扣款回执与扣费事务关联，不参与通用幂等指纹。
-	LegacyVideoTaskID  int64 `json:"legacy_video_task_id,omitempty"`
+	LegacyVideoTaskID int64 `json:"legacy_video_task_id,omitempty"`
 	// CreativeTextExecutionID 仅关联画布文本持久回执，不改变普通或历史命令的幂等指纹。
 	CreativeTextExecutionID string `json:"creative_text_execution_id,omitempty"`
-	RequestID          string
-	APIKeyID           int64
-	RequestFingerprint string
-	RequestPayloadHash string
+	RequestID               string
+	APIKeyID                int64
+	RequestFingerprint      string
+	RequestPayloadHash      string
 	// APIKeyBillingMode 与 PreferredSubscriptionID 固化请求进入网关时的资金来源选择。
 	APIKeyBillingMode       string
 	PreferredSubscriptionID *int64
@@ -66,6 +66,11 @@ type UsageBillingCommand struct {
 	APIKeyQuotaCost     float64
 	APIKeyRateLimitCost float64
 	AccountQuotaCost    float64
+
+	// AccountQuotaHasDailyLimit / AccountQuotaHasWeeklyLimit 记录构造命令时账号是否设置了日/周上限，
+	// 只用于选择账号配额累加语句，不参与幂等指纹；实际累加哪些维度以数据库中的账号配置为准。
+	AccountQuotaHasDailyLimit  bool
+	AccountQuotaHasWeeklyLimit bool
 }
 
 func (c *UsageBillingCommand) Normalize() {

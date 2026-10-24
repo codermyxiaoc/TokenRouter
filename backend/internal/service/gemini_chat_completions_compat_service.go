@@ -168,6 +168,14 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 	if err != nil {
 		return nil, s.writeGeminiOpenAICompatError(c, protocol, http.StatusBadRequest, "invalid_request_error", err.Error())
 	}
+	if geminiImageGenerationDenied(c, geminiReq, originalModel, req.Model, mappedModel) {
+		return nil, s.writeGeminiOpenAICompatError(c, protocol, http.StatusBadRequest, "invalid_request_error", ImageGenerationPermissionMessage())
+	}
+	var imagePolicyErr error
+	ctx, imagePolicyErr = prepareGeminiImageAttempt(ctx, c, s.imageCooldownStore(), account, geminiReq, mappedModel, originalModel)
+	if imagePolicyErr != nil {
+		return nil, imagePolicyErr
+	}
 	geminiReq = ensureGeminiFunctionCallThoughtSignatures(geminiReq)
 	geminiReq = applyGeminiCompatThinkingConfig(geminiReq, claudeBody, mappedModel, clientStream)
 
@@ -205,7 +213,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 		}
 		requestIDHeader = idHeader
 
-		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		resp, err = doGeminiImageAwareRequest(ctx, s.httpUpstream, upstreamReq, proxyURL, account, s.cache, mappedModel, GeminiImageAttemptOperation(geminiReq))
 		if err != nil {
 			return nil, s.handleUpstreamTransportError(ctx, c, account, err)
 		}
@@ -217,7 +225,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 			break
 		}
 
-		if resp.StatusCode >= 400 && s.shouldRetryGeminiUpstreamError(account, resp.StatusCode) {
+		if resp.StatusCode >= 400 && !ImageAttemptHasPolicy(ctx) && s.shouldRetryGeminiUpstreamError(account, resp.StatusCode) {
 			respBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusForbidden && isGeminiInsufficientScope(resp.Header, respBody) {
@@ -325,6 +333,8 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 	}
 	var usage *ClaudeUsage
 	var firstTokenMs *int
+	clientDisconnect := false
+	streamFinished := false
 	if clientStream {
 		streamRes, err := s.handleOpenAICompatStreamingResponseFromGemini(c, resp, startTime, originalModel, account.Type == AccountTypeOAuth, includeUsage, protocol, clientToolMapping)
 		if err != nil {
@@ -332,6 +342,8 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 		}
 		usage = streamRes.usage
 		firstTokenMs = streamRes.firstTokenMs
+		clientDisconnect = streamRes.clientDisconnect
+		streamFinished = streamRes.finished
 	} else if useUpstreamStream {
 		collected, usageObj, err := collectGeminiSSE(resp.Body, account.Type == AccountTypeOAuth)
 		if err != nil {
@@ -382,6 +394,10 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 	if isImageGenerationModel(originalModel) {
 		imageCount = 1
 	}
+	// 客户端在收到结束分片前断开时只计已送达的图片：Chat 流不向客户端转发图片。
+	if clientDisconnect && !streamFinished {
+		imageCount = 0
+	}
 
 	return &ForwardResult{
 		RequestID:        requestID,
@@ -396,7 +412,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 		ImageCount:       imageCount,
 		ImageSize:        imageSize,
 		ImageInputSize:   imageInputSize,
-		ClientDisconnect: false,
+		ClientDisconnect: clientDisconnect,
 	}, nil
 }
 
@@ -703,6 +719,8 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 	var usage ClaudeUsage
 	var firstTokenMs *int
 	firstChunk := true
+	finishReason := ""
+	clientDisconnect := false
 
 	writeChatChunk := func(chunk apicompat.ChatCompletionsChunk) bool {
 		payload, err := json.Marshal(chunk)
@@ -710,6 +728,7 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 			return false
 		}
 		if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", payload); err != nil {
+			clientDisconnect = true
 			return true
 		}
 		return false
@@ -727,6 +746,7 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 		for _, restored := range payloads {
 			eventType := gjson.GetBytes(restored, "type").String()
 			if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, restored); err != nil {
+				clientDisconnect = true
 				return true
 			}
 		}
@@ -735,8 +755,10 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 
 	resultSnapshot := func() *geminiStreamResult {
 		return &geminiStreamResult{
-			usage:        &usage,
-			firstTokenMs: firstTokenMs,
+			usage:            &usage,
+			firstTokenMs:     firstTokenMs,
+			clientDisconnect: clientDisconnect,
+			finished:         finishReason != "",
 		}
 	}
 
@@ -776,7 +798,6 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 		return resultSnapshot(), nil
 	}
 
-	finishReason := ""
 	sawToolUse := false
 	nextBlockIndex := 0
 	openBlockIndex := -1
@@ -810,7 +831,8 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 	reader := bufio.NewReader(resp.Body)
 	for {
 		line, err := reader.ReadString('\n')
-		if len(line) > 0 {
+		// 与原生路径一致，读取中断时不接受未结束的残行。
+		if len(line) > 0 && (err == nil || errors.Is(err, io.EOF)) {
 			trimmed := strings.TrimRight(line, "\r\n")
 			if strings.HasPrefix(trimmed, "data:") {
 				payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
@@ -964,6 +986,11 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 			break
 		}
 		if err != nil {
+			if geminiStreamAbortedWithBillableOutput(c, err, &usage) {
+				logger.LegacyPrintf("service.gemini_messages_compat", "[GeminiAPI] Client disconnected during OpenAI compatible stream, billing collected usage: %v", err)
+				clientDisconnect = true
+				return resultSnapshot(), nil
+			}
 			return nil, fmt.Errorf("stream read error: %w", err)
 		}
 	}

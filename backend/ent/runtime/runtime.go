@@ -870,26 +870,30 @@ func init() {
 	creativerunDescAttemptCount := creativerunFields[30].Descriptor()
 	// creativerun.DefaultAttemptCount holds the default value on creation for the attempt_count field.
 	creativerun.DefaultAttemptCount = creativerunDescAttemptCount.Default.(int)
+	// creativerunDescImageAttemptAccountIds is the schema descriptor for image_attempt_account_ids field.
+	creativerunDescImageAttemptAccountIds := creativerunFields[31].Descriptor()
+	// creativerun.DefaultImageAttemptAccountIds holds the default value on creation for the image_attempt_account_ids field.
+	creativerun.DefaultImageAttemptAccountIds = creativerunDescImageAttemptAccountIds.Default.(func() []int64)
 	// creativerunDescAllowanceReserved is the schema descriptor for allowance_reserved field.
-	creativerunDescAllowanceReserved := creativerunFields[31].Descriptor()
+	creativerunDescAllowanceReserved := creativerunFields[33].Descriptor()
 	// creativerun.DefaultAllowanceReserved holds the default value on creation for the allowance_reserved field.
 	creativerun.DefaultAllowanceReserved = creativerunDescAllowanceReserved.Default.(bool)
 	// creativerunDescProvisioningPhase is the schema descriptor for provisioning_phase field.
-	creativerunDescProvisioningPhase := creativerunFields[32].Descriptor()
+	creativerunDescProvisioningPhase := creativerunFields[34].Descriptor()
 	// creativerun.DefaultProvisioningPhase holds the default value on creation for the provisioning_phase field.
 	creativerun.DefaultProvisioningPhase = creativerunDescProvisioningPhase.Default.(string)
 	// creativerun.ProvisioningPhaseValidator is a validator for the "provisioning_phase" field. It is called by the builders before save.
 	creativerun.ProvisioningPhaseValidator = creativerunDescProvisioningPhase.Validators[0].(func(string) error)
 	// creativerunDescSettlementAttemptCount is the schema descriptor for settlement_attempt_count field.
-	creativerunDescSettlementAttemptCount := creativerunFields[34].Descriptor()
+	creativerunDescSettlementAttemptCount := creativerunFields[36].Descriptor()
 	// creativerun.DefaultSettlementAttemptCount holds the default value on creation for the settlement_attempt_count field.
 	creativerun.DefaultSettlementAttemptCount = creativerunDescSettlementAttemptCount.Default.(int)
 	// creativerunDescReleaseAttemptCount is the schema descriptor for release_attempt_count field.
-	creativerunDescReleaseAttemptCount := creativerunFields[35].Descriptor()
+	creativerunDescReleaseAttemptCount := creativerunFields[37].Descriptor()
 	// creativerun.DefaultReleaseAttemptCount holds the default value on creation for the release_attempt_count field.
 	creativerun.DefaultReleaseAttemptCount = creativerunDescReleaseAttemptCount.Default.(int)
 	// creativerunDescVersion is the schema descriptor for version field.
-	creativerunDescVersion := creativerunFields[38].Descriptor()
+	creativerunDescVersion := creativerunFields[40].Descriptor()
 	// creativerun.DefaultVersion holds the default value on creation for the version field.
 	creativerun.DefaultVersion = creativerunDescVersion.Default.(int64)
 	creativerunoutboxFields := schema.CreativeRunOutbox{}.Fields()

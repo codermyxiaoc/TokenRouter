@@ -44,8 +44,8 @@ func TestEnsureCodexIdentityHeaders(t *testing.T) {
 		ensureCodexIdentityHeaders(h)
 		enforceCodexIdentityHeaders(h)
 
-		require.Equal(t, "codex-tui", h.Get("originator"))
-		require.Equal(t, tuiUA, h.Get("user-agent"))
+		require.Equal(t, "codex_cli_rs", h.Get("originator"))
+		require.Equal(t, "codex_cli_rs/9.9.9 (Mac OS X 14.0; arm64) iTerm", h.Get("user-agent"))
 		require.Equal(t, "9.9.9", h.Get("version"))
 		require.Equal(t, "responses=experimental", h.Get("OpenAI-Beta"))
 	})
@@ -67,15 +67,15 @@ func TestEnforceCodexIdentityHeaders(t *testing.T) {
 			name:           "错配 originator 按最终 UA 重配",
 			originator:     "codex_cli_rs",
 			userAgent:      tuiUA,
-			wantOriginator: "codex-tui",
-			wantUA:         tuiUA,
+			wantOriginator: "codex_cli_rs",
+			wantUA:         "codex_cli_rs/0.140.2 (Mac OS X 14.0; arm64) iTerm",
 		},
 		{
 			name:           "官方配套身份原样保留",
 			originator:     "codex-tui",
 			userAgent:      tuiUA,
-			wantOriginator: "codex-tui",
-			wantUA:         tuiUA,
+			wantOriginator: "codex_cli_rs",
+			wantUA:         "codex_cli_rs/0.140.2 (Mac OS X 14.0; arm64) iTerm",
 		},
 		{
 			name:           "第三方 UA 整体回退默认身份",
@@ -94,8 +94,8 @@ func TestEnforceCodexIdentityHeaders(t *testing.T) {
 			name:           "originator override UA 首段被尾部真实身份重写",
 			originator:     "cccc",
 			userAgent:      "cccc/0.142.0 (Ubuntu 22.4.0; x86_64) screen (codex-tui; 0.142.0)",
-			wantOriginator: "codex-tui",
-			wantUA:         "codex-tui/0.142.0 (Ubuntu 22.4.0; x86_64) screen (codex-tui; 0.142.0)",
+			wantOriginator: "codex_cli_rs",
+			wantUA:         "codex_cli_rs/0.142.0 (Ubuntu 22.4.0; x86_64) screen",
 		},
 		{
 			name:           "低于门槛的 version 提升为内置版本",
@@ -182,4 +182,19 @@ func TestCodexCanonicalIdentityFallsBackForInvalidResolverValue(t *testing.T) {
 
 	require.Equal(t, codexCLIUserAgent, CodexCanonicalUserAgent())
 	require.Equal(t, codexCLIVersion, CodexCanonicalClientVersion())
+}
+
+// 历史面板 TUI 身份在规范出口和账号自定义出口中保持成对迁移。
+func TestCodexTUIIdentityNormalizesToCLI(t *testing.T) {
+	SetCodexCanonicalUserAgentResolver(func() string { return "codex-tui/0.200.1 (Linux; x86_64) terminal (codex-tui; 0.200.1)" })
+	t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
+	ua, originator := CodexCanonicalAuthIdentity()
+	require.Equal(t, "codex_cli_rs", originator)
+	require.Equal(t, "codex_cli_rs/0.200.1 (Linux; x86_64) terminal", ua)
+	h := make(http.Header)
+	h.Set("originator", "codex-tui")
+	h.Set("user-agent", "codex-tui/0.190.0 (Mac OS X 14.0; arm64) iTerm")
+	enforceCodexIdentityHeaders(h)
+	require.Equal(t, "codex_cli_rs", h.Get("originator"))
+	require.Equal(t, "codex_cli_rs/0.190.0 (Mac OS X 14.0; arm64) iTerm", h.Get("user-agent"))
 }

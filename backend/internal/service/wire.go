@@ -9,6 +9,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/payment"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/antigravity"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/chanshui"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/manxue"
@@ -873,6 +874,7 @@ var ProviderSet = wire.NewSet(
 	NewTicketService,
 	ProvideTicketRuntime,
 	ProvideIntelligenceService,
+	ProvideChanshuiService,
 	ProvideDailyActivityService,
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
@@ -1113,6 +1115,20 @@ func ProvideClaudeResetCreditService(accounts AccountRepository, tokens *ClaudeT
 // ProvideIntelligenceService 复用数据库权限与后台生命周期，不进入既有渠道探测统计。
 func ProvideIntelligenceService(repo IntelligenceRepository, keys APIKeyRepository, groups GroupRepository, keyService *APIKeyService, settings *SettingService) *IntelligenceService {
 	svc := NewIntelligenceService(repo, keys, groups, keyService, manxue.NewClient(nil), settings.IsIntelligenceEnabled)
+	svc.Start()
+	return svc
+}
+
+// ProvideChanshuiService 使用独立队列；事务 outbox 保证跨实例一致，本实例同时刷新调度缓存。
+func ProvideChanshuiService(repo ChanshuiRepository, accounts AccountRepository, settings *SettingService, snapshot *SchedulerSnapshotService) *ChanshuiService {
+	svc := NewChanshuiService(repo, accounts, chanshui.NewClient(nil), settings.IsChanshuiEnabled)
+	svc.onDisabled = func(ctx context.Context, id int64) {
+		if snapshot != nil {
+			if account, err := accounts.GetByID(ctx, id); err == nil && account != nil {
+				_ = snapshot.UpdateAccountInCache(ctx, account)
+			}
+		}
+	}
 	svc.Start()
 	return svc
 }

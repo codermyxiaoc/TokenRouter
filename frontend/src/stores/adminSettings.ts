@@ -32,6 +32,8 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
   const paymentEnabled = ref(readCachedBool('payment_enabled_cached', false))
   // 仅缓存后台菜单可见性；不作为插件运行权限或停用开关。
   const pluginManagementEnabled = ref(readCachedBool('plugin_management_enabled_cached', false))
+  // 掺水检测仅使用管理员私有设置，默认隐藏且不读取浏览器持久缓存。
+  const chanshuiEnabled = ref(false)
   const customMenuItems = ref<CustomMenuItem[]>([])
 
   async function fetch(force = false): Promise<void> {
@@ -44,6 +46,7 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
         adminAPI.settings.getSettings(),
         adminAPI.payment.getConfig()
       ])
+      chanshuiEnabled.value = settings.chanshui_enabled === true
       opsMonitoringEnabled.value = settings.ops_monitoring_enabled ?? true
       writeCachedBool('ops_monitoring_enabled_cached', opsMonitoringEnabled.value)
 
@@ -63,6 +66,16 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
       console.error('[adminSettings] Failed to fetch settings:', err)
     } finally {
       loading.value = false
+    }
+  }
+
+  // 路由单独核对已保存的开关，不受菜单缓存或支付配置请求失败影响。
+  async function refreshChanshuiEnabled(): Promise<void> {
+    try {
+      const settings = await adminAPI.settings.getSettings()
+      chanshuiEnabled.value = settings.chanshui_enabled === true
+    } catch {
+      chanshuiEnabled.value = false
     }
   }
 
@@ -115,6 +128,8 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
     opsRealtimeMonitoringEnabled,
     paymentEnabled,
     pluginManagementEnabled,
+    chanshuiEnabled,
+    refreshChanshuiEnabled,
     customMenuItems,
     fetch,
     setOpsMonitoringEnabledLocal,

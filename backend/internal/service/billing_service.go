@@ -951,6 +951,13 @@ func (s *BillingService) initFallbackPricing() {
 		LongContextOutputMultiplier:   2,
 	}
 
+	// Grok 4.7 fast 使用独立精确价格项，避免影响标准版与未知后缀的回退行为。
+	s.fallbackPrices["grok-4.7-fast"] = &ModelPricing{
+		InputPricePerToken: 4e-6, OutputPricePerToken: 12e-6, CacheReadPricePerToken: 1e-6,
+		LongContextInputThreshold: 200000, LongContextThresholdInclusive: true,
+		LongContextInputMultiplier: 1.5, LongContextOutputMultiplier: 1.5,
+	}
+
 	// xAI Grok 4.3：20 万 token 以下每百万输入 $1.25、缓存输入 $0.20、输出 $2.50。
 	s.fallbackPrices["grok-4.3"] = &ModelPricing{
 		InputPricePerToken:            1.25e-6,
@@ -1220,6 +1227,12 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 		case "gpt-5.3-codex", "gpt-5.3-codex-spark":
 			return s.fallbackPrices["gpt-5.3-codex"]
 		}
+	}
+
+	// 供应商前缀不改变同一 Fast 型号的价格，但未知后缀仍走原有未知型号回退。
+	switch strings.ToLower(strings.TrimSpace(xai.StripGrokProviderPrefix(model))) {
+	case "grok-4.7-fast", "grok-4.7-build-fast":
+		return s.fallbackPrices["grok-4.7-fast"]
 	}
 
 	switch modelLower {

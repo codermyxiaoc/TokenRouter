@@ -197,6 +197,9 @@ func TestAdvancedSchedulerRuntimeFeedbackSnapshot_RecordsSamplesAndObservedTime(
 }
 
 func TestAdvancedSchedulerScoreDiagnosticService_UsesProcessConfigBeforeFallback(t *testing.T) {
+	// 本用例验证无运行时覆盖的进程默认值，不能继承其他设置测试留下的全局缓存。
+	resetAdvancedSchedulerSettingCacheForTest()
+	t.Cleanup(resetAdvancedSchedulerSettingCacheForTest)
 	group := &Group{ID: 501, Name: "advanced", Platform: PlatformGemini, SchedulerType: GroupSchedulerTypeAdvanced}
 	target := &Account{
 		ID:            5011,
@@ -445,6 +448,9 @@ func TestAdvancedSchedulerScoreDiagnosticService_FiltersModelRuntimeBlock(t *tes
 }
 
 func TestAdvancedSchedulerScoreDiagnosticService_EscapedStickyUsesRegularWindowCostGate(t *testing.T) {
+	// 粘性逃逸阈值来自本用例的配置，隔离跨测试及 -count 重复轮次的运行时缓存。
+	resetAdvancedSchedulerSettingCacheForTest()
+	t.Cleanup(resetAdvancedSchedulerSettingCacheForTest)
 	group := &Group{
 		ID: 1301, Platform: PlatformAnthropic, SchedulerType: GroupSchedulerTypeAdvanced,
 		AdvancedSchedulerOverrides: GroupAdvancedSchedulerOverrides{

@@ -182,7 +182,10 @@ type CreativeRun struct {
 	ErrorMessage        *string
 	ReleaseTargetStatus string
 	AttemptCount        int
-	ProvisioningPhase   string
+	// 图片执行预算不随 worker 重排、重启或备用账号切换而重置，TTS 不使用这两个字段。
+	ImageAttemptAccountIDs   []int64
+	ImageExecutionDeadlineAt *time.Time
+	ProvisioningPhase        string
 	// SettlementAttemptCount 与 ReleaseAttemptCount 分离执行重试和资金补偿重试。
 	SettlementAttemptCount   int
 	ReleaseAttemptCount      int
@@ -308,6 +311,13 @@ type CreativeRunOutputBatchReader interface {
 // CreativeRunAllowanceMarker 持久化余额/额度预占事实，供补偿流程重启后判断是否需要释放。
 type CreativeRunAllowanceMarker interface {
 	SetCreativeRunAllowanceReserved(ctx context.Context, runID string, reserved bool) error
+}
+
+// CreativeImageAttemptRepository 原子取得图片执行栅栏并保存安全换号预算。
+// 独立于旧任务接口，音频和资金补偿不会意外执行图片路由逻辑。
+type CreativeImageAttemptRepository interface {
+	BeginCreativeImageAttempt(context.Context, string, int64, time.Duration, time.Time) (*CreativeRun, error)
+	AuthorizeCreativeImageRetry(context.Context, string, int64) error
 }
 
 // CreativeRunRepository 持久化创作台任务元数据。

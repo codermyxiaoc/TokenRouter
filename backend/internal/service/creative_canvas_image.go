@@ -25,6 +25,9 @@ func creativeImageProviderReconciliationDue(run *CreativeRun, now time.Time, tim
 	if run.ErrorCode != nil && *run.ErrorCode == "PROVIDER_RESULT_UNCONFIRMED" {
 		return true
 	}
+	if run.ImageExecutionDeadlineAt != nil {
+		return !now.Before(*run.ImageExecutionDeadlineAt)
+	}
 	if timeout <= 0 || run.StartedAt == nil {
 		return false
 	}
@@ -42,7 +45,7 @@ func creativeCanvasImageExecutionTimeout(public *CreativePublicService) time.Dur
 // 任务编号来自已验证归属的记录，仅展示安全身份，不回显供应商响应或素材地址。
 func creativeImageUnconfirmedMessage(run *CreativeRun, now time.Time, timeout time.Duration) string {
 	reason := "图片请求已中断或返回结果无法确认"
-	if run.StartedAt != nil && timeout > 0 && !now.Before(run.StartedAt.Add(timeout)) {
+	if run.ImageExecutionDeadlineAt != nil && !now.Before(*run.ImageExecutionDeadlineAt) || run.ImageExecutionDeadlineAt == nil && run.StartedAt != nil && timeout > 0 && !now.Before(run.StartedAt.Add(timeout)) {
 		reason = "图片请求等待已超时，上游结果尚未确认"
 	}
 	return fmt.Sprintf("%s，请联系管理员核对任务 %s；已停止自动重发，预扣尚未结算", reason, run.RunID)

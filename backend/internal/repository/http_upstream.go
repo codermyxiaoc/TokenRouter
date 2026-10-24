@@ -301,6 +301,12 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 
 // doUpstreamRequest 只取消当前上游尝试，保留调用方的排水结算与后续重试上下文。
 func doUpstreamRequest(client *http.Client, req *http.Request) (*http.Response, error) {
+	if service.ImageAttemptHasPolicy(req.Context()) && req.Method == http.MethodPost {
+		// 生成 POST 只能由上层明确授权发送，禁止 transport 利用 GetBody 隐式重放。
+		clone := req.Clone(req.Context())
+		clone.GetBody = nil
+		req = clone
+	}
 	if err := service.ClaimCreativeTextUpstreamRequest(req); err != nil {
 		return nil, err
 	}
@@ -353,7 +359,7 @@ func httpClientForUpstreamRequest(s *httpUpstreamService, client *http.Client, r
 	}
 	ctx := req.Context()
 	switch {
-	case service.HTTPUpstreamRedirectsDisabled(ctx):
+	case service.HTTPUpstreamRedirectsDisabled(ctx) || service.ImageAttemptHasPolicy(ctx) && req.Method == http.MethodPost:
 		clone := *client
 		clone.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 		return &clone
@@ -400,7 +406,7 @@ func httpClientWithGrokAccessDeniedFallback(client *http.Client) *http.Client {
 // RoundTrip 只接受官方 CLI 身份、OAuth Bearer 和明确 Access denied 响应作为回退候选。
 func (t *grokAccessDeniedFallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
-	if service.HasCreativeTextUsageSink(req.Context()) {
+	if service.HasCreativeTextUsageSink(req.Context()) || service.ImageAttemptHasPolicy(req.Context()) && req.Method == http.MethodPost {
 		return resp, err
 	}
 	if err != nil || !isGrokCLIAccessDeniedFallbackCandidate(req, resp) {

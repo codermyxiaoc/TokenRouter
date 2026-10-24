@@ -83,6 +83,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		service.NewImageTaskService(nil),        // 异步图片租约与补偿循环
 		&service.VideoTaskService{},             // 独立视频恢复器允许幂等关闭
 		service.NewLegacyVideoRuntime(nil, nil), // 旧视频恢复器未启动时也必须可安全关闭。
+		nil,                                     // 待确认媒体资金维护器未启动。
 		pricingSvc,
 		emailQueueSvc,
 		billingCacheSvc,
@@ -109,6 +110,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		service.NewUpstreamBillingProbeService(nil, nil, nil), // 倍率探测生命周期也必须安全关闭。
 		nil, // 工单后台任务
 		service.NewIntelligenceService(nil, nil, nil, nil, nil, nil), // 未启动的检测工作者也可安全关闭
+		service.NewChanshuiService(nil, nil, nil, nil),               // 掺水检测工作者未启动时也必须幂等关闭。
 		nil, // 插件进程管理
 	)
 

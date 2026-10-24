@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/util/urlvalidator"
@@ -79,7 +80,41 @@ func (u *ImageResultUploader) CheckReadiness(ctx context.Context) error {
 	return nil
 }
 
+// 仅共享安全传输连接池；调用方可独立配置视频超时，不能修改全局图片客户端。
+var sharedImageDownloadClient = sync.OnceValue(newImageDownloadHTTPClient)
+
 func defaultImageDownloadHTTPClient() *http.Client {
+	client := *sharedImageDownloadClient()
+	return &client
+}
+
+// 公网下载额外排除 CGNAT、this-network 和云元数据主机，不能仅依赖 IsPrivate。
+func isPublicImageDownloadIP(ip net.IP) bool {
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || urlvalidator.IsBlockedHost(ip.String()) {
+		return false
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4[0] != 0 && !(v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127)
+	}
+	return true
+}
+
+func isBlockedImageDownloadHost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "" || urlvalidator.IsBlockedHost(host) {
+		return true
+	}
+	switch host {
+	case "localhost.localdomain", "metadata", "metadata.google.internal", "metadata.goog", "instance-data", "instance-data.ec2.internal":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !isPublicImageDownloadIP(ip)
+	}
+	return false
+}
+
+func newImageDownloadHTTPClient() *http.Client {
 	// 禁止环境代理和内网连接；直接拨号已校验的解析地址，避免 DNS 重绑定与重定向绕过。
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
@@ -88,7 +123,7 @@ func defaultImageDownloadHTTPClient() *http.Client {
 		if err != nil {
 			return nil, err
 		}
-		if urlvalidator.IsBlockedHost(host) {
+		if isBlockedImageDownloadHost(host) {
 			return nil, errors.New("image download target is not public")
 		}
 		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
@@ -99,7 +134,7 @@ func defaultImageDownloadHTTPClient() *http.Client {
 			return nil, errors.New("image download host has no address")
 		}
 		for _, ip := range ips {
-			if !ip.IP.IsGlobalUnicast() || ip.IP.IsPrivate() || urlvalidator.IsBlockedHost(ip.IP.String()) {
+			if !isPublicImageDownloadIP(ip.IP) {
 				return nil, errors.New("image download resolved address is not public")
 			}
 		}
@@ -120,6 +155,9 @@ func defaultImageDownloadHTTPClient() *http.Client {
 		}
 		if req.URL.Scheme != "http" && req.URL.Scheme != "https" || req.URL.User != nil {
 			return errors.New("invalid image download redirect")
+		}
+		if isBlockedImageDownloadHost(req.URL.Hostname()) {
+			return errors.New("image download redirect target is not public")
 		}
 		return nil
 	}}
@@ -378,9 +416,13 @@ func (u *ImageResultUploader) downloadOnce(ctx context.Context, rawURL string) (
 	if int64(len(data)) > limit {
 		return nil, "", classifyImageStorageFailure("download", imageResultTooLarge, fmt.Errorf("downloaded image exceeds %d bytes", limit))
 	}
-	contentType := strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0])
+	contentType := strings.ToLower(strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0]))
 	if !strings.HasPrefix(contentType, "image/") {
-		contentType = detectImageContentType(data)
+		// 非图片响应不能伪装成 PNG；Rewrite 仍会进一步拒绝 SVG 等非位图内容。
+		contentType = detectedImageContentType(data)
+		if contentType == "" {
+			return nil, "", classifyImageStorageFailure("download", imageResultInvalid, errors.New("download image: content is not an image"))
+		}
 	}
 	return data, contentType, nil
 }

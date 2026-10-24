@@ -71,6 +71,9 @@ func TestOpenAIStreamBusy_SafeEmptyPreludeAllowsFailover(t *testing.T) {
 			`{"type":"response.output_text.delta","delta":"","item_id":"item-1","output_index":0,"content_index":0}`,
 			`{"type":"response.reasoning_text.delta","delta":""}`,
 			`{"type":"response.reasoning_summary_text.delta","delta":""}`,
+			`{"type":"response.function_call_arguments.delta","delta":""}`,
+			`{"type":"response.custom_tool_call_input.delta","delta":""}`,
+			`{"type":"response.output_text.done","text":""}`,
 		} {
 			t.Run(prelude+map[bool]string{false: "/native", true: "/passthrough"}[passthrough], func(t *testing.T) {
 				c, rec, svc, account := busyTestContext()
@@ -92,7 +95,7 @@ func TestOpenAIStreamBusy_ConservativePreludeRecordsFinalFailure(t *testing.T) {
 		for _, prelude := range []string{
 			`{"type":"response.output_text.delta","delta":"hello"}`,
 			`{"type":"provider.unknown"}`,
-			`{"type":"response.function_call_arguments.delta","delta":""}`,
+			`{"type":"response.function_call_arguments.delta","delta":"","arguments":"hidden"}`,
 			`{"type":"response.output_item.added","item":{"type":"reasoning","encrypted_content":"opaque"}}`,
 			`{"type":"response.output_text.delta","delta":"","usage":{"input_tokens":1}}`,
 			`{"type":"ping","future_side_effect":true}`,

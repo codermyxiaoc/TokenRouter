@@ -373,6 +373,7 @@ type UpdateSettingsRequest struct {
 	TeamEnabled         *bool `json:"team_enabled"`
 	CreativeEnabled     *bool `json:"creative_enabled"`
 	IntelligenceEnabled *bool `json:"intelligence_enabled"`
+	ChanshuiEnabled     *bool `json:"chanshui_enabled"`
 
 	// cyber 会话屏蔽开关与 TTL
 	CyberSessionBlockEnabled    *bool   `json:"cyber_session_block_enabled"`
@@ -1908,6 +1909,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.CreativeEnabled
 		}(),
+		ChanshuiEnabled: func() bool {
+			if req.ChanshuiEnabled != nil {
+				return *req.ChanshuiEnabled
+			}
+			return previousSettings.ChanshuiEnabled
+		}(),
 		IntelligenceEnabled: func() bool {
 			if req.IntelligenceEnabled != nil {
 				return *req.IntelligenceEnabled
@@ -2522,6 +2529,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		TeamEnabled:                                      updatedSettings.TeamEnabled,
 		CreativeEnabled:                                  updatedSettings.CreativeEnabled,
 		IntelligenceEnabled:                              updatedSettings.IntelligenceEnabled,
+		ChanshuiEnabled:                                  updatedSettings.ChanshuiEnabled,
 		CreativeModelSettings:                            updatedSettings.CreativeModelSettings,
 		CreativeWorkerCount:                              updatedSettings.CreativeWorkerCount,
 		MediaTaskReconciliationTimeoutMinutes:            updatedSettings.MediaTaskReconciliationTimeoutMinutes,

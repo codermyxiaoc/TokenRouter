@@ -55,7 +55,7 @@ func (APIKey) Fields() []ent.Field {
 		field.Bool("smart_routing").Default(false).
 			Comment("是否启用跨分组智能路由"),
 		// 冷却属于单个 Key 的路由配置，0 关闭冷却但保留跨组重试。
-		field.Int("smart_routing_cooldown_seconds").Default(60).Min(0).Max(3600).
+		field.Int("smart_routing_cooldown_seconds").Default(10).Min(0).Max(3600).
 			SchemaType(map[string]string{dialect.Postgres: "integer"}).
 			Comment("智能路由分组上游失败后的冷却秒数，0 关闭冷却"),
 		field.String("status").

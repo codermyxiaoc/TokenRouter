@@ -80,6 +80,10 @@ const (
 	FieldReleaseTargetStatus = "release_target_status"
 	// FieldAttemptCount holds the string denoting the attempt_count field in the database.
 	FieldAttemptCount = "attempt_count"
+	// FieldImageAttemptAccountIds holds the string denoting the image_attempt_account_ids field in the database.
+	FieldImageAttemptAccountIds = "image_attempt_account_ids"
+	// FieldImageExecutionDeadlineAt holds the string denoting the image_execution_deadline_at field in the database.
+	FieldImageExecutionDeadlineAt = "image_execution_deadline_at"
 	// FieldAllowanceReserved holds the string denoting the allowance_reserved field in the database.
 	FieldAllowanceReserved = "allowance_reserved"
 	// FieldProvisioningPhase holds the string denoting the provisioning_phase field in the database.
@@ -142,6 +146,8 @@ var Columns = []string{
 	FieldErrorMessage,
 	FieldReleaseTargetStatus,
 	FieldAttemptCount,
+	FieldImageAttemptAccountIds,
+	FieldImageExecutionDeadlineAt,
 	FieldAllowanceReserved,
 	FieldProvisioningPhase,
 	FieldProviderResultRecordedAt,
@@ -234,6 +240,8 @@ var (
 	ReleaseTargetStatusValidator func(string) error
 	// DefaultAttemptCount holds the default value on creation for the "attempt_count" field.
 	DefaultAttemptCount int
+	// DefaultImageAttemptAccountIds holds the default value on creation for the "image_attempt_account_ids" field.
+	DefaultImageAttemptAccountIds func() []int64
 	// DefaultAllowanceReserved holds the default value on creation for the "allowance_reserved" field.
 	DefaultAllowanceReserved bool
 	// DefaultProvisioningPhase holds the default value on creation for the "provisioning_phase" field.
@@ -414,6 +422,11 @@ func ByReleaseTargetStatus(opts ...sql.OrderTermOption) OrderOption {
 // ByAttemptCount orders the results by the attempt_count field.
 func ByAttemptCount(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAttemptCount, opts...).ToFunc()
+}
+
+// ByImageExecutionDeadlineAt orders the results by the image_execution_deadline_at field.
+func ByImageExecutionDeadlineAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldImageExecutionDeadlineAt, opts...).ToFunc()
 }
 
 // ByAllowanceReserved orders the results by the allowance_reserved field.

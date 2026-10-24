@@ -86,6 +86,9 @@ func creativeHTTPStatusError(statusCode int, message string) *CreativeUpstreamEr
 
 // IsRetryableCreativeError 判断错误是否值得 worker 有限重试。
 func IsRetryableCreativeError(err error) bool {
+	if decision, ok := ImageAttemptDecisionForError(err); ok {
+		return ImageAttemptCanSwitch(decision)
+	}
 	if isCreativeResultUnconfirmedError(err) {
 		return false
 	}
@@ -132,6 +135,63 @@ func NewCreativeExecutor(
 
 // Prepare 复用现有网关调度器选择账号并预占账号并发槽位。
 func (e *CreativeExecutor) Prepare(ctx context.Context, run CreativeRun) (*CreativeExecution, error) {
+	if run.Operation == CreativeOperationTTS {
+		return e.prepareCreativeCandidate(ctx, run, nil)
+	}
+	if len(run.ImageAttemptAccountIDs) >= ImageAttemptMaxSends || run.AttemptCount >= ImageAttemptMaxSends {
+		return nil, ErrCreativeImageBudgetExhausted
+	}
+	if run.ImageExecutionDeadlineAt != nil && !time.Now().Before(*run.ImageExecutionDeadlineAt) {
+		return nil, ErrCreativeImageBudgetExhausted
+	}
+	excluded := make(map[int64]struct{}, len(run.ImageAttemptAccountIDs))
+	for _, id := range run.ImageAttemptAccountIDs {
+		excluded[id] = struct{}{}
+	}
+	// 冷却候选只跳过选号，不消耗发送次数；单轮选号有界，暂时无槽位由队列承担等待。
+	selectCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	sawCooling := false
+	for {
+		execution, err := e.prepareCreativeCandidate(selectCtx, run, excluded)
+		if err != nil {
+			if selectCtx.Err() != nil && ctx.Err() == nil {
+				return nil, ErrCreativeExecutionPending
+			}
+			if errors.Is(err, ErrNoAvailableAccounts) && len(run.ImageAttemptAccountIDs) > 0 && !sawCooling {
+				return nil, ErrCreativeImageBudgetExhausted
+			}
+			return nil, err
+		}
+		id := execution.Account.ID
+		if _, repeated := excluded[id]; repeated {
+			if execution.ReleaseFunc != nil {
+				execution.ReleaseFunc()
+			}
+			return nil, ErrCreativeExecutionPending
+		}
+		remaining := time.Duration(0)
+		if execution.Account.Platform == PlatformGemini && e.gatewayService != nil {
+			remaining = e.gatewayService.ImageModelCooldownRemaining(selectCtx, id, execution.UpstreamModel, run.Operation)
+		} else if e.gateway != nil {
+			remaining = e.gateway.ImageModelCooldownRemaining(selectCtx, id, execution.UpstreamModel, run.Operation)
+		}
+		if remaining <= 0 {
+			return execution, nil
+		}
+		if execution.ReleaseFunc != nil {
+			execution.ReleaseFunc()
+		}
+		excluded[id] = struct{}{}
+		sawCooling = true
+		if selectCtx.Err() != nil {
+			return nil, ErrCreativeExecutionPending
+		}
+	}
+}
+
+// prepareCreativeCandidate 保留原平台准入，只将图片任务的持久失败集合传给现有调度器。
+func (e *CreativeExecutor) prepareCreativeCandidate(ctx context.Context, run CreativeRun, excluded map[int64]struct{}) (*CreativeExecution, error) {
 	if e == nil {
 		return nil, errors.New("creative executor is not configured")
 	}
@@ -149,7 +209,7 @@ func (e *CreativeExecutor) Prepare(ctx context.Context, run CreativeRun) (*Creat
 		if e.gateway == nil {
 			return nil, errors.New("creative OpenAI gateway is not configured")
 		}
-		selection, err = e.prepareOpenAIImageSelection(ctx, groupID, run.Model)
+		selection, err = e.prepareOpenAIImageSelection(ctx, groupID, run.Model, excluded)
 	case PlatformGrok:
 		if e.gateway == nil {
 			return nil, errors.New("creative OpenAI gateway is not configured")
@@ -165,7 +225,7 @@ func (e *CreativeExecutor) Prepare(ctx context.Context, run CreativeRun) (*Creat
 			"",
 			"",
 			selectionModel,
-			nil,
+			excluded,
 			OpenAIUpstreamTransportHTTPSSE,
 			capability,
 			false,
@@ -176,7 +236,7 @@ func (e *CreativeExecutor) Prepare(ctx context.Context, run CreativeRun) (*Creat
 		if e.gatewayService == nil {
 			return nil, errors.New("creative gateway service is not configured")
 		}
-		selection, err = e.gatewayService.SelectAccountWithLoadAwareness(ctx, &groupID, "", run.Model, nil, "", 0)
+		selection, err = e.gatewayService.SelectAccountWithLoadAwareness(ctx, &groupID, "", run.Model, excluded, "", 0)
 	default:
 		return nil, creativeNonRetryableError("creative executor unsupported account platform %s", platform)
 	}
@@ -228,13 +288,17 @@ func (e *CreativeExecutor) Prepare(ctx context.Context, run CreativeRun) (*Creat
 
 // prepareOpenAIImageSelection 只把 Midjourney 交给 API Key 账号，不改变 GPT Image 的原生能力。
 // 请求别名可能在账号层才映射到 MJ；若首次选中 OAuth，先释放槽位，再按 API Key 能力选一次。
-func (e *CreativeExecutor) prepareOpenAIImageSelection(ctx context.Context, groupID int64, model string) (*AccountSelectionResult, error) {
+func (e *CreativeExecutor) prepareOpenAIImageSelection(ctx context.Context, groupID int64, model string, exclusions ...map[int64]struct{}) (*AccountSelectionResult, error) {
+	var excluded map[int64]struct{}
+	if len(exclusions) > 0 {
+		excluded = exclusions[0]
+	}
 	capability := OpenAIImagesCapabilityNative
 	if IsMidjourneyImageGenerationModel(model) || IsMidjourneyImageGenerationModel(e.gateway.resolveChannelRoutingModel(ctx, &groupID, model)) {
 		capability = OpenAIImagesCapabilityAPIKey
 	}
 	for range 2 {
-		selection, _, err := e.gateway.SelectAccountWithSchedulerForImages(ctx, &groupID, "", model, nil, capability)
+		selection, _, err := e.gateway.SelectAccountWithSchedulerForImages(ctx, &groupID, "", model, excluded, capability)
 		if err != nil || selection == nil || selection.Account == nil {
 			return selection, err
 		}
@@ -269,14 +333,23 @@ func creativePlatformImageModel(platform, model string) bool {
 // Execute 使用 Prepare 返回的账号上下文调用上游。
 func (e *CreativeExecutor) Execute(ctx context.Context, run CreativeRun, payload CreativeRunPayload, execution *CreativeExecution) (*CreativeExecuteResult, error) {
 	if e == nil {
+		if run.Operation != CreativeOperationTTS {
+			return nil, creativeImageLocalFailure(errors.New("creative executor is not configured"))
+		}
 		return nil, errors.New("creative executor is not configured")
 	}
 	if execution == nil || execution.Account == nil {
+		if run.Operation != CreativeOperationTTS {
+			return nil, creativeImageLocalFailure(errors.New("creative execution context is not configured"))
+		}
 		return nil, errors.New("creative execution context is not configured")
 	}
 	account := execution.Account
 	upstreamModel := strings.TrimSpace(execution.UpstreamModel)
 	if upstreamModel == "" {
+		if run.Operation != CreativeOperationTTS {
+			return nil, creativeImageLocalFailure(errors.New("creative execution upstream model is not configured"))
+		}
 		return nil, errors.New("creative execution upstream model is not configured")
 	}
 	if run.Operation == CreativeOperationTTS {
@@ -293,23 +366,29 @@ func (e *CreativeExecutor) Execute(ctx context.Context, run CreativeRun, payload
 		return &CreativeExecuteResult{Outputs: outputs, AccountID: account.ID}, nil
 	}
 	if IsMidjourneyImageGenerationModel(upstreamModel) && (account.Platform != PlatformOpenAI || account.Type != AccountTypeAPIKey) {
-		return nil, creativeNonRetryableError("creative Midjourney requires an OpenAI API key account")
+		return nil, creativeImageLocalFailure(creativeNonRetryableError("creative Midjourney requires an OpenAI API key account"))
 	}
 	if IsMidjourneyImageGenerationModel(upstreamModel) {
 		// 排队后账号映射可能变化；只有持久预占明确覆盖四张才允许调用 MJ。
 		if run.RequestedOutputCount != creativeMidjourneyOutputCount {
-			return nil, creativeNonRetryableError("creative Midjourney requires a four-image reservation")
+			return nil, creativeImageLocalFailure(creativeNonRetryableError("creative Midjourney requires a four-image reservation"))
 		}
 	} else {
 		if run.RequestedOutputCount == creativeMidjourneyOutputCount {
 			// 四张报价属于 MJ 合同，执行时映射成其它模型也不能沿用该报价生成。
-			return nil, creativeNonRetryableError("creative four-image reservation requires a Midjourney model")
+			return nil, creativeImageLocalFailure(creativeNonRetryableError("creative four-image reservation requires a Midjourney model"))
 		}
 		// 其它模型保持原有单张输出合同，不受 MJ 固定四张影响。
 		run.RequestedOutputCount = 1
 	}
-	execCtx, cancel := context.WithTimeout(ctx, e.executeTimeout())
+	deadline := time.Now().Add(e.executeTimeout())
+	if run.ImageExecutionDeadlineAt != nil {
+		deadline = *run.ImageExecutionDeadlineAt
+	}
+	execCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
+	execCtx, policyCancel := WithImageAttemptPolicy(execCtx, time.Until(deadline))
+	defer policyCancel()
 
 	var outputs []CreativeOutput
 	var err error
@@ -321,20 +400,27 @@ func (e *CreativeExecutor) Execute(ctx context.Context, run CreativeRun, payload
 	case PlatformGemini:
 		outputs, err = e.executeGemini(execCtx, run, payload, account, upstreamModel)
 	default:
-		return nil, creativeNonRetryableError("creative executor unsupported account platform %s", account.Platform)
+		return nil, creativeImageLocalFailure(creativeNonRetryableError("creative executor unsupported account platform %s", account.Platform))
 	}
 	if err != nil {
-		e.reportScheduleResult(execution, account.ID, false)
+		// 构造请求阶段的错误没有生成副作用；发送后的无分类错误一律按未知处理。
+		if _, classified := ImageAttemptDecisionForError(err); !classified {
+			decision := ImageAttemptDecision{Outcome: ImageAttemptUnknown, Reason: "image_result_unconfirmed"}
+			if ImageAttemptSendCount(execCtx) == 0 {
+				decision = ImageAttemptDecision{Outcome: ImageAttemptNotSent, Reason: "image_request_not_sent"}
+			}
+			err = WrapImageAttemptError(err, decision)
+		}
+		e.recordCreativeImageFailure(execCtx, run, execution, err)
 		return nil, err
 	}
 	outputs, err = normalizeCreativeOutputsForModel(outputs, upstreamModel)
 	if err != nil {
-		e.reportScheduleResult(execution, account.ID, false)
 		if IsMidjourneyImageGenerationModel(upstreamModel) {
 			// MJ 已返回生成结果，输出校验失败不能触发再次付费生成或无依据释放预占。
 			return nil, creativeResultUnconfirmedError()
 		}
-		return nil, err
+		return nil, WrapImageAttemptError(err, ImageAttemptDecision{Outcome: ImageAttemptAccepted, Reason: "image_output_validation_failed"})
 	}
 	e.reportScheduleResult(execution, account.ID, true)
 	return &CreativeExecuteResult{

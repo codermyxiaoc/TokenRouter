@@ -10,6 +10,7 @@ import tickets from './tickets'
 import mediaTasks from './mediaTasks'
 import apiDocs from './apiDocs'
 import intelligence from './intelligence'
+import chanshui from './chanshui'
 import dailyActivities from './dailyActivities'
 
 export default {
@@ -25,5 +26,6 @@ export default {
   ...mediaTasks,
   ...apiDocs,
   ...intelligence,
+  ...chanshui,
   ...dailyActivities,
 }

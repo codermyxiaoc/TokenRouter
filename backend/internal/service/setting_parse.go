@@ -261,6 +261,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyTeamEnabled:         "true",
 		SettingKeyCreativeEnabled:     "true",
 		SettingKeyIntelligenceEnabled: "false",
+		SettingKeyChanshuiEnabled:     "false",
 
 		// 风控中心默认关闭，避免升级后未配置审计 Key 时影响现有请求。
 		SettingKeyRiskControlEnabled:          "false",
@@ -399,6 +400,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		TeamEnabled:                            settings[SettingKeyTeamEnabled] != "false",
 		CreativeEnabled:                        settings[SettingKeyCreativeEnabled] != "false",
 		IntelligenceEnabled:                    settings[SettingKeyIntelligenceEnabled] == "true",
+		ChanshuiEnabled:                        settings[SettingKeyChanshuiEnabled] == "true",
 		RiskControlEnabled:                     settings[SettingKeyRiskControlEnabled] == "true",
 		CyberSessionBlockEnabled:               settings[SettingKeyCyberSessionBlockEnabled] == "true",
 		CyberPolicyUserAllowlist:               settings[SettingKeyCyberPolicyUserAllowlist],

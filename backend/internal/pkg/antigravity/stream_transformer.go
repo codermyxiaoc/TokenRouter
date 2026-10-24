@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"github.com/tidwall/gjson"
 )
 
 // BlockType 内容块类型
@@ -97,7 +99,26 @@ func (p *StreamingProcessor) ProcessLine(line string) []byte {
 		v1Resp.ModelVersion = directResp.ModelVersion
 	}
 
+	// 直接格式的 JSON 解码为包装结构也会成功，必须按字段而非解码错误识别。
+	if !gjson.Get(data, "response").Exists() {
+		var directResp GeminiResponse
+		if err := json.Unmarshal([]byte(data), &directResp); err != nil {
+			return nil
+		}
+		v1Resp.Response = directResp
+		v1Resp.ResponseID = directResp.ResponseID
+		v1Resp.ModelVersion = directResp.ModelVersion
+	}
+
 	geminiResp := &v1Resp.Response
+	// 空计量心跳不是新的计费快照；保留先前累计值，显式零值仍可更新。
+	metadata := gjson.Get(data, "response.usageMetadata")
+	if !metadata.Exists() {
+		metadata = gjson.Get(data, "usageMetadata")
+	}
+	if !hasAntigravityUsageCounters(metadata) {
+		geminiResp.UsageMetadata = nil
+	}
 
 	var result bytes.Buffer
 
@@ -108,10 +129,11 @@ func (p *StreamingProcessor) ProcessLine(line string) []byte {
 
 	// 更新 usage
 	// 注意：Gemini 的 promptTokenCount 包含 cachedContentTokenCount，
-	// 但 Claude 的 input_tokens 不包含 cache_read_input_tokens，需要减去
+	// 但 Claude 的 input_tokens 不包含 cache_read_input_tokens，需要减去。
+	// prompt 被拦截时上游可能只报 cachedContentTokenCount，差值下限为 0。
 	if geminiResp.UsageMetadata != nil {
 		cached := geminiResp.UsageMetadata.CachedContentTokenCount
-		p.inputTokens = geminiResp.UsageMetadata.PromptTokenCount - cached
+		p.inputTokens = max(geminiResp.UsageMetadata.PromptTokenCount-cached, 0)
 		p.outputTokens = geminiResp.UsageMetadata.CandidatesTokenCount + geminiResp.UsageMetadata.ThoughtsTokenCount
 		p.cacheReadTokens = cached
 		p.imageOutputTokens = geminiResp.UsageMetadata.ImageOutputTokens()
@@ -184,7 +206,7 @@ func (p *StreamingProcessor) emitMessageStart(v1Resp *V1InternalResponse) []byte
 	usage := ClaudeUsage{}
 	if v1Resp.Response.UsageMetadata != nil {
 		cached := v1Resp.Response.UsageMetadata.CachedContentTokenCount
-		usage.InputTokens = v1Resp.Response.UsageMetadata.PromptTokenCount - cached
+		usage.InputTokens = max(v1Resp.Response.UsageMetadata.PromptTokenCount-cached, 0)
 		usage.OutputTokens = v1Resp.Response.UsageMetadata.CandidatesTokenCount + v1Resp.Response.UsageMetadata.ThoughtsTokenCount
 		usage.CacheReadInputTokens = cached
 		usage.ImageOutputTokens = v1Resp.Response.UsageMetadata.ImageOutputTokens()
@@ -562,4 +584,22 @@ func (p *StreamingProcessor) formatSSE(eventType string, data any) []byte {
 	}
 
 	return []byte(fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, string(jsonData)))
+}
+
+// 仅总计不能区分输入、输出与缓存，不能把它误当成各分项均为零。
+func hasAntigravityUsageCounters(metadata gjson.Result) bool {
+	if !metadata.IsObject() {
+		return false
+	}
+	for _, field := range []string{"promptTokenCount", "candidatesTokenCount", "cachedContentTokenCount", "thoughtsTokenCount"} {
+		if value := metadata.Get(field); value.Exists() && value.Type != gjson.Null {
+			return true
+		}
+	}
+	found := false
+	metadata.Get("candidatesTokensDetails").ForEach(func(_, detail gjson.Result) bool {
+		found = detail.Get("modality").String() == "IMAGE" && (detail.Get("tokenCount").Exists() && detail.Get("tokenCount").Type != gjson.Null)
+		return !found
+	})
+	return found
 }

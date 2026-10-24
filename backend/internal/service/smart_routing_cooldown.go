@@ -19,6 +19,11 @@ type SmartRoutingAccountCooldownCache interface {
 	CooldownSmartRoutingAccounts(context.Context, int64, []int64, string, string, time.Duration) error
 }
 
+// 精确缓存直接返回单调时钟截止时间，跨仓储、服务和候选扫描不重新起算剩余时长。
+type SmartRoutingAccountCooldownDeadlineCache interface {
+	GetSmartRoutingAccountCooldownDeadlines(context.Context, int64, []int64, string, string) (map[int64]time.Time, error)
+}
+
 // UsesSmartRoutingAccountCooldown 区分生产账号冷却与旧适配器的组级兼容能力。
 func (s *SmartRoutingService) UsesSmartRoutingAccountCooldown() bool { return true }
 
@@ -36,7 +41,7 @@ func (s *SmartRoutingService) CooldownSmartRoutingAccounts(ctx context.Context, 
 	return cache.CooldownSmartRoutingAccounts(cacheCtx, keyID, accountIDs, model, endpoint, min(duration, time.Hour))
 }
 
-func (s *SmartRoutingService) loadSmartRoutingAccountCooldowns(ctx context.Context, accountIDs []int64) map[int64]time.Duration {
+func (s *SmartRoutingService) loadSmartRoutingAccountCooldowns(ctx context.Context, accountIDs []int64) map[int64]time.Time {
 	config, _ := ctx.Value(smartRoutingAccountCooldownContextKey{}).(smartRoutingAccountCooldownContext)
 	if config.duration <= 0 || config.keyID <= 0 || len(accountIDs) == 0 || s == nil || s.gateway == nil {
 		return nil
@@ -47,12 +52,26 @@ func (s *SmartRoutingService) loadSmartRoutingAccountCooldowns(ctx context.Conte
 	}
 	cacheCtx, cancel := context.WithTimeout(ctx, smartRoutingCooldownCacheTimeout)
 	defer cancel()
-	remaining, err := cache.GetSmartRoutingAccountCooldowns(cacheCtx, config.keyID, accountIDs, config.model, config.endpoint)
+	var err error
+	deadlines := make(map[int64]time.Time)
+	if exact, ok := cache.(SmartRoutingAccountCooldownDeadlineCache); ok {
+		deadlines, err = exact.GetSmartRoutingAccountCooldownDeadlines(cacheCtx, config.keyID, accountIDs, config.model, config.endpoint)
+	} else {
+		// 旧内部适配器仍可返回时长，以查询发起时刻为基准避免加入读取耗时。
+		began := time.Now()
+		var remaining map[int64]time.Duration
+		remaining, err = cache.GetSmartRoutingAccountCooldowns(cacheCtx, config.keyID, accountIDs, config.model, config.endpoint)
+		for id, ttl := range remaining {
+			if ttl > 0 {
+				deadlines[id] = began.Add(ttl)
+			}
+		}
+	}
 	if err != nil {
 		slog.Warn("smart_routing_account_cooldown_read_failed", "api_key_id", config.keyID, "error", err)
 	}
-	setSmartRoutingAccountCooldowns(ctx, accountIDs, remaining)
-	return remaining
+	setSmartRoutingAccountCooldowns(ctx, accountIDs, deadlines)
+	return deadlines
 }
 
 const smartRoutingCooldownCacheTimeout = 250 * time.Millisecond

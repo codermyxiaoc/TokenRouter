@@ -1148,6 +1148,11 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		if _, rejected := middleware2.GetIngressRejectReason(c); rejected {
 			return
 		}
+		// 纯客户端取消不是上游或平台故障；此前已观测到的上游/流错误仍须保留诊断。
+		if status == statusClientClosedRequest && errors.Is(c.Request.Context().Err(), context.Canceled) &&
+			!hasOpsUpstreamErrorContext(c) && !parsed.StreamFailure && len(service.GetOpsStreamErrors(c)) == 0 {
+			return
+		}
 		// 成功请求只保留 usage_logs 统计，失败请求才写入管理员排障详情。
 		// 错误日志仍按原有异步队列单独记录。入口拒绝在此之前直接返回，
 		// 遵守 hard skip 语义，不把认证失败正文写入详情表。

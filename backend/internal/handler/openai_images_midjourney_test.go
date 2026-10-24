@@ -87,7 +87,8 @@ func TestMidjourneyImagesHandlersReserveFourBeforeGeneration(t *testing.T) {
 				fallback.ID++
 				accounts.accounts[0].Credentials = map[string]any{"api_key": "local-test", "model_mapping": map[string]any{model: model}}
 				accounts.accounts = append(accounts.accounts, fallback)
-				upstream.statuses = []int{503, 200}
+				// 普通503无法证明未受理；这里用明确429拒绝验证换号后的冻结张数约束。
+				upstream.statuses = []int{429, 200}
 			}
 			if tc.backup {
 				fallback := accounts.accounts[0]

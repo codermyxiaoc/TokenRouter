@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -668,7 +669,8 @@ func (s *OpenAIGatewayService) ForwardImages(
 	parsed *OpenAIImagesRequest,
 	channelMappedModel string,
 	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
-) (*OpenAIForwardResult, error) {
+) (result *OpenAIForwardResult, err error) {
+	defer func() { result, err = finalizeImageAttemptForward(ctx, result, err) }()
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
@@ -725,7 +727,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	// 就把已经在出图的上游调用打断成 context canceled，网关记 502、不扣费，而上游那边
 	// 图已经生成并计费。同一端点的 OAuth 分支 forwardOpenAIImagesOAuth 以及 Grok 媒体
 	// 路径本来就无条件脱钩，这里对齐；上游侧仍由 ResponseHeaderTimeout 兜底。
-	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+	upstreamCtx, releaseUpstreamCtx := DetachImageAttemptContext(ctx)
 	defer releaseUpstreamCtx()
 
 	token, _, err := s.GetAccessToken(upstreamCtx, account)
@@ -742,9 +744,15 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamStart := time.Now()
+	if err := BeginImageAttempt(upstreamCtx, account.ID, upstreamModel, ImageAttemptOperation(parsed)); err != nil {
+		return nil, err
+	}
 	markImageUpstreamAttempt(c)
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+	if resp == nil && err == nil {
+		err = errors.New("image upstream returned no response")
+	}
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
@@ -757,13 +765,32 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 			Kind:               "request_error",
 			Message:            safeErr,
 		})
+		if ImageAttemptHasPolicy(ctx) {
+			return nil, RecordImageAttemptFailure(ctx, fmt.Errorf("upstream request failed: %s", safeErr), ClassifyImageTransportFailure(err))
+		}
 		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
+	if resp.Body == nil {
+		resp.Body = http.NoBody
+	}
 	if resp.StatusCode >= 400 {
-		respBody := s.readUpstreamErrorBody(resp)
+		var respBody []byte
+		if ImageAttemptHasPolicy(ctx) {
+			var readErr error
+			respBody, readErr = readImageAttemptErrorBody(resp)
+			if readErr != nil {
+				_ = resp.Body.Close()
+				return nil, imageAttemptUnknownFailure(ctx, readErr)
+			}
+		} else {
+			respBody = s.readUpstreamErrorBody(resp)
+		}
 		_ = resp.Body.Close()
 		respBody = s.redactAgentIdentitySensitiveBody(upstreamCtx, account, respBody)
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+		if ImageAttemptHasPolicy(ctx) {
+			return s.imageAttemptHTTPFailure(ctx, c, account, resp, respBody, upstreamModel)
+		}
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 		if IsMidjourneyImageGenerationModel(upstreamModel) && (resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode >= http.StatusInternalServerError) {
@@ -1036,6 +1063,9 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return OpenAIUsage{}, 0, nil, err
+	}
+	if ImageAttemptHasPolicy(ctx) {
+		RecordImageAttemptDecision(ctx, ClassifyImageHTTPFailure(resp.StatusCode, body))
 	}
 	// 回填只影响交付格式，计费仍使用原始上游用量与图片尺寸。
 	usage, _ := extractOpenAIUsageFromJSONBytes(body)

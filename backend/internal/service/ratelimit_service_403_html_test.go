@@ -202,7 +202,7 @@ func TestIsHTMLResponse(t *testing.T) {
 const openAI403Cloudflare1010Body = "error code: 1010\n"
 
 func TestHandleUpstreamError_OpenAICloudflare1010DoesNotPenalizeAccount(t *testing.T) {
-	for _, platform := range []string{PlatformOpenAI, PlatformOpenCodeGo} {
+	for _, platform := range []string{PlatformOpenAI, PlatformOpenCodeGo, PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformGrok, PlatformDeepseek} {
 		t.Run(platform, func(t *testing.T) {
 			repo := &rateLimitAccountRepoStub{}
 			counter := &countingOpenAI403CounterCache{
@@ -224,5 +224,29 @@ func TestHandleUpstreamError_OpenAICloudflare1010DoesNotPenalizeAccount(t *testi
 			require.Equal(t, 0, repo.tempCalls)
 			require.Empty(t, blocker.accounts)
 		})
+	}
+}
+
+// 结构化边缘标记只免除账号处罚，不把普通业务数字误判为 Cloudflare。
+func TestCloudflare1010StructuredBodies(t *testing.T) {
+	for _, body := range []string{
+		`{"error":{"cloudflare_error":true,"code":1010}}`,
+		`{"errors":[{"cloudflare_error":true,"error_code":"1010"}]}`,
+		`{"error":{"error_name":"browser_signature_banned"}}`,
+	} {
+		require.True(t, isCloudflareBotBlockResponse([]byte(body)), body)
+		for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformGrok, PlatformOpenAI} {
+			h := newOpenAI403TestHarness(t, 509, 1)
+			h.account.Platform = platform
+			require.False(t, h.handle(body), platform)
+			h.requireNoAccountPenalty(t)
+		}
+	}
+	for _, body := range []string{
+		`{"error":{"code":1010,"message":"forbidden"}}`,
+		`{"error":{"cloudflare_error":false,"code":1010}}`,
+		`{"error":{"message":"user said error code: 1010"}}`,
+	} {
+		require.False(t, isCloudflareBotBlockResponse([]byte(body)), body)
 	}
 }

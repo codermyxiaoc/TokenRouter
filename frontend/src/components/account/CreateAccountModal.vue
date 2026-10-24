@@ -2568,9 +2568,9 @@
         />
       </div>
 
-      <!-- 配额控制 (非 Anthropic apikey/bedrock) -->
+      <!-- 配额控制 (非 Anthropic apikey/bedrock，以及 Vertex service_account) -->
       <div
-        v-else-if="form.type === 'apikey' || form.type === 'bedrock'"
+        v-else-if="supportsAccountQuota(form.type)"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -4442,6 +4442,7 @@
 </template>
 
 <script setup lang="ts">
+import { supportsAccountQuota } from '@/utils/accountQuota'
 import VideoAccountFields from '@/components/account/VideoAccountFields.vue'
 import { createVideoAccountForm, validateVideoAccountForm, videoAccountCredentials } from '@/components/account/videoAccountConfig'
 
@@ -7303,9 +7304,9 @@ const createAccountAndFinish = async (
   if (!applyTempUnschedConfig(credentials)) {
     return false
   }
-  // Inject quota limits for apikey/bedrock accounts
+  // 配额账号统一保存总、日与周额度，Vertex 与 API Key 使用相同规则。
   let finalExtra = withUpstreamRequestIdHeader(extra)
-  if (type === 'apikey' || type === 'bedrock') {
+  if (supportsAccountQuota(type)) {
     const quotaExtra: Record<string, unknown> = { ...(finalExtra || {}) }
     if (editQuotaLimit.value != null && editQuotaLimit.value > 0) {
       quotaExtra.quota_limit = editQuotaLimit.value

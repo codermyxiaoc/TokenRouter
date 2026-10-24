@@ -20,7 +20,17 @@ import (
 )
 
 // Forward forwards request to OpenAI API
-func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (forwardResult *OpenAIForwardResult, forwardErr error) {
+	// 最终账号映射才可能揭示生图别名；错误收尾必须保留本次受理状态，不能继承旧账号的拒绝。
+	if account != nil {
+		ctx = prepareOpenAIResponsesImageAttempt(ctx, c, account, body, ImageAttemptAccountModel(ctx, account, gjson.GetBytes(body, "model").String()))
+	}
+	defer func() {
+		if c != nil && c.Request != nil && ImageAttemptHasPolicy(c.Request.Context()) {
+			ctx = c.Request.Context()
+		}
+		forwardResult, forwardErr = finalizeImageAttemptForward(ctx, forwardResult, forwardErr)
+	}()
 	// 内部调用同样拒绝歧义模型，不能在协议转换后掩盖不同解析器的取值差异。
 	if err := jsonutil.ValidateRoutingModel(body); err != nil {
 		return nil, err
@@ -767,6 +777,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageSizeTier = imageCfg.SizeTier
 		imageInputSize = imageCfg.InputSize
 	}
+	ctx = prepareOpenAIResponsesImageAttempt(ctx, c, account, body, upstreamModel)
 
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
@@ -1027,7 +1038,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
 	for {
 
-		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+		upstreamCtx, releaseUpstreamCtx := DetachImageAttemptContext(ctx)
+		if ImageAttemptHasPolicy(ctx) {
+			defer releaseUpstreamCtx()
+			releaseUpstreamCtx = func() {}
+		}
 		var headerGuard *openAIFirstOutputHeaderGuard
 		if firstOutputTimeout > 0 {
 			upstreamCtx, headerGuard = newOpenAIFirstOutputHeaderGuard(
@@ -1053,7 +1068,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 
 		upstreamStart := time.Now()
-		resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account, s.resolveOpenAITLSProfile(account, tlsRouterMatch))
+		resp, err := s.doOpenAIResponsesImageAwareRequest(ctx, c, upstreamReq, proxyURL, account, body, upstreamModel, s.resolveOpenAITLSProfile(account, tlsRouterMatch))
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if headerGuard != nil && headerGuard.stopHeaderWait() {
 			if resp != nil && resp.Body != nil {
@@ -1071,6 +1086,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			if headerGuard != nil {
 				headerGuard.close()
+			}
+			if ImageAttemptHasPolicy(ctx) {
+				return nil, err
 			}
 			// 传输层故障（代理、DNS、TCP、TLS，且没有 HTTP 响应）转为 failover，
 			// 让 handler 切换到健康账号；持久故障会临时摘除账号。
@@ -1214,6 +1232,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if reqStream {
 			streamResult, err := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
 			if err != nil && (streamResult == nil || !openAIStreamHasBillableResult(streamResult.usage, streamResult.imageCount)) {
+				if ImageAttemptHasPolicy(ctx) {
+					return nil, err
+				}
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
 					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
 						c, account, requestedModel, body, http.StatusBadRequest, signal.message, signal.payload, compactModelFallbackRetried,
@@ -1263,7 +1284,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageOutputSizes = streamResult.imageOutputSizes
 		} else {
 			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
-			if err != nil {
+			if err != nil && ImageAttemptHasPolicy(ctx) && nonStreamResult != nil && openAIStreamHasBillableResult(nonStreamResult.usage, nonStreamResult.imageCount) {
+				// 已受理失败仍保留真实产物和用量，让原结算路径只结算一次。
+				streamErr = err
+			} else if err != nil {
+				if ImageAttemptHasPolicy(ctx) {
+					return nil, err
+				}
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
 					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
 						c, account, requestedModel, body, http.StatusBadRequest, signal.message, signal.payload, compactModelFallbackRetried,
@@ -1490,7 +1517,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 终态收口：强制统一 OAuth 出站身份（User-Agent / originator / version 同源自洽）。
 	// 客户端自报身份不参与构造，浏览器型 UA 也因此不会再到达上游（原浏览器 UA 兜底已被吸收）。
 	if account.UsesOpenAICodexProtocol() {
-		enforceCodexIdentityHeadersWithUA(req.Header, "")
+		enforceCodexIdentityHeadersForRouting(req.Header, routerMatch...)
 	}
 
 	// Ensure required headers exist

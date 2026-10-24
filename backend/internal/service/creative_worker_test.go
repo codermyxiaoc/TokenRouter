@@ -37,6 +37,16 @@ func (e *creativeFakeExecutor) Execute(ctx context.Context, run CreativeRun, pay
 	if e.onExecute != nil {
 		e.onExecute(run.RunID)
 	}
+	if run.Operation != CreativeOperationTTS && e.err != nil {
+		if _, ok := ImageAttemptDecisionForError(e.err); !ok {
+			decision := ImageAttemptDecision{Outcome: ImageAttemptUnknown}
+			var local *CreativeUpstreamError
+			if errors.As(e.err, &local) && !local.Retryable {
+				decision.Outcome = ImageAttemptNotSent
+			}
+			return e.result, WrapImageAttemptError(e.err, decision)
+		}
+	}
 	return e.result, e.err
 }
 
@@ -261,31 +271,21 @@ func TestCreativeProvisionRecoveryPreservesExecutionFence(t *testing.T) {
 	require.Equal(t, 0, f.billing.releaseN)
 }
 
+// 泛5xx无法证明未受理，不能沿用旧“三次生成后释放”的假设。
 func TestCreativeWorkerRetryableError(t *testing.T) {
 	f := newCreativeWorkerFixture()
-	runID := "crun_workerretry0001"
-	seedCreativeRun(f, runID, true)
+	id := "crun_workerretry0001"
+	seedCreativeRun(f, id, true)
 	f.exec.err = creativeHTTPStatusError(503, "upstream busy")
-
-	// 第一次与第二次处理：attempt 递增并重排。
-	for attempt := 1; attempt <= 2; attempt++ {
-		result, err := f.worker.process(context.Background(), runID)
+	for range 3 {
+		result, err := f.worker.process(context.Background(), id)
 		require.NoError(t, err)
 		require.False(t, result.Terminal)
-		require.Greater(t, result.RequeueAfter, time.Duration(0))
-		require.Equal(t, attempt, f.repo.runs[runID].AttemptCount)
 	}
-	require.Equal(t, 2, f.exec.calls)
-
-	// 第三次：attempt 达到上限 → FailRun 出队并释放预占。
-	result, err := f.worker.process(context.Background(), runID)
-	require.NoError(t, err)
-	require.True(t, result.Terminal)
-	run := f.repo.runs[runID]
-	require.Equal(t, CreativeRunStatusFailed, run.Status)
-	require.NotNil(t, run.ErrorCode)
-	require.Equal(t, 3, run.AttemptCount)
-	require.Equal(t, 1, f.billing.releaseN)
+	require.Equal(t, 1, f.exec.calls)
+	require.Zero(t, f.repo.runs[id].AttemptCount)
+	require.Zero(t, f.billing.releaseN)
+	require.Equal(t, CreativeProvisioningPhaseProviderInflight, f.repo.runs[id].ProvisioningPhase)
 }
 
 func TestCreativeWorkerNonRetryableError(t *testing.T) {

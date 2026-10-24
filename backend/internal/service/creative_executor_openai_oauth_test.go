@@ -54,7 +54,7 @@ func TestCreativeCodexDirectImagesOperations(t *testing.T) {
 	}
 }
 
-// 原生 OAuth 网络失败禁止队列再次生成；API Key 的历史重试策略保持不变。
+// OAuth与API Key的写出后断连都属于结果未知，不能再让队列重复生成。
 func TestCreativeCodexDirectImagesNetworkFailureNotRetried(t *testing.T) {
 	for _, oauth := range []bool{true, false} {
 		calls := 0
@@ -69,12 +69,12 @@ func TestCreativeCodexDirectImagesNetworkFailureNotRetried(t *testing.T) {
 		}
 		_, err := executor.Execute(context.Background(), CreativeRun{ID: 1, Operation: CreativeOperationGenerate}, CreativeRunPayload{Prompt: "draw"}, &CreativeExecution{Account: account, UpstreamModel: "gpt-image-2"})
 		require.Error(t, err)
-		require.Equal(t, !oauth, executor.IsRetryable(err))
+		require.False(t, executor.IsRetryable(err))
 		require.Equal(t, 1, calls)
 	}
 }
 
-// 只有端点明确不可用才回退一次；后台队列不能把接收失败当成重新生成的理由。
+// 原生端点拒绝不在同号改用Responses再提交，备用选择由持久任务预算统一处理。
 func TestCreativeCodexDirectImagesFallbackBoundary(t *testing.T) {
 	for _, status := range []int{404, 405, 429, 503} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
@@ -86,13 +86,9 @@ func TestCreativeCodexDirectImagesFallbackBoundary(t *testing.T) {
 			executor := &CreativeExecutor{gateway: newOpenAIImagesTestService(upstream)}
 			_, err := executor.Execute(context.Background(), CreativeRun{ID: 1, Operation: CreativeOperationGenerate}, CreativeRunPayload{Prompt: "draw"}, &CreativeExecution{Account: directImagesTestAccount(), UpstreamModel: "gpt-image-2"})
 			require.Error(t, err)
-			if status == 404 || status == 405 {
-				require.Equal(t, []string{"/backend-api/codex/images/generations", "/backend-api/codex/responses"}, paths)
-				require.False(t, executor.IsRetryable(err))
-			} else {
-				require.Equal(t, []string{"/backend-api/codex/images/generations"}, paths)
-				require.True(t, executor.IsRetryable(err), "明确限流/服务拒绝保留队列原有有限重试")
-			}
+			require.Equal(t, []string{"/backend-api/codex/images/generations"}, paths)
+			// 404/405/429只授权另一个账号；泛503保持未知，不得隐藏同号协议回退。
+			require.Equal(t, status != 503, executor.IsRetryable(err))
 		})
 	}
 }

@@ -54,6 +54,18 @@ func TestAccountHandlerListLiteUsesCompactDTOAndETag(t *testing.T) {
 	credentialsStatus, ok := liteItem["credentials_status"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, true, credentialsStatus["has_access_token"])
+	// 轻量入口保留分组徽章所需信息，不能再携带完整分组策略和定价对象。
+	groups := liteItem["groups"].([]any)
+	group := groups[0].(map[string]any)
+	require.Equal(t, float64(groupID), group["id"])
+	require.Equal(t, "codex", group["name"])
+	require.Equal(t, service.PlatformOpenAI, group["platform"])
+	require.Contains(t, group, "rate_multiplier")
+	require.NotContains(t, group, "description")
+	require.NotContains(t, group, "image_price_1k")
+	links := liteItem["account_groups"].([]any)
+	linkedGroup := links[0].(map[string]any)["group"].(map[string]any)
+	require.Equal(t, group, linkedGroup)
 
 	// ETag 必须代表同一份压缩响应，刷新请求应返回 304。
 	rec304 := httptest.NewRecorder()
@@ -75,6 +87,9 @@ func TestAccountHandlerListLiteUsesCompactDTOAndETag(t *testing.T) {
 	require.NoError(t, json.Unmarshal(recFull.Body.Bytes(), &fullPayload))
 	require.Contains(t, fullPayload.Data.Items[0], "groups")
 	require.Contains(t, fullPayload.Data.Items[0], "account_groups")
+	fullGroup := fullPayload.Data.Items[0]["groups"].([]any)[0].(map[string]any)
+	require.Contains(t, fullGroup, "description")
+	require.Contains(t, fullGroup, "image_price_1k")
 }
 
 func TestAccountHandlerListLiteStaysBelowResponseBudget(t *testing.T) {
@@ -99,6 +114,7 @@ func TestAccountHandlerListLiteStaysBelowResponseBudget(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts?page=1&page_size=20&lite=1", nil)
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
+	t.Logf("轻量列表响应大小：%d bytes", rec.Body.Len())
 	require.Less(t, rec.Body.Len(), 80*1024)
 
 	var compressed bytes.Buffer

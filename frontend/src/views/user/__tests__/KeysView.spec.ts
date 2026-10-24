@@ -1218,7 +1218,7 @@ describe('user KeysView column settings', () => {
       composite_groups: undefined,
       smart_routing: true,
       smart_routing_group_ids: [43, 42],
-      smart_routing_cooldown_seconds: 60,
+      smart_routing_cooldown_seconds: 10,
       fallback_to_default_group_when_unavailable: false,
     }))
   })
@@ -1232,7 +1232,7 @@ describe('user KeysView column settings', () => {
     await wrapper.get('[data-test="smart-routing-toggle"]').setValue(true)
     await wrapper.getComponent('[data-test="smart-routing-add-group"]').vm.$emit('update:modelValue', 42)
     const input = wrapper.get('[data-test="smart-routing-cooldown-seconds"]')
-    expect((input.element as HTMLInputElement).value).toBe('60')
+    expect((input.element as HTMLInputElement).value).toBe('10')
     await input.setValue(String(seconds))
     await wrapper.get('form#key-form').trigger('submit')
     await flushPromises()
@@ -1257,7 +1257,8 @@ describe('user KeysView column settings', () => {
   })
 
   it.each([
-    { stored: undefined, expected: 60 },
+    { stored: undefined, expected: 10 },
+    { stored: 60, expected: 60 },
     { stored: 0, expected: 0 },
     { stored: 150, expected: 150 },
   ])('round-trips stored cooldown $stored as $expected seconds', async ({ stored, expected }) => {
@@ -1302,7 +1303,7 @@ describe('user KeysView column settings', () => {
     await nextTick()
     await getButtonByText(wrapper, 'Create API Key').trigger('click')
     await wrapper.get('[data-test="smart-routing-toggle"]').setValue(true)
-    expect((wrapper.get('[data-test="smart-routing-cooldown-seconds"]').element as HTMLInputElement).value).toBe('60')
+    expect((wrapper.get('[data-test="smart-routing-cooldown-seconds"]').element as HTMLInputElement).value).toBe('10')
   })
 
   it('omits invalid hidden cooldown when changing back to an ordinary key', async () => {

@@ -24,7 +24,7 @@ func TestSmartRoutingCooldownCreateDefaultsAndBounds(t *testing.T) {
 		value *int
 		want  int
 	}{
-		{name: "omitted", want: 60},
+		{name: "omitted", want: 10},
 		{name: "disabled", value: new(0), want: 0},
 		{name: "minimum", value: new(1), want: 1},
 		{name: "maximum", value: new(3600), want: 3600},

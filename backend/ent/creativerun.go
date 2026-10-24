@@ -85,6 +85,10 @@ type CreativeRun struct {
 	ReleaseTargetStatus string `json:"release_target_status,omitempty"`
 	// AttemptCount holds the value of the "attempt_count" field.
 	AttemptCount int `json:"attempt_count,omitempty"`
+	// ImageAttemptAccountIds holds the value of the "image_attempt_account_ids" field.
+	ImageAttemptAccountIds []int64 `json:"image_attempt_account_ids,omitempty"`
+	// ImageExecutionDeadlineAt holds the value of the "image_execution_deadline_at" field.
+	ImageExecutionDeadlineAt *time.Time `json:"image_execution_deadline_at,omitempty"`
 	// AllowanceReserved holds the value of the "allowance_reserved" field.
 	AllowanceReserved bool `json:"allowance_reserved,omitempty"`
 	// ProvisioningPhase holds the value of the "provisioning_phase" field.
@@ -115,7 +119,7 @@ func (*CreativeRun) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case creativerun.FieldSubscriptionHoldAllocations:
+		case creativerun.FieldSubscriptionHoldAllocations, creativerun.FieldImageAttemptAccountIds:
 			values[i] = new([]byte)
 		case creativerun.FieldPlanGroupRateMultiplierEnabled, creativerun.FieldAllowanceReserved:
 			values[i] = new(sql.NullBool)
@@ -125,7 +129,7 @@ func (*CreativeRun) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullInt64)
 		case creativerun.FieldRunID, creativerun.FieldWorkspaceID, creativerun.FieldQuotaPlatform, creativerun.FieldModel, creativerun.FieldRequestedModel, creativerun.FieldOperation, creativerun.FieldImageSize, creativerun.FieldAspectRatio, creativerun.FieldResponseMimeType, creativerun.FieldPromptHash, creativerun.FieldRequestFingerprint, creativerun.FieldIdempotencyKey, creativerun.FieldStatus, creativerun.FieldErrorCode, creativerun.FieldErrorMessage, creativerun.FieldReleaseTargetStatus, creativerun.FieldProvisioningPhase, creativerun.FieldLastReconcileError:
 			values[i] = new(sql.NullString)
-		case creativerun.FieldCreatedAt, creativerun.FieldUpdatedAt, creativerun.FieldProviderResultRecordedAt, creativerun.FieldNextReconcileAt, creativerun.FieldStartedAt, creativerun.FieldCompletedAt, creativerun.FieldCancelledAt:
+		case creativerun.FieldCreatedAt, creativerun.FieldUpdatedAt, creativerun.FieldImageExecutionDeadlineAt, creativerun.FieldProviderResultRecordedAt, creativerun.FieldNextReconcileAt, creativerun.FieldStartedAt, creativerun.FieldCompletedAt, creativerun.FieldCancelledAt:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -355,6 +359,21 @@ func (_m *CreativeRun) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.AttemptCount = int(value.Int64)
 			}
+		case creativerun.FieldImageAttemptAccountIds:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field image_attempt_account_ids", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.ImageAttemptAccountIds); err != nil {
+					return fmt.Errorf("unmarshal field image_attempt_account_ids: %w", err)
+				}
+			}
+		case creativerun.FieldImageExecutionDeadlineAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field image_execution_deadline_at", values[i])
+			} else if value.Valid {
+				_m.ImageExecutionDeadlineAt = new(time.Time)
+				*_m.ImageExecutionDeadlineAt = value.Time
+			}
 		case creativerun.FieldAllowanceReserved:
 			if value, ok := values[i].(*sql.NullBool); !ok {
 				return fmt.Errorf("unexpected type %T for field allowance_reserved", values[i])
@@ -575,6 +594,14 @@ func (_m *CreativeRun) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("attempt_count=")
 	builder.WriteString(fmt.Sprintf("%v", _m.AttemptCount))
+	builder.WriteString(", ")
+	builder.WriteString("image_attempt_account_ids=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ImageAttemptAccountIds))
+	builder.WriteString(", ")
+	if v := _m.ImageExecutionDeadlineAt; v != nil {
+		builder.WriteString("image_execution_deadline_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
 	builder.WriteString(", ")
 	builder.WriteString("allowance_reserved=")
 	builder.WriteString(fmt.Sprintf("%v", _m.AllowanceReserved))

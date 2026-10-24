@@ -3,7 +3,10 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+
+	"github.com/tidwall/gjson"
 	"net/http"
 	"net/url"
 
@@ -29,7 +32,7 @@ func (e *CreativeExecutor) executeOpenAIOAuth(ctx context.Context, run CreativeR
 	}
 	token, _, err := e.gateway.GetAccessToken(ctx, account)
 	if err != nil {
-		return nil, creativeHTTPStatusError(0, err.Error())
+		return nil, creativeImageAccountPreparationFailure(ctx, err)
 	}
 	tlsMatch := e.gateway.MatchOpenAITLSFingerprintRouterForRequest(c, account)
 	direct := usesCodexDirectImages(model)
@@ -61,24 +64,27 @@ func (e *CreativeExecutor) executeOpenAIOAuth(ctx context.Context, run CreativeR
 		} else {
 			upstream.Header.Set("OpenAI-Beta", "responses=experimental")
 		}
+		if err := BeginImageAttempt(ctx, account.ID, model, run.Operation); err != nil {
+			return nil, err
+		}
 		resp, err := e.gateway.httpUpstream.DoWithTLS(upstream, accountProxyURL(account), account.ID, account.Concurrency, e.gateway.resolveOpenAITLSProfile(account, tlsMatch))
 		if err != nil {
 			// 已提交生成后，网络错误无法证明上游没有完成，禁止 worker 再次提交。
-			return nil, creativeNonRetryableError("creative image generation result is unknown after a connection failure")
+			return nil, creativeImageTransportFailure(ctx, err)
 		}
 		responseBody, readErr := readCreativeUpstreamBody(resp.Body, 64<<20)
 		_ = resp.Body.Close()
 		// Responses 是 SSE：读取中断前可能已有完整图片，先保留这些已读事件供下方恢复。
 		// 原生 JSON 无法从截断正文确认完整产出，HTTP 拒绝也不按成功图片处理。
 		if readErr != nil && (direct || resp.StatusCode >= 400) {
-			return nil, creativeNonRetryableError("creative image generation response was interrupted")
+			return nil, creativeImageReadFailure(ctx)
 		}
-		if direct && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) {
+		if direct && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) && !ImageAttemptHasPolicy(ctx) {
 			direct = false
 			continue
 		}
 		if resp.StatusCode >= 400 {
-			return nil, creativeHTTPStatusError(resp.StatusCode, "image upstream rejected request")
+			return nil, creativeImageHTTPFailure(ctx, resp.StatusCode, responseBody)
 		}
 		var images []openAIResponsesImageResult
 		var upstreamErr *OpenAIImagesUpstreamError
@@ -108,15 +114,39 @@ func (e *CreativeExecutor) executeOpenAIOAuth(ctx context.Context, run CreativeR
 			}
 		}
 		if readErr != nil {
-			return nil, creativeNonRetryableError("creative image generation response was interrupted")
+			return nil, creativeImageReadFailure(ctx)
 		}
 		if len(images) == 0 && upstreamErr != nil {
-			return nil, creativeHTTPStatusError(upstreamErr.StatusCode, "image upstream failed")
+			return nil, creativeOAuthImageStreamFailure(ctx, responseBody, upstreamErr)
 		}
 		if err != nil || len(images) == 0 {
-			return nil, creativeNonRetryableError("creative image generation returned no complete image")
+			return nil, creativeImageOutputFailure(ctx, resp.StatusCode, responseBody, err)
 		}
-		return nil, creativeNonRetryableError("creative image generation returned no decodable image")
+		return nil, creativeImageOutputFailure(ctx, resp.StatusCode, responseBody, err)
 	}
 	return nil, creativeNonRetryableError("creative image endpoint unavailable")
+}
+
+// 只有单独的明确拒绝帧可以换号；任务身份、用量、处理中或任何其它内容都已越过受理边界。
+func creativeOAuthImageStreamFailure(ctx context.Context, body []byte, upstreamErr *OpenAIImagesUpstreamError) error {
+	accepted := upstreamErr.SynthesizedFromModelText
+	forEachOpenAISSEDataPayload(string(body), func(payload []byte) {
+		if string(payload) == "[DONE]" {
+			return
+		}
+		if !gjson.ValidBytes(payload) {
+			accepted = true
+			return
+		}
+		root := gjson.ParseBytes(payload)
+		kind := root.Get("type").String()
+		if root.Get("usage").Exists() || root.Get("response.usage").Exists() || root.Get("response.id").String() != "" || root.Get("task_id").String() != "" || kind != "error" && kind != "response.failed" {
+			accepted = true
+		}
+	})
+	if accepted {
+		return RecordImageAttemptFailure(ctx, creativeResultUnconfirmedError(), ImageAttemptDecision{Outcome: ImageAttemptAccepted, Reason: "image_stream_accepted"})
+	}
+	envelope, _ := json.Marshal(map[string]any{"error": map[string]string{"code": upstreamErr.Code, "type": upstreamErr.ErrorType}})
+	return creativeImageHTTPFailure(ctx, upstreamErr.StatusCode, envelope)
 }

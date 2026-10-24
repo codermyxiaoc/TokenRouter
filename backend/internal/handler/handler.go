@@ -72,6 +72,7 @@ type Handlers struct {
 	Team              *TeamHandler
 	Ticket            *TicketHandler
 	IntelligenceTests *IntelligenceHandler
+	ChanshuiTests     *ChanshuiHandler
 	DailyActivities   *DailyActivityHandler
 }
 

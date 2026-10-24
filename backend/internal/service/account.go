@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log/slog"
 	"net/url"
 	"reflect"
@@ -71,6 +70,9 @@ type Account struct {
 	AccountGroups []AccountGroup
 	GroupIDs      []int64
 	Groups        []*Group
+
+	// 仅调度快照发布前构建；读取路径绝不写回，保留普通账号的并发安全语义。
+	sharedModelMapping *accountSharedModelMapping
 }
 
 type OpenAIEndpointCapability string
@@ -185,7 +187,7 @@ func (a *Account) IsSchedulable() bool {
 	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
 		return false
 	}
-	if a.IsAPIKeyOrBedrock() && a.IsQuotaExceeded() {
+	if a.SupportsAccountQuota() && a.IsQuotaExceeded() {
 		return false
 	}
 	return true
@@ -621,8 +623,35 @@ func stringMappingFromRaw(raw any) map[string]string {
 	}
 }
 
+// 持有原始 map 引用，避免母本退役后裸地址被 GC 回收复用造成错误命中。
+type accountSharedModelMapping struct {
+	credentials    map[string]any
+	raw            map[string]any
+	rawLen         int
+	runtimeVersion uint64
+	mapping        map[string]string
+}
+
+// PrepareSharedSnapshot 仅由发布账号前的 goroutine 调用，预解析模型映射。
+// 已发布账号不得原地修改凭据；替换凭据后读取自动回到无缓存解析路径。
+func (a *Account) PrepareSharedSnapshot() {
+	if a == nil {
+		return
+	}
+	raw, _ := a.Credentials["model_mapping"].(map[string]any)
+	a.sharedModelMapping = &accountSharedModelMapping{
+		credentials: a.Credentials, raw: raw, rawLen: len(raw),
+		runtimeVersion: xai.RuntimeModelMappingVersion(), mapping: a.resolveModelMapping(raw),
+	}
+}
+
 func (a *Account) GetModelMapping() map[string]string {
 	rawMapping, _ := a.Credentials["model_mapping"].(map[string]any)
+	if prepared := a.sharedModelMapping; prepared != nil &&
+		mapPtr(prepared.credentials) == mapPtr(a.Credentials) && mapPtr(prepared.raw) == mapPtr(rawMapping) &&
+		prepared.rawLen == len(rawMapping) && prepared.runtimeVersion == xai.RuntimeModelMappingVersion() {
+		return prepared.mapping
+	}
 	// 账号对象会被调度与画布目录并发共享；每次按当前凭据解析，避免懒缓存的共享写入竞态。
 	return a.resolveModelMapping(rawMapping)
 }
@@ -678,28 +707,56 @@ func mapPtr(m map[string]any) uintptr {
 	return reflect.ValueOf(m).Pointer()
 }
 
+const (
+	modelMappingSignatureFNVOffset = 14695981039346656037
+	modelMappingSignatureFNVPrime  = 1099511628211
+)
+
+// modelMappingSignature 计算原始映射内容的进程内校验值，与 map 遍历顺序无关且不分配内存。
+// 每个条目把 key、分隔字节 0 与 value（string 写其字节，其它类型写标记字节 1）
+// 放进同一个 FNV-1a 哈希并经 fmix64 收尾，再对所有条目求和；
+// key 与 value 同在一个条目哈希里，交换两个 key 的 value 会改变结果。
 func modelMappingSignature(rawMapping map[string]any) uint64 {
 	if len(rawMapping) == 0 {
 		return 0
 	}
-	keys := make([]string, 0, len(rawMapping))
-	for k := range rawMapping {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	h := fnv.New64a()
-	for _, k := range keys {
-		_, _ = h.Write([]byte(k))
-		_, _ = h.Write([]byte{0})
-		if v, ok := rawMapping[k].(string); ok {
-			_, _ = h.Write([]byte(v))
+	var sum uint64
+	for k, v := range rawMapping {
+		h := uint64(modelMappingSignatureFNVOffset)
+		h = fnv1aString(h, k)
+		h = fnv1aByte(h, 0)
+		if s, ok := v.(string); ok {
+			h = fnv1aString(h, s)
 		} else {
-			_, _ = h.Write([]byte{1})
+			h = fnv1aByte(h, 1)
 		}
-		_, _ = h.Write([]byte{0xff})
+		sum += fmix64(h)
 	}
-	return h.Sum64()
+	return sum
+}
+
+func fnv1aString(h uint64, s string) uint64 {
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= modelMappingSignatureFNVPrime
+	}
+	return h
+}
+
+func fnv1aByte(h uint64, b byte) uint64 {
+	h ^= uint64(b)
+	h *= modelMappingSignatureFNVPrime
+	return h
+}
+
+// fmix64 是 MurmurHash3 的 64 位收尾函数，使条目哈希各位充分混合后再求和。
+func fmix64(h uint64) uint64 {
+	h ^= h >> 33
+	h *= 0xff51afd7ed558ccd
+	h ^= h >> 33
+	h *= 0xc4ceb9fe1a85ec53
+	h ^= h >> 33
+	return h
 }
 
 // antigravityDefaultPassthroughModels 是 Antigravity 显式 model_mapping 运行时补齐的默认透传条目：
@@ -1580,9 +1637,24 @@ func (a *Account) IsBedrockAPIKey() bool {
 	return a.IsBedrock() && a.GetCredential("auth_mode") == "apikey"
 }
 
-// IsAPIKeyOrBedrock 返回账号类型是否支持配额和池模式等特性
+// IsAPIKeyOrBedrock 返回账号类型是否支持池模式等特性（账号配额判定见 SupportsAccountQuota）
 func (a *Account) IsAPIKeyOrBedrock() bool {
 	return a.Type == AccountTypeAPIKey || a.Type == AccountTypeBedrock
+}
+
+// AccountTypeSupportsQuota 返回账号类型是否支持账号配额（quota_limit 及日/周额度、quota_used 累加、超限停调度）。
+// 在 apikey/bedrock 之外额外放开 Vertex service_account；池模式等其它特性仍只看 IsAPIKeyOrBedrock。
+func AccountTypeSupportsQuota(accountType string) bool {
+	switch strings.ToLower(accountType) {
+	case AccountTypeAPIKey, AccountTypeBedrock, AccountTypeServiceAccount:
+		return true
+	}
+	return false
+}
+
+// SupportsAccountQuota 返回账号是否支持账号配额，类型集合见 AccountTypeSupportsQuota。
+func (a *Account) SupportsAccountQuota() bool {
+	return AccountTypeSupportsQuota(a.Type)
 }
 
 func (a *Account) IsOpenAI() bool {

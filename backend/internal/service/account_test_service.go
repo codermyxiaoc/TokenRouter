@@ -295,6 +295,17 @@ func openAIAutomaticProbeDecisionFromContext(c *gin.Context) (openAIAutomaticPro
 	return decision, ok
 }
 
+// 账号探针仍使用规范 CLI 兜底；自动探针命中管理员 TLS 路由时保留其显式身份。
+func enforceOpenAIAccountTestIdentity(c *gin.Context, headers http.Header) {
+	if c != nil {
+		if decision, automatic := openAIAutomaticProbeDecisionFromContext(c); automatic {
+			enforceCodexIdentityHeadersForRouting(headers, decision.tlsRouterMatch)
+			return
+		}
+	}
+	enforceCodexIdentityHeaders(headers)
+}
+
 // applyOpenAIAccountTestRouting 让自动探针复用正常网关的上游身份优先级，手动测试保持原样。
 func (s *AccountTestService) applyOpenAIAccountTestRouting(c *gin.Context, account *Account, req *http.Request, isOAuth bool) {
 	decision, automatic := openAIAutomaticProbeDecisionFromContext(c)
@@ -1174,7 +1185,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	s.applyOpenAIAccountTestRouting(c, account, req, isOAuth)
 	if account.Type == AccountTypeOAuth {
 		// 必须在测试专用 UA 覆写之后配对身份，否则测试请求仍可能因头部错配返回 404。
-		enforceCodexIdentityHeaders(req.Header)
+		enforceOpenAIAccountTestIdentity(c, req.Header)
 	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
@@ -1642,7 +1653,7 @@ func (s *AccountTestService) testOpenAINativeCompactionV2Connection(c *gin.Conte
 		if fingerprintIDs := resolveCodexFingerprintIDsFromRequest(account, req.Header); fingerprintIDs != nil {
 			applyCodexFingerprintHeaders(req.Header, fingerprintIDs)
 		}
-		enforceCodexIdentityHeaders(req.Header)
+		enforceOpenAIAccountTestIdentity(c, req.Header)
 	}
 
 	// 账号覆盖先执行，再补 V2 协商头，保证探测和真实转发有相同的协议契约。
@@ -1799,7 +1810,7 @@ func (s *AccountTestService) testOpenAILegacyCompactConnection(c *gin.Context, a
 		req.Host = "chatgpt.com"
 		setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
 		// compact 探针同样访问 Codex 上游，测试 UA 覆写完成后必须重新配对身份头。
-		enforceCodexIdentityHeaders(req.Header)
+		enforceOpenAIAccountTestIdentity(c, req.Header)
 	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
@@ -2915,7 +2926,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	s.applyOpenAIAccountTestRouting(c, account, req, true)
 	setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
 	// 与真实转发一致：originator 与最终 User-Agent 首段配套（原 opencode 与 Codex UA 错配会 404，issue #3901）。
-	enforceCodexIdentityHeaders(req.Header)
+	enforceOpenAIAccountTestIdentity(c, req.Header)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

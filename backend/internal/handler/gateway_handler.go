@@ -120,6 +120,7 @@ func NewGatewayHandler(
 // Messages handles Claude API compatible messages endpoint
 // POST /v1/messages
 func (h *GatewayHandler) Messages(c *gin.Context) {
+	defer finishImageAttemptRequest(c, func() { h.errorResponse(c, http.StatusGatewayTimeout, "timeout_error", "Image generation timed out") })
 	// 从context获取apiKey和user（ApiKeyAuth中间件已设置）
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
@@ -213,6 +214,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	// 验证 model 必填
 	if reqModel == "" {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		return
+	}
+
+	if geminiImageGenerationRejected(c, apiKey, body, reqModel, channelMapping.MappedModel) {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", service.ImageGenerationPermissionMessage())
 		return
 	}
 
@@ -330,12 +336,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		fs := NewFailoverState(h.maxAccountSwitchesGemini, hasBoundSession)
 		slotRetry := &accountSlotReschedule{excluded: fs.FailedAccountIDs, switches: &fs.SwitchCount, maximum: fs.MaxSwitches}
 
-		// 单账号分组提前设置 SingleAccountRetry 标记，让 Service 层首次 503 就不设模型限流标记。
+		// 单账号判定按需执行，避免普通平台请求查询无关 Antigravity 快照。
 		// 避免单账号分组收到 503 (MODEL_CAPACITY_EXHAUSTED) 时设 29s 限流，导致后续请求连续快速失败。
-		if h.gatewayService.IsSingleAntigravityAccountGroup(c.Request.Context(), apiKey.GroupID) {
-			ctx := service.WithSingleAccountRetry(c.Request.Context(), true, h.metadataBridgeEnabled())
-			c.Request = c.Request.WithContext(ctx)
-		}
+		c.Request = c.Request.WithContext(h.gatewayService.WithSingleAntigravityAccountGroupProbe(c.Request.Context(), apiKey.GroupID))
 
 		for {
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), apiKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, "", int64(0)) // Gemini 不使用会话限制
@@ -504,6 +507,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
 			}
+			// Gemini 客户端取消且没有用量时直接收尾，避免计为账号失败或补写网关错误。
+			if account.Platform == service.PlatformGemini && err != nil && result == nil && errors.Is(c.Request.Context().Err(), context.Canceled) {
+				failoverClientGone(c)
+				return
+			}
 			h.gatewayService.ReportAdvancedAccountScheduleResult(selection, account.ID, err == nil, result)
 			if err != nil {
 				var failoverErr *service.UpstreamFailoverError
@@ -640,12 +648,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		}
 	}()
 
-	// 单账号分组提前设置 SingleAccountRetry 标记，让 Service 层首次 503 就不设模型限流标记。
+	// 单账号判定按需执行，避免普通平台请求查询无关 Antigravity 快照。
 	// 避免单账号分组收到 503 (MODEL_CAPACITY_EXHAUSTED) 时设 29s 限流，导致后续请求连续快速失败。
-	if h.gatewayService.IsSingleAntigravityAccountGroup(c.Request.Context(), currentAPIKey.GroupID) {
-		ctx := service.WithSingleAccountRetry(c.Request.Context(), true, h.metadataBridgeEnabled())
-		c.Request = c.Request.WithContext(ctx)
-	}
+	c.Request = c.Request.WithContext(h.gatewayService.WithSingleAntigravityAccountGroupProbe(c.Request.Context(), currentAPIKey.GroupID))
 
 	for {
 		fs := NewFailoverState(h.maxAccountSwitches, hasBoundSession)

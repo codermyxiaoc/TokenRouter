@@ -37,8 +37,10 @@ const imageTaskResponse = { id: 'imgtask_example', task_id: 'imgtask_example', o
 const asyncNotes = [
   '需要管理员配置并启用图片对象存储；未启用时返回 404。提交成功返回 HTTP 202、Location 和 Retry-After: 3。',
   '使用创建任务的同一个站内 API Key 查询。异步沿用同步接口的模型、路由和计费规则；不接受 stream=true。',
-  '完成和失败都通过任务状态表示。查询失败任务仍可能返回 HTTP 200，请检查 status、http_status 和 error。',
-  '创建和完成时分别保留 24 小时查询记录；图片链接有效期独立于任务期限。已持久化结果可跨重启查询，执行中的上游调用不能在重启后安全续跑。',
+  '只有 HTTP 200 且 status=processing 时继续轮询，并遵循 Retry-After（当前为 3 秒）。status=completed 时保存 result 中的图片并停止轮询；status=failed 时读取 http_status 与 error，停止轮询并移出待查询队列。失败任务查询也返回 HTTP 200，不能只按 HTTP 状态判断生成成功。',
+  'HTTP 404 且 error.code=IMAGE_TASK_NOT_FOUND（error.type 也为 IMAGE_TASK_NOT_FOUND）表示任务不存在、已过期或不属于当前用户与 API Key。立即停止该任务 ID 的轮询并移出待查询队列；核对原 Key，不能仅凭 404 断言任务过期或自动重新生成。',
+  '创建时保留 24 小时查询记录，完成或失败时重新起算 24 小时。expires_at 是 Unix 秒时间戳；达到最近响应中的 expires_at 后停止轮询，即使客户端仍将其记为 processing。任务历史、R2/S3 图片保存期及链接有效期与查询记录期限独立。',
+  '查询请求遇到网络错误或临时服务错误时可按 Retry-After 和有界退避重试，但必须设置最大尝试次数或截止时间；不得恢复已失败、已完成、404 或已过期任务的定时查询。已持久化结果可跨重启查询，执行中的上游调用不能在重启后安全续跑。',
   '执行中断或结果转存失败时可能已产生上游用量，不应仅根据 failed 自动重试。轮询不会再次生成或收费。'
 ]
 const batchID = parameter('id', 'string', true, 'Path：创建批量任务返回的 id；将示例 batch_example 替换为真实值，并使用创建任务的同一个站内 API Key。')
@@ -122,9 +124,13 @@ export const mediaEndpoints: ApiDocEndpoint[] = [
     id: 'images-task', category: 'images', title: '查询异步图片任务', summary: '查询处理状态、错误和最终图片结果。',
     platforms: ['openai', 'grok'], method: 'GET', path: '/v1/images/tasks/{task_id}', aliases: ['/images/tasks/{task_id}'], auth: 'bearer',
     parameters: [parameter('task_id', 'string', true, 'Path：异步提交返回的 task_id；用真实任务 ID 替换示例 imgtask_example。')], requestPath: '/v1/images/tasks/imgtask_example',
-    responseExample: json({ ...imageTaskResponse, status: 'completed', http_status: 200, image_url: 'https://images.example.com/output.png', result: { created: 1790900120, data: [{ url: 'https://images.example.com/output.png' }] }, completed_at: 1790900120 }),
-    responseDescription: '处理中 status=processing；失败 status=failed，并读取 http_status 与 error。image_url 是首张图片，完整数据在 result。', notes: asyncNotes,
-    errors: [{ status: 404, code: 'not_found_error', description: '任务不存在、已过期或不属于当前 API Key。' }]
+    responseExample: json({ ...imageTaskResponse, status: 'completed', http_status: 200, image_url: 'https://images.example.com/output.png', result: { created: 1790900120, data: [{ url: 'https://images.example.com/output.png' }] }, completed_at: 1790900120, expires_at: 1790986520 }),
+    responseDescription: 'HTTP 200 仅表示查询成功。仅 status=processing 继续轮询；completed 和 failed 均停止轮询，failed 的执行失败原因在 http_status 与 error 中。image_url 是首张图片，完整数据在 result。', notes: asyncNotes,
+    errors: [
+      { status: 404, code: 'IMAGE_TASK_NOT_FOUND', description: '任务不存在、已过期或不属于当前用户与 API Key；停止轮询该任务，勿自动重新生成。error.type 与 error.code 均为 IMAGE_TASK_NOT_FOUND。' },
+      { status: 404, code: 'not_found_error', description: '任务查询服务未初始化，无法查询；停止当前自动轮询并联系管理员，勿自动重新生成。' },
+      { status: 503, code: 'IMAGE_TASK_UNAVAILABLE', description: '任务存储暂不可用；可有界退避重试原查询，勿改为重新提交生成。' }
+    ]
   },
   {
     id: 'image-batch-create', category: 'images', title: '创建批量图片任务', summary: '一次提交多条图片提示词，由 Gemini API 或 Vertex 批量执行。',

@@ -26,6 +26,7 @@ const (
 	EndpointResponsesCompact     = "/v1/responses/compact"
 	EndpointImagesGenerations    = "/v1/images/generations"
 	EndpointImagesEdits          = "/v1/images/edits"
+	EndpointImagesTasks          = "/v1/images/tasks"
 	EndpointVideosGenerations    = "/v1/videos/generations"
 	EndpointVideosEdits          = "/v1/videos/edits"
 	EndpointVideosExtensions     = "/v1/videos/extensions"
@@ -94,6 +95,9 @@ func NormalizeInboundEndpoint(path string) string {
 		return EndpointChatCompletions
 	case strings.Contains(path, EndpointMessages):
 		return EndpointMessages
+	case isBareOrSubpathOf(path, EndpointImagesTasks) || isBareOrSubpathOf(path, "/images/tasks"):
+		// 任务查询由本站处理，统一归类时不把具体任务 ID 当作独立端点。
+		return EndpointImagesTasks
 	case strings.Contains(path, EndpointImagesGenerations) || strings.Contains(path, "/images/generations"):
 		return EndpointImagesGenerations
 	case strings.Contains(path, EndpointImagesEdits) || strings.Contains(path, "/images/edits"):
@@ -182,6 +186,10 @@ func isBareOrSubpathOf(path, root string) bool {
 // /v1beta/models；Antigravity 根据入站端点区分 Claude 与 Gemini。
 func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 	inbound = strings.TrimSpace(inbound)
+	// 异步图片查询只读本站结果，没有上游请求，不能回退成 Responses 等生成端点。
+	if inbound == EndpointImagesTasks {
+		return ""
+	}
 	if inbound == EndpointSystemOne {
 		return EndpointSystemOne
 	}

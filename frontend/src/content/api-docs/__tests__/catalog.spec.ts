@@ -6,6 +6,28 @@ import { apiDocCategories, apiDocEndpoints, apiDocPlatforms, apiDocVideoProtocol
 import { apiDocBaseUrl, apiDocCurl, apiDocEnvironment, apiDocMarkdown } from '../format'
 
 describe('公开网关文档契约', () => {
+  it('异步图片文档与真实查询错误码一致，并在页面与导出中说明停止轮询条件', () => {
+    // 错误码直接对照后端定义，防止客户端按错误的文档码无限轮询旧任务。
+    const taskService = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../backend/internal/service/image_task.go'), 'utf8')
+    const actualNotFoundCode = taskService.match(/ErrImageTaskNotFound\s*=\s*infraerrors\.New\(http\.StatusNotFound, "([^"]+)"/)?.[1]
+    expect(actualNotFoundCode).toBeTruthy()
+    const query = apiDocEndpoints.find(endpoint => endpoint.id === 'images-task')!
+    expect(query.method).toBe('GET')
+    expect(query.errors).toContainEqual(expect.objectContaining({ status: 404, code: actualNotFoundCode }))
+    const result = JSON.parse(query.responseExample)
+    expect(result.status).toBe('completed')
+    expect(result.expires_at - result.completed_at).toBe(24 * 60 * 60)
+
+    for (const id of ['images-generate-async', 'images-edit-async', 'images-task']) {
+      const endpoint = apiDocEndpoints.find(item => item.id === id)!
+      const notes = endpoint.notes!.join(' ')
+      for (const rule of ['status=processing', 'status=completed', 'status=failed', 'HTTP 200', 'HTTP 404', `error.code=${actualNotFoundCode}`, 'expires_at', '停止轮询', '移出待查询队列', '轮询不会再次生成或收费']) {
+        expect(notes, `${id}: ${rule}`).toContain(rule)
+        expect(apiDocMarkdown(endpoint, 'https://gateway.example.com'), `${id} 导出: ${rule}`).toContain(rule)
+      }
+    }
+  })
+
   it('Vidu 文档覆盖已注册的四个创建操作和查询，示例图片数量匹配操作', () => {
     // 从真实路由对照文档，防止供应商适配完成后遗漏端点或宣传未提供的删除接口。
     const videoRoutes = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../backend/internal/server/routes/video.go'), 'utf8')

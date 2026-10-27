@@ -11,6 +11,7 @@
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
 - [平台额度事务化升级](#transactional_platform_quotas)：切换额度统计权威来源、旧实例及缓存处理时读取。
+- [v3.31 异步图片查询观测与轮询文档](#v3_31_upgrade)：升级任务查询端点归类和客户端终止轮询说明时读取。
 - [v3.30 模型目录与使用说明](#v3_30_upgrade)：升级账号映射目录修复、创作台说明及模型调用指南时读取。
 - [v3.29 检测与图片安全路由](#v3_29_upgrade)：升级掺水检测、Sub2API 0.2.18 同步、智能路由冷却和图片安全换号时读取。
 - [v3.28 Grok 画布视频升级](#creative_grok_video_upgrade)：部署迁移 316、启用创作台 Grok 视频或回退在途执行时读取。
@@ -76,7 +77,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.30`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.31`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -91,11 +92,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.30`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.31`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.30 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.31 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -193,7 +194,16 @@ Gemini 缓存费用复用本站持久资金合同，使用 `gemini_cache` 报价
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.30`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移仍为 `320_creative_image_attempt_budget.sql`。从 v3.29 升级没有新增 SQL 迁移；本版包含模型目录修复、创作台视频使用说明及 API 模型调用指南。更早版本仍须遵循各自迁移与恢复边界。
+当前发布版本为 `v0.1.278-ct-v3.31`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移仍为 `320_creative_image_attempt_budget.sql`。从 v3.30 升级没有新增 SQL 迁移；本版修复异步图片查询的日志端点归类，并校正查询错误码及停止轮询文档。更早版本仍须遵循各自迁移与恢复边界。
+
+<a id="v3_31_upgrade"></a>
+### v3.31 异步图片查询观测与轮询文档升级
+
+异步图片查询的入站端点归一化为 `/v1/images/tasks`，完整请求路径仍保留任务 ID，上游端点留空，不再错误推导为 `/v1/responses`。修复只影响新版产生的日志，不改写历史记录；不改变生成端点、路由、模型参数、任务状态、资金预占、结算或退款行为。
+
+站内 API 文档及导出说明改用实际的 `IMAGE_TASK_NOT_FOUND` 错误码，明确只有 `processing` 继续轮询，完成、失败、404 或到达最近响应中的 `expires_at` 后停止并移出待查询队列。失败任务查询仍返回 HTTP 200，客户端必须读取任务 `status`；结果查询保留期仍为 24 小时，与后台任务历史及 R2/S3 图片保存期独立。升级服务器不会自动清除外部客户端保存的旧任务队列，调用方须按文档停止无效轮询，不能自动重新生成。
+
+从 v3.30 升级保留原数据库、Redis、对象存储、应用配置及稳定密钥，备份后更新应用和嵌入前端即可，无需清空缓存或重跑历史迁移。回退应用不改变任务与资金事实，但会恢复旧日志推导和文档；更早版本跨级升级仍遵循对应迁移、worker 排空与回退约束。发布包和镜像上传不代表已经部署生产服务器。
 
 <a id="v3_30_upgrade"></a>
 ### v3.30 模型目录与使用说明升级

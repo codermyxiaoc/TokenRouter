@@ -368,7 +368,32 @@ x-goog-api-key: <tokenrouter_api_key>
 }
 ```
 
-失败任务的查询仍返回 HTTP 200，任务内 `status: failed`、`http_status` 和 `error` 表示执行失败原因。任务不存在、过期或归属不匹配返回 404。创建和完成时分别保留 24 小时查询记录；S3 图片链接有效期独立于任务保留期。已落库的完成结果可跨重启和 Redis 丢失继续查询。执行实例失联后会登记 `failed / 503`、`error.type: execution_interrupted`，表示上游结果不确定且可能已经计费；不会静默一直处理中。轮询和状态补偿不再次生成或收费；图片已经生成但结果存储失败时可能仍有真实用量扣费，不要看到失败就自动重复生成。未完成上游调用无法在进程重启后安全续跑。
+HTTP 200 只表示查到了任务，不能据此认定生成成功。客户端应按以下规则维护待查询队列：
+
+| 查询结果 | 客户端处理 |
+| --- | --- |
+| HTTP 200，`status=processing`，且未到 `expires_at` | 继续查询原任务，遵循 `Retry-After`（当前为 3 秒） |
+| HTTP 200，`status=completed` | 保存 `result` 中的图片，停止轮询并移出队列 |
+| HTTP 200，`status=failed` | 读取任务内的 `http_status` 和 `error`，停止轮询并移出队列；不得仅因失败自动重新生成 |
+| HTTP 404，`error.code=IMAGE_TASK_NOT_FOUND` | 停止该 ID 的轮询并移出队列，核对任务 ID 和创建时的 Key；不自动重新提交生成 |
+| 已达到最近响应中的 `expires_at` | 停止轮询并移出队列，即使客户端仍把任务记为处理中 |
+| 查询网络失败或临时服务错误 | 只对原查询做有最大尝试次数或截止时间的退避重试；不能恢复已终止的任务轮询，也不能重发生成请求 |
+
+不存在、过期和用户或 API Key 归属不匹配均返回同样的 404，不能仅凭该错误判定任务过期。实际错误响应如下，`error.type` 与 `error.code` 均为 `IMAGE_TASK_NOT_FOUND`：
+
+```json
+{
+  "error": {
+    "type": "IMAGE_TASK_NOT_FOUND",
+    "code": "IMAGE_TASK_NOT_FOUND",
+    "message": "image task not found"
+  }
+}
+```
+
+`expires_at` 是 Unix 秒时间戳。创建时保留 24 小时查询记录，完成或失败时重新起算 24 小时；任务历史、R2/S3 图片保存期和链接有效期与查询记录期限独立。后台历史仍存在不代表已过期任务结果还能从查询接口取回。任务查询服务未初始化的 404 仍使用 `not_found_error`；存储暂不可用返回 `503 / IMAGE_TASK_UNAVAILABLE`，可有界退避重试原查询。
+
+已落库的完成结果可跨重启和 Redis 丢失继续查询。执行实例失联后会登记 `failed / 503`、`error.type: execution_interrupted`，表示上游结果不确定且可能已经计费；不会静默一直处理中。轮询和状态补偿不再次生成或收费；图片已经生成但结果存储失败时可能仍有真实用量扣费，不要看到失败就自动重复生成。未完成上游调用无法在进程重启后安全续跑。
 
 该方式让长耗时生成在后台执行，客户端通过短请求取结果；客户端需要实现提交、轮询与保存返回链接。详细权限、结果存储和计费边界见[异步图片与任务记录](../domains/media_tasks.md)。
 

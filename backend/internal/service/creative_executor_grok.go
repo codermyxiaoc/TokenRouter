@@ -75,7 +75,7 @@ func (e *CreativeExecutor) executeGrok(ctx context.Context, run CreativeRun, pay
 	if resp.StatusCode >= 400 {
 		return nil, creativeImageHTTPFailure(ctx, resp.StatusCode, respBody)
 	}
-	outputs, parseErr := parseCreativeOpenAIImageOutputs(respBody)
+	outputs, parseErr := parseCreativeOpenAIImageOutputs(ctx, respBody, e.outputImageDownloader())
 	if parseErr != nil {
 		return nil, creativeImageOutputFailure(ctx, resp.StatusCode, respBody, parseErr)
 	}

@@ -18,8 +18,9 @@ import (
 
 // TestParseCreativeOpenAIImageOutputs 解析 OpenAI/grok 兼容响应的 data[].b64_json。
 func TestParseCreativeOpenAIImageOutputs(t *testing.T) {
-	img1 := base64.StdEncoding.EncodeToString([]byte("png-bytes-1"))
-	img2 := base64.StdEncoding.EncodeToString([]byte("png-bytes-2"))
+	image1 := creativeMJTestPNG(t, 1)
+	img1 := base64.StdEncoding.EncodeToString(image1)
+	img2 := base64.StdEncoding.EncodeToString(creativeMJTestPNG(t, 2))
 	body, err := json.Marshal(map[string]any{
 		"created": 123,
 		"data": []map[string]any{
@@ -29,19 +30,17 @@ func TestParseCreativeOpenAIImageOutputs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	outputs, err := parseCreativeOpenAIImageOutputs(body)
+	outputs, err := parseCreativeOpenAIImageOutputs(context.Background(), body, creativeOutputImageDownloader)
 	require.NoError(t, err)
 	require.Len(t, outputs, 1)
 	require.Equal(t, 0, outputs[0].Index)
-	require.Equal(t, []byte("png-bytes-1"), outputs[0].Bytes)
+	require.Equal(t, image1, outputs[0].Bytes)
 	require.Equal(t, "image/png", outputs[0].Mime)
-	// 空 data 报 502 可重试上游错误。
-	_, err = parseCreativeOpenAIImageOutputs([]byte(`{"data":[]}`))
+	// 成功响应缺少产物仍属未知结果，不能把它转成可再次付费生成的错误。
+	_, err = parseCreativeOpenAIImageOutputs(context.Background(), []byte(`{"data":[]}`), creativeOutputImageDownloader)
 	require.Error(t, err)
-	var upstreamErr *CreativeUpstreamError
-	require.True(t, errors.As(err, &upstreamErr))
-	require.Equal(t, 502, upstreamErr.StatusCode)
-	require.True(t, upstreamErr.Retryable)
+	require.ErrorAs(t, err, new(*CreativeProviderResultUnconfirmedError))
+	require.False(t, IsRetryableCreativeError(err))
 }
 
 // TestParseCreativeGeminiImageOutputs 解析 Gemini generateContent 响应的 inlineData。
@@ -285,7 +284,8 @@ func TestBuildCreativeGrokEditRequest(t *testing.T) {
 
 // TestExecuteCreativeGrokEditUsesJSONEditEndpoint 校验编辑端点、鉴权请求和 b64 输出解析。
 func TestExecuteCreativeGrokEditUsesJSONEditEndpoint(t *testing.T) {
-	encoded := base64.StdEncoding.EncodeToString([]byte("edited-image"))
+	image := creativeMJTestPNG(t, 42)
+	encoded := base64.StdEncoding.EncodeToString(image)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
 		{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"data":[{"b64_json":%q}]}`, encoded)))},
 		{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"data":[{"b64_json":%q}]}`, encoded)))},
@@ -305,7 +305,7 @@ func TestExecuteCreativeGrokEditUsesJSONEditEndpoint(t *testing.T) {
 	outputs, err := executor.executeGrok(context.Background(), run, payload, account, "grok-imagine-image-2.0")
 	require.NoError(t, err)
 	require.Len(t, outputs, 1)
-	require.Equal(t, []byte("edited-image"), outputs[0].Bytes)
+	require.Equal(t, image, outputs[0].Bytes)
 	require.Equal(t, "https://xai.test/v1/images/edits", upstream.lastReq.URL.String())
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Content-Type"))
 	var editBody map[string]any
@@ -315,10 +315,10 @@ func TestExecuteCreativeGrokEditUsesJSONEditEndpoint(t *testing.T) {
 	require.Equal(t, "2k", editBody["resolution"])
 	require.Equal(t, "16:9", editBody["aspect_ratio"])
 	require.Equal(t, float64(1), editBody["n"])
-	image, ok := editBody["image"].(map[string]any)
+	imageRef, ok := editBody["image"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "image_url", image["type"])
-	require.Equal(t, "data:image/png;base64,c291cmNl", image["url"])
+	require.Equal(t, "image_url", imageRef["type"])
+	require.Equal(t, "data:image/png;base64,c291cmNl", imageRef["url"])
 
 	generateRun := CreativeRun{Operation: CreativeOperationGenerate, RequestedOutputCount: 1, ImageSize: "1K"}
 	_, err = executor.executeGrok(context.Background(), generateRun, CreativeRunPayload{Prompt: "generate"}, account, "grok-imagine-image-2.0")

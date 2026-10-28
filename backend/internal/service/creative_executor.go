@@ -110,6 +110,8 @@ type CreativeExecutor struct {
 	gatewayService *GatewayService
 	geminiTokens   *GeminiTokenProvider
 	settingService *SettingService
+	// 产物下载与生成传输隔离，测试可注入下载客户端，生产始终使用公网安全下载器。
+	imageDownloader *ImageResultUploader
 }
 
 // NewCreativeExecutor 创建创作台执行器。
@@ -488,7 +490,12 @@ func readCreativeUpstreamBody(body io.Reader, limit int64) ([]byte, error) {
 	if limit <= 0 {
 		limit = 64 << 20
 	}
-	return io.ReadAll(io.LimitReader(body, limit))
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if int64(len(data)) > limit {
+		// 不能把恰好截断后的 JSON 或 SSE 当作完整成功响应。
+		return nil, creativeResultUnconfirmedError()
+	}
+	return data, err
 }
 
 // normalizeCreativeOutputs 保持旧执行器单张输出行为。

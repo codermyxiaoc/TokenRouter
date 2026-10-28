@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
-	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -99,7 +98,7 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 		}
 		return outputs, nil
 	}
-	outputs, err := parseCreativeOpenAIImageOutputs(respBody)
+	outputs, err := parseCreativeOpenAIImageOutputs(ctx, respBody, e.outputImageDownloader())
 	if err != nil {
 		// 对外继续沿用原安全错误；后台保留真实 HTTP 状态，不能将本地解码失败误诊为上游502。
 		logger.L().Warn("creative.openai_image_failed", zap.String("run_id", run.RunID), zap.Int64("account_id", account.ID), zap.String("stage", "response_parse"), zap.Int("upstream_status", resp.StatusCode))
@@ -236,32 +235,7 @@ func writeCreativeOpenAIImagePart(writer *multipart.Writer, field, filename stri
 	return err
 }
 
-// creativeOpenAIUsesResponseFormat 仅对 DALL-E 保留旧版 response_format 参数；GPT Image 固定返回 base64。
+// creativeOpenAIUsesResponseFormat 仅对 DALL-E 保留旧版参数；兼容上游返回的 base64 或 URL 由结果解析器处理。
 func creativeOpenAIUsesResponseFormat(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "dall-e")
-}
-
-// parseCreativeOpenAIImageOutputs 解析 OpenAI images 响应（grok 同结构）的 data[].b64_json。
-func parseCreativeOpenAIImageOutputs(body []byte) ([]CreativeOutput, error) {
-	data := gjson.GetBytes(body, "data")
-	if !data.IsArray() || len(data.Array()) == 0 {
-		return nil, creativeHTTPStatusError(http.StatusBadGateway, "upstream returned no image output")
-	}
-	outputs := make([]CreativeOutput, 0, len(data.Array()))
-	for _, item := range data.Array() {
-		b64 := strings.TrimSpace(item.Get("b64_json").String())
-		if b64 == "" {
-			continue
-		}
-		decoded, err := decodeBase64Image(b64)
-		if err != nil || len(decoded.Bytes) == 0 {
-			continue
-		}
-		outputs = append(outputs, CreativeOutput{Index: len(outputs), Bytes: decoded.Bytes, Mime: decoded.Mime})
-		break
-	}
-	if len(outputs) == 0 {
-		return nil, creativeHTTPStatusError(http.StatusBadGateway, "upstream returned no decodable image output")
-	}
-	return outputs, nil
 }

@@ -37,21 +37,30 @@
           </div>
           <div class="max-h-[65dvh] space-y-5 overflow-y-auto overscroll-contain pr-1">
             <nav v-for="node in visibleCategories" :key="node.category.id" class="space-y-1" :aria-label="node.category.title">
-              <h2 class="mb-2 px-2 text-xs font-semibold text-gray-500 dark:text-dark-400">{{ node.category.title }} <span v-if="node.category.id !== guideCategoryId" class="ml-1 font-normal">{{ apiDocNodeCount(node) }}</span></h2>
-              <div v-if="node.documents.length" class="space-y-1">
-                <router-link v-for="doc in node.documents" :key="doc.id" :to="`/docs/${doc.id}`" class="doc-nav-link" :class="{ 'doc-nav-active': selectedId === doc.id }" :aria-current="selectedId === doc.id ? 'page' : undefined" @click="mobileCatalog = false">
-                  <span v-if="doc.endpoint" class="mr-1.5 font-mono text-[10px] font-bold" :class="methodColor(doc.endpoint.method)">{{ doc.endpoint.method }}</span>{{ doc.title }}
-                </router-link>
-              </div>
-              <!-- 二级分类：标题可在后台改名、隐藏或删除，组内文档按后台顺序排列 -->
-              <div v-for="child in node.children" :key="child.category.id" class="pt-2">
-                <h3 class="mb-1 flex items-center justify-between gap-2 px-2 text-xs font-semibold text-gray-800 dark:text-dark-100">
-                  {{ child.category.title }}<span class="font-normal text-gray-400 dark:text-dark-400">{{ child.documents.length }}</span>
-                </h3>
-                <div class="ml-2 space-y-1 border-l border-gray-200 pl-2 dark:border-dark-600">
-                  <router-link v-for="doc in child.documents" :key="doc.id" :to="`/docs/${doc.id}`" class="doc-nav-link" :class="{ 'doc-nav-active': selectedId === doc.id }" :aria-current="selectedId === doc.id ? 'page' : undefined" @click="mobileCatalog = false">
+              <button
+                type="button"
+                class="mb-2 flex w-full items-center justify-between gap-2 px-2 text-left text-xs font-semibold text-gray-500 hover:text-gray-700 dark:text-dark-400 dark:hover:text-dark-200"
+                @click="toggleCategory(node.category.id)"
+              >
+                <span>{{ node.category.title }} <span v-if="node.category.id !== guideCategoryId" class="ml-1 font-normal">{{ apiDocNodeCount(node) }}</span></span>
+                <Icon :name="expandedCategories.includes(node.category.id) ? 'chevronDown' : 'chevronRight'" size="xs" />
+              </button>
+              <div v-if="expandedCategories.includes(node.category.id)" class="space-y-1">
+                <div v-if="node.documents.length" class="space-y-1">
+                  <router-link v-for="doc in node.documents" :key="doc.id" :to="`/docs/${doc.id}`" class="doc-nav-link" :class="{ 'doc-nav-active': selectedId === doc.id }" :aria-current="selectedId === doc.id ? 'page' : undefined" @click="mobileCatalog = false">
                     <span v-if="doc.endpoint" class="mr-1.5 font-mono text-[10px] font-bold" :class="methodColor(doc.endpoint.method)">{{ doc.endpoint.method }}</span>{{ doc.title }}
                   </router-link>
+                </div>
+                <!-- 二级分类：标题可在后台改名、隐藏或删除，组内文档按后台顺序排列 -->
+                <div v-for="child in node.children" :key="child.category.id" class="pt-2">
+                  <h3 class="mb-1 flex items-center justify-between gap-2 px-2 text-xs font-semibold text-gray-800 dark:text-dark-100">
+                    {{ child.category.title }}<span class="font-normal text-gray-400 dark:text-dark-400">{{ child.documents.length }}</span>
+                  </h3>
+                  <div class="ml-2 space-y-1 border-l border-gray-200 pl-2 dark:border-dark-600">
+                    <router-link v-for="doc in child.documents" :key="doc.id" :to="`/docs/${doc.id}`" class="doc-nav-link" :class="{ 'doc-nav-active': selectedId === doc.id }" :aria-current="selectedId === doc.id ? 'page' : undefined" @click="mobileCatalog = false">
+                      <span v-if="doc.endpoint" class="mr-1.5 font-mono text-[10px] font-bold" :class="methodColor(doc.endpoint.method)">{{ doc.endpoint.method }}</span>{{ doc.title }}
+                    </router-link>
+                  </div>
                 </div>
               </div>
             </nav>
@@ -123,6 +132,8 @@ const search = ref('')
 const platform = ref<string | null>(null)
 const mobileCatalog = ref(false)
 const article = ref<HTMLElement | null>(null)
+// 折叠/展开状态：存储展开的一级分类 ID 数组，默认全部折叠。
+const expandedCategories = ref<string[]>([])
 // 管理员的目录叠加；读取失败时保持空集合，页面回退到内置目录。
 const overlay = ref<ApiDocCatalogOverlay>({ categories: [], documents: [] })
 // 当前文档的改写正文：undefined 表示仍在读取，null 表示没有改写。
@@ -162,6 +173,12 @@ const visibleCategories = computed(() => {
   const ids = new Set(filteredDocuments.value.map(doc => doc.id))
   return apiDocCategoryTree(catalog.value, doc => ids.has(doc.id))
 })
+// 搜索或筛选时自动展开所有匹配的分类。
+watch([search, platform], () => {
+  if (search.value || platform.value) {
+    expandedCategories.value = visibleCategories.value.map(node => node.category.id)
+  }
+})
 
 function methodColor(method: string): string {
   if (method === 'GET') return 'text-emerald-600 dark:text-emerald-400'
@@ -174,6 +191,14 @@ function scrollToHeading(index: number) {
 }
 function copyLink() {
   void copyToClipboard(new URL(`/docs/${selectedId.value}`, window.location.origin).href)
+}
+function toggleCategory(categoryId: string) {
+  const index = expandedCategories.value.indexOf(categoryId)
+  if (index >= 0) {
+    expandedCategories.value.splice(index, 1)
+  } else {
+    expandedCategories.value.push(categoryId)
+  }
 }
 // 只为存在改写正文的文档读取正文，忽略切换后才返回的旧请求。
 let markdownRequest = 0
@@ -193,6 +218,17 @@ async function loadCustomMarkdown() {
   }
 }
 watch(() => [selectedId.value, selectedDocument.value?.overlay?.version], () => { void loadCustomMarkdown() }, { immediate: true })
+// 自动展开包含当前选中文档的分类。
+watch(selectedDocument, doc => {
+  if (doc?.categoryId) {
+    const category = catalog.value.categories.find(cat => cat.id === doc.categoryId)
+    if (category) {
+      // 如果是二级分类下的文档，展开其父分类；否则展开一级分类本身。
+      const targetId = category.parentId || category.id
+      if (!expandedCategories.value.includes(targetId)) expandedCategories.value.push(targetId)
+    }
+  }
+}, { immediate: true })
 // 地址是文档唯一定位依据，浏览器前进后退和直接分享均能恢复相同正文。
 watch(selectedId, async () => {
   mobileCatalog.value = false

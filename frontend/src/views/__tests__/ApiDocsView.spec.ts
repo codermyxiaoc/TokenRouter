@@ -110,6 +110,9 @@ describe('API 文档页面', () => {
 
   it('搜索和自研平台选择框共同过滤目录，空结果可清除', async () => {
     const { wrapper } = await render('/docs/overview')
+    // 搜索和筛选自动展开所有匹配的分类。
+    await wrapper.get('input[placeholder="apiDocs.search"]').setValue('video')
+    await flushPromises()
     const videoCatalog = wrapper.get('nav[aria-label="视频与异步任务"]')
     // 模型指南复用已注册路径；目录按协议/模型家族分组，不能将指南数量误作新增服务端路由。
     expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual([
@@ -117,10 +120,12 @@ describe('API 文档页面', () => {
     ])
     expect(videoCatalog.findAll('a')).toHaveLength(27)
     await wrapper.get('input[placeholder="apiDocs.search"]').setValue('Vidu')
+    await flushPromises()
     // 统一入口与迁移页的说明提到 Vidu 旧路径，同样命中。
     expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['OpenAI Videos3', 'Vidu4'])
     expect(videoCatalog.findAll('a')).toHaveLength(7)
     await wrapper.get('input[placeholder="apiDocs.search"]').setValue('Kling')
+    await flushPromises()
     // 视频检索包含使用说明，旧入口迁移页中对 Kling 旧路径的说明也应命中。
     expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['OpenAI Videos3', 'Kling / 可灵3'])
     expect(videoCatalog.find('a[href="/docs/video-retired-endpoints"]').exists()).toBe(true)
@@ -188,13 +193,17 @@ describe('API 文档页面', () => {
       ],
       documents: [],
     })
-    const { wrapper, router } = await render('/docs/overview')
+    const { wrapper, router } = await render('/docs/video-create')
+    // 搜索自动展开匹配的分类。
+    await wrapper.get('input[placeholder="apiDocs.search"]').setValue('video')
+    await flushPromises()
     const videoCatalog = wrapper.get('nav[aria-label="视频与异步任务"]')
     const headings = videoCatalog.findAll('h3').map(heading => heading.text())
     expect(headings[0]).toBe('OpenAI 视频接口5')
     expect(headings.some(heading => heading.startsWith('Vidu'))).toBe(false)
     const viduDoc = wrapper.find('a[href^="/docs/vidu"]')
     expect(viduDoc.exists()).toBe(false)
+    await wrapper.get('input[placeholder="apiDocs.search"]').setValue('')
     await router.push('/docs/video-create')
     await flushPromises()
     // 面包屑同时显示一级与二级标题。
@@ -204,14 +213,53 @@ describe('API 文档页面', () => {
   })
 
   it('移动目录能展开，选择接口后自动收起', async () => {
-    const { wrapper } = await render()
+    const { wrapper } = await render('/docs/quickstart')
     const trigger = wrapper.get('button[aria-controls="api-doc-catalog"]')
     expect(trigger.attributes('aria-expanded')).toBe('false')
     await trigger.trigger('click')
     expect(trigger.attributes('aria-expanded')).toBe('true')
+    // 点击"对话与生成"分类标题展开该分类。
+    const navs = wrapper.findAll('nav[aria-label]')
+    const textIndex = navs.findIndex(nav => nav.attributes('aria-label')?.startsWith('对话与生成'))
+    await navs[textIndex].find('button').trigger('click')
+    await flushPromises()
+    // 选择接口后目录自动收起。
     await wrapper.get('a[href="/docs/responses"]').trigger('click')
     await flushPromises()
     expect(trigger.attributes('aria-expanded')).toBe('false')
+    wrapper.unmount()
+  })
+
+  // 目录默认折叠，点击一级标题展开，再次点击折叠；选中文档时自动展开所属分类。
+  it('目录默认折叠，点击展开/折叠，选中文档自动展开所属分类', async () => {
+    const { wrapper, router } = await render('/docs/overview')
+    // 初始状态：overview 所属的"指南"分类自动展开。
+    expect(wrapper.findAll('nav[aria-label]')[0].attributes('aria-label')).toBe('指南')
+    expect(wrapper.findAll('nav[aria-label]')[0].find('a[href="/docs/quickstart"]').isVisible()).toBe(true)
+    // 找到"对话与生成"分类并确认默认折叠。
+    let navs = wrapper.findAll('nav[aria-label]')
+    let textIndex = navs.findIndex(nav => nav.attributes('aria-label')?.startsWith('对话与生成'))
+    expect(textIndex).toBeGreaterThan(0)
+    expect(navs[textIndex].find('a[href="/docs/messages"]').exists()).toBe(false)
+    // 点击展开。
+    await navs[textIndex].find('button').trigger('click')
+    await flushPromises()
+    navs = wrapper.findAll('nav[aria-label]')
+    textIndex = navs.findIndex(nav => nav.attributes('aria-label')?.startsWith('对话与生成'))
+    expect(navs[textIndex].find('a[href="/docs/messages"]').isVisible()).toBe(true)
+    // 再次点击折叠。
+    await navs[textIndex].find('button').trigger('click')
+    await flushPromises()
+    navs = wrapper.findAll('nav[aria-label]')
+    textIndex = navs.findIndex(nav => nav.attributes('aria-label')?.startsWith('对话与生成'))
+    expect(navs[textIndex].find('a[href="/docs/messages"]').exists()).toBe(false)
+    // 导航到"视频与异步任务"下的文档，自动展开该分类。
+    await router.push('/docs/video-create')
+    await flushPromises()
+    navs = wrapper.findAll('nav[aria-label]')
+    const videoIndex = navs.findIndex(nav => nav.attributes('aria-label')?.startsWith('视频与异步任务'))
+    expect(videoIndex).toBeGreaterThan(0)
+    expect(navs[videoIndex].find('a[href="/docs/video-create"]').isVisible()).toBe(true)
     wrapper.unmount()
   })
 })

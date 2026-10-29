@@ -32,7 +32,8 @@ vi.mock('@/hooks/use-cloud-document', () => {
 });
 vi.mock('@/platform/api', async importOriginal => ({ ...await importOriginal<typeof import('@/platform/api')>(), api: vi.fn(), assetBlob: vi.fn(), assetMetadata: vi.fn(), assetURL: vi.fn(), createExecution: vi.fn(), createImageBatch: vi.fn(), listAssets: vi.fn(), listExecutions: vi.fn(), listModels: vi.fn(), uploadAsset: vi.fn() }));
 vi.mock('@/components/canvas/infinite-canvas', () => ({ InfiniteCanvas: ({ children, containerRef, onDrop }: { children: ReactNode; containerRef: RefObject<HTMLDivElement | null>; onDrop?: React.DragEventHandler<HTMLDivElement> }) => <div ref={containerRef} data-testid="canvas-drop" onDrop={onDrop}>{children}</div> }));
-vi.mock('@/components/canvas/canvas-connection-layer', () => ({ CanvasConnectionLayer: () => null }));
+const connectionLayer = vi.hoisted(() => ({ props: null as null | { onDropEmpty?: (handle: { nodeId: string; handleType: 'source' | 'target' }, point: { x: number; y: number }, client: { x: number; y: number }) => void } }));
+vi.mock('@/components/canvas/canvas-connection-layer', () => ({ CanvasConnectionLayer: (props: typeof connectionLayer.props) => { connectionLayer.props = props; return null; } }));
 vi.mock('@/components/canvas/canvas-mini-map', () => ({ Minimap: () => null }));
 vi.mock('@/components/canvas/canvas-zoom-controls', () => ({ CanvasZoomControls: () => null }));
 vi.mock('@/components/canvas/canvas-node-crop-dialog', () => ({ CanvasNodeCropDialog: () => null }));
@@ -1289,5 +1290,76 @@ describe('生成配置节点与四类模型集成', () => {
     cloudState.document!.nodes=[{...imageNode,id:'g',type:'group',title:'组',metadata:{}},cfg,ref];cloudState.document!.connections=[{id:'refedge',fromNodeId:'ref-text',toNodeId:cfg.id}];await mount();await key('c');await key('v');
     expect(cloudState.document!.nodes).toHaveLength(6);const copy=cloudState.document!.nodes.find(node=>node.type==='config'&&node.id!==cfg.id)!;const copyRef=cloudState.document!.nodes.find(node=>node.type==='text'&&node.id!=='ref-text')!;
     expect(copy.metadata?.composerContent).toBe(`@[node:${copyRef.id}]`);expect(copy.metadata?.generation_target_id).toBeUndefined();expect(copy.metadata?.groupId).toBe(copyRef.metadata?.groupId);expect(copy.metadata?.groupId).not.toBe('g');expect(cloudState.document!.connections.some(edge=>edge.fromNodeId===copyRef.id&&edge.toNodeId===copy.id)).toBe(true);expect(createExecution).not.toHaveBeenCalled();
+  });
+});
+
+describe('画布 @ 引用、拖线新建与就地错误', () => {
+  const withReferences = () => {
+    cloudState.document!.nodes.push(
+      { id: 'ref-a', type: 'image', title: '人物', position: { x: -300, y: 0 }, width: 340, height: 240, metadata: { asset_id: 'asset-a', expires_at: '2099-10-25T00:00:00Z' } },
+      { id: 'ref-b', type: 'image', title: '背景', position: { x: -300, y: 300 }, width: 340, height: 240, metadata: { asset_id: 'asset-b', expires_at: '2099-10-25T00:00:00Z' } },
+    );
+    cloudState.document!.connections = [{ id: 'edge-a', fromNodeId: 'ref-a', toNodeId: imageNode.id }, { id: 'edge-b', fromNodeId: 'ref-b', toNodeId: imageNode.id }];
+  };
+
+  // 主提示词输入 @ 弹出已连接参考图，选择后插入纯文本标签，编号与参考图提交顺序一致。
+  it('主提示词键入 @ 可选择参考图并插入对应编号', async () => {
+    withReferences();
+    await mount();
+    await writePrompt('让 @');
+    const options = [...document.querySelectorAll<HTMLButtonElement>('.prompt-mention-menu [role="option"]')];
+    expect(options.map(option => option.querySelector('strong')?.textContent)).toEqual(['图片1', '图片2']);
+    await click(options[1]);
+    expect(currentNode().metadata?.prompt).toBe('让 图片2 ');
+    expect(document.querySelector('.prompt-mention-menu')).toBeNull();
+    expect(host.querySelector('.prompt-mention-label')?.textContent).toBe('图片2');
+    // 只编辑提示词，不触发生成或扣费请求。
+    expect(createImageBatch).not.toHaveBeenCalled();
+    vi.mocked(createImageBatch).mockImplementation(async (_canvas, _node, _params, count, key) => batch(key!, count));
+    await click(button('生成图片'));
+    expect(vi.mocked(createImageBatch).mock.calls[0][2]).toMatchObject({ prompt: '让 图片2', references: [{ asset_id: 'asset-a' }, { asset_id: 'asset-b' }] });
+  });
+
+  // 拖线落在空白处弹出新建菜单，按拖出方向创建节点与连线，不触发任何生成请求。
+  it('拖线到空白处可新建节点并自动连线', async () => {
+    await mount();
+    await act(async () => connectionLayer.props!.onDropEmpty!({ nodeId: imageNode.id, handleType: 'source' }, { x: 700, y: 220 }, { x: 300, y: 200 }));
+    const menu = document.querySelector<HTMLElement>('.connection-create-menu')!;
+    expect([...menu.querySelectorAll('[data-create-type]')].map(item => item.getAttribute('data-create-type'))).toEqual(['text', 'image', 'video', 'audio', 'config']);
+    await click(menu.querySelector<HTMLButtonElement>('[data-create-type="video"]')!);
+    const created = cloudState.document!.nodes.find(node => node.type === 'video')!;
+    expect(created.position).toEqual({ x: 700, y: 220 - created.height / 2 });
+    expect(cloudState.document!.connections).toContainEqual(expect.objectContaining({ fromNodeId: imageNode.id, toNodeId: created.id }));
+    expect(document.querySelector('.connection-create-menu')).toBeNull();
+    // 从输入端拖出时新节点作为来源，生成配置没有输出端因此不可选；Esc 关闭不改动画布。
+    await act(async () => connectionLayer.props!.onDropEmpty!({ nodeId: imageNode.id, handleType: 'target' }, { x: 0, y: 220 }, { x: 50, y: 200 }));
+    expect([...document.querySelectorAll('.connection-create-menu [data-create-type]')].map(item => item.getAttribute('data-create-type'))).not.toContain('config');
+    const before = structuredClone(cloudState.document);
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(document.querySelector('.connection-create-menu')).toBeNull();
+    expect(cloudState.document).toEqual(before);
+    expect(createImageBatch).not.toHaveBeenCalled();
+    expect(createExecution).not.toHaveBeenCalled();
+  });
+
+  // 提交前校验失败的原因显示在当前生成面板内，不落到页面顶部；可手动关闭。
+  it('生成前校验失败在面板内显示原因', async () => {
+    await mount();
+    await writePrompt('');
+    await click(button('生成图片'));
+    expect(host.querySelector('.panel-error')?.textContent).toContain('请填写提示词或连接文本节点');
+    expect(host.querySelector('.editor-alert')).toBeNull();
+    expect(createImageBatch).not.toHaveBeenCalled();
+    await click(button('关闭错误提示'));
+    expect(host.querySelector('.panel-error')).toBeNull();
+  });
+
+  // 提交结果未知时节点同时保留服务端原因与核对说明，不删除原提交意图。
+  it('提交结果未知时节点保留服务端原因', async () => {
+    vi.mocked(createImageBatch).mockRejectedValue(new ApiError(503, '服务暂时不可用'));
+    await mount();
+    await click(button('生成图片'));
+    expect(currentNode().metadata?.errorDetails).toBe('服务暂时不可用。提交结果待确认，请点击核对提交；不会重复生成或扣费');
+    expect(currentNode().metadata?.generation_request).toBeTruthy();
   });
 });

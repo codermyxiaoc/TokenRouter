@@ -4,6 +4,7 @@ import {useNavigate,useParams} from 'react-router-dom';
 import {ArrowLeft,Hand,MousePointer2,Type,Image as ImageIcon,Video,Music,Settings2,Group,Upload,Trash2,Undo2,Redo2,Play,Copy,Download,Scissors,Brush,Search,Moon,Sun,PanelLeftClose,PanelLeftOpen,LoaderCircle,Clock3,Link2,X,Info,Pencil,BookOpen,Maximize2,Minimize2,Focus,LayoutGrid,ListChecks,Eye,ArrowUp,Palette} from 'lucide-react';
 import {InfiniteCanvas} from '@/components/canvas/infinite-canvas';
 import {CanvasConnectionLayer,type CanvasConnectionController} from '@/components/canvas/canvas-connection-layer';
+import {ConnectionCreateMenu,type ConnectionCreateType,type PendingConnectionCreate} from '@/components/canvas/canvas-connection-create-menu';
 import {CanvasGenerationLoading} from '@/components/canvas/canvas-generation-loading';
 import {Minimap} from '@/components/canvas/canvas-mini-map';
 import {CanvasZoomControls} from '@/components/canvas/canvas-zoom-controls';
@@ -15,6 +16,8 @@ import {ConfigComposer} from '@/components/ConfigComposer';
 import {configInputs,compileConfigPrompt,remapConfigReferences} from '@/platform/config-composer';
 import {GenerationSettings} from '@/components/GenerationSettings';
 import {GenerationStatusDetails} from '@/components/GenerationStatusDetails';
+import {PromptMentionTextarea} from '@/components/PromptMentionTextarea';
+import {promptReferences} from '@/platform/prompt-references';
 import {ModelUsageNotes,videoModelUsageNotes,modelUsageNotesFootprint} from '@/components/ModelUsageNotes';
 import {resolveGenerationSettings} from '@/platform/generation-settings';
 import {referenceImageSizeWarning} from '@/platform/reference-image-limit';
@@ -46,7 +49,9 @@ type Gesture={kind:'move'|'resize'|'select';x:number;y:number;start:CanvasDocume
 export function Editor(){
  const {id=''}=useParams();const canvasIdRef=useRef(id);canvasIdRef.current=id;const navigate=useNavigate();const cloud=useCloudDocument(id);const doc=cloud.document;
  const [models,setModels]=useState<Model[]>([]);const [assets,setAssets]=useState<Asset[]>([]);const [assetPage,setAssetPage]=useState(1);const [assetTotal,setAssetTotal]=useState(0);const [capabilities,setCapabilities]=useState<{max_asset_bytes?:number;max_prompt_chars?:number}>({});
- const [selected,setSelected]=useState<Set<string>>(new Set());const [selectedEdge,setSelectedEdge]=useState('');const [tool,setTool]=useState<'pan'|'select'>('pan');const [sideTab,setSideTab]=useState<'canvas'|'assets'|'prompts'>('canvas');const [sidebar,setSidebar]=useState(true);const [search,setSearch]=useState('');const [miniMap,setMiniMap]=useState(false);const [error,setError]=useState('');const [busy,setBusy]=useState(false);
+ const [selected,setSelected]=useState<Set<string>>(new Set());const [selectedEdge,setSelectedEdge]=useState('');const [tool,setTool]=useState<'pan'|'select'>('pan');const [sideTab,setSideTab]=useState<'canvas'|'assets'|'prompts'>('canvas');const [sidebar,setSidebar]=useState(true);const [search,setSearch]=useState('');const [miniMap,setMiniMap]=useState(false);const [error,setError]=useState('');
+ // 提交前校验失败只显示在点击生成的面板内，用户无需到页面顶部寻找原因；已提交的失败写入结果节点。
+ const [generationError,setGenerationError]=useState<{nodeId:string;message:string}|null>(null);const [busy,setBusy]=useState(false);
  const connectionController=useRef<CanvasConnectionController>(null);const [box,setBox]=useState<{from:Position;to:Position}|null>(null);const [imageTool,setImageTool]=useState<{kind:'crop'|'mask';node:CanvasNodeData;url:string}|null>(null);const [settingsOpen,setSettingsOpen]=useState(false);
  const [,historyRender]=useState(0);const history=useRef<{past:CanvasDocument[];future:CanvasDocument[]}>({past:[],future:[]});const copied=useRef<CanvasDocument|null>(null);const container=useRef<HTMLDivElement>(null);const uploadInput=useRef<HTMLInputElement>(null);const documentRef=useRef(doc);documentRef.current=doc;
  const submitLocks=useRef(new Set<string>());const activeExecutions=useRef(new Map<string,Execution>());const themeName=useThemeStore(s=>s.theme);const setTheme=useThemeStore(s=>s.setTheme);const theme=canvasThemes[themeName];
@@ -124,6 +129,17 @@ export function Editor(){
  const onMoveStart=(event:React.PointerEvent,node:CanvasNodeData,resize=false)=>{if(event.button!==0||!documentRef.current)return;event.stopPropagation();event.preventDefault();const ids=new Set(selected);if(!ids.has(node.id)){if(!event.shiftKey)ids.clear();ids.add(node.id);setSelected(ids);}if(node.type==='group')documentRef.current.nodes.forEach(n=>{if(n.metadata?.groupId===node.id)ids.add(n.id);});const deferMoveHistory=!resize&&['video','audio'].includes(node.type)&&!!node.metadata?.asset_id;nodeGesture.begin(event,{kind:resize?'resize':'move',x:event.clientX,y:event.clientY,start:snapshot(documentRef.current),ids,nodeId:node.id,deferMoveHistory});if(!deferMoveHistory)remember(documentRef.current);};
  // 播放控件只触发选择，不 preventDefault 或捕获指针，以保留拖动进度、音量与全屏操作。
  const selectMediaNode=(event:{shiftKey:boolean},node:CanvasNodeData)=>{setSelectedEdge('');setSelected(previous=>{if(previous.has(node.id))return previous;const next=event.shiftKey?new Set(previous):new Set<string>();next.add(node.id);return next;});};
+ // 拖线松手在空白处新建节点并按拖出方向连线：从输出端拖出时新节点接收输入，从输入端拖出时新节点作为来源。
+ const [connectionCreate,setConnectionCreate]=useState<PendingConnectionCreate|null>(null);
+ const createConnected=(type:ConnectionCreateType)=>{
+  const pending=connectionCreate;setConnectionCreate(null);
+  if(!pending||(type==='config'&&pending.handle.handleType!=='source'))return;
+  const draft=makeNode(type,pending.point);
+  const node={...draft,position:{x:pending.handle.handleType==='source'?pending.point.x:pending.point.x-draft.width,y:pending.point.y-draft.height/2}};
+  const edge=pending.handle.handleType==='source'?{fromNodeId:pending.handle.nodeId,toNodeId:node.id}:{fromNodeId:node.id,toNodeId:pending.handle.nodeId};
+  change(old=>old.nodes.some(n=>n.id===pending.handle.nodeId)?{...old,nodes:[...old.nodes,node],connections:[...old.connections,{id:randomId(),...edge}]}:old);
+  setSettingsOpen(false);setSelectedEdge('');setSelected(new Set([node.id]));
+ };
  const link=(from:string,to:string)=>{if(from===to)return;change(old=>({...old,connections:old.connections.some(e=>e.fromNodeId===from&&e.toNodeId===to)?old.connections:[...old.connections,{id:randomId(),fromNodeId:from,toNodeId:to}]}));connectionController.current?.cancel();};
  async function insertAsset(asset:Asset,position?:Position){const node=makeNode(asset.media_type,position);node.metadata={asset_id:asset.id,mimeType:asset.mime_type,bytes:asset.byte_size,expires_at:asset.expires_at,status:'success'};change(old=>({...old,nodes:[...old.nodes,node]}));setSelected(new Set([node.id]));}
  const pickUpload=(target?:{nodeId:string;mode:'reference'|'replace'})=>{uploadTarget.current=target||null;uploadInput.current?.click();};
@@ -168,7 +184,7 @@ export function Editor(){
  };
  async function openImageTool(kind:'crop'|'mask',node:CanvasNodeData){try{const url=await assetURL(node.metadata?.asset_id||'');setImageTool({kind,node,url});}catch(e){report(e);}}
  async function execute(source:CanvasNodeData,mask?:{assetId:string;prompt:string}){
-   if(submitLocks.current.has(source.id))return;submitLocks.current.add(source.id);setBusy(true);setError('');
+   if(submitLocks.current.has(source.id))return;submitLocks.current.add(source.id);setBusy(true);setError('');setGenerationError(null);
    let targetId=source.id;let request:GenerationRequest|undefined;let saved=false;
    try{
     const current=documentRef.current;if(!current)throw new Error('画布尚未载入');
@@ -237,7 +253,9 @@ export function Editor(){
     await cloud.flush();saved=true;
     await submitSavedGeneration(targetId,prepared);
    }catch(e){
-    report(e);
+    // 尚未形成提交请求的错误（模型、参数、参考图校验等）贴在当前面板；局部重绘弹窗中仍同时使用顶部提示。
+    if(!request&&(e as Error)?.name!=='AbortError'){setGenerationError({nodeId:source.id,message:(e as Error).message||'生成失败'});if(mask)report(e);}
+    else report(e);
     // 保存失败不会请求上游；已提交但响应未知时保留键，供按钮核对及刷新恢复。
     if(request&&!saved)update(old=>({...old,nodes:old.nodes.map(n=>n.id===targetId&&n.metadata?.generation_request?.key===request?.key?{...n,metadata:{...n.metadata,status:'error',errorDetails:'提交尚未确认，可点击核对提交；不会创建重复任务'}}:n)}));
    }finally{submitLocks.current.delete(source.id);setBusy(false);}
@@ -264,7 +282,7 @@ export function Editor(){
      // 确定被拒绝的请求可重新填写；超时、断网和服务端异常保留原键等待核对。
      // 只有本站容量准入的稳定 429 明确表示尚未受理；普通限流或上游 429 仍保留原键核对。
      const rejected=e instanceof ApiError&&([400,403,404,413,422].includes(e.status)||(e.status===429&&e.code==='CANVAS_EXECUTION_LIMIT'));
-     update(old=>({...old,nodes:old.nodes.map(n=>n.id===nodeId&&n.metadata?.generation_request?.key===request.key?{...n,metadata:{...n.metadata,status:'error',generation_key:rejected?undefined:n.metadata.generation_key,generation_request:rejected?undefined:request,errorDetails:rejected?(e as Error).message:'提交结果待确认，请点击核对提交；不会重复生成或扣费'}}:n)}));
+     update(old=>({...old,nodes:old.nodes.map(n=>n.id===nodeId&&n.metadata?.generation_request?.key===request.key?{...n,metadata:{...n.metadata,status:'error',generation_key:rejected?undefined:n.metadata.generation_key,generation_request:rejected?undefined:request,errorDetails:rejected?(e as Error).message:`${(e as Error).message?`${(e as Error).message}。`:''}提交结果待确认，请点击核对提交；不会重复生成或扣费`}}:n)}));
      throw e;
    }
  }
@@ -273,6 +291,8 @@ export function Editor(){
  const videoCaps=chosenModel?.video_capabilities as {durations:number[];resolutions:string[];aspect_ratios:string[]}|undefined;
  const canGenerate=!!active&&['image','video','audio','text'].includes(active.type);
  const referenceNodes=active&&doc?selectedReferences(doc,active.id).filter(n=>kind==='audio'||kind==='text'?['text','image','video','audio'].includes(n.type):n.type==='image'||n.type==='video'):[];
+ // @ 标签沿用提交时的素材顺序编号：“图片1”就是请求中的第一张参考图；语音会逐字朗读输入，不提供 @ 标签。
+ const mentionReferences=kind==='audio'?[]:promptReferences(referenceNodes);
  const sizeWarning=active?referenceWarning(active):undefined;
  const effectiveSettings=resolveGenerationSettings(chosenModel,active?.metadata,kind);
  const qualityLabels:Record<string,string>={auto:'自动',low:'低',medium:'中',high:'高',hd:'高清',standard:'标准'};
@@ -291,10 +311,11 @@ export function Editor(){
    {(error||cloud.error||executionSyncError)&&<div className="editor-alert" role="alert">{error||cloud.error||executionSyncError}{cloud.conflict&&<><button onClick={()=>void exportCanvas({...cloud.record!,document:doc}).catch(report)}>导出本地草稿</button><button onClick={()=>{if(confirm('重新载入会放弃未保存修改，是否继续？'))void cloud.reload().catch(report);}}>重新载入</button></>}<button aria-label="关闭错误" onClick={()=>{setError('');setExecutionSyncError('');}}><X size={16}/></button></div>}
    <div className="canvas-stage">
     <InfiniteCanvas containerRef={container} viewport={doc.viewport} tool={tool} backgroundMode={doc.backgroundMode} onViewportChange={viewport} onCanvasDeselect={()=>{setSelected(new Set());setSelectedEdge('');connectionController.current?.cancel();}} onCanvasMouseDown={e=>nodeGesture.begin(e,{kind:'select',x:e.clientX,y:e.clientY,start:snapshot(doc),ids:new Set()})} onCanvasDoubleClick={e=>addNode('text',world(e.clientX,e.clientY))} onContextMenu={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();void upload([...e.dataTransfer.files],world(e.clientX,e.clientY));}}>
-     <CanvasConnectionLayer ref={connectionController} containerRef={container} nodes={doc.nodes} connections={doc.connections} viewport={doc.viewport} selected={selected} selectedEdge={selectedEdge} onSelect={edgeId=>{setSelectedEdge(edgeId);setSelected(new Set());}} onConnect={link}/>
+     <CanvasConnectionLayer ref={connectionController} containerRef={container} nodes={doc.nodes} connections={doc.connections} viewport={doc.viewport} selected={selected} selectedEdge={selectedEdge} onSelect={edgeId=>{setSelectedEdge(edgeId);setSelected(new Set());}} onConnect={link} onDropEmpty={(handle,point,client)=>setConnectionCreate({handle,point,client})}/>
      {visible.map(node=>{const Icon=iconFor(node.type);const isSelected=selected.has(node.id);const expired=!!node.metadata?.expires_at&&Date.parse(node.metadata.expires_at)<=Date.now();return <div key={node.id} data-node-id={node.id} className={`canvas-node ${node.type==='group'?'group-node':''} ${isSelected?'selected':''}`} style={{left:node.position.x,top:node.position.y,width:node.width,height:node.height,background:node.type==='group'?'transparent':theme.node.panel,borderColor:isSelected?'#3b9cff':theme.node.stroke,zIndex:isSelected?20:node.type==='group'?0:1}} onPointerDownCapture={event=>{if(node.type==='config'&&event.button===0)selectMediaNode(event,node);}} onPointerDown={e=>onMoveStart(e,node)} onDoubleClick={e=>{e.stopPropagation();setSelected(new Set([node.id]));}}>
       {node.type!=='config'&&<div className={`node-heading${['video','audio'].includes(node.type)?' video-node-heading':''}`} title={['video','audio'].includes(node.type)?`拖动标题移动${names[node.type]}节点`:undefined}><span>{node.title}</span></div>}
       {node.type==='text'?<textarea className="text-node-content" value={node.metadata?.content||''} placeholder="输入文本或提示词…" onPointerDown={e=>e.stopPropagation()} onChange={e=>patchNode(node.id,{content:e.target.value})}/>:node.type==='image'?<ImageResults node={node} onSelect={assetId=>selectImage(node.id,assetId)} onDownload={downloadImage} onExtract={assetId=>void assetMetadata(assetId).then(asset=>insertAsset(asset,{x:node.position.x+node.width+48,y:node.position.y})).catch(report)}/>:['video','audio'].includes(node.type)?<AssetView id={node.metadata?.asset_id} type={node.type} expired={expired} videoNodeInteraction={node.type==='video'?{scale:doc.viewport.k,height:node.height,onSelect:event=>selectMediaNode(event,node)}:undefined} audioNodeInteraction={node.type==='audio'?{onSelect:event=>selectMediaNode(event,node)}:undefined}/>:node.type==='config'?<ConfigNodePanel node={node} inputs={configInputs(doc,node.id)} models={models} selected={isSelected} busy={busy||cloud.conflict} pending={!!doc.nodes.find(n=>n.id===node.metadata?.generation_target_id)?.metadata?.generation_request} running={doc.nodes.find(n=>n.id===node.metadata?.generation_target_id)?.metadata?.status==='loading'} reconciling={doc.nodes.find(n=>n.id===node.metadata?.generation_target_id)?.metadata?.generation_phase==='reconciliation'} composerOpen={configComposerId===node.id} onChange={patch=>patchNode(node.id,patch)} onComposerToggle={()=>{setSelected(new Set([node.id]));setConfigComposerId(current=>current===node.id?'':node.id);if(configComposerId!==node.id)viewport(focusNodeLayout(node,viewSize,304));}} onGenerate={()=>void execute(node)}/>:null}
+      {node.type==='config'&&generationError?.nodeId===node.id&&<p className="panel-error config-node-error" role="alert" data-canvas-no-zoom onPointerDown={e=>e.stopPropagation()} style={{transform:`scale(${1/doc.viewport.k})`}}><span>{generationError.message}</span><button type="button" aria-label="关闭错误提示" onClick={()=>setGenerationError(null)}><X size={12}/></button></p>}
       {node.type==='config'&&isSelected&&configComposerId===node.id&&<div className="node-panel" style={{width:Math.min(600,viewSize.width-24),transform:`translateX(-50%) scale(${1/doc.viewport.k})`}}><ConfigComposer kind={configKind(node)} onAddText={()=>addTextReference(node)} onUploadImage={()=>pickUpload({nodeId:node.id,mode:'reference'})} value={node.metadata?.composerContent??node.metadata?.prompt??''} inputs={configInputs(doc,node.id)} onChange={value=>patchNode(node.id,{composerContent:value})} onClose={()=>setConfigComposerId('')} onDisconnect={from=>change(old=>({...old,connections:old.connections.filter(edge=>!(edge.toNodeId===node.id&&edge.fromNodeId===from))}))}/></div>}
       <CanvasGenerationLoading node={node}/>
       {node.metadata?.status==='error'&&<GenerationStatusDetails node={node}/>}
@@ -309,7 +330,7 @@ export function Editor(){
         </div></div>
         {kind==='audio'&&<p className="audio-reference-hint">输入要朗读的文本，也可连接文本节点；不支持图片或音频参考。</p>}
         {sizeWarning&&<p className="reference-size-warning" id="reference-size-warning" role="alert">{sizeWarning}</p>}
-        <textarea style={{height:composerPromptHeight(viewSize.height,panelExtra(active))}} className="composer-prompt" placeholder={kind==='text'?'输入文本生成要求':kind==='audio'?'输入要朗读的文本':'描述要生成的'+names[kind]+'内容'} value={active.metadata?.prompt||''} onChange={e=>patchNode(active.id,{prompt:e.target.value})}/>
+        <PromptMentionTextarea style={{height:composerPromptHeight(viewSize.height,panelExtra(active))}} className="composer-prompt" aria-label="提示词" placeholder={(kind==='text'?'输入文本生成要求':kind==='audio'?'输入要朗读的文本':'描述要生成的'+names[kind]+'内容')+(mentionReferences.length?'，键入 @ 引用参考内容':'')} value={active.metadata?.prompt||''} references={mentionReferences} onChange={value=>patchNode(active.id,{prompt:value})}/>
         <div className="composer-footer">
          <div className="composer-controls">
          <button className="composer-icon" title={expandedPrompt?'收起提示词':'展开提示词'} onClick={()=>setExpandedPrompt(v=>!v)}>{expandedPrompt?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
@@ -319,6 +340,7 @@ export function Editor(){
          </div>
          <button className="primary generate-icon" disabled={busy||cloud.conflict||!!sizeWarning||(!chosenModel&&!active.metadata?.generation_request)||(active.metadata?.status==='loading'&&!active.metadata?.generation_request)} aria-describedby={sizeWarning?'reference-size-warning':undefined} title={active.metadata?.generation_request?'核对提交':active.metadata?.status==='loading'?(active.metadata.generation_phase==='reconciliation'?'任务核对中…':'生成中…'):`生成${names[kind]}`} aria-label={active.metadata?.generation_request?'核对提交':active.metadata?.status==='loading'?(active.metadata.generation_phase==='reconciliation'?'任务核对中…':'生成中…'):`生成${names[kind]}`} onClick={()=>void execute(active)}>{active.metadata?.status==='loading'&&active.metadata.generation_phase==='reconciliation'?<Clock3 size={18}/>:busy||active.metadata?.status==='loading'?<LoaderCircle className="animate-spin" size={18}/>:<ArrowUp size={18}/>}</button>
         </div>
+        {generationError?.nodeId===active.id&&<p className="panel-error" role="alert"><span>{generationError.message}</span><button type="button" aria-label="关闭错误提示" onClick={()=>setGenerationError(null)}><X size={12}/></button></p>}
         {!available.length&&<p className="muted">管理员尚未开放此类模型。</p>}
         {kind==='video'&&<ModelUsageNotes model={chosenModel} condensed={viewSize.height<600}/>}
 
@@ -327,6 +349,7 @@ export function Editor(){
      </div>;})}
      {box&&<div className="selection-box" style={{left:Math.min(box.from.x,box.to.x),top:Math.min(box.from.y,box.to.y),width:Math.abs(box.to.x-box.from.x),height:Math.abs(box.to.y-box.from.y)}}/>}
     </InfiniteCanvas>
+    {connectionCreate&&<ConnectionCreateMenu pending={connectionCreate} onCreate={createConnected} onClose={()=>setConnectionCreate(null)}/>}
     {active&&<div className={`node-actions ${active.type==='image'?'image-actions':''}`} data-canvas-no-zoom style={{left:doc.viewport.x+(active.position.x+active.width/2)*doc.viewport.k,top:doc.viewport.y+active.position.y*doc.viewport.k-14}} onPointerDown={e=>e.stopPropagation()}>
       <button title="信息" onClick={()=>setInfoOpen(v=>!v)}><Info size={16}/><span>信息</span></button>
       <button title="删除节点" onClick={removeSelected}><Trash2 size={16}/><span>删除</span></button>
@@ -342,7 +365,7 @@ export function Editor(){
     <div className="canvas-dock-wrap"><div className="canvas-dock" style={{background:theme.toolbar.panel,borderColor:theme.toolbar.border}}><button title="切换选择/平移" onClick={()=>setTool(t=>t==='pan'?'select':'pan')}>{tool==='pan'?<Hand size={18}/>:<MousePointer2 size={18}/>}</button><button title="撤销" disabled={!history.current.past.length} onClick={undo}><Undo2 size={18}/></button><button title="重做" disabled={!history.current.future.length} onClick={redo}><Redo2 size={18}/></button><button title="聚焦所选" onClick={()=>focus()}><Focus size={18}/></button><i/>{(['text','image','video','audio','config'] as const).map(type=>{const Icon=iconFor(type);return <button key={type} title={`添加${names[type]}`} onClick={()=>addNode(type)}><Icon size={18}/></button>;})}<button title="分组" disabled={!selected.size} onClick={group}><Group size={18}/></button><button title="上传素材" onClick={()=>pickUpload()}><Upload size={18}/></button><button title="切换网格" onClick={()=>change(old=>({...old,backgroundMode:old.backgroundMode==='dots'?'blank':old.backgroundMode==='blank'?'lines':'dots'}))}><Palette size={18}/></button><i/><button title="删除所选" disabled={!selected.size&&!selectedEdge} onClick={removeSelected}><Trash2 size={18}/></button></div></div>
    </div>
   </section><input type="file" ref={uploadInput} hidden multiple accept={mediaUploadAccept} onChange={e=>{const intent=uploadTarget.current;uploadTarget.current=null;void upload([...e.target.files||[]],undefined,intent);e.target.value='';}}/>
-  {active&&<Modal title="提示词" open={expandedPrompt} onCancel={()=>setExpandedPrompt(false)} footer={null} width={720} centered><textarea className="expanded-prompt-input" value={active.metadata?.prompt||''} onChange={e=>patchNode(active.id,{prompt:e.target.value})}/></Modal>}
+  {active&&<Modal title="提示词" open={expandedPrompt} onCancel={()=>setExpandedPrompt(false)} footer={null} width={720} centered><PromptMentionTextarea className="expanded-prompt-input" aria-label="展开的提示词" value={active.metadata?.prompt||''} references={mentionReferences} onChange={value=>patchNode(active.id,{prompt:value})}/></Modal>}
   {imageTool?.kind==='crop'&&<CanvasNodeCropDialog open dataUrl={imageTool.url} onClose={()=>setImageTool(null)} onConfirm={rect=>{const tool=imageTool;setImageTool(null);void cropDataUrl(tool.url,rect).then(async data=>{const blob=await(await fetch(data)).blob();const asset=await uploadAsset(blob,id,'crop.png');await insertAsset(asset,{x:tool.node.position.x+tool.node.width+40,y:tool.node.position.y});await refreshAssets();}).catch(report);}}/>}
   {imageTool?.kind==='mask'&&<CanvasNodeMaskEditDialog open dataUrl={imageTool.url} onClose={()=>setImageTool(null)} onConfirm={payload=>{const tool=imageTool;setImageTool(null);void fetch(payload.maskDataUrl).then(r=>r.blob()).then(async blob=>{const asset=await uploadAsset(blob,id,'mask.png');patchNode(tool.node.id,{mask_asset_id:asset.id});if(payload.generate)await execute(tool.node,{assetId:asset.id,prompt:payload.prompt});}).catch(report);}}/>}
  </div>;

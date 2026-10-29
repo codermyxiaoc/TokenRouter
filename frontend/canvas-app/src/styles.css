@@ -23,3 +23,8 @@ button,input,textarea{font:inherit;color:inherit}button{cursor:pointer}button:di
 .expanded-prompt-input{width:100%;height:320px;max-height:60vh;resize:vertical;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--panel);color:var(--text);outline:none}
 /* 大图提醒占用独立行，原图不变；提示颜色同时适配明暗主题。 */
 .reference-size-warning{margin:6px 0;padding:6px 10px;border:1px solid var(--border);border-left:3px solid #d97706;border-radius:8px;background:var(--hover);color:inherit;font-size:12px;line-height:18px}
+/* 生成前校验失败的就地提示：显示在生成面板底部或生成配置节点上方，可手动关闭。 */
+.panel-error{display:flex;align-items:flex-start;gap:8px;margin:8px 4px 0;padding:8px 10px;border:1px solid #fca5a5;border-radius:10px;background:color-mix(in srgb,#ef4444 8%,var(--panel));color:#dc2626;font-size:12px;line-height:18px}
+.panel-error span{flex:1;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.panel-error button{display:grid;place-items:center;flex:0 0 20px;height:20px;padding:0;border:0;border-radius:6px;background:none;color:inherit}
+.config-node-error{position:absolute;left:0;bottom:100%;width:340px;margin:0 0 8px;transform-origin:bottom left;z-index:5}

@@ -14,6 +14,7 @@ let root: Root;
 let controller: ReturnType<typeof createRef<CanvasConnectionController>>;
 let frames: FrameRequestCallback[];
 let onConnect: ReturnType<typeof vi.fn>;
+let onDropEmpty: ReturnType<typeof vi.fn>;
 let parentRenders: number;
 
 function Harness({ connections = [] }: { connections?: CanvasConnection[] }) {
@@ -21,7 +22,7 @@ function Harness({ connections = [] }: { connections?: CanvasConnection[] }) {
   return <>
     <button data-testid="a-source" className="handle" onPointerDown={event => controller.current?.begin(event, 'a', 'source')}>a source</button>
     <button data-testid="b-target" className="handle" onPointerDown={event => controller.current?.begin(event, 'b', 'target')}>b target</button>
-    <CanvasConnectionLayer ref={controller} containerRef={{ current: host }} nodes={nodes} connections={connections} viewport={{ x: 0, y: 0, k: 1 }} selected={new Set()} selectedEdge="" onSelect={() => {}} onConnect={onConnect}/>
+    <CanvasConnectionLayer ref={controller} containerRef={{ current: host }} nodes={nodes} connections={connections} viewport={{ x: 0, y: 0, k: 1 }} selected={new Set()} selectedEdge="" onSelect={() => {}} onConnect={onConnect} onDropEmpty={onDropEmpty}/>
   </>;
 }
 
@@ -36,7 +37,7 @@ const start = (id = 'a-source', x = 120, y = 60) => pointer('pointerdown', x, y,
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
-  controller = createRef<CanvasConnectionController>(); frames = []; onConnect = vi.fn(); parentRenders = 0;
+  controller = createRef<CanvasConnectionController>(); frames = []; onConnect = vi.fn(); onDropEmpty = vi.fn(); parentRenders = 0;
   vi.spyOn(host, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON() {} });
   vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { frames.push(callback); return frames.length; });
   vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
@@ -109,5 +110,22 @@ describe('独立连线拖动层', () => {
     expect(host.querySelector('[data-active-connection]')).not.toBeNull();
     act(() => start('b-target', 300, 60));
     expect(onConnect).toHaveBeenCalledExactlyOnceWith('a', 'b');
+  });
+  // 吸附目标显示“连接到”提示；拖出的线落在空白处交给编辑器弹出新建菜单，靠近节点或点击端点模式不弹。
+  it('吸附时标明连接目标，拖到空白处松手请求新建并连接', () => {
+    act(() => { start(); pointer('pointermove', 340, 60); frames.shift()!(16); });
+    expect(host.querySelector('[data-connection-target="b"]')?.textContent).toBe('连接到：B');
+    act(() => { pointer('pointermove', 600, 500); pointer('pointerup', 600, 500); });
+    expect(onConnect).not.toHaveBeenCalled();
+    expect(onDropEmpty).toHaveBeenCalledExactlyOnceWith({ nodeId: 'a', handleType: 'source' }, { x: 600, y: 500 }, { x: 600, y: 500 });
+    expect(host.querySelector('[data-active-connection]')).toBeNull();
+    act(() => { start('b-target', 300, 60); pointer('pointermove', 50, 40); frames.splice(0).forEach(frame => frame(16)); });
+    expect(host.querySelector('[data-connection-target="a"]')?.textContent).toBe('输入来自：A');
+    act(() => { pointer('pointerup', 50, 40); });
+    // 靠近节点但不可连（已存在同向连线）时直接取消，不弹新建菜单。
+    act(() => root.render(<Harness connections={[{ id: 'edge', fromNodeId: 'a', toNodeId: 'b' }]}/>));
+    act(() => { start(); pointer('pointermove', 405, 60); pointer('pointerup', 405, 60); });
+    act(() => { start(); pointer('pointerup', 120, 60); pointer('pointerdown', 600, 500, host); });
+    expect(onDropEmpty).toHaveBeenCalledTimes(1);
   });
 });

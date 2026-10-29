@@ -1,0 +1,11 @@
+/* 新建并连接菜单固定在屏幕坐标，不随画布缩放，配色沿用画布面板变量。 */
+.connection-create-menu{position:fixed;z-index:1200;padding:8px;border:1px solid var(--border);border-radius:16px;background:var(--panel);color:var(--text);box-shadow:0 16px 40px #0003}
+.connection-create-menu header{display:flex;align-items:center;justify-content:space-between;padding:0 4px 6px;color:var(--muted);font-size:13px;font-weight:600}
+.connection-create-menu header button{display:grid;place-items:center;width:26px;height:26px;padding:0;border:0;border-radius:8px;background:none;color:var(--muted)}
+.connection-create-menu header button:hover{background:var(--hover);color:var(--text)}
+.connection-create-menu button[data-create-type]{display:flex;align-items:center;gap:10px;width:100%;height:46px;padding:0 8px;border:0;border-radius:12px;background:none;text-align:left;color:var(--text)}
+.connection-create-menu button[data-create-type]:hover,.connection-create-menu button[data-create-type]:focus-visible{background:var(--hover);outline:none}
+.connection-create-icon{display:grid;place-items:center;flex:0 0 34px;height:34px;border-radius:10px;background:var(--hover);color:var(--muted)}
+.connection-create-copy{min-width:0;flex:1}
+.connection-create-copy strong{display:block;font-size:13px;font-weight:600;line-height:18px}
+.connection-create-copy small{display:block;overflow:hidden;color:var(--muted);font-size:11px;line-height:16px;white-space:nowrap;text-overflow:ellipsis}

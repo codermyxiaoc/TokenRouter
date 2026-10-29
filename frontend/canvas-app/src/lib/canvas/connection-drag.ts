@@ -36,6 +36,12 @@ export function findConnectionTarget(
   return best;
 }
 
+// 松手位置靠近任意节点（含已连接或不可连的节点）时不弹出新建菜单，避免把“没连上”误当作“要新建”。
+export function isNearAnyNode(nodes: CanvasNodeData[], point: Position, zoom: number): boolean {
+  const padding = NODE_PADDING / Math.max(zoom, 0.05);
+  return nodes.some(node => node.type !== 'group' && point.x >= node.position.x - padding && point.x <= node.position.x + node.width + padding && point.y >= node.position.y - padding && point.y <= node.position.y + node.height + padding);
+}
+
 // 预览与最终路径共用曲线，吸附完成时不突然改变弯曲形状。
 export function connectionCurve(start: Position, end: Position) {
   const curvature = Math.max(Math.abs(end.x - start.x) * 0.5, 50);

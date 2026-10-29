@@ -1,0 +1,8 @@
+/* 高亮层与输入框共用同一排版类，输入框文字透明、保留原生光标，标签在下层着色。 */
+.prompt-mention{position:relative;width:100%}
+.prompt-mention-overlay{position:absolute;inset:0;z-index:0;height:auto!important;max-height:none!important;resize:none;pointer-events:none;overflow:hidden;white-space:pre-wrap;overflow-wrap:break-word;color:var(--text)}
+.prompt-mention-input{position:relative;z-index:1;color:transparent!important;caret-color:var(--text);background:transparent!important}
+.prompt-mention-input::selection{color:var(--text);background:color-mix(in srgb,var(--brand) 30%,transparent)}
+.prompt-mention-label{color:var(--brand);background:color-mix(in srgb,var(--brand) 14%,transparent);border-radius:4px;box-shadow:0 0 0 1px color-mix(in srgb,var(--brand) 24%,transparent)}
+.prompt-mention-thumb{display:grid;place-items:center;flex:0 0 36px;width:36px;height:36px;overflow:hidden;border-radius:6px;background:var(--hover);color:var(--muted)}
+.prompt-mention-thumb .media-content,.prompt-mention-thumb .media-placeholder{width:36px;height:36px;min-height:0;object-fit:cover;font-size:0}

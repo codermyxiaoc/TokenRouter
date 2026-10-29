@@ -1,6 +1,6 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import { ActiveConnectionPath, ConnectionPath } from './canvas-connections';
-import { connectionEndpoints, findConnectionTarget } from '@/lib/canvas/connection-drag';
+import { connectionEndpoints, findConnectionTarget, isNearAnyNode } from '@/lib/canvas/connection-drag';
 import { canvasThemes } from '@/lib/canvas-theme';
 import { useThemeStore } from '@/stores/use-theme-store';
 import type { CanvasConnection, CanvasNodeData, ConnectionHandle, Position, ViewportTransform } from '@/types/canvas';
@@ -19,6 +19,8 @@ type Props = {
   selectedEdge: string;
   onSelect: (id: string) => void;
   onConnect: (from: string, to: string) => void;
+  /** 拖线松手在空白处：由编辑器弹出“新建并连接”菜单；point 为画布坐标，client 为屏幕坐标。 */
+  onDropEmpty?: (handle: ConnectionHandle, point: Position, client: Position) => void;
 };
 
 type Drag = {
@@ -115,6 +117,15 @@ export const CanvasConnectionLayer = forwardRef<CanvasConnectionController, Prop
       // 松手时同步命中检测，不能依赖尚未执行的最后一帧，避免快拖漏连。
       const next = calculate(current);
       if (next?.target) { finish(current, next.target); return; }
+      // 真正拖出的线落在画布空白处时交给编辑器新建节点；点击端点进入的待连接模式不弹菜单。
+      const rect = latest.current.containerRef.current?.getBoundingClientRect();
+      const insideCanvas = !!rect && current.client.x >= rect.left && current.client.x <= rect.right && current.client.y >= rect.top && current.client.y <= rect.bottom;
+      if (next && current.moved && !current.armed && insideCanvas && latest.current.onDropEmpty && !isNearAnyNode(latest.current.nodes, next.point, latest.current.viewport.k)) {
+        const { handle } = current, client = current.client;
+        cancel();
+        latest.current.onDropEmpty(handle, next.point, client);
+        return;
+      }
       if (!current.moved && !current.armed) {
         current.armed = true;
         if (current.capture?.hasPointerCapture?.(current.pointerId)) current.capture.releasePointerCapture(current.pointerId);
@@ -156,7 +167,7 @@ export const CanvasConnectionLayer = forwardRef<CanvasConnectionController, Prop
 
   return <svg className="connections" style={{ overflow: 'visible', pointerEvents: 'none' }}>
     <SavedConnections nodes={props.nodes} connections={props.connections} selected={props.selected} selectedEdge={props.selectedEdge} onSelect={props.onSelect}/>
-    {preview?.target && <rect data-connection-target={preview.target.id} x={preview.target.position.x - 4 / props.viewport.k} y={preview.target.position.y - 4 / props.viewport.k} width={preview.target.width + 8 / props.viewport.k} height={preview.target.height + 8 / props.viewport.k} rx={24} fill="none" stroke={theme.node.activeStroke} strokeWidth={2 / props.viewport.k} opacity={0.7}/>}
+    {preview?.target && <ConnectionTargetHint target={preview.target} input={preview.handle.handleType === 'source'} zoom={props.viewport.k} stroke={theme.node.activeStroke}/>}
     {preview && <ActiveConnectionPath node={nodeById.get(preview.handle.nodeId)} handle={preview.handle} mouseWorld={preview.point} target={preview.target}/>}
   </svg>;
 });
@@ -169,3 +180,17 @@ const SavedConnections = memo(function SavedConnections({ nodes, connections, se
     return from && to ? <ConnectionPath key={edge.id} connection={edge} from={from} to={to} active={selectedEdge === edge.id || selected.has(from.id) || selected.has(to.id)} onSelect={() => onSelect(edge.id)}/> : null;
   });
 });
+
+// 吸附目标使用实线高亮，并在节点上方标明“连接到”哪个节点与连接方向；尺寸按缩放倒数换算，始终保持屏幕大小。
+function ConnectionTargetHint({ target, input, zoom, stroke }: { target: CanvasNodeData; input: boolean; zoom: number; stroke: string }) {
+  const k = Math.max(zoom, 0.05), pad = 4 / k, fontSize = 12 / k;
+  const text = `${input ? '连接到' : '输入来自'}：${target.title || '未命名节点'}`;
+  const width = (Array.from(text).length * 12 + 20) / k, height = 24 / k;
+  return <g data-connection-target={target.id} pointerEvents="none">
+    <rect x={target.position.x - pad} y={target.position.y - pad} width={target.width + pad * 2} height={target.height + pad * 2} rx={24} fill={stroke} fillOpacity={0.06} stroke={stroke} strokeWidth={2.5 / k}/>
+    <g transform={`translate(${target.position.x} ${target.position.y - pad - height - 6 / k})`}>
+      <rect width={width} height={height} rx={height / 2} fill={stroke}/>
+      <text x={10 / k} y={height / 2} dominantBaseline="central" fontSize={fontSize} fill="#fff" fontWeight={600}>{text}</text>
+    </g>
+  </g>;
+}

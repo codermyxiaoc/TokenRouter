@@ -350,6 +350,11 @@ func (s *CreativeVideoCanvasExecutor) Poll(ctx context.Context, e *CreativeCanva
 	}
 	switch task.Status {
 	case "completed":
+		// released 是账务终态（人工释放或按未交付释放），不会再变成 settled；
+		// 仍按结算中显示会让画布永久停在“待核对”，必须直接给出终态。
+		if task.BillingStatus == "released" {
+			return &CreativeCanvasExecutionResult{Status: "failed", ErrorCode: "CREATIVE_VIDEO_RELEASED", ErrorMessage: "本任务未扣费，预扣已释放，可重新生成"}, nil
+		}
 		if task.BillingStatus != "settled" {
 			return &CreativeCanvasExecutionResult{Status: "running", ErrorCode: "CREATIVE_VIDEO_SETTLEMENT_PENDING", ErrorMessage: "视频已生成，正在核对结算，请勿重复生成"}, nil
 		}

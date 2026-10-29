@@ -249,8 +249,9 @@ func RegisterAuthRoutes(
 	settings.Use(panelRateLimiter.PublicIP())
 	{
 		settings.GET("/public", h.Setting.GetPublicSettings)
-		// API 文档的管理员改写正文，未登录访客的文档页同样需要读取。
-		settings.GET("/api-docs", h.Setting.GetAPIDocOverrides)
+		// API 文档目录叠加与单篇改写正文，未登录访客的文档页同样需要读取。
+		settings.GET("/api-docs", h.Setting.GetAPIDocCatalog)
+		settings.GET("/api-docs/:id", h.Setting.GetAPIDocDocument)
 		settings.GET("/email-unsubscribe", h.Setting.UnsubscribeNotificationEmail)
 		// 链接访问只读，必须显式提交确认表单才修改通知偏好。
 		settings.POST("/email-unsubscribe", h.Setting.ConfirmNotificationEmailUnsubscribe)

@@ -252,15 +252,17 @@ const (
 	SettingKeyIntelligenceEnabled                 = "intelligence_enabled"             // 降智检测默认关闭，开启后才允许发起检测。
 	SettingKeyCreativeModelSettings               = "creative_model_settings"          // 创作台生图模型与能力白名单（JSON）
 	SettingKeyCreativeWorkerCount                 = "creative_worker_count"            // 创作台 worker 数量（正整数）
-	SettingKeyRiskControlEnabled                  = "risk_control_enabled"             // 是否启用风控中心入口与内容审计链路
-	SettingKeyCyberSessionBlockEnabled            = "cyber_session_block_enabled"      // cyber_policy 命中后的会话本地屏蔽开关
-	SettingKeyCyberPolicyUserAllowlist            = "cyber_policy_user_allowlist"      // 按实际行为用户仅保留风控审计，不执行本地惩罚
-	SettingKeyCyberSessionBlockTTLSeconds         = "cyber_session_block_ttl_seconds"  // cyber_policy 会话本地屏蔽时长（秒）
-	SettingKeyContentModerationConfig             = "content_moderation_config"        // 内容审计配置（JSON）
-	SettingKeyLoginAgreementEnabled               = "login_agreement_enabled"          // 登录前是否要求同意条款
-	SettingKeyLoginAgreementMode                  = "login_agreement_mode"             // 条款确认展示模式：modal / checkbox
-	SettingKeyLoginAgreementUpdatedAt             = "login_agreement_updated_at"       // 条款更新日期（展示用）
-	SettingKeyLoginAgreementDocuments             = "login_agreement_documents"        // 条款文档列表（JSON，Markdown 内容）
+	// 创作台画布素材保存期（小时）；修改只作用于之后归档的新素材。
+	SettingKeyCreativeCanvasAssetRetentionHours = "creative_canvas_asset_retention_hours"
+	SettingKeyRiskControlEnabled                = "risk_control_enabled"            // 是否启用风控中心入口与内容审计链路
+	SettingKeyCyberSessionBlockEnabled          = "cyber_session_block_enabled"     // cyber_policy 命中后的会话本地屏蔽开关
+	SettingKeyCyberPolicyUserAllowlist          = "cyber_policy_user_allowlist"     // 按实际行为用户仅保留风控审计，不执行本地惩罚
+	SettingKeyCyberSessionBlockTTLSeconds       = "cyber_session_block_ttl_seconds" // cyber_policy 会话本地屏蔽时长（秒）
+	SettingKeyContentModerationConfig           = "content_moderation_config"       // 内容审计配置（JSON）
+	SettingKeyLoginAgreementEnabled             = "login_agreement_enabled"         // 登录前是否要求同意条款
+	SettingKeyLoginAgreementMode                = "login_agreement_mode"            // 条款确认展示模式：modal / checkbox
+	SettingKeyLoginAgreementUpdatedAt           = "login_agreement_updated_at"      // 条款更新日期（展示用）
+	SettingKeyLoginAgreementDocuments           = "login_agreement_documents"       // 条款文档列表（JSON，Markdown 内容）
 
 	SettingKeyMediaTaskReconciliationTimeoutMinutes = "media_task_reconciliation_timeout_minutes" // 失败媒体任务待确认超时（分钟）
 

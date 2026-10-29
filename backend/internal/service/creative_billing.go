@@ -155,6 +155,20 @@ func captureCreativeBalanceHold(ctx context.Context, repo UsageBillingRepository
 	return result, nil
 }
 
+// UsageBillingRequestRecorder 只读确认某个资金动作是否已经提交（含归档），不提供扣款或释放入口。
+type UsageBillingRequestRecorder interface {
+	UsageBillingRequestRecorded(ctx context.Context, requestID string, apiKeyID int64) (bool, error)
+}
+
+// creativeCaptureRecorded 判断该任务是否已捕获资金；仓储不支持查询时按未捕获处理，由仓储互斥守卫兜底。
+func creativeCaptureRecorded(ctx context.Context, repo UsageBillingRepository, run *CreativeRun) (bool, error) {
+	recorder, ok := repo.(UsageBillingRequestRecorder)
+	if !ok || run == nil {
+		return false, nil
+	}
+	return recorder.UsageBillingRequestRecorded(ctx, CreativeCaptureRequestID(run.RunID), run.APIKeyID)
+}
+
 // releaseCreativeBalanceHold 释放未消耗的冻结（失败/取消/结果丢失路径，幂等）。
 // 与批量图片一致：同 request id 的指纹冲突视为已释放，避免毒消息循环。
 func releaseCreativeBalanceHold(ctx context.Context, repo UsageBillingRepository, run *CreativeRun) error {
@@ -178,6 +192,10 @@ func releaseCreativeBalanceHold(ctx context.Context, repo UsageBillingRepository
 				zap.String("run_id", run.RunID),
 			)
 			return nil
+		}
+		if errors.Is(err, ErrBatchImageHoldAlreadyCaptured) {
+			// 资金已捕获，原预占已经不在冻结池中；再释放会误减其它任务的冻结。原样上抛由调用方按已扣款收尾。
+			return err
 		}
 		return ErrCreativeBillingHoldFailed.WithCause(err)
 	}

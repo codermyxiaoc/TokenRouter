@@ -44,6 +44,17 @@ func NewCreativeCanvasService(repo CreativeCanvasRepository, store CreativeCanva
 	}
 	return s
 }
+// assetRetention 读取管理员配置的素材保存期；读取接口缺失或不可用时沿用原七天默认，永不写成零。
+func (s *CreativeCanvasService) assetRetention(ctx context.Context) time.Duration {
+	if s == nil || s.creative == nil || s.creative.Settings == nil {
+		return CreativeCanvasAssetTTL
+	}
+	if ttl := s.creative.Settings.GetCreativeCanvasAssetRetention(ctx); ttl > 0 {
+		return ttl
+	}
+	return CreativeCanvasAssetTTL
+}
+
 func (s *CreativeCanvasService) SetExecutor(kind string, executor CreativeCanvasExecutor) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -182,17 +193,27 @@ func (s *CreativeCanvasService) UploadAsset(ctx context.Context, u int64, canvas
 	if kind == "image" && limit > 32<<20 {
 		limit = 32 << 20
 	}
-	a := &CreativeCanvasAsset{ID: uuid.NewString(), UserID: u, CanvasID: canvasID, MediaType: kind, MIMEType: mime, ByteSize: limit, ExpiresAt: s.now().Add(CreativeCanvasAssetTTL)}
+	a := &CreativeCanvasAsset{ID: uuid.NewString(), UserID: u, CanvasID: canvasID, MediaType: kind, MIMEType: mime, ByteSize: limit, ExpiresAt: s.now().Add(s.assetRetention(ctx))}
 	a, err = s.repo.ReserveAsset(ctx, a, CreativeCanvasUserQuota)
 	if err != nil {
 		return nil, err
 	}
 	return s.writeAsset(ctx, a, io.MultiReader(bytes.NewReader(prefix), reader), limit)
 }
+// writeAsset 写入文件并登记就绪；图片在登记前必须能完整解码，截断或损坏的文件不能变成可引用的素材。
 func (s *CreativeCanvasService) writeAsset(ctx context.Context, a *CreativeCanvasAsset, reader io.Reader, limit int64) (*CreativeCanvasAsset, error) {
 	n, hash, err := s.store.Put(ctx, a.ID, reader, limit)
 	if err != nil {
 		return nil, err
+	}
+	if a.MediaType == "image" {
+		// 媒体类型只按文件头判断，截断的 PNG 仍会通过；这里对落盘文件做一次完整解码，
+		// 失败时删除文件并让预占记录保持未就绪，避免用户引用到无法解码的图片。
+		valid, verifyErr := s.store.VerifyImage(ctx, a.ID, n)
+		if verifyErr != nil || !valid {
+			_ = s.store.Delete(ctx, a.ID)
+			return nil, ErrCanvasInvalid
+		}
 	}
 	if err = s.repo.ReadyAsset(ctx, a.UserID, a.ID, n, hash); err != nil {
 		return nil, err
@@ -757,7 +778,7 @@ func (s *CreativeCanvasService) archiveOutput(ctx context.Context, e *CreativeCa
 	if reserved <= 0 {
 		reserved = limit
 	}
-	a := &CreativeCanvasAsset{ID: id, UserID: e.UserID, CanvasID: e.CanvasID, ExecutionID: e.ID, OutputIndex: o.Index, MediaType: kind, MIMEType: mime, ByteSize: reserved, ExpiresAt: s.now().Add(CreativeCanvasAssetTTL)}
+	a := &CreativeCanvasAsset{ID: id, UserID: e.UserID, CanvasID: e.CanvasID, ExecutionID: e.ID, OutputIndex: o.Index, MediaType: kind, MIMEType: mime, ByteSize: reserved, ExpiresAt: s.now().Add(s.assetRetention(ctx))}
 	a, err = s.repo.ReserveAsset(ctx, a, CreativeCanvasUserQuota)
 	if err != nil {
 		return err

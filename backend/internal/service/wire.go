@@ -902,6 +902,7 @@ var ProviderSet = wire.NewSet(
 	NewOpenAIGatewayService,
 	ProvideVideoUpstreamService,
 	ProvideVideoProtocolProfileService,
+	NewAPIDocService,
 	NewVideoProfileAIService,
 	NewCodexInviteResetService,
 	ProvideOpenAIQuotaService,

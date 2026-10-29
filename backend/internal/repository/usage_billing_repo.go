@@ -433,6 +433,8 @@ func (r *usageBillingRepository) applyBatchImageBalanceHoldOnce(
 		if err := guardVideoBudgetOperation(ctx, tx, cmd, operation); err != nil {
 			return nil, err
 		}
+	} else if err := guardBatchImageSettlementExclusive(ctx, tx, cmd, operation); err != nil {
+		return nil, err
 	}
 	// 未配置 Token 预算的视频仅在完成时按实际金额严格分配，不能套用旧图片的零预占兜底。
 	deferredCapture := cmd.VideoEntity && cmd.VideoDeferredBilling && operation == batchImageAllowanceCapture
@@ -452,6 +454,12 @@ func (r *usageBillingRepository) applyBatchImageBalanceHoldOnce(
 		result = &service.BatchImageBalanceHoldResult{}
 	}
 	result.Applied = true
+	if operation == batchImageAllowanceCapture && cmd.CreativeEntity && !cmd.VideoEntity {
+		// 扣款回执与资金同一事务提交，后续结算步骤失败也能据此确认“已扣款”及金额。
+		if err := persistCreativeCaptureResult(ctx, tx, cmd.BatchID, result); err != nil {
+			return nil, err
+		}
+	}
 	if operation == batchImageAllowanceReserve && !cmd.VideoEntity {
 		// 订阅分配之后才能确认是否使用余额；平台拒绝必须回滚本次订阅、余额和去重。
 		quotaCommand := &service.UsageBillingCommand{UserID: cmd.UserID, GroupID: cmd.GroupID, QuotaPlatform: cmd.QuotaPlatform}
@@ -1838,6 +1846,86 @@ func normalizeBatchImageBalanceAmount(amount float64) float64 {
 
 // batchImageHoldClaimExists 检查 hold request id 是否已在 dedup（或归档）表中被 claim，
 // 即该 batch 的冻结操作确实成功提交过。
+// guardBatchImageSettlementExclusive 保证创作台与批量图片的同一笔预占只结清一次：捕获与释放使用不同去重键，
+// 仅靠 request_id 去重无法阻止“先捕获、很久之后又释放”。检查位于付款用户行锁之后，
+// 并发的对向动作会等待前者提交后再读到其去重记录。视频由任务状态守卫互斥，不走这里。
+// @project-doc docs/domains/media_tasks.md#batch_image_settlement_exclusive
+func guardBatchImageSettlementExclusive(ctx context.Context, tx *sql.Tx, cmd *service.BatchImageBalanceHoldCommand, operation batchImageAllowanceOperation) error {
+	if cmd == nil || cmd.VideoEntity {
+		return nil
+	}
+	batchID := strings.TrimSpace(cmd.BatchID)
+	if batchID == "" {
+		return nil
+	}
+	var opposite string
+	var conflict error
+	switch operation {
+	case batchImageAllowanceCapture:
+		opposite, conflict = service.BatchImageReleaseRequestID(batchID), service.ErrBatchImageHoldAlreadyReleased
+		if cmd.CreativeEntity {
+			opposite = service.CreativeReleaseRequestID(batchID)
+		}
+	case batchImageAllowanceRelease:
+		opposite, conflict = service.BatchImageCaptureRequestID(batchID), service.ErrBatchImageHoldAlreadyCaptured
+		if cmd.CreativeEntity {
+			opposite = service.CreativeCaptureRequestID(batchID)
+		}
+	default:
+		return nil
+	}
+	done, err := batchImageHoldClaimExists(ctx, tx, opposite, cmd.APIKeyID)
+	if err != nil {
+		return err
+	}
+	if done {
+		return conflict
+	}
+	return nil
+}
+
+// persistCreativeCaptureResult 保存创作台扣款回执；任务行缺失时不阻断资金事务（守卫已保证预占存在）。
+func persistCreativeCaptureResult(ctx context.Context, tx *sql.Tx, runID string, result *service.BatchImageBalanceHoldResult) error {
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE creative_runs SET capture_result = $2::jsonb, updated_at = NOW() WHERE run_id = $1`,
+		strings.TrimSpace(runID), string(encoded))
+	return err
+}
+
+// CreativeCaptureReceipt 只读返回创作台任务是否已捕获资金及保存的扣款回执；历史任务可能已捕获但没有回执。
+func (r *usageBillingRepository) CreativeCaptureReceipt(ctx context.Context, runID string, apiKeyID int64) (*service.BatchImageBalanceHoldResult, bool, error) {
+	captured, err := r.UsageBillingRequestRecorded(ctx, service.CreativeCaptureRequestID(runID), apiKeyID)
+	if err != nil || !captured {
+		return nil, captured, err
+	}
+	var raw []byte
+	err = r.db.QueryRowContext(ctx, `SELECT capture_result FROM creative_runs WHERE run_id = $1`, runID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && len(raw) == 0) {
+		return nil, true, nil
+	}
+	if err != nil {
+		return nil, true, err
+	}
+	var receipt service.BatchImageBalanceHoldResult
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		return nil, true, err
+	}
+	return &receipt, true, nil
+}
+
+// UsageBillingRequestRecorded 只读确认某个资金动作是否已提交（含归档），供结算在重判交付前识别已捕获的任务。
+func (r *usageBillingRepository) UsageBillingRequestRecorded(ctx context.Context, requestID string, apiKeyID int64) (bool, error) {
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM usage_billing_dedup WHERE request_id = $1 AND api_key_id = $2)
+		    OR EXISTS (SELECT 1 FROM usage_billing_dedup_archive WHERE request_id = $1 AND api_key_id = $2)
+	`, requestID, apiKeyID).Scan(&exists)
+	return exists, err
+}
+
 func batchImageHoldClaimExists(ctx context.Context, tx *sql.Tx, holdRequestID string, apiKeyID int64) (bool, error) {
 	var exists int
 	err := tx.QueryRowContext(ctx, `

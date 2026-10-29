@@ -769,6 +769,8 @@ export interface SystemSettings {
   chanshui_enabled: boolean;
   creative_model_settings: CreativeModelSetting[];
   creative_worker_count: number;
+  /** 创作台画布素材保存期（小时），只影响之后归档的新素材。 */
+  creative_canvas_asset_retention_hours: number;
   media_task_reconciliation_timeout_minutes: number;
   risk_control_enabled: boolean;
   cyber_session_block_enabled: boolean;
@@ -1099,6 +1101,7 @@ export interface UpdateSettingsRequest {
   intelligence_enabled?: boolean;
   chanshui_enabled?: boolean;
   creative_worker_count?: number;
+  creative_canvas_asset_retention_hours?: number;
   media_task_reconciliation_timeout_minutes?: number;
   risk_control_enabled?: boolean;
   cyber_session_block_enabled?: boolean;

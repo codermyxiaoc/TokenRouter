@@ -64,6 +64,9 @@ var (
 	ErrBatchImageSettlementCostExceedsHold  = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_SETTLEMENT_COST_EXCEEDS_HOLD", "batch image settlement cost exceeds held balance")
 	ErrBatchImageBillingHoldFailed          = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_BILLING_HOLD_FAILED", "batch image balance hold failed")
 	ErrBatchImageInsufficientBalance        = infraerrors.New(http.StatusPaymentRequired, "BATCH_IMAGE_INSUFFICIENT_BALANCE", "insufficient balance for batch image hold")
+	// 同一笔预占只能被捕获或释放其中之一：捕获后再释放会把仍属于其它任务的冻结转成可用余额。
+	ErrBatchImageHoldAlreadyCaptured = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_HOLD_ALREADY_CAPTURED", "this hold was already captured and cannot be released")
+	ErrBatchImageHoldAlreadyReleased = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_HOLD_ALREADY_RELEASED", "this hold was already released and cannot be captured")
 
 	ErrBatchImageDisabled                   = infraerrors.New(http.StatusNotFound, "BATCH_IMAGE_DISABLED", "batch image API is disabled")
 	ErrBatchImageGroupDisabled              = infraerrors.New(http.StatusForbidden, "BATCH_IMAGE_GROUP_DISABLED", "batch image API is disabled for this group")

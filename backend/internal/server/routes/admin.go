@@ -575,10 +575,14 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		adminSettings.GET("", h.Admin.Setting.GetSettings)
 		adminSettings.PUT("", h.Admin.Setting.UpdateSettings)
-		// API 文档 Markdown 改写；读取走公开接口 /api/v1/settings/api-docs。
-		adminSettings.PUT("/api-docs", h.Admin.Setting.UpdateAPIDocOverrides)
-		// 单篇合并保存，带编辑起点做并发冲突检测，避免多名管理员互相覆盖
-		adminSettings.PATCH("/api-docs", h.Admin.Setting.PatchAPIDocOverrides)
+		// API 文档目录管理：分类与文档逐条增删改，version 做并发冲突检测；排序单独提交。
+		adminSettings.GET("/api-docs", h.Admin.Setting.GetAPIDocCatalog)
+		adminSettings.GET("/api-docs/documents/:id", h.Admin.Setting.GetAPIDocDocument)
+		adminSettings.PUT("/api-docs/documents/:id", h.Admin.Setting.SaveAPIDocDocument)
+		adminSettings.DELETE("/api-docs/documents/:id", h.Admin.Setting.DeleteAPIDocDocument)
+		adminSettings.PUT("/api-docs/categories/:id", h.Admin.Setting.SaveAPIDocCategory)
+		adminSettings.DELETE("/api-docs/categories/:id", h.Admin.Setting.DeleteAPIDocCategory)
+		adminSettings.PUT("/api-docs/order", h.Admin.Setting.ReorderAPIDocs)
 		adminSettings.GET("/creative-model-candidates", h.Admin.Setting.ListCreativeModelCandidates)
 		adminSettings.GET("/creative-worker-status", h.Admin.Setting.GetCreativeWorkerStatus)
 		adminSettings.GET("/pre-aggregation", h.Admin.Setting.GetPreAggregationSettings)

@@ -2,16 +2,9 @@ import { apiDocCategories, apiDocEndpoints, commonApiErrors } from './index'
 import { apiDocAuthExample, apiDocEnvironment, apiDocMarkdown } from './format'
 import type { ApiDocEndpoint } from './types'
 
-// API 文档统一以 Markdown 作为正文：内置文档由下面的函数生成，管理员可在系统设置中逐篇改写。
+// API 文档统一以 Markdown 作为正文：内置文档由下面的函数生成；管理员可在系统设置中改写、改名、隐藏、排序或新增文档（见 catalog.ts）。
 // 改写正文中的 {{BASE_URL}} 会替换为当前站点的网关地址。
 // @project-doc docs/interfaces/api_reference.md#api_docs_markdown
-
-/** 文档目录项：指南与接口共用同一 ID 空间（即 /docs/:id）。 */
-export interface ApiDocDocument {
-  id: string
-  title: string
-  group: string
-}
 
 export const API_DOC_GUIDES = [
   { id: 'quickstart', title: '快速开始' },
@@ -97,22 +90,10 @@ export function defaultApiDocMarkdown(id: string, baseUrl: string): string | nul
   return endpoint ? apiDocMarkdown(endpoint, baseUrl) : null
 }
 
-/** 实际展示的 Markdown：优先使用管理员改写，并替换 {{BASE_URL}} 占位符。 */
-export function effectiveApiDocMarkdown(id: string, baseUrl: string, overrides: Record<string, string>): string | null {
-  const custom = overrides[id]
+/** 实际展示的 Markdown：优先使用管理员改写正文（替换 {{BASE_URL}} 占位符），否则使用内置正文。 */
+export function resolveApiDocMarkdown(id: string, baseUrl: string, custom: string | null | undefined): string | null {
   if (custom && custom.trim()) return custom.split('{{BASE_URL}}').join(baseUrl)
   return defaultApiDocMarkdown(id, baseUrl)
-}
-
-/** 全部可编辑文档，按“指南 / 分类”分组，供系统设置选择。 */
-export function apiDocDocuments(): ApiDocDocument[] {
-  const guides = API_DOC_GUIDES.map(guide => ({ id: guide.id, title: guide.title, group: '指南' }))
-  const endpoints = apiDocEndpoints.map(endpoint => ({
-    id: endpoint.id,
-    title: `${endpoint.method} ${endpoint.path} · ${endpoint.title}`,
-    group: apiDocCategories.find(category => category.id === endpoint.category)?.label ?? '',
-  }))
-  return [...guides, ...endpoints]
 }
 
 /** 提取二级标题作为页面大纲，忽略代码块中的 # 行。 */

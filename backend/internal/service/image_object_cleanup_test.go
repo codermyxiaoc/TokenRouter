@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -441,4 +442,27 @@ func TestImageObjectRetentionCleanupFailureKeepsEvidenceAndRetries(t *testing.T)
 		require.Len(t, store.saved(), 1)
 		require.Empty(t, store.retryCodes, "不能覆盖另一持有者的租约状态")
 	})
+}
+
+// 本地存储没有对象存储凭据：未配置固定加密密钥时仍可保存，清理快照明文登记，重启后照常清理。
+func TestImageObjectRetentionLocalBackendWithoutStableKey(t *testing.T) {
+	manager, store, storage := cleanupTestManager(t)
+	manager.stableEncryption = false
+	cfg := config.ImageStorageConfig{Enabled: true, Backend: config.ImageStorageBackendLocal, LocalDir: "data/image-storage", Prefix: "images/", SecretAccessKey: "leftover-yaml-secret"}
+	wrapped := manager.Wrap(&cfg, storage).(*retainedImageStorage)
+	require.NoError(t, wrapped.CheckReadiness(context.Background()))
+	_, err := wrapped.Save(context.Background(), cleanupTestObjectKey, "image/png", []byte("image"))
+	require.NoError(t, err)
+	record := store.saved()[0]
+	require.True(t, strings.HasPrefix(record.StorageCiphertext, imageCleanupPlainPrefix))
+	require.NotContains(t, record.StorageCiphertext, "leftover-yaml-secret", "明文快照不能带出任何凭据")
+	require.Empty(t, manager.deleteObject(context.Background(), record.ExpiresAt.Add(time.Second), record))
+	require.Equal(t, []string{cleanupTestObjectKey}, storage.deleted)
+
+	// S3 仍要求固定密钥；明文快照也不能伪造成 S3 目标。
+	s3 := cleanupTestConfig()
+	require.ErrorIs(t, manager.Wrap(&s3, storage).(*retainedImageStorage).CheckReadiness(context.Background()), ErrSecretEncryptionKeyNotConfigured)
+	forged := record
+	forged.StorageCiphertext = imageCleanupPlainPrefix + `{"storage":{"bucket":"victim"},"object_key":"` + record.ObjectKey + `"}`
+	require.Equal(t, "cleanup_snapshot_invalid", manager.deleteObject(context.Background(), record.ExpiresAt.Add(time.Second), forged))
 }

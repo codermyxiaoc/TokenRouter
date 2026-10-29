@@ -20,6 +20,11 @@ import (
 type creativeAudioIntegrationSettings struct{ groupID int64 }
 
 func (creativeAudioIntegrationSettings) IsCreativeEnabled(context.Context) bool { return true }
+
+// GetCreativeCanvasAssetRetention 集成测试不需要画布素材，沿用默认七天。
+func (creativeAudioIntegrationSettings) GetCreativeCanvasAssetRetention(context.Context) time.Duration {
+	return service.CreativeCanvasAssetTTL
+}
 func (s creativeAudioIntegrationSettings) GetCreativeModelSettings(context.Context) []service.CreativeModelSetting {
 	return []service.CreativeModelSetting{{GroupID: s.groupID, Model: service.CreativeGrokTTSModel,
 		MediaType: "audio", Operations: []string{service.CreativeOperationGenerate}}}

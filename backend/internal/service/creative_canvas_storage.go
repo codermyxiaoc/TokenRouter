@@ -144,6 +144,26 @@ func (s *CreativeCanvasLocalStore) Open(ctx context.Context, id string) (io.Read
 	}
 	return os.Open(path)
 }
+// VerifyImage 读取已落盘的图片并完整解码，确认不是只有文件头的截断文件。
+// 解码在私有目录内完成，读取量受已登记的字节数约束。
+func (s *CreativeCanvasLocalStore) VerifyImage(ctx context.Context, id string, size int64) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	path, err := s.path(id)
+	if err != nil {
+		return false, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	if size > 0 && int64(len(data)) != size {
+		return false, nil
+	}
+	return isDecodableStoredImage(data), nil
+}
+
 func (s *CreativeCanvasLocalStore) Delete(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err

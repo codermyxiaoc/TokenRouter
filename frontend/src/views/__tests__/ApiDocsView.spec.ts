@@ -4,11 +4,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ApiDocsView from '../ApiDocsView.vue'
 import Select from '@/components/common/Select.vue'
 
-const { copyToClipboard, fetchPublicSettings, getOverrides, state } = vi.hoisted(() => ({
-  copyToClipboard: vi.fn(), fetchPublicSettings: vi.fn(), getOverrides: vi.fn(),
+const { copyToClipboard, fetchPublicSettings, getCatalog, getDocument, state } = vi.hoisted(() => ({
+  copyToClipboard: vi.fn(), fetchPublicSettings: vi.fn(), getCatalog: vi.fn(), getDocument: vi.fn(),
   state: { authenticated: false },
 }))
-vi.mock('@/api/apiDocs', () => ({ apiDocsAPI: { getOverrides } }))
+vi.mock('@/api/apiDocs', () => ({ apiDocsAPI: { getCatalog, getDocument } }))
+
+const emptyCatalog = () => ({ categories: [], documents: [] })
+// 构造一条文档叠加记录，未指定的字段沿用内置值。
+const docOverlay = (id: string, extra: Record<string, unknown> = {}) => ({
+  id, category_id: null, title: null, has_markdown: false, sort: null, hidden: false, custom: false, version: 1, updated_at: '', ...extra,
+})
 vi.mock('@/stores', () => ({
   useAppStore: () => ({ siteName: 'TokenRouter', siteLogo: '', apiBaseUrl: 'https://gateway.example.com/v1', publicSettingsLoaded: true, cachedPublicSettings: {}, fetchPublicSettings }),
   useAuthStore: () => ({ get isAuthenticated() { return state.authenticated }, isAdmin: false }),
@@ -36,11 +42,12 @@ async function render(path = '/docs') {
 }
 
 describe('API 文档页面', () => {
-  beforeEach(() => { vi.clearAllMocks(); state.authenticated = false; getOverrides.mockResolvedValue({}) })
+  beforeEach(() => { vi.clearAllMocks(); state.authenticated = false; getCatalog.mockResolvedValue(emptyCatalog()) })
 
   // 管理员改写的 Markdown 优先渲染，{{BASE_URL}} 替换为网关地址，站内链接走前端路由；读取失败回退内置文档。
   it('渲染管理员改写的 Markdown 并保留内置回退', async () => {
-    getOverrides.mockResolvedValue({ responses: '# 自定义 Responses\n\n调用 `{{BASE_URL}}/v1/responses`\n\n## 第一节\n\n[看总览](/docs/overview)\n\n<script>alert(1)</script>' })
+    getCatalog.mockResolvedValue({ categories: [], documents: [docOverlay('responses', { has_markdown: true })] })
+    getDocument.mockResolvedValue(docOverlay('responses', { markdown: '# 自定义 Responses\n\n调用 `{{BASE_URL}}/v1/responses`\n\n## 第一节\n\n[看总览](/docs/overview)\n\n<script>alert(1)</script>' }))
     const { wrapper, router } = await render('/docs/responses')
     const article = wrapper.get('article')
     expect(article.find('h1').text()).toBe('自定义 Responses')
@@ -52,7 +59,7 @@ describe('API 文档页面', () => {
     await wrapper.findAll('button').find(button => button.text().includes('apiDocs.copyMarkdown'))!.trigger('click')
     expect(copyToClipboard).toHaveBeenLastCalledWith(expect.stringContaining('# 接口总览'))
     wrapper.unmount()
-    getOverrides.mockRejectedValue(new Error('offline'))
+    getCatalog.mockRejectedValue(new Error('offline'))
     const fallback = await render('/docs/responses')
     expect(fallback.wrapper.get('article').text()).toContain('/v1/responses')
     fallback.wrapper.unmount()
@@ -140,6 +147,35 @@ describe('API 文档页面', () => {
     await router.push('/docs/unknown-document')
     await flushPromises()
     expect(wrapper.find('article').text()).toContain('apiDocs.notFound')
+    wrapper.unmount()
+  })
+
+  // 管理员可改名、移动分类、隐藏和新增文档；隐藏的文档在目录和地址中都不可见。
+  it('按目录叠加改名、排序、隐藏并显示自定义文档', async () => {
+    getCatalog.mockResolvedValue({
+      categories: [
+        { id: 'faq', title: '常见问题', sort: 1, hidden: false, custom: true, version: 1, updated_at: '' },
+        { id: 'audio', title: null, sort: null, hidden: true, custom: false, version: 1, updated_at: '' },
+      ],
+      documents: [
+        docOverlay('responses', { title: '响应接口（改名）', category_id: 'faq' }),
+        docOverlay('auth', { hidden: true }),
+        docOverlay('faq-billing', { title: '计费问答', category_id: 'faq', has_markdown: true, custom: true }),
+      ],
+    })
+    getDocument.mockResolvedValue(docOverlay('faq-billing', { markdown: '# 计费问答\n\n按量计费。', custom: true }))
+    const { wrapper, router } = await render('/docs/faq-billing')
+    const navs = wrapper.findAll('nav[aria-label]').map(nav => nav.attributes('aria-label'))
+    expect(navs[0]).toBe('常见问题')
+    expect(navs).not.toContain('语音与实时会话')
+    const faq = wrapper.get('nav[aria-label="常见问题"]')
+    expect(faq.text()).toContain('响应接口（改名）')
+    expect(faq.text()).toContain('计费问答')
+    expect(wrapper.find('a[href="/docs/auth"]').exists()).toBe(false)
+    expect(wrapper.get('article').text()).toContain('按量计费。')
+    await router.push('/docs/auth')
+    await flushPromises()
+    expect(wrapper.get('article').text()).toContain('apiDocs.notFound')
     wrapper.unmount()
   })
 

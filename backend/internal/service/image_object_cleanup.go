@@ -78,11 +78,16 @@ func (m *ImageObjectRetention) Wrap(cfg *config.ImageStorageConfig, storage Imag
 	return &retainedImageStorage{ImageStorage: storage, manager: m, config: *cfg}
 }
 
-func (m *ImageObjectRetention) ready(ctx context.Context) error {
+// imageCleanupPlainPrefix 标记不含任何凭据的本地存储清理快照：明文保存，不依赖加密密钥，
+// 重启后自动生成的临时密钥变化也不影响清理。
+const imageCleanupPlainPrefix = "plain:"
+
+// ready 检查清理队列可用；requireStableKey 为真（S3 快照含凭据需要加密）时还要求固定加密密钥。
+func (m *ImageObjectRetention) ready(ctx context.Context, requireStableKey bool) error {
 	if m == nil || m.store == nil || m.encryptor == nil || m.factory == nil {
 		return errors.New("image object retention is unavailable")
 	}
-	if !m.stableEncryption {
+	if requireStableKey && !m.stableEncryption {
 		// 自动生成的临时密钥不能恢复清理快照，必须在调用付费生成之前拒绝。
 		return ErrSecretEncryptionKeyNotConfigured
 	}
@@ -92,7 +97,7 @@ func (m *ImageObjectRetention) ready(ctx context.Context) error {
 }
 
 func (s *retainedImageStorage) CheckReadiness(ctx context.Context) error {
-	if err := s.manager.ready(ctx); err != nil {
+	if err := s.manager.ready(ctx, !s.config.IsLocal()); err != nil {
 		return err
 	}
 	if _, ok := s.ImageStorage.(ImageObjectDeleter); !ok {
@@ -109,7 +114,7 @@ func (s *retainedImageStorage) CheckReadiness(ctx context.Context) error {
 }
 
 func (s *retainedImageStorage) Save(ctx context.Context, key, contentType string, data []byte) (string, error) {
-	if err := s.manager.ready(ctx); err != nil {
+	if err := s.manager.ready(ctx, !s.config.IsLocal()); err != nil {
 		return "", err
 	}
 	if err := s.config.ValidateRetentionHours(); err != nil {
@@ -122,12 +127,18 @@ func (s *retainedImageStorage) Save(ctx context.Context, key, contentType string
 	// 重试使用同一对象标识；仓储保留首次登记的到期时间，不延长文件寿命。
 	expiresAt := time.Now().UTC().Truncate(time.Second).Add(time.Duration(s.config.EffectiveRetentionHours()) * time.Hour)
 	snapshot := imageObjectCleanupSnapshot{Storage: s.config, ObjectKey: key, ExpiresAt: expiresAt}
+	if s.config.IsLocal() {
+		// 本地存储不需要对象存储凭据；清除可能来自 YAML 回落的 S3 字段，快照即可明文保存。
+		snapshot.Storage.AccessKeyID, snapshot.Storage.SecretAccessKey = "", ""
+	}
 	plain, err := json.Marshal(snapshot)
 	if err != nil {
 		return "", errors.New("image cleanup snapshot encoding failed")
 	}
-	ciphertext, err := s.manager.encryptor.Encrypt(string(plain))
-	if err != nil {
+	var ciphertext string
+	if s.config.IsLocal() {
+		ciphertext = imageCleanupPlainPrefix + string(plain)
+	} else if ciphertext, err = s.manager.encryptor.Encrypt(string(plain)); err != nil {
 		return "", errors.New("image cleanup snapshot encryption failed")
 	}
 	record := ImageObjectCleanupRecord{ID: imageObjectCleanupID(&s.config, key), ObjectKey: key, StorageCiphertext: ciphertext, ExpiresAt: expiresAt}
@@ -207,15 +218,26 @@ func (m *ImageObjectRetention) Sweep(ctx context.Context, now time.Time) error {
 }
 
 func (m *ImageObjectRetention) deleteObject(ctx context.Context, now time.Time, record ImageObjectCleanupRecord) string {
-	if m.encryptor == nil || m.factory == nil || !m.stableEncryption {
+	var plain string
+	localSnapshot := strings.HasPrefix(record.StorageCiphertext, imageCleanupPlainPrefix)
+	if localSnapshot {
+		plain = strings.TrimPrefix(record.StorageCiphertext, imageCleanupPlainPrefix)
+	} else {
+		if m.encryptor == nil || m.factory == nil || !m.stableEncryption {
+			return "cleanup_storage_unavailable"
+		}
+		decrypted, err := m.encryptor.Decrypt(record.StorageCiphertext)
+		if err != nil {
+			return "cleanup_decrypt_failed"
+		}
+		plain = decrypted
+	}
+	if m.factory == nil {
 		return "cleanup_storage_unavailable"
 	}
-	plain, err := m.encryptor.Decrypt(record.StorageCiphertext)
-	if err != nil {
-		return "cleanup_decrypt_failed"
-	}
 	var snapshot imageObjectCleanupSnapshot
-	if json.Unmarshal([]byte(plain), &snapshot) != nil ||
+	// 明文快照只允许描述本地存储，不能借此绕过加密指向带凭据的 S3 目标。
+	if json.Unmarshal([]byte(plain), &snapshot) != nil || (localSnapshot && !snapshot.Storage.IsLocal()) ||
 		snapshot.ObjectKey != record.ObjectKey || !snapshot.ExpiresAt.Equal(record.ExpiresAt) ||
 		record.ExpiresAt.After(now) || snapshot.ExpiresAt.IsZero() ||
 		!validGeneratedImageObjectKey(snapshot.Storage.Prefix, record.ObjectKey) ||

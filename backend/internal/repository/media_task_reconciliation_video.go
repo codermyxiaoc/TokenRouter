@@ -25,8 +25,11 @@ func resolveVideoMediaTaskBilling(ctx context.Context, tx *sql.Tx, media *servic
 	if err != nil {
 		return nil, err
 	}
+	// 已完成视频只有在自动结算已转入待对账后才允许人工核定（且不能走自动过期），
+	// 避免与仍在等待成品、取回探测的正常流程抢先处理。
+	completedPending := task.Status == "completed" && task.BillingStatus == "reconciliation" && action != "expire"
 	if !videoMediaTaskBillingIdentityMatches(media, task) ||
-		(task.Status != "failed" && task.Status != "cancelled" && task.Status != "expired") ||
+		(task.Status != "failed" && task.Status != "cancelled" && task.Status != "expired" && !completedPending) ||
 		(task.BillingStatus != "reserved" && task.BillingStatus != "reconciliation") || task.BillingResult != nil {
 		return nil, service.ErrVideoTaskConflict
 	}

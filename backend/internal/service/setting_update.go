@@ -418,6 +418,13 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		settings.CreativeWorkerCount = DefaultCreativeWorkerCount
 	}
 	updates[SettingKeyCreativeWorkerCount] = strconv.Itoa(settings.CreativeWorkerCount)
+	if settings.CreativeCanvasAssetRetentionHours == 0 {
+		settings.CreativeCanvasAssetRetentionHours = DefaultCreativeCanvasAssetRetentionHours
+	}
+	if err := ValidateCreativeCanvasAssetRetentionHours(settings.CreativeCanvasAssetRetentionHours); err != nil {
+		return nil, infraerrors.BadRequest("INVALID_CREATIVE_CANVAS_ASSET_RETENTION", err.Error())
+	}
+	updates[SettingKeyCreativeCanvasAssetRetentionHours] = strconv.Itoa(settings.CreativeCanvasAssetRetentionHours)
 	// 内部整份设置的零值沿用升级默认；外部更新明确提交零值会在 handler 被拒绝。
 	if settings.MediaTaskReconciliationTimeoutMinutes == 0 {
 		settings.MediaTaskReconciliationTimeoutMinutes = DefaultMediaTaskReconciliationTimeoutMinutes

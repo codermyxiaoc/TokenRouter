@@ -21,6 +21,11 @@ type creativeMJIntegrationSettings struct{ groupID int64 }
 
 func (creativeMJIntegrationSettings) IsCreativeEnabled(context.Context) bool { return true }
 
+// GetCreativeCanvasAssetRetention 集成测试不需要画布素材，沿用默认七天。
+func (creativeMJIntegrationSettings) GetCreativeCanvasAssetRetention(context.Context) time.Duration {
+	return service.CreativeCanvasAssetTTL
+}
+
 func (s creativeMJIntegrationSettings) GetCreativeModelSettings(context.Context) []service.CreativeModelSetting {
 	return []service.CreativeModelSetting{{GroupID: s.groupID, Model: "MJ-v7", Operations: []string{service.CreativeOperationGenerate}}}
 }

@@ -2590,6 +2590,26 @@ describe("admin SettingsView payment visible method controls", () => {
     wrapper.unmount();
   });
 
+  it("migrates a saved endpoint to the template protocol after the account was rebound", async () => {
+    // 线上回归：MiniMax-H3-Max 账号改绑模板后候选只有 unified，旧设置记着 compat，下拉无可选项且保存报端点无效。
+    const caps = { durations: [5], resolutions: ['720p'], aspect_ratios: ['16:9', '9:16'], max_reference_images: 1 };
+    const saved = { group_id: 3, model: 'MiniMax-H3-Max', media_type: 'video', operations: ['generate'], video_endpoint: 'compat', video_capabilities: caps };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [saved] });
+    getCreativeModelCandidates.mockResolvedValue([{ ...saved, group_name: 'Video', platform: 'video', video_endpoint: 'unified', video_endpoints: ['unified'] }]);
+    const wrapper = mountView();
+    await flushPromises();
+    const endpoint = wrapper.get('[data-testid="creative-video-endpoint"]');
+    expect(endpoint.findAll('option').map(option => option.attributes('value'))).toEqual(['unified']);
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('admin.settings.features.creative.modelSettings.videoEndpointInvalid');
+    // 只迁移端点，已填写的参数原样保留。
+    expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      creative_model_settings: [expect.objectContaining({ model: 'MiniMax-H3-Max', video_endpoint: 'unified', video_capabilities: caps })],
+    }));
+    wrapper.unmount();
+  });
+
   it.each(['openai_videos', 'grok'])("loads, saves and clears %s video usage notes without changing capabilities", async (endpoint) => {
     // 说明是视频配置的纯文本附加字段；保存、端点参数和清空均不能互相覆盖。
     const caps = { durations: [5], resolutions: ['720p'], aspect_ratios: ['16:9'], max_reference_images: 1 };

@@ -390,14 +390,16 @@ func TestFrontendServer_ServeIndexHTML(t *testing.T) {
 		etag := w1.Header().Get("ETag")
 		require.NotEmpty(t, etag)
 
-		// Second request with If-None-Match
+		// 带 If-None-Match 也返回 200：HTML 内联脚本携带每请求 nonce，304 会让浏览器复用旧 nonce 的页面，
+		// 而本次 CSP 已是新 nonce，首屏配置脚本会被拦截。
 		w2 := httptest.NewRecorder()
 		req2 := httptest.NewRequest(http.MethodGet, "/", nil)
 		req2.Header.Set("If-None-Match", etag)
 		router.ServeHTTP(w2, req2)
 
-		assert.Equal(t, http.StatusNotModified, w2.Code)
-		assert.Empty(t, w2.Body.String())
+		assert.Equal(t, http.StatusOK, w2.Code)
+		assert.NotEmpty(t, w2.Body.String())
+		assert.Equal(t, etag, w2.Header().Get("ETag"))
 	})
 
 	t.Run("sets_cache_control_header", func(t *testing.T) {

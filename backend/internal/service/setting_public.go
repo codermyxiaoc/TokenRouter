@@ -253,6 +253,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyAccountQuotaNotifyEnabled,
 		SettingKeyTeamEnabled,
 		SettingKeyCreativeEnabled,
+		SettingKeyCreativeCanvasAssetRetentionHours,
 		SettingKeyIntelligenceEnabled,
 		DailyActivitySettingKey,
 		SettingKeyTicketEnabled,
@@ -344,6 +345,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		TeamEnabled:                         settings[SettingKeyTeamEnabled] != "false" && (s.cfg == nil || s.cfg.Team.Enabled),
 		TeamSelfServiceEnabled:              s.cfg == nil || s.cfg.Team.SelfServiceEnabled,
 		CreativeEnabled:                     settings[SettingKeyCreativeEnabled] != "false",
+		CreativeCanvasAssetRetentionHours:   parseCreativeCanvasAssetRetentionForDisplay(settings[SettingKeyCreativeCanvasAssetRetentionHours]),
 		IntelligenceEnabled:                 settings[SettingKeyIntelligenceEnabled] == "true",
 		DailyActivityEnabled:                dailyActivityPublicEnabled(settings[DailyActivitySettingKey]),
 		TicketEnabled:                       parseTicketConfigBool(settings[SettingKeyTicketEnabled], true),
@@ -507,16 +509,18 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		TeamEnabled                         bool                     `json:"team_enabled"`
 		TeamSelfServiceEnabled              bool                     `json:"team_self_service_enabled"`
 		CreativeEnabled                     bool                     `json:"creative_enabled"`
-		IntelligenceEnabled                 bool                     `json:"intelligence_enabled"`
-		DailyActivityEnabled                bool                     `json:"daily_activity_enabled"`
-		TicketEnabled                       bool                     `json:"ticket_enabled"`
-		OIDCOAuthEnabled                    bool                     `json:"oidc_oauth_enabled"`
-		OIDCOAuthProviderName               string                   `json:"oidc_oauth_provider_name"`
-		GitHubOAuthEnabled                  bool                     `json:"github_oauth_enabled"`
-		GoogleOAuthEnabled                  bool                     `json:"google_oauth_enabled"`
-		GoogleOneTapEnabled                 bool                     `json:"google_one_tap_enabled"`
-		GoogleOAuthClientID                 string                   `json:"google_oauth_client_id"`
-		Version                             string                   `json:"version,omitempty"`
+		// 画布素材保存期（小时），供画布素材库展示真实期限而不是写死的七天。
+		CreativeCanvasAssetRetentionHours int    `json:"creative_canvas_asset_retention_hours"`
+		IntelligenceEnabled               bool   `json:"intelligence_enabled"`
+		DailyActivityEnabled              bool   `json:"daily_activity_enabled"`
+		TicketEnabled                     bool   `json:"ticket_enabled"`
+		OIDCOAuthEnabled                  bool   `json:"oidc_oauth_enabled"`
+		OIDCOAuthProviderName             string `json:"oidc_oauth_provider_name"`
+		GitHubOAuthEnabled                bool   `json:"github_oauth_enabled"`
+		GoogleOAuthEnabled                bool   `json:"google_oauth_enabled"`
+		GoogleOneTapEnabled               bool   `json:"google_one_tap_enabled"`
+		GoogleOAuthClientID               string `json:"google_oauth_client_id"`
+		Version                           string `json:"version,omitempty"`
 		// 服务器全局时区与当前 UTC 偏移，供前端标注高峰计费窗口等服务端本地时间。
 		ServerTimezone              string  `json:"server_timezone"`
 		ServerUTCOffset             string  `json:"server_utc_offset"`
@@ -597,6 +601,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		TeamEnabled:                         settings.TeamEnabled,
 		TeamSelfServiceEnabled:              settings.TeamSelfServiceEnabled,
 		CreativeEnabled:                     settings.CreativeEnabled,
+		CreativeCanvasAssetRetentionHours:   settings.CreativeCanvasAssetRetentionHours,
 		IntelligenceEnabled:                 settings.IntelligenceEnabled,
 		DailyActivityEnabled:                settings.DailyActivityEnabled,
 		TicketEnabled:                       settings.TicketEnabled,

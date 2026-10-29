@@ -17,16 +17,20 @@ import (
 func TestCreativeVideoPollProjectsReconciliationWithoutBillingChanges(t *testing.T) {
 	for _, tt := range []struct {
 		status, billing, code, message string
+		// wantStatus 为空表示仍应保持 running 等待；账务终态用例给出最终状态。
+		wantStatus string
 	}{
-		{"submission_unknown", "reconciliation", "CREATIVE_VIDEO_SUBMISSION_UNCONFIRMED", "上游受理结果待核对"},
-		{"completed", "reconciliation", "CREATIVE_VIDEO_SETTLEMENT_PENDING", "正在核对结算"},
-		{"completed", "reserved", "CREATIVE_VIDEO_SETTLEMENT_PENDING", "正在核对结算"},
-		{"failed", "reconciliation", "CREATIVE_VIDEO_RELEASE_PENDING", "正在核对预扣处理结果"},
-		{"cancelled", "reserved", "CREATIVE_VIDEO_RELEASE_PENDING", "正在核对预扣处理结果"},
-		{"expired", "reconciliation", "CREATIVE_VIDEO_RELEASE_PENDING", "正在核对预扣处理结果"},
-		{"processing", "reconciliation", "CREATIVE_VIDEO_RECONCILIATION", "任务状态与费用正在核对"},
-		{"queued", "reserved", "", ""},
-		{"processing", "reserved", "", ""},
+		{status: "submission_unknown", billing: "reconciliation", code: "CREATIVE_VIDEO_SUBMISSION_UNCONFIRMED", message: "上游受理结果待核对"},
+		{status: "completed", billing: "reconciliation", code: "CREATIVE_VIDEO_SETTLEMENT_PENDING", message: "正在核对结算"},
+		{status: "completed", billing: "reserved", code: "CREATIVE_VIDEO_SETTLEMENT_PENDING", message: "正在核对结算"},
+		// 已完成但人工释放的视频是账务终态，不能再停在“结算待核对”。
+		{status: "completed", billing: "released", code: "CREATIVE_VIDEO_RELEASED", message: "预扣已释放", wantStatus: "failed"},
+		{status: "failed", billing: "reconciliation", code: "CREATIVE_VIDEO_RELEASE_PENDING", message: "正在核对预扣处理结果"},
+		{status: "cancelled", billing: "reserved", code: "CREATIVE_VIDEO_RELEASE_PENDING", message: "正在核对预扣处理结果"},
+		{status: "expired", billing: "reconciliation", code: "CREATIVE_VIDEO_RELEASE_PENDING", message: "正在核对预扣处理结果"},
+		{status: "processing", billing: "reconciliation", code: "CREATIVE_VIDEO_RECONCILIATION", message: "任务状态与费用正在核对"},
+		{status: "queued", billing: "reserved"},
+		{status: "processing", billing: "reserved"},
 	} {
 		t.Run(tt.status+"/"+tt.billing, func(t *testing.T) {
 			s, e, upstream, billing, _ := creativeVideoTestFixture(t)
@@ -36,13 +40,19 @@ func TestCreativeVideoPollProjectsReconciliationWithoutBillingChanges(t *testing
 			s.repo.(*videoLifecycleRepo).tasks[task.ID] = task
 			content := &creativeVideoContentStub{}
 			s.content = content
+			wantStatus := tt.wantStatus
+			if wantStatus == "" {
+				wantStatus = "running"
+			}
 			for range 2 {
 				result, err := s.Poll(context.Background(), e)
 				require.NoError(t, err)
-				require.Equal(t, "running", result.Status)
+				require.Equal(t, wantStatus, result.Status)
 				require.Equal(t, tt.code, result.ErrorCode)
 				require.Contains(t, result.ErrorMessage, tt.message)
-				require.NotContains(t, result.ErrorMessage, "已释放")
+				if wantStatus == "running" {
+					require.NotContains(t, result.ErrorMessage, "已释放")
+				}
 				require.Empty(t, result.Outputs)
 			}
 			require.Equal(t, tt.status, task.Status)

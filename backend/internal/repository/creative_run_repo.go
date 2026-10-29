@@ -333,6 +333,8 @@ func (r *creativeRunRepository) markCreativeRunSettled(ctx context.Context, runI
 				service.CreativeRunStatusRunning,
 				service.CreativeRunStatusProviderSucceeded,
 				service.CreativeRunStatusSettlementPending,
+				// 已捕获资金却误入释放等待的任务，只能按已扣款收尾，不能再释放。
+				service.CreativeRunStatusReleasePending,
 			),
 		).
 		SetStatus(status).

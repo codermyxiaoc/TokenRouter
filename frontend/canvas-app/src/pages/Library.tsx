@@ -6,6 +6,12 @@ import {archiveManifest,exportCanvas,importCanvasAssets} from '@/platform/archiv
 import type {CanvasRecord} from '@/platform/types';
 import './library.css';
 
+// 保存期超过一天时按天数展示，否则按小时展示，避免出现“保留 0 天”。
+function retentionLabel(hours:number):string{
+  if(!Number.isFinite(hours)||hours<=0)return '7 天';
+  return hours%24===0?`${hours/24} 天`:`${hours} 小时`;
+}
+
 export function Library(){
   const navigate=useNavigate();
   const [items,setItems]=useState<CanvasRecord[]>([]);
@@ -17,6 +23,8 @@ export function Library(){
   const [selected,setSelected]=useState<Set<string>>(new Set());
   const [editingId,setEditingId]=useState<string|null>(null);
   const [editingTitle,setEditingTitle]=useState('');
+  // 画布素材保存期来自系统设置；读取失败时沿用七天，仅影响提示文案。
+  const [retentionHours,setRetentionHours]=useState(168);
   const importInput=useRef<HTMLInputElement>(null);
   const actionRunning=useRef(false);
 
@@ -28,6 +36,20 @@ export function Library(){
     setItems(data.items);
     if(targetPage!==page)setPage(targetPage);
   },[page]);
+
+  useEffect(()=>{
+    let current=true;
+    // 公开设置无需登录，读取失败只回退默认提示，不阻塞素材库。
+    fetch('/api/v1/settings/public',{credentials:'same-origin'})
+      .then(response=>response.ok?response.json():null)
+      .then(payload=>{
+        if(!current||!payload)return;
+        const hours=Number(payload.data?.creative_canvas_asset_retention_hours ?? payload.creative_canvas_asset_retention_hours);
+        if(Number.isInteger(hours)&&hours>0)setRetentionHours(hours);
+      })
+      .catch(()=>{});
+    return()=>{current=false;};
+  },[]);
 
   useEffect(()=>{
     let current=true;
@@ -170,7 +192,7 @@ export function Library(){
           :<section className="library-empty"><h2>还没有画布</h2><p>创建一个画布，开始连接你的想法。</p><button type="button" className="library-primary" disabled={busy} onClick={create}><Plus size={16}/>新建画布</button></section>}
 
       {total>30&&<nav className="library-pagination" aria-label="画布分页"><button type="button" disabled={disabled||page===1} onClick={()=>setPage(p=>p-1)}>上一页</button><span>{page} / {Math.ceil(total/30)}</span><button type="button" disabled={disabled||page*30>=total} onClick={()=>setPage(p=>p+1)}>下一页</button></nav>}
-      <p className="library-retention">画布自动保存到个人账户；上传与生成的素材保留 7 天，到期后画布布局和文字仍然保留。</p>
+      <p className="library-retention">画布自动保存到个人账户；上传与生成的素材保留 {retentionLabel(retentionHours)}，到期后画布布局和文字仍然保留。</p>
       {busy&&<div className="library-status" role="status"><LoaderCircle className="animate-spin" size={16}/>正在处理…</div>}
     </div>
     <input ref={importInput} type="file" accept="application/zip,.zip" hidden disabled={disabled} onChange={e=>{const file=e.target.files?.[0];e.target.value='';importFile(file);}}/>

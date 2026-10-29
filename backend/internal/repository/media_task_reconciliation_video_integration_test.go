@@ -371,6 +371,11 @@ func TestVideoMediaReconciliationRejectsSuccessRunningAndWrongIdentity(t *testin
 			f := newVideoBillingFixture(t)
 			task := f.reserve(f.task(10, 1, 1))
 			media := videoMediaReviewTask(t, f, task, status)
+			if status == "completed" {
+				// 已完成视频仅在待对账时开放人工核定；reserved 仍属自动流程（见 CompletedReconciliation 用例）。
+				_, err := integrationDB.ExecContext(context.Background(), `UPDATE video_tasks SET billing_status='reserved' WHERE id=$1`, task.ID)
+				require.NoError(t, err)
+			}
 			_, err := videoMediaReviewTransaction(context.Background(), task.Hold.UserID, media, "release", false)
 			require.ErrorIs(t, err, service.ErrVideoTaskConflict)
 			f.money(990, 10, 10, 0)
@@ -464,5 +469,68 @@ func TestVideoMediaReconciliationDoesNotBlockAutomaticRelease(t *testing.T) {
 		f.money(990, 0, 10, 0)
 	} else {
 		f.money(1000, 0, 0, 0)
+	}
+}
+
+// 已完成视频在自动结算转入待对账后，管理员必须能人工扣款或退款，冻结不能永久滞留；
+// 仍在 reserved（等待成品或取回探测）时不开放，自动过期也不能处理已完成视频。
+func TestVideoMediaCompletedReconciliationManualSettlement(t *testing.T) {
+	for _, action := range []string{"charge", "release"} {
+		t.Run(action, func(t *testing.T) {
+			ctx := context.Background()
+			completedAt := time.Now().Add(-2 * time.Hour)
+			f := newVideoBillingFixture(t)
+			f.quota(100)
+			task := f.reserve(tokenPrepayTestTask(t, f, 9, .3))
+			videoMediaReviewTask(t, f, task, "completed")
+			repo := &mediaTaskRepository{db: integrationDB}
+			observation := service.MediaTaskObservation{Source: "video", TaskID: task.ID, MediaType: "video", Platform: service.PlatformVideo,
+				Model: "video-token-prepay", Status: "completed", UserID: task.UserID, APIKeyID: task.APIKeyID, GroupID: &task.GroupID,
+				AccountID: &task.AccountID, RequestID: "video_capture:" + task.ID, CreatedAt: completedAt.Add(-time.Minute), CompletedAt: &completedAt}
+			require.NoError(t, repo.Observe(ctx, observation))
+			var id int64
+			require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT id FROM media_tasks WHERE source='video' AND task_id=$1 AND api_key_id=$2`, task.ID, task.APIKeyID).Scan(&id))
+			media, err := repo.Get(ctx, service.MediaTaskActor{UserID: task.UserID}, id)
+			require.NoError(t, err)
+			require.Equal(t, "completed", media.Status)
+
+			// reserved 表示自动流程仍在等待成品或取回探测，不开放人工入口。
+			_, err = integrationDB.ExecContext(ctx, `UPDATE video_tasks SET billing_status='reserved' WHERE id=$1`, task.ID)
+			require.NoError(t, err)
+			review, err := repo.GetMediaTaskBillingReview(ctx, media)
+			require.NoError(t, err)
+			require.Equal(t, "pending", review.Status)
+			require.False(t, review.CanRelease)
+			require.False(t, review.CanCharge)
+			_, err = repo.ResolveMediaTaskBilling(ctx, service.MediaTaskSettlementCommand{TaskID: media.ID, ActorID: f.userID, Action: action, Reason: "等待中"})
+			require.ErrorIs(t, err, service.ErrMediaTaskSettlementConflict)
+
+			_, err = integrationDB.ExecContext(ctx, `UPDATE video_tasks SET billing_status='reconciliation' WHERE id=$1`, task.ID)
+			require.NoError(t, err)
+			review, err = repo.GetMediaTaskBillingReview(ctx, media)
+			require.NoError(t, err)
+			require.True(t, review.CanRelease)
+			require.True(t, review.CanCharge)
+			// 自动过期只覆盖失败类任务，不能替已完成视频做决定。
+			cutoff := time.Now()
+			_, err = repo.ResolveMediaTaskBilling(ctx, service.MediaTaskSettlementCommand{TaskID: media.ID, Action: "expire", FailedBefore: &cutoff})
+			require.ErrorIs(t, err, service.ErrMediaTaskSettlementConflict)
+
+			_, err = repo.ResolveMediaTaskBilling(ctx, service.MediaTaskSettlementCommand{TaskID: media.ID, ActorID: f.userID, Action: action, Reason: "已完成视频人工核对"})
+			require.NoError(t, err)
+			fresh, err := f.tasks.Get(ctx, task.ID)
+			require.NoError(t, err)
+			require.Equal(t, "completed", fresh.Status, "人工核定不改写视频生成状态")
+			require.True(t, fresh.EffectsDone)
+			if action == "charge" {
+				require.Equal(t, "settled", fresh.BillingStatus)
+				f.money(997.3, 0, 2.7, 0)
+			} else {
+				require.Equal(t, "released", fresh.BillingStatus)
+				f.money(1000, 0, 0, 0)
+			}
+			_, err = f.tasks.Claim(ctx, task.ID, time.Minute)
+			require.ErrorIs(t, err, service.ErrVideoTaskNotFound, "人工决定后自动流程不能再领取")
+		})
 	}
 }

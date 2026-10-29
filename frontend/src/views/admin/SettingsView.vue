@@ -7801,6 +7801,29 @@
                 />
               </div>
 
+              <!-- 画布素材保存期：到期后删除私有目录文件；修改只影响之后归档的新素材。 -->
+              <div class="mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-gray-100 pt-5 dark:border-dark-700">
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white" for="creative-canvas-retention">
+                    {{ t("admin.settings.features.creative.canvasRetention") }}
+                  </label>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.features.creative.canvasRetentionHint") }}
+                  </p>
+                </div>
+                <input
+                  id="creative-canvas-retention"
+                  v-model.number="form.creative_canvas_asset_retention_hours"
+                  type="number"
+                  min="1"
+                  max="8760"
+                  step="1"
+                  required
+                  class="input w-32"
+                  data-testid="creative-canvas-retention"
+                />
+              </div>
+
               <!-- 当前 worker 使用情况：进度条 + 忙碌/总数，数据来自运行时状态轮询。 -->
               <div class="mt-4">
                 <p class="mb-1.5 text-sm text-gray-500 dark:text-gray-400">
@@ -10207,6 +10230,8 @@ const form = reactive<SettingsForm>({
   chanshui_enabled: false,
   creative_model_settings: [] as CreativeModelSetting[],
   creative_worker_count: 128,
+  // 创作台画布素材保存期（小时），默认七天，与升级前行为一致。
+  creative_canvas_asset_retention_hours: 168,
   media_task_reconciliation_timeout_minutes: 60,
   risk_control_enabled: false,
   cyber_policy_user_allowlist: "",
@@ -10587,11 +10612,32 @@ function normalizeCreativeModelSettingsForSave(): CreativeModelSetting[] | null 
   return normalized;
 }
 
+// 账号把模型改绑为声明式模板后，候选端点变为 unified（模板协议），而已保存设置仍记着旧端点（如 compat）。
+// 载入时把这类过期端点迁到候选当前端点，否则下拉没有可选项且保存报“请选择该模型支持的视频端点”；
+// 已填写的时长、分辨率等参数原样保留，保存前仍正常校验。
+function migrateStaleCreativeVideoEndpoints() {
+  for (const item of form.creative_model_settings) {
+    if (item.media_type !== 'video') continue;
+    const candidate = creativeCandidateForSetting(item);
+    const endpoints = candidate?.video_endpoints;
+    if (!endpoints?.length || (item.video_endpoint && endpoints.includes(item.video_endpoint))) continue;
+    item.video_endpoint = candidate?.video_endpoint || endpoints[0];
+  }
+}
+
+// 画布素材保存期：只接受 1–8760 的整数小时，小数或越界返回 null 由调用方拒绝保存。
+function normalizeCreativeCanvasRetentionForSave(): number | null {
+  const value = Number(form.creative_canvas_asset_retention_hours);
+  if (!Number.isInteger(value) || value < 1 || value > 8760) return null;
+  return value;
+}
+
 async function loadCreativeModelCandidates() {
   creativeModelCandidatesLoading.value = true;
   creativeModelCandidatesError.value = false;
   try {
     creativeModelCandidates.value = await adminAPI.settings.getCreativeModelCandidates();
+    migrateStaleCreativeVideoEndpoints();
   } catch {
     creativeModelCandidatesError.value = true;
   } finally {
@@ -12039,6 +12085,16 @@ async function saveSettings() {
       return;
     }
     const normalizedCreativeWorkerCount = Math.floor(Number(form.creative_worker_count));
+    // 保存期必须是 1–8760 的整数；非法值必须阻止提交，不能静默回退默认值。
+    const creativeCanvasRetentionCheck = normalizeCreativeCanvasRetentionForSave();
+    if (creativeCanvasRetentionCheck === null) {
+      activeTab.value = "features";
+      appStore.showError(
+        t("admin.settings.features.creative.canvasRetentionInvalid"),
+      );
+      return;
+    }
+    const normalizedCreativeCanvasRetention = creativeCanvasRetentionCheck;
     if (!Number.isSafeInteger(normalizedCreativeWorkerCount) || normalizedCreativeWorkerCount <= 0) {
       activeTab.value = "creative";
       appStore.showError(t("admin.settings.features.creative.workerCountInvalid"));
@@ -12529,6 +12585,8 @@ async function saveSettings() {
       chanshui_enabled: form.chanshui_enabled,
       creative_model_settings: normalizedCreativeModelSettings,
       creative_worker_count: normalizedCreativeWorkerCount,
+      // 画布素材保存期必须随保存提交，否则修改不会落库，且无关设置保存会把它重置为默认值。
+      creative_canvas_asset_retention_hours: normalizedCreativeCanvasRetention,
       media_task_reconciliation_timeout_minutes: normalizedMediaTaskTimeout,
       risk_control_enabled: form.risk_control_enabled,
       cyber_policy_user_allowlist: form.cyber_policy_user_allowlist,

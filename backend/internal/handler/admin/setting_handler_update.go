@@ -188,6 +188,8 @@ type UpdateSettingsRequest struct {
 	HomeFeaturedModels          *[]string                       `json:"home_featured_models"`
 	CreativeModelSettings       *[]service.CreativeModelSetting `json:"creative_model_settings"`
 	CreativeWorkerCount         *int                            `json:"creative_worker_count"`
+	// 创作台画布素材保存期（小时），只影响之后归档的新素材。
+	CreativeCanvasAssetRetentionHours *int `json:"creative_canvas_asset_retention_hours"`
 
 	// 失败媒体任务超过此等待时间后可由后台自动释放冻结额度。
 	MediaTaskReconciliationTimeoutMinutes *int `json:"media_task_reconciliation_timeout_minutes"`
@@ -1726,6 +1728,13 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		response.BadRequest(c, "creative_worker_count must be > 0")
 		return
 	}
+	// 显式提交零值或超限值必须拒绝，不能静默回退默认保存期。
+	if req.CreativeCanvasAssetRetentionHours != nil {
+		if err := service.ValidateCreativeCanvasAssetRetentionHours(*req.CreativeCanvasAssetRetentionHours); err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+	}
 	if req.MediaTaskReconciliationTimeoutMinutes != nil {
 		if err := service.ValidateMediaTaskReconciliationTimeoutMinutes(*req.MediaTaskReconciliationTimeoutMinutes); err != nil {
 			response.BadRequest(c, err.Error())
@@ -1932,6 +1941,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.CreativeWorkerCount
 			}
 			return previousSettings.CreativeWorkerCount
+		}(),
+		CreativeCanvasAssetRetentionHours: func() int {
+			if req.CreativeCanvasAssetRetentionHours != nil {
+				return *req.CreativeCanvasAssetRetentionHours
+			}
+			return previousSettings.CreativeCanvasAssetRetentionHours
 		}(),
 		MediaTaskReconciliationTimeoutMinutes: func() int {
 			if req.MediaTaskReconciliationTimeoutMinutes != nil {
@@ -2532,6 +2547,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChanshuiEnabled:                                  updatedSettings.ChanshuiEnabled,
 		CreativeModelSettings:                            updatedSettings.CreativeModelSettings,
 		CreativeWorkerCount:                              updatedSettings.CreativeWorkerCount,
+		CreativeCanvasAssetRetentionHours:                updatedSettings.CreativeCanvasAssetRetentionHours,
 		MediaTaskReconciliationTimeoutMinutes:            updatedSettings.MediaTaskReconciliationTimeoutMinutes,
 		RiskControlEnabled:                               updatedSettings.RiskControlEnabled,
 		CyberSessionBlockEnabled:                         updatedSettings.CyberSessionBlockEnabled,

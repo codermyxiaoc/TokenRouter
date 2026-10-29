@@ -185,6 +185,8 @@ type SystemSettings struct {
 	CreativeModelSettings []CreativeModelSetting
 	// CreativeWorkerCount 是创作台任务 worker 数量，缺失时回退默认值。
 	CreativeWorkerCount int
+	// CreativeCanvasAssetRetentionHours 是创作台画布素材保存期（小时），只影响之后归档的新素材。
+	CreativeCanvasAssetRetentionHours int
 	// MediaTaskReconciliationTimeoutMinutes 是失败媒体任务待确认的自动释放等待时间。
 	MediaTaskReconciliationTimeoutMinutes int
 
@@ -414,19 +416,21 @@ type PublicSettings struct {
 	// TicketEnabled 与工单独立设置共用总开关，供导航和路由判断。
 	TicketEnabled bool
 	// CreativeEnabled 暴露给前端用于控制创作台页面入口与路由守卫。
-	CreativeEnabled       bool
-	DailyActivityEnabled  bool
-	IntelligenceEnabled   bool
-	OIDCOAuthEnabled      bool
-	OIDCOAuthProviderName string
-	GitHubOAuthEnabled    bool
-	GoogleOAuthEnabled    bool
-	GoogleOneTapEnabled   bool
-	GoogleOAuthClientID   string
-	Version               string
-	BalanceUnitName       string
-	BalanceUnitSymbol     string
-	BalanceIconSVG        string
+	CreativeEnabled bool
+	// CreativeCanvasAssetRetentionHours 供画布素材库展示真实保存期，而不是写死的天数。
+	CreativeCanvasAssetRetentionHours int
+	DailyActivityEnabled              bool
+	IntelligenceEnabled               bool
+	OIDCOAuthEnabled                  bool
+	OIDCOAuthProviderName             string
+	GitHubOAuthEnabled                bool
+	GoogleOAuthEnabled                bool
+	GoogleOneTapEnabled               bool
+	GoogleOAuthClientID               string
+	Version                           string
+	BalanceUnitName                   string
+	BalanceUnitSymbol                 string
+	BalanceIconSVG                    string
 
 	BalanceLowNotifyEnabled   bool
 	AccountQuotaNotifyEnabled bool

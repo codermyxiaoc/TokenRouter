@@ -82,6 +82,8 @@ type CreativeSettingReader interface {
 	IsCreativeEnabled(ctx context.Context) bool
 	// GetCreativeModelSettings 读取创作台模型白名单；缺失或异常时返回空列表。
 	GetCreativeModelSettings(ctx context.Context) []CreativeModelSetting
+	// GetCreativeCanvasAssetRetention 读取画布素材保存期；缺失或损坏时返回默认七天。
+	GetCreativeCanvasAssetRetention(ctx context.Context) time.Duration
 }
 
 // 以下窄接口只依赖真正用到的方法，便于单测替身实现；生产环境由现有仓储实现。
@@ -2179,6 +2181,12 @@ func (s *CreativePublicService) SettleRun(ctx context.Context, runID string) err
 	if run.Status == CreativeRunStatusCancelled && run.ActualCost != nil {
 		return nil
 	}
+	// 资金已捕获时只补写日志与终态：素材此后过期不能把已扣款任务改判为未交付并释放原预占。
+	if receipt, captured, err := s.creativeCaptureReceipt(ctx, run); err != nil {
+		return err
+	} else if captured {
+		return s.finishCapturedRun(ctx, run, receipt)
+	}
 	if run.Status == CreativeRunStatusProviderSucceeded {
 		if err := s.Repo.TransitionCreativeRunStatus(ctx, runID, CreativeRunStatusSettlementPending, CreativeRunTransitionOptions{}); err != nil && !errors.Is(err, ErrCreativeInvalidTransition) {
 			return err
@@ -2345,6 +2353,9 @@ func (s *CreativePublicService) releaseUndeliveredRun(ctx context.Context, run *
 // releaseCancelledProviderResult 释放历史 cancelled 任务的预占；释放按 request_id 幂等，可重复调用。
 func (s *CreativePublicService) releaseCancelledProviderResult(ctx context.Context, run *CreativeRun) error {
 	if err := releaseCreativeBalanceHold(ctx, s.BillingRepo, run); err != nil {
+		if errors.Is(err, ErrBatchImageHoldAlreadyCaptured) {
+			return s.finishCapturedRun(ctx, run, nil)
+		}
 		return err
 	}
 	if marker, ok := s.Repo.(CreativeRunAllowanceMarker); ok && run.AllowanceReserved {
@@ -2395,7 +2406,16 @@ func (s *CreativePublicService) ReleaseRun(ctx context.Context, runID string) er
 	if run == nil || run.Status != CreativeRunStatusReleasePending {
 		return nil
 	}
+	if receipt, captured, err := s.creativeCaptureReceipt(ctx, run); err != nil {
+		return err
+	} else if captured {
+		return s.finishCapturedRun(ctx, run, receipt)
+	}
 	if err := releaseCreativeBalanceHold(ctx, s.BillingRepo, run); err != nil {
+		if errors.Is(err, ErrBatchImageHoldAlreadyCaptured) {
+			// 查询与释放之间被并发捕获：仓储已拒绝释放，改按已扣款收尾。
+			return s.finishCapturedRun(ctx, run, nil)
+		}
 		return err
 	}
 	if marker, ok := s.Repo.(CreativeRunAllowanceMarker); ok && run.AllowanceReserved {

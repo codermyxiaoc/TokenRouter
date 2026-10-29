@@ -176,6 +176,14 @@ func releaseBatchImageBalanceHold(ctx context.Context, repo UsageBillingReposito
 			)
 			return nil
 		}
+		if errors.Is(err, ErrBatchImageHoldAlreadyCaptured) {
+			// 预占已被捕获（已扣款），仓储拒绝再释放；资金状态正确，不能让失败收尾陷入无限重试。
+			logger.L().Error("batch_image.release_skipped_already_captured",
+				zap.String("batch_id", job.BatchID),
+			)
+			job.AllowanceReserved = false
+			return nil
+		}
 		return ErrBatchImageBillingHoldFailed.WithCause(err)
 	}
 	job.AllowanceReserved = false

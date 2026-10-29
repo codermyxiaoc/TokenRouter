@@ -52,6 +52,8 @@ func firstNonEmpty(values ...string) string {
 
 // SettingHandler 系统设置处理器
 type SettingHandler struct {
+	// apiDocs 管理 API 文档目录叠加（分类、文档、排序）。
+	apiDocs                  *service.APIDocService
 	settingService           *service.SettingService
 	emailService             *service.EmailService
 	turnstileService         *service.TurnstileService
@@ -147,47 +149,6 @@ func (h *SettingHandler) SetStepUpDeps(totpService *service.TotpService, userSer
 }
 
 // apiDocOverridesRequest 是 API 文档改写集合；空正文表示恢复默认。
-type apiDocOverridesRequest struct {
-	Overrides map[string]string `json:"overrides"`
-}
-
-// UpdateAPIDocOverrides 保存管理员改写的 API 文档 Markdown。
-// PUT /api/v1/admin/settings/api-docs
-func (h *SettingHandler) UpdateAPIDocOverrides(c *gin.Context) {
-	var req apiDocOverridesRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request: "+err.Error())
-		return
-	}
-	overrides, err := h.settingService.UpdateAPIDocOverrides(c.Request.Context(), req.Overrides)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, gin.H{"overrides": overrides})
-}
-
-// apiDocOverridePatchRequest 只携带本次修改的文档及其编辑起点，用于合并保存与并发冲突检测。
-type apiDocOverridePatchRequest struct {
-	Documents map[string]service.APIDocOverridePatch `json:"documents"`
-}
-
-// PatchAPIDocOverrides 合并保存单篇（或少量）API 文档；他人已改过同一文档时返回 409。
-// PATCH /api/v1/admin/settings/api-docs
-func (h *SettingHandler) PatchAPIDocOverrides(c *gin.Context) {
-	var req apiDocOverridePatchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request: "+err.Error())
-		return
-	}
-	overrides, err := h.settingService.PatchAPIDocOverrides(c.Request.Context(), req.Documents)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, gin.H{"overrides": overrides})
-}
-
 // GetSettings 获取所有系统设置
 // GET /api/v1/admin/settings
 func (h *SettingHandler) GetSettings(c *gin.Context) {
@@ -371,6 +332,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ChanshuiEnabled:                                  settings.ChanshuiEnabled,
 		CreativeModelSettings:                            settings.CreativeModelSettings,
 		CreativeWorkerCount:                              settings.CreativeWorkerCount,
+		CreativeCanvasAssetRetentionHours:                settings.CreativeCanvasAssetRetentionHours,
 		MediaTaskReconciliationTimeoutMinutes:            settings.MediaTaskReconciliationTimeoutMinutes,
 		RiskControlEnabled:                               settings.RiskControlEnabled,
 		CyberSessionBlockEnabled:                         settings.CyberSessionBlockEnabled,

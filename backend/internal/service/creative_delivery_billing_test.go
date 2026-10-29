@@ -320,3 +320,36 @@ type creativeOutageTransient struct {
 func (s *creativeOutageTransient) LoadOutput(context.Context, string, int) ([]byte, error) {
 	return nil, ErrCreativeTransientUnavailable
 }
+
+// 线上事故回归：资金已捕获但终态没写成，临时素材随后过期。重试结算不能把任务改判为未交付并释放原预占，
+// 否则会误减同一付款用户的共享冻结池，让后续视频等任务结算时“冻结余额不足”。
+func TestCreativeSettleAfterCaptureNeverReleasesWhenOutputExpires(t *testing.T) {
+	f := newCreativeWorkerFixture()
+	runID := "crun_captured_then_expired"
+	seedCreativeRun(f, runID, true)
+	f.exec.result = creativeDeliveryResult()
+	f.repo.markSucceededErr = errors.New("database unavailable")
+	_, _ = f.worker.process(context.Background(), runID)
+	require.Equal(t, 1, f.billing.captureN, "首次结算已扣款")
+	require.Equal(t, CreativeRunStatusSettlementPending, f.repo.runs[runID].Status, "终态写入失败，任务停留在结算等待")
+
+	// 临时素材过期，数据库恢复后重试结算。
+	delete(f.store.outputs, fmtInputKey(runID, 0))
+	f.repo.markSucceededErr = nil
+	require.NoError(t, f.service.SettleRun(context.Background(), runID))
+	require.Zero(t, f.billing.releaseN, "已扣款任务不能再释放原预占")
+	require.Equal(t, 1, f.billing.captureN, "也不能重复扣款")
+	require.Equal(t, CreativeRunStatusSucceeded, f.repo.runs[runID].Status)
+	require.NotNil(t, f.repo.runs[runID].ActualCost)
+
+	// 即使历史数据已处于释放等待，ReleaseRun 也只按已扣款收尾。
+	runID2 := "crun_captured_release_pending"
+	seedCreativeRun(f, runID2, true)
+	f.repo.runs[runID2].Status = CreativeRunStatusReleasePending
+	f.repo.outputs[runID2][0].Status = CreativeRunOutputStatusFailed
+	f.billing.captured[runID2] = &BatchImageBalanceHoldResult{ActualAmountUSD: 0.0603, BalanceAmountUSD: 0.0603}
+	require.NoError(t, f.service.ReleaseRun(context.Background(), runID2))
+	require.Zero(t, f.billing.releaseN)
+	require.Equal(t, CreativeRunStatusResultLost, f.repo.runs[runID2].Status)
+	require.InDelta(t, 0.0603, *f.repo.runs[runID2].ActualCost, 1e-12, "保留实扣金额，是否退款另行核定")
+}

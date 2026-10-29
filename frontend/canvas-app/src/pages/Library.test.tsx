@@ -188,3 +188,28 @@ describe('画布库云端操作失败恢复',()=>{
     expect(listCanvases).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('素材保存期提示',()=>{
+  // 重新 mount 复用同一个 root 会保留旧的组件状态，回退场景必须换一个全新 root。
+  async function freshRoot(){
+    act(()=>root.unmount());
+    host.remove();
+    host=document.createElement('div');
+    document.body.append(host);
+    root=createRoot(host);
+    await mount();
+    await act(async()=>{await Promise.resolve();});
+  }
+
+  it('按系统设置的小时数展示保存期，读取失败时回退七天',async()=>{
+    const originalFetch=globalThis.fetch;
+    try{
+      globalThis.fetch=vi.fn().mockResolvedValue({ok:true,json:async()=>({code:0,data:{creative_canvas_asset_retention_hours:72}})} as unknown as Response);
+      await freshRoot();
+      expect(host.textContent).toContain('保留 3 天');
+      globalThis.fetch=vi.fn().mockRejectedValue(new Error('offline'));
+      await freshRoot();
+      expect(host.textContent).toContain('保留 7 天');
+    }finally{globalThis.fetch=originalFetch;}
+  });
+});

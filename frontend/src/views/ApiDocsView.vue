@@ -36,31 +36,28 @@
             <Select v-model="platform" :options="platformOptions" searchable />
           </div>
           <div class="max-h-[65dvh] space-y-5 overflow-y-auto overscroll-contain pr-1">
-            <nav class="space-y-1" :aria-label="t('apiDocs.quickstart')">
-              <router-link v-for="guide in guides" :key="guide.id" :to="`/docs/${guide.id}`" class="doc-nav-link" :class="{ 'doc-nav-active': selectedId === guide.id }" :aria-current="selectedId === guide.id ? 'page' : undefined" @click="mobileCatalog = false">{{ t(guide.label) }}</router-link>
-            </nav>
             <nav v-for="category in visibleCategories" :key="category.id" class="space-y-1" :aria-label="category.label">
-              <h2 class="mb-2 px-2 text-xs font-semibold text-gray-500 dark:text-dark-400">{{ category.label }} <span class="ml-1 font-normal">{{ category.items.length }}</span></h2>
+              <h2 class="mb-2 px-2 text-xs font-semibold text-gray-500 dark:text-dark-400">{{ category.label }} <span v-if="category.id !== guideCategoryId" class="ml-1 font-normal">{{ category.items.length }}</span></h2>
               <div v-for="group in category.groups" :key="group.id" :class="group.label ? 'pt-2' : ''">
                 <h3 v-if="group.label" class="mb-1 flex items-center justify-between gap-2 px-2 text-xs font-semibold text-gray-800 dark:text-dark-100">
                   {{ group.label }}<span class="font-normal text-gray-400 dark:text-dark-400">{{ group.items.length }}</span>
                 </h3>
                 <div :class="group.label ? 'ml-2 space-y-1 border-l border-gray-200 pl-2 dark:border-dark-600' : 'space-y-1'">
-                  <router-link v-for="endpoint in group.items" :key="endpoint.id" :to="`/docs/${endpoint.id}`" class="doc-nav-link" :class="{ 'doc-nav-active': selectedId === endpoint.id }" :aria-current="selectedId === endpoint.id ? 'page' : undefined" @click="mobileCatalog = false">
-                    <span class="mr-1.5 font-mono text-[10px] font-bold" :class="methodColor(endpoint.method)">{{ endpoint.method }}</span>{{ endpoint.title }}
+                  <router-link v-for="doc in group.items" :key="doc.id" :to="`/docs/${doc.id}`" class="doc-nav-link" :class="{ 'doc-nav-active': selectedId === doc.id }" :aria-current="selectedId === doc.id ? 'page' : undefined" @click="mobileCatalog = false">
+                    <span v-if="doc.endpoint" class="mr-1.5 font-mono text-[10px] font-bold" :class="methodColor(doc.endpoint.method)">{{ doc.endpoint.method }}</span>{{ doc.title }}
                   </router-link>
                 </div>
               </div>
             </nav>
-            <p v-if="!filteredEndpoints.length" class="px-2 text-sm text-gray-500">{{ t('apiDocs.noResults') }}</p>
+            <p v-if="!filteredDocuments.length" class="px-2 text-sm text-gray-500">{{ t('apiDocs.noResults') }}</p>
           </div>
           <div class="flex items-center justify-between border-t border-gray-100 pt-3 text-xs text-gray-500 dark:border-dark-700">
-            <span>{{ filteredEndpoints.length }} {{ t('apiDocs.endpoints') }}</span>
+            <span>{{ filteredEndpointCount }} {{ t('apiDocs.endpoints') }}</span>
             <button v-if="search || platform" type="button" class="text-primary-600 dark:text-primary-300" @click="search = ''; platform = null">{{ t('apiDocs.reset') }}</button>
           </div>
         </aside>
 
-        <!-- 正文统一按 Markdown 渲染：管理员在系统设置中改写的版本优先，否则使用内置文档 -->
+        <!-- 正文统一按 Markdown 渲染：管理员在系统设置中改写的版本优先，否则使用内置文档；已隐藏的文档按不存在处理 -->
         <article ref="article" class="card min-w-0 scroll-mt-20 p-4 sm:p-6 lg:p-8">
           <template v-if="markdown !== null">
             <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -104,10 +101,11 @@ import ApiDocMarkdown from '@/components/api-docs/ApiDocMarkdown.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { initTheme, useTheme } from '@/composables/useTheme'
 import { sanitizeUrl } from '@/utils/url'
-import { apiDocCategories, apiDocEndpoints, apiDocPlatforms, apiDocVideoProtocols, filterApiDocEndpoints, platformLabel, videoProtocolLabel } from '@/content/api-docs'
+import { apiDocPlatforms, platformLabel, videoProtocolLabel } from '@/content/api-docs'
 import { apiDocBaseUrl } from '@/content/api-docs/format'
-import { apiDocOutline, effectiveApiDocMarkdown, overviewMarkdown } from '@/content/api-docs/markdown'
-import { apiDocsAPI } from '@/api/apiDocs'
+import { apiDocOutline, overviewMarkdown, resolveApiDocMarkdown } from '@/content/api-docs/markdown'
+import { API_DOC_GUIDE_CATEGORY, apiDocCategoryDocuments, buildApiDocCatalog, catalogOverviewEndpoints, filterApiDocCatalog, groupApiDocDocuments } from '@/content/api-docs/catalog'
+import { apiDocsAPI, type ApiDocCatalogOverlay } from '@/api/apiDocs'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -119,34 +117,42 @@ const search = ref('')
 const platform = ref<string | null>(null)
 const mobileCatalog = ref(false)
 const article = ref<HTMLElement | null>(null)
-// 管理员改写的文档；读取失败时保持空集合，页面回退到内置文档。
-const overrides = ref<Record<string, string>>({})
+// 管理员的目录叠加；读取失败时保持空集合，页面回退到内置目录。
+const overlay = ref<ApiDocCatalogOverlay>({ categories: [], documents: [] })
+// 当前文档的改写正文：undefined 表示仍在读取，null 表示没有改写。
+const customMarkdown = ref<string | null | undefined>(undefined)
+const catalog = computed(() => buildApiDocCatalog(overlay.value))
+const guideCategoryId = API_DOC_GUIDE_CATEGORY.id
 const isAuthenticated = computed(() => authStore.isAuthenticated)
 const siteName = computed(() => appStore.siteName || 'TokenRouter')
 const siteLogo = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
 const baseUrl = computed(() => apiDocBaseUrl(appStore.apiBaseUrl || '', window.location.origin))
 const selectedId = computed(() => typeof route.params.documentId === 'string' && route.params.documentId ? route.params.documentId : 'quickstart')
-const selectedEndpoint = computed(() => apiDocEndpoints.find(endpoint => endpoint.id === selectedId.value))
-const selectedCategory = computed(() => apiDocCategories.find(category => category.id === selectedEndpoint.value?.category)?.label)
-// 总览未改写时按目录筛选结果生成表格，与左侧搜索保持一致。
-const markdown = computed(() => selectedId.value === 'overview' && !overrides.value.overview?.trim()
-  ? overviewMarkdown(filteredEndpoints.value, t('apiDocs.noResults'))
-  : effectiveApiDocMarkdown(selectedId.value, baseUrl.value, overrides.value))
+const selectedDocument = computed(() => catalog.value.documents.find(doc => doc.id === selectedId.value))
+const selectedEndpoint = computed(() => selectedDocument.value?.endpoint)
+const selectedCategory = computed(() => catalog.value.categories.find(category => category.id === selectedDocument.value?.categoryId)?.title)
+// 总览未改写时按目录筛选结果生成表格，与左侧搜索保持一致；隐藏或不存在的文档显示未找到。
+const markdown = computed(() => {
+  const doc = selectedDocument.value
+  if (!doc) return null
+  const custom = doc.hasMarkdown ? customMarkdown.value : null
+  if (doc.id === 'overview' && !custom?.trim()) return overviewMarkdown(catalogOverviewEndpoints(filteredDocuments.value), t('apiDocs.noResults'))
+  // 自定义文档没有内置正文，正文读取完成前保持空白而不是显示“未找到”。
+  if (!doc.builtin && custom === undefined) return ''
+  return resolveApiDocMarkdown(doc.id, baseUrl.value, custom)
+})
 const outline = computed(() => markdown.value ? apiDocOutline(markdown.value) : [])
 const platformOptions = computed(() => [{ value: null, label: t('apiDocs.allPlatforms') }, ...apiDocPlatforms])
-const filteredEndpoints = computed(() => filterApiDocEndpoints(search.value, platform.value))
-// 先筛选再生成视频子目录，隐藏没有匹配端点的平台标题。
-const visibleCategories = computed(() => apiDocCategories.map(category => {
-  const items = filteredEndpoints.value.filter(endpoint => endpoint.category === category.id)
-  const groups = category.id === 'video'
-    ? apiDocVideoProtocols.map(protocol => ({ ...protocol, items: items.filter(endpoint => endpoint.videoProtocol === protocol.id) })).filter(group => group.items.length)
-    : [{ id: category.id, label: '', items }]
-  return { ...category, items, groups }
-}).filter(category => category.items.length))
-const guides = [
-  { id: 'quickstart', label: 'apiDocs.quickstart' }, { id: 'auth', label: 'apiDocs.auth' },
-  { id: 'overview', label: 'apiDocs.overview' }, { id: 'errors', label: 'apiDocs.errors' },
-]
+const filteredDocuments = computed(() => filterApiDocCatalog(catalog.value.documents, search.value, platform.value))
+const filteredEndpointCount = computed(() => filteredDocuments.value.filter(doc => doc.endpoint).length)
+// 先筛选再生成视频子目录，隐藏没有匹配文档的分类与平台标题；分类与文档按管理员设置的顺序排列。
+const visibleCategories = computed(() => {
+  const ids = new Set(filteredDocuments.value.map(doc => doc.id))
+  return catalog.value.categories.map(category => {
+    const items = apiDocCategoryDocuments(catalog.value, category.id).filter(doc => ids.has(doc.id))
+    return { id: category.id, label: category.title, items, groups: groupApiDocDocuments(items) }
+  }).filter(category => category.items.length)
+})
 
 function methodColor(method: string): string {
   if (method === 'GET') return 'text-emerald-600 dark:text-emerald-400'
@@ -160,6 +166,24 @@ function scrollToHeading(index: number) {
 function copyLink() {
   void copyToClipboard(new URL(`/docs/${selectedId.value}`, window.location.origin).href)
 }
+// 只为存在改写正文的文档读取正文，忽略切换后才返回的旧请求。
+let markdownRequest = 0
+async function loadCustomMarkdown() {
+  const request = ++markdownRequest
+  const doc = selectedDocument.value
+  if (!doc?.hasMarkdown) {
+    customMarkdown.value = null
+    return
+  }
+  customMarkdown.value = undefined
+  try {
+    const entry = await apiDocsAPI.getDocument(doc.id)
+    if (request === markdownRequest) customMarkdown.value = entry.markdown ?? null
+  } catch {
+    if (request === markdownRequest) customMarkdown.value = null
+  }
+}
+watch(() => [selectedId.value, selectedDocument.value?.overlay?.version], () => { void loadCustomMarkdown() }, { immediate: true })
 // 地址是文档唯一定位依据，浏览器前进后退和直接分享均能恢复相同正文。
 watch(selectedId, async () => {
   mobileCatalog.value = false
@@ -169,7 +193,7 @@ watch(selectedId, async () => {
 onMounted(() => {
   initTheme()
   if (!appStore.publicSettingsLoaded) void appStore.fetchPublicSettings()
-  apiDocsAPI.getOverrides().then(value => { overrides.value = value }).catch(() => { overrides.value = {} })
+  apiDocsAPI.getCatalog().then(value => { overlay.value = value }).catch(() => { overlay.value = { categories: [], documents: [] } })
 })
 </script>
 

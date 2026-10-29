@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,8 @@ type creativeFakeRunRepo struct {
 	transition        []string
 	setAccountN       int
 	recordProviderErr error
+	// markSucceededErr 模拟扣款已提交、写入终态失败（数据库瞬断等）。
+	markSucceededErr error
 }
 
 const testCreativeWorkspaceID = "11111111-1111-4111-8111-111111111111"
@@ -187,7 +190,12 @@ func (r *creativeFakeRunRepo) MarkCreativeRunSucceeded(ctx context.Context, runI
 	if !ok {
 		return ErrCreativeRunNotFound
 	}
-	if run.Status != CreativeRunStatusRunning && run.Status != CreativeRunStatusProviderSucceeded && run.Status != CreativeRunStatusSettlementPending {
+	if r.markSucceededErr != nil {
+		return r.markSucceededErr
+	}
+	// 与真实仓储一致：已捕获资金却误入释放等待的任务也可按已扣款收尾。
+	if run.Status != CreativeRunStatusRunning && run.Status != CreativeRunStatusProviderSucceeded && run.Status != CreativeRunStatusSettlementPending &&
+		run.Status != CreativeRunStatusReleasePending {
 		return ErrCreativeInvalidTransition
 	}
 	run.Status = CreativeRunStatusSucceeded
@@ -437,12 +445,25 @@ func (r *creativeFakeRateRepo) GetByUserAndGroup(ctx context.Context, userID, gr
 }
 
 type creativeFakeBillingRepo struct {
+	// mu 保护下面的计数字段与资金动作记录：并行 worker 会同时结算不同任务。
+	mu         sync.Mutex
 	reserveN   int
 	captureN   int
 	releaseN   int
 	reserveIDs []string
 	captureIDs []string
 	releaseIDs []string
+	// captured/released 记录已提交的资金动作（按任务），模拟仓储的捕获-释放互斥与回执保存。
+	captured map[string]*BatchImageBalanceHoldResult
+	released map[string]bool
+}
+
+// CreativeCaptureReceipt 与真实仓储一致：已捕获时返回保存的回执。
+func (r *creativeFakeBillingRepo) CreativeCaptureReceipt(_ context.Context, runID string, _ int64) (*BatchImageBalanceHoldResult, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	receipt, ok := r.captured[runID]
+	return receipt, ok, nil
 }
 
 func (r *creativeFakeBillingRepo) Apply(ctx context.Context, cmd *UsageBillingCommand) (*UsageBillingApplyResult, error) {
@@ -450,6 +471,8 @@ func (r *creativeFakeBillingRepo) Apply(ctx context.Context, cmd *UsageBillingCo
 }
 
 func (r *creativeFakeBillingRepo) ReserveBatchImageBalance(ctx context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.reserveN++
 	r.reserveIDs = append(r.reserveIDs, cmd.RequestID)
 	return &BatchImageBalanceHoldResult{
@@ -461,17 +484,39 @@ func (r *creativeFakeBillingRepo) ReserveBatchImageBalance(ctx context.Context, 
 }
 
 func (r *creativeFakeBillingRepo) CaptureBatchImageBalance(ctx context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.released[cmd.BatchID] {
+		return nil, ErrBatchImageHoldAlreadyReleased
+	}
 	r.captureN++
 	r.captureIDs = append(r.captureIDs, cmd.RequestID)
-	return &BatchImageBalanceHoldResult{
-		Applied:         true,
-		ActualAmountUSD: cmd.ActualBaseAmountUSD,
-	}, nil
+	result := &BatchImageBalanceHoldResult{
+		Applied:          true,
+		ActualAmountUSD:  cmd.ActualBaseAmountUSD,
+		BalanceAmountUSD: cmd.ActualBaseAmountUSD,
+	}
+	if r.captured == nil {
+		r.captured = map[string]*BatchImageBalanceHoldResult{}
+	}
+	if _, ok := r.captured[cmd.BatchID]; !ok {
+		r.captured[cmd.BatchID] = result
+	}
+	return result, nil
 }
 
 func (r *creativeFakeBillingRepo) ReleaseBatchImageBalance(ctx context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.captured[cmd.BatchID]; ok {
+		return nil, ErrBatchImageHoldAlreadyCaptured
+	}
 	r.releaseN++
 	r.releaseIDs = append(r.releaseIDs, cmd.RequestID)
+	if r.released == nil {
+		r.released = map[string]bool{}
+	}
+	r.released[cmd.BatchID] = true
 	return &BatchImageBalanceHoldResult{Applied: true}, nil
 }
 
@@ -1183,8 +1228,9 @@ func TestEnsureCreativeManagedKey(t *testing.T) {
 
 // creativeFakeSettingReader 是 CreativeSettingReader 的测试替身。
 type creativeFakeSettingReader struct {
-	enabled bool
-	models  []CreativeModelSetting
+	enabled         bool
+	models          []CreativeModelSetting
+	canvasRetention time.Duration
 }
 
 func (f *creativeFakeSettingReader) IsCreativeEnabled(ctx context.Context) bool {
@@ -1193,6 +1239,14 @@ func (f *creativeFakeSettingReader) IsCreativeEnabled(ctx context.Context) bool 
 
 func (f *creativeFakeSettingReader) GetCreativeModelSettings(ctx context.Context) []CreativeModelSetting {
 	return append([]CreativeModelSetting(nil), f.models...)
+}
+
+// GetCreativeCanvasAssetRetention 默认返回原七天；测试可显式覆盖。
+func (f *creativeFakeSettingReader) GetCreativeCanvasAssetRetention(ctx context.Context) time.Duration {
+	if f.canvasRetention > 0 {
+		return f.canvasRetention
+	}
+	return CreativeCanvasAssetTTL
 }
 
 // TestCreativeEnabledGate 校验数据库运行时开关 creative_enabled 的门控语义：

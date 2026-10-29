@@ -4,7 +4,7 @@ export default {
       title: 'Reserved funds and settlement', status: 'Settlement status',
       statuses: { pending: 'Awaiting review', charged: 'Charge confirmed', released: 'Reservation released', expired: 'Expired and released', unreserved: 'No reserved funds', unavailable: 'Billing information unavailable' },
       hints: {
-        pending: 'Review the upstream result before settling. Unhandled failed tasks release existing reservations at the deadline, independently of media retention.',
+        pending: 'Review the upstream result before settling. Unhandled failed tasks release existing reservations at the deadline; completed videos awaiting settlement are never handled automatically and need a manual charge or release. The deadline is independent of media retention.',
         charged: 'The charge has been confirmed. This action cannot charge or refund it again.',
         released: 'Reserved funds were returned to their original balance or subscription quota. This is not an additional refund.',
         expired: 'The review deadline has passed and reserved funds were released. No further automatic charge will occur.',

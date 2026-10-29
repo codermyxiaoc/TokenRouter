@@ -175,13 +175,9 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 	// Check cache first
 	cached := s.cache.Get()
 	if cached != nil {
-		// Check If-None-Match for 304 response
-		if match := c.GetHeader("If-None-Match"); match == cached.ETag {
-			c.Status(http.StatusNotModified)
-			c.Abort()
-			return
-		}
-
+		// HTML 内联脚本带每请求生成的 CSP nonce，缓存里的 ETag 不包含 nonce。
+		// 若按 ETag 返回 304，浏览器会复用旧 nonce 的 HTML，而本次响应的 CSP 已是新 nonce，
+		// 首屏配置脚本会被拦截；因此这里始终返回 200 并重新替换 nonce。
 		// Replace nonce placeholder with actual nonce before serving
 		content := replaceNoncePlaceholder(cached.Content, nonce)
 

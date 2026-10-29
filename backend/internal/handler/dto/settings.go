@@ -180,6 +180,8 @@ type SystemSettings struct {
 	HomeFeaturedModels          []string                       `json:"home_featured_models"`
 	CreativeModelSettings       []service.CreativeModelSetting `json:"creative_model_settings"`
 	CreativeWorkerCount         int                            `json:"creative_worker_count"`
+	// 创作台画布素材保存期（小时），仅管理员可读写；只影响之后归档的新素材。
+	CreativeCanvasAssetRetentionHours int `json:"creative_canvas_asset_retention_hours"`
 
 	// 失败媒体任务待确认超时（分钟），仅管理员可读写。
 	MediaTaskReconciliationTimeoutMinutes int `json:"media_task_reconciliation_timeout_minutes"`

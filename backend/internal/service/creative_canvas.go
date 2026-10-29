@@ -160,6 +160,8 @@ type CreativeCanvasAssetStore interface {
 	Put(context.Context, string, io.Reader, int64) (int64, string, error)
 	Open(context.Context, string) (io.ReadSeekCloser, error)
 	Delete(context.Context, string) error
+	// VerifyImage 校验已写入的图片能完整解码，截断文件不能登记为就绪素材。
+	VerifyImage(context.Context, string, int64) (bool, error)
 }
 
 type CreativeCanvasRepository interface {

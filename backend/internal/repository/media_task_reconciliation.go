@@ -93,11 +93,24 @@ func mediaSettlementEligible(status string) bool {
 	return status == "failed" || status == "cancelled" || status == "expired"
 }
 
-// mediaManualSettlementEligible 允许管理员人工核定“异步图片已完成但预占仍待核对”的历史任务：
-// 这类任务结果已交付却缺少结算证据，自动流程既不能按完成标记猜测扣费，也不能无条件退款，
-// 只能由管理员按实际交付情况决定扣费或释放；自动过期处理仍只覆盖失败类状态。
-func mediaManualSettlementEligible(source, status string) bool {
-	return mediaSettlementEligible(status) || (source == "async_image" && status == "completed")
+// mediaManualSettlementEligible 允许管理员人工核定两类“已完成但资金仍冻结”的任务：
+//   - 异步图片已完成但预占仍待核对的历史任务（缺少结算证据）；
+//   - 视频已完成但自动结算进入待对账（用量无法确认、扣费持续失败等），否则冻结可能永不释放。
+//
+// 自动流程既不能按完成标记猜测扣费，也不能无条件退款，只能由管理员按实际交付情况决定扣费或释放；
+// 已完成视频仅在账务已转入 reconciliation 时开放，reserved 仍在等待成品或取回探测，由自动流程按期限处理。
+// 自动过期处理仍只覆盖失败类状态。
+func mediaManualSettlementEligible(source, status, billingState string) bool {
+	if mediaSettlementEligible(status) {
+		return true
+	}
+	switch source {
+	case "async_image":
+		return status == "completed"
+	case "video":
+		return status == "completed" && billingState == "reconciliation"
+	}
+	return false
 }
 func mediaSnapshotPending(s *mediaBillingSnapshot) bool {
 	return s.state == "reserved" || s.state == "reconciliation"
@@ -158,7 +171,7 @@ func (r *mediaTaskRepository) GetMediaTaskBillingReview(ctx context.Context, tas
 	case "reserved", "reconciliation":
 		review.Status = "pending"
 		review.HeldBalanceAmount, review.HeldSubscriptionAmount = balance, sub
-		review.CanRelease = mediaManualSettlementEligible(task.Source, task.Status) && (snapshot.sourceStatus == "" || mediaManualSettlementEligible(task.Source, snapshot.sourceStatus)) && (task.ActualCost == nil || *task.ActualCost == 0)
+		review.CanRelease = mediaManualSettlementEligible(task.Source, task.Status, snapshot.state) && (snapshot.sourceStatus == "" || mediaManualSettlementEligible(task.Source, snapshot.sourceStatus, snapshot.state)) && (task.ActualCost == nil || *task.ActualCost == 0)
 		review.CanCharge = review.CanRelease && balance+sub > 0 && !snapshot.hold.VideoDeferredBilling
 	}
 	return review, nil
@@ -206,12 +219,12 @@ func (r *mediaTaskRepository) resolveMediaTaskBillingOnce(ctx context.Context, c
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	// 自动过期只处理失败类状态；人工核定额外覆盖已完成但预占待核对的异步图片。
-	eligible := mediaSettlementEligible
+	// 自动过期只处理失败类状态；人工核定额外覆盖已完成但资金待核对的异步图片和视频。
+	eligible := func(status, _ string) bool { return mediaSettlementEligible(status) }
 	if cmd.Action != "expire" {
-		eligible = func(status string) bool { return mediaManualSettlementEligible(task.Source, status) }
+		eligible = func(status, state string) bool { return mediaManualSettlementEligible(task.Source, status, state) }
 	}
-	if !eligible(task.Status) {
+	if !eligible(task.Status, initial.state) {
 		return nil, service.ErrMediaTaskSettlementConflict
 	}
 	failedAt := task.UpdatedAt
@@ -226,7 +239,7 @@ func (r *mediaTaskRepository) resolveMediaTaskBillingOnce(ctx context.Context, c
 		return nil, service.ErrMediaTaskSettlementConflict
 	}
 	locked, err := readMediaBillingSnapshot(ctx, tx, task, true)
-	if err != nil || locked.hold.UserID != initial.hold.UserID || !mediaSnapshotPending(locked) || (locked.sourceStatus != "" && !eligible(locked.sourceStatus)) {
+	if err != nil || locked.hold.UserID != initial.hold.UserID || !mediaSnapshotPending(locked) || !eligible(task.Status, locked.state) || (locked.sourceStatus != "" && !eligible(locked.sourceStatus, locked.state)) {
 		return nil, service.ErrMediaTaskSettlementConflict
 	}
 	balance, sub := mediaSnapshotAmount(locked)

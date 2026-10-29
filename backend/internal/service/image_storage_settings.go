@@ -197,7 +197,8 @@ func (s *ImageStorageSettingService) Update(ctx context.Context, in ImageStorage
 	if err := validateImageStorageRetention(in.RetentionHours); err != nil {
 		return nil, err
 	}
-	if in.Enabled && s.objectRetention != nil && !s.objectRetention.stableEncryption {
+	// 只有 S3 的清理快照含凭据、需要固定加密密钥；本地存储快照明文保存，不受此限制。
+	if in.Enabled && in.Backend != config.ImageStorageBackendLocal && s.objectRetention != nil && !s.objectRetention.stableEncryption {
 		return nil, ErrSecretEncryptionKeyNotConfigured
 	}
 	newSecret := in.SecretAccessKey != ""
@@ -261,7 +262,7 @@ func (s *ImageStorageSettingService) TestConnection(ctx context.Context, in Imag
 		return err
 	}
 	if s.objectRetention != nil {
-		if err := s.objectRetention.ready(ctx); err != nil {
+		if err := s.objectRetention.ready(ctx, in.Backend != config.ImageStorageBackendLocal); err != nil {
 			return err
 		}
 	}

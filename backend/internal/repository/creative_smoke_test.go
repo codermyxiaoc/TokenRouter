@@ -404,6 +404,10 @@ type smokeCreativeSettingReader struct{}
 
 func (smokeCreativeSettingReader) IsCreativeEnabled(context.Context) bool { return true }
 
+func (smokeCreativeSettingReader) GetCreativeCanvasAssetRetention(context.Context) time.Duration {
+	return service.CreativeCanvasAssetTTL
+}
+
 func (smokeCreativeSettingReader) GetCreativeModelSettings(context.Context) []service.CreativeModelSetting {
 	return []service.CreativeModelSetting{{
 		GroupID:    12,

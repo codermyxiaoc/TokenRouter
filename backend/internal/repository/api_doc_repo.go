@@ -15,7 +15,7 @@ func NewAPIDocRepository(db *sql.DB) service.APIDocRepository {
 	return &apiDocRepository{db: db}
 }
 
-const apiDocCategoryColumns = `id,title,sort,hidden,custom,version,updated_at`
+const apiDocCategoryColumns = `id,parent_id,title,sort,hidden,custom,version,updated_at`
 
 // 目录不读取正文，只返回是否存在改写正文，避免公开接口一次性返回全部长文。
 const apiDocEntrySummaryColumns = `id,category_id,title,NULL::text,markdown IS NOT NULL,sort,hidden,custom,version,updated_at`
@@ -23,12 +23,12 @@ const apiDocEntryColumns = `id,category_id,title,markdown,markdown IS NOT NULL,s
 
 func scanAPIDocCategory(row rowScanner) (*service.APIDocCategory, error) {
 	var c service.APIDocCategory
-	var title sql.NullString
+	var parent, title sql.NullString
 	var sort sql.NullInt64
-	if err := row.Scan(&c.ID, &title, &sort, &c.Hidden, &c.Custom, &c.Version, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &parent, &title, &sort, &c.Hidden, &c.Custom, &c.Version, &c.UpdatedAt); err != nil {
 		return nil, err
 	}
-	c.Title = nullStringPtr(title)
+	c.ParentID, c.Title = nullStringPtr(parent), nullStringPtr(title)
 	c.Sort = nullIntPtr(sort)
 	return &c, nil
 }
@@ -127,16 +127,16 @@ func (r *apiDocRepository) SaveCategory(ctx context.Context, id string, in servi
 	var row *sql.Row
 	if in.Version == 0 {
 		// 排序占位行（version=0）可被接管并保留排序，其它已存在的行视为冲突。
-		row = r.db.QueryRowContext(ctx, `INSERT INTO api_doc_categories (id,title,hidden,custom,updated_by)
- VALUES ($1,$2,$3,$4,$5)
- ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,hidden=EXCLUDED.hidden,custom=EXCLUDED.custom,
+		row = r.db.QueryRowContext(ctx, `INSERT INTO api_doc_categories (id,parent_id,title,hidden,custom,updated_by)
+ VALUES ($1,$2,$3,$4,$5,$6)
+ ON CONFLICT (id) DO UPDATE SET parent_id=EXCLUDED.parent_id,title=EXCLUDED.title,hidden=EXCLUDED.hidden,custom=EXCLUDED.custom,
  updated_by=EXCLUDED.updated_by,version=1,updated_at=NOW() WHERE api_doc_categories.version=0
  RETURNING `+apiDocCategoryColumns,
-			id, in.Title, in.Hidden, in.Custom, nullableActor(actorID))
+			id, in.ParentID, in.Title, in.Hidden, in.Custom, nullableActor(actorID))
 	} else {
-		row = r.db.QueryRowContext(ctx, `UPDATE api_doc_categories SET title=$2,hidden=$3,custom=$4,updated_by=$5,
- version=version+1,updated_at=NOW() WHERE id=$1 AND version=$6 RETURNING `+apiDocCategoryColumns,
-			id, in.Title, in.Hidden, in.Custom, nullableActor(actorID), in.Version)
+		row = r.db.QueryRowContext(ctx, `UPDATE api_doc_categories SET parent_id=$2,title=$3,hidden=$4,custom=$5,updated_by=$6,
+ version=version+1,updated_at=NOW() WHERE id=$1 AND version=$7 RETURNING `+apiDocCategoryColumns,
+			id, in.ParentID, in.Title, in.Hidden, in.Custom, nullableActor(actorID), in.Version)
 	}
 	saved, err := scanAPIDocCategory(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -161,8 +161,10 @@ func (r *apiDocRepository) DeleteCategory(ctx context.Context, id string, versio
 		return err
 	}
 	if custom {
+		// 仍有文档或子分类挂在下面时拒绝删除，避免它们失去归属。
 		var used bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM api_docs WHERE category_id=$1)`, id).Scan(&used); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM api_docs WHERE category_id=$1)
+ OR EXISTS(SELECT 1 FROM api_doc_categories WHERE parent_id=$1)`, id).Scan(&used); err != nil {
 			return err
 		}
 		if used {
@@ -174,7 +176,7 @@ func (r *apiDocRepository) DeleteCategory(ctx context.Context, id string, versio
 		return tx.Commit()
 	}
 	// 内置分类“恢复默认”只清除内容叠加，保留管理员调整过的排序。
-	if _, err := tx.ExecContext(ctx, `UPDATE api_doc_categories SET title=NULL,hidden=FALSE,version=0,updated_at=NOW() WHERE id=$1`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE api_doc_categories SET parent_id=NULL,title=NULL,hidden=FALSE,version=0,updated_at=NOW() WHERE id=$1`, id); err != nil {
 		return err
 	}
 	return tx.Commit()

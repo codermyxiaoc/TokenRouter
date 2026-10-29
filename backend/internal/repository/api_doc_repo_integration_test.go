@@ -187,6 +187,57 @@ func TestAPIDocHiddenCategoryBlocksPublicDocument(t *testing.T) {
 	require.Error(t, svc.Reorder(ctx, service.APIDocOrderInput{Documents: map[string][]string{"draft": {"draft-doc"}, "text": {"draft-doc"}}}, 1))
 }
 
+// 两级目录：二级分类挂在一级分类下，最多两级；有子分类或文档的自定义分类不能被彻底删除。
+func TestAPIDocTwoLevelCategories(t *testing.T) {
+	cleanAPIDocs(t)
+	t.Cleanup(func() { cleanAPIDocs(t) })
+	ctx := context.Background()
+	svc := service.NewAPIDocService(NewAPIDocRepository(integrationDB))
+
+	parent, err := svc.SaveCategory(ctx, "sdk", service.APIDocCategoryInput{Custom: true, Title: apiDocText("SDK")}, 1)
+	require.NoError(t, err)
+	require.Nil(t, parent.ParentID)
+	child, err := svc.SaveCategory(ctx, "sdk-python", service.APIDocCategoryInput{Custom: true, Title: apiDocText("Python"), ParentID: apiDocText("sdk")}, 1)
+	require.NoError(t, err)
+	require.Equal(t, "sdk", *child.ParentID)
+
+	// 不能挂到二级分类下（超过两级），不能以自身为上级，已有子分类的分类不能再降级。
+	_, err = svc.SaveCategory(ctx, "sdk-python-v3", service.APIDocCategoryInput{Custom: true, Title: apiDocText("v3"), ParentID: apiDocText("sdk-python")}, 1)
+	require.Error(t, err)
+	_, err = svc.SaveCategory(ctx, "loop", service.APIDocCategoryInput{Custom: true, Title: apiDocText("x"), ParentID: apiDocText("loop")}, 1)
+	require.Error(t, err)
+	other, err := svc.SaveCategory(ctx, "other", service.APIDocCategoryInput{Custom: true, Title: apiDocText("Other")}, 1)
+	require.NoError(t, err)
+	_, err = svc.SaveCategory(ctx, "sdk", service.APIDocCategoryInput{Custom: true, Title: apiDocText("SDK"), ParentID: apiDocText("other"), Version: parent.Version}, 1)
+	require.Error(t, err, "已有子分类的分类不能变成二级分类")
+
+	// 有子分类时彻底删除被拒绝；先删子分类后可删除。
+	require.ErrorIs(t, svc.DeleteCategory(ctx, "sdk", parent.Version), service.ErrAPIDocCategoryNotEmpty)
+	require.NoError(t, svc.DeleteCategory(ctx, "sdk-python", child.Version))
+	require.NoError(t, svc.DeleteCategory(ctx, "sdk", parent.Version))
+	require.NoError(t, svc.DeleteCategory(ctx, "other", other.Version))
+
+	// 二级分类的上级被隐藏时，其下文档对访客的直达读取同样返回 404。
+	parent, err = svc.SaveCategory(ctx, "sdk", service.APIDocCategoryInput{Custom: true, Title: apiDocText("SDK")}, 1)
+	require.NoError(t, err)
+	_, err = svc.SaveCategory(ctx, "sdk-go", service.APIDocCategoryInput{Custom: true, Title: apiDocText("Go"), ParentID: apiDocText("sdk")}, 1)
+	require.NoError(t, err)
+	_, err = svc.SaveDocument(ctx, "sdk-go-intro", service.APIDocEntryInput{Custom: true, Title: apiDocText("入门"), CategoryID: apiDocText("sdk-go"), Markdown: apiDocText("# Go")}, 1)
+	require.NoError(t, err)
+	_, err = svc.Document(ctx, "sdk-go-intro", true)
+	require.NoError(t, err)
+	_, err = svc.SaveCategory(ctx, "sdk", service.APIDocCategoryInput{Custom: true, Title: apiDocText("SDK"), Hidden: true, Version: parent.Version}, 1)
+	require.NoError(t, err)
+	_, err = svc.Document(ctx, "sdk-go-intro", true)
+	require.ErrorIs(t, err, service.ErrAPIDocNotFound)
+
+	// 内置二级分类（如 video-openai）可改名与隐藏，上级保持内置。
+	builtin, err := svc.SaveCategory(ctx, "video-openai", service.APIDocCategoryInput{Title: apiDocText("OpenAI 视频"), Hidden: true}, 1)
+	require.NoError(t, err)
+	require.Nil(t, builtin.ParentID)
+	require.True(t, builtin.Hidden)
+}
+
 // 升级迁移：旧设置中的逐篇改写转为文档叠加行，损坏的旧值不阻断升级。
 func TestAPIDocMigrationImportsLegacyOverrides(t *testing.T) {
 	for name, legacy := range map[string]string{

@@ -32,7 +32,9 @@ var (
 
 // APIDocCategory 是分类的叠加记录。
 type APIDocCategory struct {
-	ID        string    `json:"id"`
+	ID string `json:"id"`
+	// ParentID 为空表示一级分类（内置条目沿用内置上级），否则为所属一级分类。
+	ParentID  *string   `json:"parent_id"`
 	Title     *string   `json:"title"`
 	Sort      *int      `json:"sort"`
 	Hidden    bool      `json:"hidden"`
@@ -63,10 +65,12 @@ type APIDocCatalog struct {
 
 // APIDocCategoryInput 保存分类叠加；Version 为 0 表示新建（已存在则冲突）。
 type APIDocCategoryInput struct {
-	Title   *string `json:"title"`
-	Hidden  bool    `json:"hidden"`
-	Custom  bool    `json:"custom"`
-	Version int64   `json:"version"`
+	// ParentID 只能指向一级分类，目录最多两级；空值表示一级分类或沿用内置上级。
+	ParentID *string `json:"parent_id"`
+	Title    *string `json:"title"`
+	Hidden   bool    `json:"hidden"`
+	Custom   bool    `json:"custom"`
+	Version  int64   `json:"version"`
 }
 
 // APIDocEntryInput 保存文档叠加；Version 为 0 表示新建（已存在则冲突）。排序由单独的排序接口维护。
@@ -180,15 +184,27 @@ func (s *APIDocService) Document(ctx context.Context, id string, publicOnly bool
 	return doc, nil
 }
 
-// categoryHidden 查询分类是否被隐藏；没有叠加记录的内置分类视为不隐藏。
+// categoryHidden 查询分类及其上级是否被隐藏；没有叠加记录的内置分类视为不隐藏。
 func (s *APIDocService) categoryHidden(ctx context.Context, id string) (bool, error) {
 	catalog, err := s.repo.Catalog(ctx)
 	if err != nil {
 		return false, err
 	}
+	byID := make(map[string]APIDocCategory, len(catalog.Categories))
 	for _, category := range catalog.Categories {
-		if category.ID == id {
-			return category.Hidden, nil
+		byID[category.ID] = category
+	}
+	category, ok := byID[id]
+	if !ok {
+		return false, nil
+	}
+	if category.Hidden {
+		return true, nil
+	}
+	// 二级分类所属的一级分类被隐藏时，其下文档同样不公开。
+	if category.ParentID != nil {
+		if parent, ok := byID[*category.ParentID]; ok && parent.Hidden {
+			return true, nil
 		}
 	}
 	return false, nil
@@ -208,6 +224,30 @@ func (s *APIDocService) SaveCategory(ctx context.Context, id string, in APIDocCa
 	}
 	if in.Version < 0 {
 		return nil, apiDocInvalid("invalid version")
+	}
+	if in.ParentID != nil && *in.ParentID == "" {
+		in.ParentID = nil
+	}
+	if in.ParentID != nil {
+		if err := validateAPIDocID(*in.ParentID); err != nil {
+			return nil, apiDocInvalid("invalid parent category id")
+		}
+		if *in.ParentID == id {
+			return nil, apiDocInvalid("a category cannot be its own parent")
+		}
+		// 目录最多两级：上级不能本身是二级分类，已有子分类的分类也不能再挂到其它分类下。
+		catalog, err := s.repo.Catalog(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, category := range catalog.Categories {
+			if category.ID == *in.ParentID && category.ParentID != nil {
+				return nil, apiDocInvalid("categories support at most two levels")
+			}
+			if category.ParentID != nil && *category.ParentID == id {
+				return nil, apiDocInvalid("a category with sub-categories cannot become a sub-category")
+			}
+		}
 	}
 	in.Title = title
 	return s.repo.SaveCategory(ctx, id, in, actorID)

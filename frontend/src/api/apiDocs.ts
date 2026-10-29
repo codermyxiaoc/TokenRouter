@@ -8,6 +8,8 @@ import { apiClient } from './client'
 /** 分类叠加记录；title 为 null 表示沿用内置标题。version=0 为仅保存排序的占位行。 */
 export interface ApiDocCategoryOverlay {
   id: string
+  /** 上级分类；null 表示一级分类，内置条目为 null 时沿用内置上级。 */
+  parent_id?: string | null
   title: string | null
   sort: number | null
   hidden: boolean
@@ -36,6 +38,8 @@ export interface ApiDocCatalogOverlay {
 }
 
 export interface ApiDocCategoryInput {
+  /** 上级分类（只能是一级分类）；null 表示一级分类或沿用内置上级。 */
+  parent_id?: string | null
   title: string | null
   hidden: boolean
   custom: boolean

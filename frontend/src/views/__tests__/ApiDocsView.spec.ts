@@ -179,6 +179,30 @@ describe('API 文档页面', () => {
     wrapper.unmount()
   })
 
+  // 二级标题（视频协议）可改名、删除；删除后其下文档在目录和地址中都不可见。
+  it('二级标题按后台设置改名与删除', async () => {
+    getCatalog.mockResolvedValue({
+      categories: [
+        { id: 'video-openai', parent_id: null, title: 'OpenAI 视频接口', sort: null, hidden: false, custom: false, version: 1, updated_at: '' },
+        { id: 'video-vidu', parent_id: null, title: null, sort: null, hidden: true, custom: false, version: 1, updated_at: '' },
+      ],
+      documents: [],
+    })
+    const { wrapper, router } = await render('/docs/overview')
+    const videoCatalog = wrapper.get('nav[aria-label="视频与异步任务"]')
+    const headings = videoCatalog.findAll('h3').map(heading => heading.text())
+    expect(headings[0]).toBe('OpenAI 视频接口5')
+    expect(headings.some(heading => heading.startsWith('Vidu'))).toBe(false)
+    const viduDoc = wrapper.find('a[href^="/docs/vidu"]')
+    expect(viduDoc.exists()).toBe(false)
+    await router.push('/docs/video-create')
+    await flushPromises()
+    // 面包屑同时显示一级与二级标题。
+    expect(wrapper.get('article').text()).toContain('视频与异步任务')
+    expect(wrapper.get('article').text()).toContain('OpenAI 视频接口')
+    wrapper.unmount()
+  })
+
   it('移动目录能展开，选择接口后自动收起', async () => {
     const { wrapper } = await render()
     const trigger = wrapper.get('button[aria-controls="api-doc-catalog"]')

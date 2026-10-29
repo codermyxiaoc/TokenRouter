@@ -36,14 +36,20 @@
             <Select v-model="platform" :options="platformOptions" searchable />
           </div>
           <div class="max-h-[65dvh] space-y-5 overflow-y-auto overscroll-contain pr-1">
-            <nav v-for="category in visibleCategories" :key="category.id" class="space-y-1" :aria-label="category.label">
-              <h2 class="mb-2 px-2 text-xs font-semibold text-gray-500 dark:text-dark-400">{{ category.label }} <span v-if="category.id !== guideCategoryId" class="ml-1 font-normal">{{ category.items.length }}</span></h2>
-              <div v-for="group in category.groups" :key="group.id" :class="group.label ? 'pt-2' : ''">
-                <h3 v-if="group.label" class="mb-1 flex items-center justify-between gap-2 px-2 text-xs font-semibold text-gray-800 dark:text-dark-100">
-                  {{ group.label }}<span class="font-normal text-gray-400 dark:text-dark-400">{{ group.items.length }}</span>
+            <nav v-for="node in visibleCategories" :key="node.category.id" class="space-y-1" :aria-label="node.category.title">
+              <h2 class="mb-2 px-2 text-xs font-semibold text-gray-500 dark:text-dark-400">{{ node.category.title }} <span v-if="node.category.id !== guideCategoryId" class="ml-1 font-normal">{{ apiDocNodeCount(node) }}</span></h2>
+              <div v-if="node.documents.length" class="space-y-1">
+                <router-link v-for="doc in node.documents" :key="doc.id" :to="`/docs/${doc.id}`" class="doc-nav-link" :class="{ 'doc-nav-active': selectedId === doc.id }" :aria-current="selectedId === doc.id ? 'page' : undefined" @click="mobileCatalog = false">
+                  <span v-if="doc.endpoint" class="mr-1.5 font-mono text-[10px] font-bold" :class="methodColor(doc.endpoint.method)">{{ doc.endpoint.method }}</span>{{ doc.title }}
+                </router-link>
+              </div>
+              <!-- 二级分类：标题可在后台改名、隐藏或删除，组内文档按后台顺序排列 -->
+              <div v-for="child in node.children" :key="child.category.id" class="pt-2">
+                <h3 class="mb-1 flex items-center justify-between gap-2 px-2 text-xs font-semibold text-gray-800 dark:text-dark-100">
+                  {{ child.category.title }}<span class="font-normal text-gray-400 dark:text-dark-400">{{ child.documents.length }}</span>
                 </h3>
-                <div :class="group.label ? 'ml-2 space-y-1 border-l border-gray-200 pl-2 dark:border-dark-600' : 'space-y-1'">
-                  <router-link v-for="doc in group.items" :key="doc.id" :to="`/docs/${doc.id}`" class="doc-nav-link" :class="{ 'doc-nav-active': selectedId === doc.id }" :aria-current="selectedId === doc.id ? 'page' : undefined" @click="mobileCatalog = false">
+                <div class="ml-2 space-y-1 border-l border-gray-200 pl-2 dark:border-dark-600">
+                  <router-link v-for="doc in child.documents" :key="doc.id" :to="`/docs/${doc.id}`" class="doc-nav-link" :class="{ 'doc-nav-active': selectedId === doc.id }" :aria-current="selectedId === doc.id ? 'page' : undefined" @click="mobileCatalog = false">
                     <span v-if="doc.endpoint" class="mr-1.5 font-mono text-[10px] font-bold" :class="methodColor(doc.endpoint.method)">{{ doc.endpoint.method }}</span>{{ doc.title }}
                   </router-link>
                 </div>
@@ -63,8 +69,8 @@
             <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div class="flex min-w-0 flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-dark-400">
                 <template v-if="selectedEndpoint">
+                  <template v-if="selectedParentCategory"><span>{{ selectedParentCategory }}</span><Icon name="chevronRight" size="xs" /></template>
                   <span>{{ selectedCategory }}</span><Icon name="chevronRight" size="xs" />
-                  <template v-if="selectedEndpoint.videoProtocol"><span>{{ videoProtocolLabel(selectedEndpoint.videoProtocol) }}</span><Icon name="chevronRight" size="xs" /></template>
                   <span v-for="id in selectedEndpoint.platforms" :key="id" class="rounded-md bg-gray-100 px-2 py-1 dark:bg-dark-700">{{ platformLabel(id) }}</span>
                 </template>
               </div>
@@ -101,10 +107,10 @@ import ApiDocMarkdown from '@/components/api-docs/ApiDocMarkdown.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { initTheme, useTheme } from '@/composables/useTheme'
 import { sanitizeUrl } from '@/utils/url'
-import { apiDocPlatforms, platformLabel, videoProtocolLabel } from '@/content/api-docs'
+import { apiDocPlatforms, platformLabel } from '@/content/api-docs'
 import { apiDocBaseUrl } from '@/content/api-docs/format'
 import { apiDocOutline, overviewMarkdown, resolveApiDocMarkdown } from '@/content/api-docs/markdown'
-import { API_DOC_GUIDE_CATEGORY, apiDocCategoryDocuments, buildApiDocCatalog, catalogOverviewEndpoints, filterApiDocCatalog, groupApiDocDocuments } from '@/content/api-docs/catalog'
+import { API_DOC_GUIDE_CATEGORY, apiDocCategoryTree, apiDocNodeCount, buildApiDocCatalog, catalogOverviewEndpoints, filterApiDocCatalog } from '@/content/api-docs/catalog'
 import { apiDocsAPI, type ApiDocCatalogOverlay } from '@/api/apiDocs'
 
 const { t } = useI18n()
@@ -130,7 +136,13 @@ const baseUrl = computed(() => apiDocBaseUrl(appStore.apiBaseUrl || '', window.l
 const selectedId = computed(() => typeof route.params.documentId === 'string' && route.params.documentId ? route.params.documentId : 'quickstart')
 const selectedDocument = computed(() => catalog.value.documents.find(doc => doc.id === selectedId.value))
 const selectedEndpoint = computed(() => selectedDocument.value?.endpoint)
-const selectedCategory = computed(() => catalog.value.categories.find(category => category.id === selectedDocument.value?.categoryId)?.title)
+const selectedCategoryRecord = computed(() => catalog.value.categories.find(category => category.id === selectedDocument.value?.categoryId))
+const selectedCategory = computed(() => selectedCategoryRecord.value?.title)
+// 二级分类的文档在面包屑中同时显示所属一级分类。
+const selectedParentCategory = computed(() => {
+  const parentId = selectedCategoryRecord.value?.parentId
+  return parentId ? catalog.value.categories.find(category => category.id === parentId)?.title : undefined
+})
 // 总览未改写时按目录筛选结果生成表格，与左侧搜索保持一致；隐藏或不存在的文档显示未找到。
 const markdown = computed(() => {
   const doc = selectedDocument.value
@@ -145,13 +157,10 @@ const outline = computed(() => markdown.value ? apiDocOutline(markdown.value) : 
 const platformOptions = computed(() => [{ value: null, label: t('apiDocs.allPlatforms') }, ...apiDocPlatforms])
 const filteredDocuments = computed(() => filterApiDocCatalog(catalog.value.documents, search.value, platform.value))
 const filteredEndpointCount = computed(() => filteredDocuments.value.filter(doc => doc.endpoint).length)
-// 先筛选再生成视频子目录，隐藏没有匹配文档的分类与平台标题；分类与文档按管理员设置的顺序排列。
+// 先筛选再生成两级目录，隐藏没有匹配文档的一级与二级分类；分类与文档按管理员设置的顺序排列。
 const visibleCategories = computed(() => {
   const ids = new Set(filteredDocuments.value.map(doc => doc.id))
-  return catalog.value.categories.map(category => {
-    const items = apiDocCategoryDocuments(catalog.value, category.id).filter(doc => ids.has(doc.id))
-    return { id: category.id, label: category.title, items, groups: groupApiDocDocuments(items) }
-  }).filter(category => category.items.length)
+  return apiDocCategoryTree(catalog.value, doc => ids.has(doc.id))
 })
 
 function methodColor(method: string): string {

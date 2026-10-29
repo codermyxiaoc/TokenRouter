@@ -115,6 +115,59 @@ describe('API 文档目录管理', () => {
     await wrapper.get('[data-testid="api-docs-category-title"]').setValue('FAQ')
     await wrapper.get('form#api-doc-category-form').trigger('submit')
     await flushPromises()
-    expect(api.saveCategory).toHaveBeenCalledWith('faq', { title: 'FAQ', hidden: false, custom: true, version: 0 })
+    expect(api.saveCategory).toHaveBeenCalledWith('faq', { title: 'FAQ', parent_id: null, hidden: false, custom: true, version: 0 })
+  })
+
+  it('视频协议作为二级标题出现在一级分类下，可编辑和删除', async () => {
+    api.saveCategory.mockResolvedValue({ id: 'video-openai', title: null, sort: null, hidden: true, custom: false, version: 1, updated_at: '' })
+    const wrapper = await render()
+    const video = wrapper.get('[data-testid="api-docs-category-video"]')
+    // 二级标题在一级分类卡片内，带自己的编辑和删除按钮。
+    const sub = video.get('[data-testid="api-docs-category-video-openai"]')
+    expect(sub.text()).toContain('OpenAI Videos')
+    expect(sub.find('[data-testid="api-docs-edit-category-video-openai"]').exists()).toBe(true)
+    await sub.get('[data-testid="api-docs-delete-video-openai"]').trigger('click')
+    expect(api.saveCategory).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="confirm-ok"]').trigger('click')
+    await flushPromises()
+    // 内置二级标题删除即隐藏，保留内置层级与名称。
+    expect(api.saveCategory).toHaveBeenCalledWith('video-openai', { title: null, parent_id: null, hidden: true, custom: false, version: 0 })
+  })
+
+  it('内置文档可在目录中直接删除并恢复，保留已改写的正文', async () => {
+    api.getAdminCatalog.mockResolvedValue({ categories: [], documents: [docOverlay('auth', { has_markdown: true, version: 2 })] })
+    api.getAdminDocument.mockResolvedValue(docOverlay('auth', { markdown: '# 改写的认证', version: 2 }))
+    api.saveDocument.mockResolvedValue(docOverlay('auth', { hidden: true, version: 3 }))
+    const wrapper = await render()
+    await wrapper.get('[data-testid="api-docs-delete-doc-auth"]').trigger('click')
+    await wrapper.get('[data-testid="confirm-ok"]').trigger('click')
+    await flushPromises()
+    expect(api.saveDocument).toHaveBeenCalledWith('auth', { title: null, category_id: null, markdown: '# 改写的认证', hidden: true, custom: false, version: 2 })
+    expect(api.deleteDocument).not.toHaveBeenCalled()
+  })
+
+  it('已删除的内置文档显示“恢复”，点击后重新显示且不丢失改写', async () => {
+    api.getAdminCatalog.mockResolvedValue({ categories: [], documents: [docOverlay('auth', { has_markdown: true, hidden: true, version: 3 })] })
+    api.getAdminDocument.mockResolvedValue(docOverlay('auth', { markdown: '# 改写的认证', hidden: true, version: 3 }))
+    api.saveDocument.mockResolvedValue(docOverlay('auth', { version: 4 }))
+    const wrapper = await render()
+    expect(wrapper.find('[data-testid="api-docs-delete-doc-auth"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="api-docs-restore-doc-auth"]').trigger('click')
+    await flushPromises()
+    expect(api.saveDocument).toHaveBeenCalledWith('auth', { title: null, category_id: null, markdown: '# 改写的认证', hidden: false, custom: false, version: 3 })
+  })
+
+  it('新增二级分类时可选择上级分类', async () => {
+    api.saveCategory.mockResolvedValue({ id: 'sora', parent_id: 'video', title: 'Sora', sort: null, hidden: false, custom: true, version: 1, updated_at: '' })
+    const wrapper = await render()
+    await wrapper.get('[data-testid="api-docs-add-category"]').trigger('click')
+    await wrapper.get('[data-testid="api-docs-category-title"]').setValue('Sora')
+    // Select 在测试中被替身替换，通过 v-model 事件选择上级分类。
+    const parent = wrapper.findAllComponents({ name: 'Select' }).find(item => item.attributes('data-testid') === 'api-docs-category-parent')!
+    parent.vm.$emit('update:modelValue', 'video')
+    await flushPromises()
+    await wrapper.get('form#api-doc-category-form').trigger('submit')
+    await flushPromises()
+    expect(api.saveCategory).toHaveBeenCalledWith('sora', { title: 'Sora', parent_id: 'video', hidden: false, custom: true, version: 0 })
   })
 })

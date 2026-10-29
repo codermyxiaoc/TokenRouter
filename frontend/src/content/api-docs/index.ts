@@ -15,14 +15,9 @@ export const apiDocCategories = [
   { id: 'tools', label: '搜索与扩展', description: '搜索工具及平台专属扩展能力' },
 ] as const
 
-// 按协议及模型家族分组；同一路径可以提供不同适配方案的模型指南，不新增服务端能力。
+// 视频二级分类：统一 Video 入口（OpenAI Videos）与 Grok 原生任务；同一路径可以提供不同适配方案的模型指南，不新增服务端能力。
 export const apiDocVideoProtocols = [
   { id: 'openai', label: 'OpenAI Videos' },
-  { id: 'seedance', label: 'Seedance / 火山方舟' },
-  { id: 'kling', label: 'Kling / 可灵' },
-  { id: 'wan', label: 'Wan / 万相' },
-  { id: 'minimax', label: 'MiniMax' },
-  { id: 'vidu', label: 'Vidu' },
   { id: 'grok', label: 'Grok / xAI' },
 ] as const satisfies ReadonlyArray<{ id: ApiDocVideoProtocol; label: string }>
 

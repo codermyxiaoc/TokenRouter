@@ -80,21 +80,6 @@ describe('API 文档页面', () => {
     wrapper.unmount()
   })
 
-  it('Seedance 首尾帧指南可直接打开并复制包含 adaptive 与角色的完整说明', async () => {
-    const { wrapper, router } = await render('/docs/kemei-seedance25-frames')
-    expect(wrapper.get('article').text()).toContain('doubao-seedance-2-5-260628')
-    expect(wrapper.get('article').text()).toContain('ratio 必须为 adaptive')
-    expect(wrapper.get('article').text()).toContain('first_frame')
-    await wrapper.findAll('button').find(button => button.text().includes('apiDocs.copyMarkdown'))!.trigger('click')
-    expect(copyToClipboard).toHaveBeenLastCalledWith(expect.stringContaining('"aspect_ratio": "adaptive"'))
-    expect(copyToClipboard).toHaveBeenLastCalledWith(expect.stringContaining('创建结果未知时先查原任务'))
-    await router.push('/docs/kemei-seedance25-reference')
-    await flushPromises()
-    expect(wrapper.get('article').text()).toContain('reference_image')
-    expect(wrapper.get('article').text()).toContain('"aspect_ratio": "16:9"')
-    wrapper.unmount()
-  })
-
   it('访客可读默认指南，已登录用户复用应用布局', async () => {
     const { wrapper } = await render()
     expect(wrapper.find('article').text()).toContain('从一个端点开始接入')
@@ -115,21 +100,14 @@ describe('API 文档页面', () => {
     await flushPromises()
     const videoCatalog = wrapper.get('nav[aria-label="视频与异步任务"]')
     // 模型指南复用已注册路径；目录按协议/模型家族分组，不能将指南数量误作新增服务端路由。
-    expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual([
-      'OpenAI Videos5', 'Seedance / 火山方舟7', 'Kling / 可灵3', 'Wan / 万相1', 'MiniMax2', 'Vidu4', 'Grok / xAI5',
-    ])
-    expect(videoCatalog.findAll('a')).toHaveLength(27)
-    await wrapper.get('input[placeholder="apiDocs.search"]').setValue('Vidu')
-    await flushPromises()
-    // 统一入口与迁移页的说明提到 Vidu 旧路径，同样命中。
-    expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['OpenAI Videos3', 'Vidu4'])
-    expect(videoCatalog.findAll('a')).toHaveLength(7)
+    expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['OpenAI Videos5', 'Grok / xAI5'])
+    expect(videoCatalog.findAll('a')).toHaveLength(10)
     await wrapper.get('input[placeholder="apiDocs.search"]').setValue('Kling')
     await flushPromises()
-    // 视频检索包含使用说明，旧入口迁移页中对 Kling 旧路径的说明也应命中。
-    expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['OpenAI Videos3', 'Kling / 可灵3'])
+    // 视频检索包含使用说明，旧入口迁移页中对 Kling 旧路径的说明仍可命中；空的二级分类隐藏。
+    expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['OpenAI Videos3'])
     expect(videoCatalog.find('a[href="/docs/video-retired-endpoints"]').exists()).toBe(true)
-    expect(wrapper.find('article').text()).toContain('Kling · 图生视频')
+    expect(wrapper.find('article').text()).toContain('旧视频入口迁移')
     wrapper.findComponent(Select).vm.$emit('update:modelValue', 'deepseek')
     await flushPromises()
     expect(wrapper.find('article').text()).toContain('apiDocs.noResults')
@@ -189,7 +167,7 @@ describe('API 文档页面', () => {
     getCatalog.mockResolvedValue({
       categories: [
         { id: 'video-openai', parent_id: null, title: 'OpenAI 视频接口', sort: null, hidden: false, custom: false, version: 1, updated_at: '' },
-        { id: 'video-vidu', parent_id: null, title: null, sort: null, hidden: true, custom: false, version: 1, updated_at: '' },
+        { id: 'video-grok', parent_id: null, title: null, sort: null, hidden: true, custom: false, version: 1, updated_at: '' },
       ],
       documents: [],
     })
@@ -200,9 +178,8 @@ describe('API 文档页面', () => {
     const videoCatalog = wrapper.get('nav[aria-label="视频与异步任务"]')
     const headings = videoCatalog.findAll('h3').map(heading => heading.text())
     expect(headings[0]).toBe('OpenAI 视频接口5')
-    expect(headings.some(heading => heading.startsWith('Vidu'))).toBe(false)
-    const viduDoc = wrapper.find('a[href^="/docs/vidu"]')
-    expect(viduDoc.exists()).toBe(false)
+    expect(headings.some(heading => heading.startsWith('Grok'))).toBe(false)
+    expect(wrapper.find('a[href^="/docs/grok-video"]').exists()).toBe(false)
     await wrapper.get('input[placeholder="apiDocs.search"]').setValue('')
     await router.push('/docs/video-create')
     await flushPromises()

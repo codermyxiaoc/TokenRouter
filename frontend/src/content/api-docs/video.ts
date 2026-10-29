@@ -99,15 +99,6 @@ const vendorGuide = (guide: VendorGuide): ApiDocEndpoint => ({
   notes: [...guide.notes, protocolNote, pollNote, ...billingNotes], errors: videoErrors,
 })
 
-// 可美 Seedance 2.5 的角色和比例规则用统一字段表达。
-const kemeiSeedanceNotes = [
-  '适用于模型绑定预置模板 profile:kemei-seedance 或 profile:kemei-compat 的可美 Seedance 2.5（含 doubao-seedance-2-5-260628）。',
-  '2.5 使用 480p、720p 或 1080p；时长为 4–30 整数秒或 -1（模型选择时长）。-1 不是不计费：按秒预算或 Token 秒价预扣仍要求管理员配置足够的时长上限。不要把 2.0 的范围或本站面板上限套到 2.5。',
-  '图片可以是供应商可访问的 HTTPS URL，或该供应商支持的图片 Data URL。只有字符串的单图默认作为首帧；角色有要求时使用 {url, role}，不要依赖图片数量猜测。',
-  '看到 first-frame / first-last-frame 的比例错误时，检查图片角色并把 aspect_ratio 设为 adaptive。已确认失败后修正参数应使用新的幂等键；创建结果未知时先查原任务，不能直接重发生成。',
-  '可美参考生在 extra.omni_reference_task_type 中使用 auto；视频编辑 edit 要求 aspect_ratio=adaptive、duration=-1，延长 extend 要求 aspect_ratio=adaptive。',
-]
-
 export const videoEndpoints: ApiDocEndpoint[] = [
   {
     id: 'video-create', category: 'video', videoProtocol: 'openai', title: 'Video · 创建视频任务',
@@ -161,25 +152,6 @@ export const videoEndpoints: ApiDocEndpoint[] = [
     ],
     errors: [{ status: 410, code: 'VIDEO_ENDPOINT_RETIRED', description: '旧视频入口已下线。' }],
   },
-  ...([
-    { id: 'kemei-seedance25-text', title: 'Seedance 2.5 · 可美文生视频', summary: '没有首帧图片时，按可美合同指定输出比例、时长与分辨率。', ratio: '16:9', images: [], reference: false },
-    { id: 'kemei-seedance25-frames', title: 'Seedance 2.5 · 可美首帧与首尾帧', summary: '首帧控制画面，输出比例跟随首帧；aspect_ratio 必须为 adaptive。', ratio: 'adaptive', images: [{ url: 'https://media.example.com/first-frame.png', role: 'first_frame' }, { url: 'https://media.example.com/last-frame.png', role: 'last_frame' }], reference: false },
-    { id: 'kemei-seedance25-reference', title: 'Seedance 2.5 · 可美参考图生成', summary: '明确使用 reference_image 参考角色，避免单张图片被识别成首帧。', ratio: '16:9', images: [{ url: 'https://media.example.com/character.png', role: 'reference_image' }], reference: true },
-  ] as const).map(guide => vendorGuide({
-    id: guide.id, protocol: 'seedance', title: guide.title, summary: guide.summary,
-    body: { model: 'doubao-seedance-2-5-260628', prompt: '人物沿海岸缓步前行，镜头平稳跟随', ...(guide.images.length ? { images: guide.images } : {}), aspect_ratio: guide.ratio, resolution: '720p', duration: 5, generate_audio: true, ...(guide.reference ? { extra: { omni_reference_task_type: 'auto' } } : {}) },
-    notes: [...kemeiSeedanceNotes, ...(guide.id === 'kemei-seedance25-frames' ? ['只用首帧时删除 last_frame 那一项，仍使用 adaptive。希望输出 16:9 时先将首帧裁剪为 16:9；把比例硬改成 16:9 不能代替裁剪。'] : [])],
-  })),
-  vendorGuide({
-    id: 'seedance-official-create', protocol: 'seedance', title: 'Seedance · 官方协议生成',
-    summary: '模型绑定 seedance.seedance_v1 时，网关把 prompt 与带角色的 images/videos 转换为方舟 content 数组。',
-    body: { model: 'seedance-model', prompt: '小猫在雪地里追逐雪花', images: [{ url: 'https://media.example.com/first-frame.png', role: 'first_frame' }], duration: 5, resolution: '720p', watermark: false },
-    notes: [
-      '单张无角色图片按首帧处理，多张无角色图片按 reference_image 处理；参考视频使用 videos（role=reference_video）。',
-      '官方 2.5 首帧/首尾帧应省略 aspect_ratio 或明确 adaptive；普通 reference_image 与纯文生不套用这一限制。官方 2.5 不支持 frames；2.0 Mini/Fast 的官方分辨率仅 480p/720p。以映射后的真实型号判断。',
-      'OpenAI 分组的旧 Seedance 方舟原生入口仍保留，见“Seedance / 方舟 · 创建原生任务（OpenAI 分组）”；Video 分组 Key 调用方舟路径返回 410。',
-    ],
-  }),
   vendorGuide({
     id: 'video-yezonghui-create', protocol: 'openai', title: 'Video · Yezonghui 模型调用',
     summary: '模型绑定预置模板 profile:yezonghui 时，resolution 是档位、aspect_ratio 是比例，不使用 OpenAI 像素 size。',
@@ -190,93 +162,6 @@ export const videoEndpoints: ApiDocEndpoint[] = [
       '上游查询间隔至少 60 秒，频繁刷新不会加速生成；完成且已结算后即使完成响应没有公开 URL 也不应重新创建。本站没有为该方案开放取消。',
     ],
   }),
-  vendorGuide({
-    id: 'video-metaso-h3', protocol: 'minimax', title: 'MiniMax H3 · 秘塔兼容调用',
-    summary: '模型绑定预置模板 profile:metaso-h3 时，可使用 OpenAI 像素 size 与单张参考图别名。',
-    body: { model: 'MiniMax-H3', prompt: '人物沿海岸缓步前行', seconds: '5', size: '1280x720', input_reference: { image_url: 'https://media.example.com/first-frame.png' } },
-    notes: [
-      '1280x720、720x1280 对应 768p；1792x1024、1024x1792 对应 2k。此处是协议约定，不能改成 1366x768 或按短边推断价格；也可直接提供一致的 resolution 与 aspect_ratio。',
-      '只支持一张参考图：使用 input_reference 或单项 images，不能两者同时提供。',
-      '创作台的自动比例会依据首图方向选择横屏或竖屏；该方案单张原图超过本站 2 MiB 发送上限时提示手动换图，不自动压缩。',
-    ],
-  }),
-  ...([
-    { id: 'kling-text', title: 'Kling · 文生视频', path: '/text-to-video/{model}', images: [] as { url: string; role: string }[] },
-    { id: 'kling-image', title: 'Kling · 图生视频', path: '/image-to-video/{model}', images: [{ url: 'https://media.example.com/first-frame.png', role: 'first_frame' }] },
-    { id: 'kling-omni', title: 'Kling · 可美 Omni 视频', path: '/omni-video/{model}', images: [{ url: 'https://media.example.com/reference.png', role: 'reference_image' }] },
-  ] as const).map(route => vendorGuide({
-    id: route.id, protocol: 'kling', title: route.title,
-    summary: `模型绑定 Kling 协议且操作路径为 ${route.path}；请求仍为统一 POST /v1/videos。`,
-    body: { model: 'kling-video-model', prompt: '海边灯塔，镜头缓慢向前', ...(route.images.length ? { images: route.images } : {}), duration: 5, resolution: '720p', aspect_ratio: '16:9' },
-    notes: [
-      'Kling 文生与图生是不同操作：管理员为模型绑定 /text-to-video/{model} 或 /image-to-video/{model}，同一模型不能按请求切换。官方 kling_v1 只支持这两种路径；可美的文生、图生与全能视频（/omni-video/{model}）分别是预置模板 profile:kemei-kling-text、profile:kemei-kling-image、profile:kemei-kling-omni。',
-      route.id === 'kling-image'
-        ? '图生首帧必须提供且只能一张（role=first_frame），尾帧可选（role=last_frame）。'
-        : route.id === 'kling-omni'
-          ? '可美 Omni 的参考图使用 role=reference_image（转换为 refer_image），参考视频使用 videos（role=reference_video，转换为 feature_video，要求音频关闭）；不接受参考音频 URL。其它厂商参数放入 extra。'
-          : '文生不带图片；其它厂商字段（如 camera_control）放入 extra，是否支持由具体上游决定。',
-      '比例不能是 adaptive。duration、resolution、aspect_ratio 由网关写入 Kling settings，不代表每个 Kling 型号支持任意时长。',
-    ],
-  })),
-  vendorGuide({
-    id: 'wan-create', protocol: 'wan', title: '万相 / Wan · 生成视频',
-    summary: '模型绑定 Wan 协议时，网关把统一字段转换为 input 与 parameters 嵌套结构。',
-    body: { model: 'wan-video-model', prompt: '山间湖泊，云雾缓慢漂移', images: ['https://media.example.com/first-frame.png'], duration: 5, resolution: '720p' },
-    notes: [
-      '官方协议只支持单张首帧（无角色或 role=first_frame），不支持多图、尾帧或参考视频；可美方案的多参考输入以带角色的 images 表达，首尾帧不能混合普通参考素材。',
-      '分辨率和时长必须符合具体 Wan 型号，不能照搬 Seedance 的范围。网关负责添加上游异步请求头。',
-    ],
-  }),
-  vendorGuide({
-    id: 'minimax-video-create', protocol: 'minimax', title: 'MiniMax · 生成视频',
-    summary: '模型绑定 minimax.minimax_v2 或可美方案时，网关把 prompt 与 images 转换为 content。',
-    body: { model: 'MiniMax-H3-Max', prompt: '小猫在雪地里追逐雪花', duration: 8, resolution: '768p', aspect_ratio: '16:9', watermark: false },
-    notes: [
-      'MiniMax-H3、H3-Max 及其它别名必须以实际账号模型为准；模型名相近不代表使用同一协议或支持同一时长、分辨率。',
-      '官方 V2 必须有 resolution；按实际模型选择 768p 等合法档位，不能用 720p 替代缺失价格。不支持参考视频。',
-      '可美 MiniMax 文生需要明确 aspect_ratio；图生保留首帧/尾帧/参考图角色，不擅自补 16:9。秘塔 H3 的像素 size 用法见“MiniMax H3 · 秘塔兼容调用”。',
-    ],
-  }),
-  // Vidu 操作由模型绑定的路径决定，指南按操作给出统一请求示例。
-  ...([
-    { operation: 'img2video', title: '图生视频', images: ['https://media.example.com/first-frame.png'] },
-    { operation: 'reference2video', title: '参考生视频', images: ['https://media.example.com/reference.png'] },
-    { operation: 'text2video', title: '文生视频', images: [] },
-    { operation: 'start-end2video', title: '首尾帧视频', images: ['https://media.example.com/first-frame.png', 'https://media.example.com/last-frame.png'] },
-  ] as const).map(route => vendorGuide({
-    id: `vidu-${route.operation}`, protocol: 'vidu', title: `Vidu · ${route.title}`,
-    summary: `模型绑定 Vidu 协议且操作路径为 /ent/v2/${route.operation}；请求仍为统一 POST /v1/videos。`,
-    body: { model: 'viduq3-pro', prompt: '镜头缓缓向前，展现安静的海岸线', ...(route.images.length ? { images: route.images } : {}), duration: 5, resolution: '540p', aspect_ratio: '16:9' },
-    notes: [
-      '操作由管理员为模型绑定的路径决定：img2video 恰好 1 张图、reference2video 至少 1 张、start-end2video 恰好 2 张（按首帧、尾帧顺序提供 URL）、text2video 不能带图。同一模型不能按请求切换操作。官方 Vidu 协议按顺序转发图片 URL，不接受 last_frame 角色；可美方案保留角色。',
-      '示例按可美方案填写 5 秒、540p、16:9；这是可美默认值，不是所有 Vidu 型号的统一要求。官方与旧透传不继承可美默认值或 Q4 限制；可美方案中的 Q4 仅支持 img2video 和 reference2video。',
-      'generate_audio 映射为 Vidu audio；参考音频、错峰模式等厂商参数放入 extra。上游官方 Token 鉴权由服务端处理，调用方只使用本站 Bearer Key。',
-    ],
-  })),
-  // OpenAI 分组的旧 Seedance 方舟入口不属于独立 Video 平台，仍保留原生协议。
-  ...([
-    { id: 'ark-create', method: 'POST', title: 'Seedance / 方舟 · 创建原生任务（OpenAI 分组）', summary: 'OpenAI 分组 API Key 账号启用 Seedance 能力后，使用 Ark content 多模态数组提交任务。', path: '/api/v3/contents/generations/tasks' },
-    { id: 'ark-query', method: 'GET', title: 'Seedance / 方舟 · 查询原生任务（OpenAI 分组）', summary: '取得方舟原生状态、产物和 usage；原生 ID 与创建 Key 必须匹配。', path: '/api/v3/contents/generations/tasks/{task_id}' },
-    { id: 'ark-delete', method: 'DELETE', title: 'Seedance / 方舟 · 删除原生任务（OpenAI 分组）', summary: '向原任务账号提交原生删除请求，保留供应商状态及响应。', path: '/api/v3/contents/generations/tasks/{task_id}' },
-  ] as const).map((route): ApiDocEndpoint => ({
-    id: route.id, category: 'video', videoProtocol: 'seedance', title: route.title, summary: route.summary,
-    platforms: ['openai'], method: route.method, path: route.path,
-    ...(route.method === 'POST' ? { contentType: 'application/json' } : { requestPath: route.path.replace('{task_id}', 'cgt_example') }),
-    auth: 'bearer',
-    parameters: route.method === 'POST' ? [
-      { name: 'model', type: 'string', required: true, description: '已配置的视频模型或方舟推理接入点 ID。' },
-      { name: 'content', type: 'array', required: true, description: '非空多模态数组。文本为 {type:"text",text:"..."}，图片/视频等按模型原生格式提供。' },
-      { name: 'duration / resolution / ratio', type: 'number / string / string', required: 'conditional', description: '按模型支持范围填写。' },
-    ] : [taskId],
-    ...(route.method === 'POST' ? { requestExample: json({ model: 'seedance-model-or-endpoint-id', content: [{ type: 'text', text: '小猫在雪地里追逐雪花' }], duration: 8, resolution: '720p', ratio: '16:9' }) } : {}),
-    responseExample: route.method === 'DELETE' ? 'HTTP/1.1 204 No Content' : json(route.method === 'POST' ? { id: 'cgt_example' } : { id: 'cgt_example', status: 'succeeded', content: { video_url: 'https://media.example.com/output.mp4' }, usage: { completion_tokens: 80770 } }),
-    ...(route.method === 'DELETE' ? { responseLanguage: 'text', responseStatus: 204 } : {}),
-    notes: [
-      '仅适用于 OpenAI 分组且显式启用 Seedance 能力的 API Key 账号；Video 分组 Key 调用该路径返回 410 VIDEO_ENDPOINT_RETIRED，请改用 POST /v1/videos（见“Seedance · 官方协议生成”）。',
-      '旧 OpenAI Seedance 任务需客户端在归属有效期内主动查询：成功状态 succeeded 且 usage.completion_tokens>0 才按输出 Token 计费；归属及待结算快照约保留 24 小时。',
-    ],
-    errors: [{ status: 404, code: 'TaskNotFound', description: '任务不存在或归属不匹配。' }, { status: 503, code: 'TaskStorageUnavailable', description: '已创建任务但归属存储失败，响应携带任务 ID；保留 ID 联系管理员，不可再次提交生成。' }],
-  })),
   {
     id: 'grok-video-create', category: 'video', videoProtocol: 'grok', title: 'Grok · 视频生成', summary: 'Grok / xAI 异步文生或图生视频，返回供应商任务 ID。',
     platforms: ['grok'], method: 'POST', path: '/v1/videos/generations', aliases: ['/videos/generations'], auth: 'bearer', contentType: 'application/json',

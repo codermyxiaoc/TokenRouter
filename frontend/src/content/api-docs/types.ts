@@ -1,6 +1,6 @@
 // 文档只描述已实现的网关协议，不携带账号、密钥或运行时任务数据。
 export type ApiDocCategory = 'text' | 'models' | 'images' | 'video' | 'audio' | 'tools'
-export type ApiDocVideoProtocol = 'openai' | 'seedance' | 'kling' | 'wan' | 'minimax' | 'vidu' | 'grok'
+export type ApiDocVideoProtocol = 'openai' | 'grok'
 export interface ApiDocParameter {
   name: string
   type: string

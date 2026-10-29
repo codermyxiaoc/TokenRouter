@@ -409,7 +409,8 @@ GATEWAY_OPENAI_WS_FORCE_HTTP=true
 
 `config.yaml` 还支持以下安全相关配置：
 
-- `cors.allowed_origins` 配置 CORS 白名单
+- `cors.allowed_origins` 配置 CORS 白名单（管理与用户接口）
+- `cors.gateway_allow_all_origins`（默认 `true`）让 `/v1`、`/v1beta`、`/antigravity/v1*` 等网关接口接受任意来源的浏览器跨域调用：响应 `Access-Control-Allow-Origin: *`、不携带凭据，预检原样放行所请求的头，并暴露 `X-Video-Task-ID`、请求 ID 与限流响应头。网关只用 API Key 请求头鉴权、不依赖 Cookie；白名单内的来源仍按原规则携带凭据。设为 `false` 恢复只按白名单放行
 - `security.url_allowlist` 配置上游/价格数据/CRS 主机白名单
 - `security.url_allowlist.enabled` 可关闭 URL 校验（慎用）
 - `security.url_allowlist.allow_insecure_http` 关闭校验时允许 HTTP URL

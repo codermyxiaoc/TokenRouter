@@ -80,7 +80,7 @@
                   ? 'https://generativelanguage.googleapis.com'
                   : account.platform === 'antigravity'
                     ? 'https://cloudcode-pa.googleapis.com'
-                    : account.platform === 'video' ? 'https://api.example.com' : account.platform === 'grok'
+                    : account.platform === 'video' ? '' : account.platform === 'grok'
                       ? 'https://api.x.ai/v1'
                       : 'https://api.anthropic.com'
             "
@@ -281,7 +281,7 @@
                     : 'AQ.Ab...'
                   : account.platform === 'antigravity'
                     ? 'sk-...'
-                    : account.platform === 'video' ? 'sk-...' : account.platform === 'grok'
+                    : account.platform === 'video' ? '' : account.platform === 'grok'
                       ? 'xai-...'
                       : 'sk-ant-...'
             "
@@ -3045,7 +3045,7 @@
 <script setup lang="ts">
 import { supportsAccountQuota } from '@/utils/accountQuota'
 import VideoAccountFields from '@/components/account/VideoAccountFields.vue'
-import { createVideoAccountForm, validateVideoAccountForm, videoAccountCredentials } from '@/components/account/videoAccountConfig'
+import { createVideoAccountForm, stripLegacyVideoCredentials, validateVideoAccountForm, videoAccountCredentials } from '@/components/account/videoAccountConfig'
 
 import { ref, reactive, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -5203,6 +5203,8 @@ const handleSubmit = async () => {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const enteredBaseUrl = editBaseUrl.value.trim()
       if (props.account.platform === 'video') {
+        // 视频账号不提供默认 Base URL，编辑时同样不能清空。
+        if (!enteredBaseUrl) { appStore.showError(t('admin.accounts.video.accountBaseUrlRequired')); return }
         const error = validateVideoAccountForm(videoAccountForm.value, enteredBaseUrl)
         if (error) { appStore.showError(t(`admin.accounts.video.${error}`)); return }
       }
@@ -5223,8 +5225,11 @@ const handleSubmit = async () => {
         ...(props.account.platform === 'video' ? videoAccountCredentials(videoAccountForm.value) : {}),
         base_url: newBaseUrl
       }
-      // 视频预扣在用户价卡配置，账号不再写回旧 Token 预算上限。
-      if (props.account.platform === 'video') delete newCredentials.video_max_output_tokens
+      // 视频预扣在用户价卡配置，账号不再写回旧 Token 预算上限；旧端点字段已换算为模型协议绑定，不再发送。
+      if (props.account.platform === 'video') {
+        delete newCredentials.video_max_output_tokens
+        stripLegacyVideoCredentials(newCredentials)
+      }
 
       // 国产供应商：模式与协议写入凭据（决定额度/余额探测与转发端点/格式）。
       if (isCNApiKeyAccount.value) {

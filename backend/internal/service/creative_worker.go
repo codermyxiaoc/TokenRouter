@@ -56,13 +56,17 @@ const (
 	defaultCreativeWorkerDelayedPollInterval = 5 * time.Second
 	defaultCreativeWorkerRecoveryInterval    = 5 * time.Minute
 	defaultCreativeWorkerStaleActiveAfter    = 10 * time.Minute
+	// 超过任何正常重排间隔（含栅栏巡检和错误重试）仍未推进，才视为脱离队列。
+	defaultCreativeWorkerOrphanRecoveryAfter = 20 * time.Minute
 	defaultCreativeWorkerDelayedMoveLimit    = 100
 	defaultCreativeWorkerRecoverLimit        = 100
 	defaultCreativeWorkerErrorBackoff        = time.Second
 	defaultCreativeWorkerReserveBlockTimeout = 5 * time.Second
 	defaultCreativeConcurrencyRequeueDelay   = time.Second
-	// 未确认的上游执行不能自动重放，降低巡检频率并保留资金等待人工核对。
-	defaultCreativeUnconfirmedRequeueDelay = 15 * time.Minute
+	// 栅栏等待期间的巡检间隔；到达原执行时限加宽限期后自动失败并释放冻结。
+	defaultCreativeUnconfirmedRequeueDelay = time.Minute
+	// 原执行者最晚返回后，留给其结果落库的宽限期。
+	defaultCreativeUnconfirmedGrace = 2 * time.Minute
 )
 
 // CreativeWorkerOptions 是创作台 worker 的运行参数（全部可由配置覆盖）。
@@ -76,6 +80,8 @@ type CreativeWorkerOptions struct {
 	DelayedPollInterval time.Duration
 	RecoveryInterval    time.Duration
 	StaleActiveAfter    time.Duration
+	// OrphanRecoveryAfter 是数据库兜底扫描判定任务已脱离 Redis 队列的静止时长。
+	OrphanRecoveryAfter time.Duration
 	DelayedMoveLimit    int
 	RecoverLimit        int
 	MaxAttempts         int
@@ -94,6 +100,7 @@ func NewCreativeWorkerOptionsFromConfig(cfg *config.Config) CreativeWorkerOption
 		DelayedPollInterval: time.Duration(cfg.Creative.DelayedMoverIntervalSeconds) * time.Second,
 		RecoveryInterval:    time.Duration(cfg.Creative.RecoveryIntervalSeconds) * time.Second,
 		StaleActiveAfter:    time.Duration(cfg.Creative.StaleActiveAfterSeconds) * time.Second,
+		OrphanRecoveryAfter: time.Duration(cfg.Creative.OrphanRecoveryAfterSeconds) * time.Second,
 		DelayedMoveLimit:    cfg.Creative.DelayedMoveLimit,
 		RecoverLimit:        cfg.Creative.RecoverLimit,
 		MaxAttempts:         cfg.Creative.MaxExecuteAttempts,
@@ -127,6 +134,9 @@ func normalizeCreativeWorkerOptions(opts CreativeWorkerOptions) CreativeWorkerOp
 	}
 	if opts.StaleActiveAfter <= 0 {
 		opts.StaleActiveAfter = defaultCreativeWorkerStaleActiveAfter
+	}
+	if opts.OrphanRecoveryAfter <= 0 {
+		opts.OrphanRecoveryAfter = defaultCreativeWorkerOrphanRecoveryAfter
 	}
 	if opts.DelayedMoveLimit <= 0 {
 		opts.DelayedMoveLimit = defaultCreativeWorkerDelayedMoveLimit
@@ -519,6 +529,17 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 	result, err := w.executor.Execute(ctx, *current, *payload, execution)
 	releaseSlots()
 	if leaseState, _ := ctx.Value(creativeLeaseStateKey{}).(*creativeLeaseState); leaseState != nil && leaseState.lost.Load() {
+		if err == nil && result != nil && len(result.Outputs) > 0 {
+			// 租约已丢失但成品已到手：先把结果落库交给新的租约持有者结算，不能丢弃用户的成品。
+			persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			if _, persistErr := w.service.SucceedRun(persistCtx, runID, result.AccountID, creativeOutputResults(result.Outputs)); persistErr != nil {
+				logger.L().Warn("creative.worker_lease_lost_persist_failed",
+					zap.String("run_id", runID),
+					zap.Error(persistErr),
+				)
+			}
+			cancelPersist()
+		}
 		return CreativeProcessResult{}, ErrCreativeLeaseLost
 	}
 	if err != nil {
@@ -526,8 +547,8 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 			return w.handleCreativeImageFailure(ctx, current, execution.Account.ID, err)
 		}
 		if isCreativeResultUnconfirmedError(err) {
-			// 上游可能已生成但产物尚未确认：保持执行栅栏和预占，禁止重发或自动退款。
-			return w.deferUnconfirmedExecution(ctx, current)
+			// 上游结果无法确认即视为用户未拿到成品：不重发生成，直接失败并释放冻结。
+			return w.releaseUnavailableExecution(ctx, runID)
 		}
 		if w.executor.IsRetryable(err) {
 			// 只有执行器明确返回既有可重试错误时，才授权下一次上游执行。
@@ -538,18 +559,9 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 		return w.handleExecuteError(ctx, runID, err)
 	}
 	if result == nil || len(result.Outputs) == 0 {
-		return w.deferUnconfirmedExecution(ctx, current)
+		return w.releaseUnavailableExecution(ctx, runID)
 	}
-	results := make([]CreativeOutputResult, 0, len(result.Outputs))
-	for _, output := range result.Outputs {
-		results = append(results, CreativeOutputResult{
-			Index:   output.Index,
-			Success: true,
-			Bytes:   output.Bytes,
-			Mime:    output.Mime,
-		})
-	}
-	if _, err := w.service.SucceedRun(ctx, runID, result.AccountID, results); err != nil {
+	if _, err := w.service.SucceedRun(ctx, runID, result.AccountID, creativeOutputResults(result.Outputs)); err != nil {
 		// provider 已成功：只统计持久化/结算重试，执行栅栏防止再次调用上游。
 		_, incErr := w.repo.IncrementCreativeRunSettlementAttempt(ctx, runID)
 		if incErr != nil {
@@ -565,15 +577,69 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 	return CreativeProcessResult{Terminal: true}, nil
 }
 
-// deferUnconfirmedExecution 不推断上游失败或成功，也不释放资金；等待已有结果恢复或人工核对。
+// deferUnconfirmedExecution 处理启动时发现的执行栅栏：原执行者可能仍在运行，
+// 在原执行时限加宽限期内只等待其落库结果；到期仍无结果即视为用户未拿到成品，失败并释放冻结。
+// @project-doc docs/domains/creative_studio.md#creative_unconfirmed_release
 func (w *CreativeRunWorker) deferUnconfirmedExecution(ctx context.Context, run *CreativeRun) (CreativeProcessResult, error) {
-	if run.NextReconcileAt != nil && run.NextReconcileAt.After(time.Now()) && run.ErrorCode != nil && *run.ErrorCode == "PROVIDER_RESULT_UNCONFIRMED" {
-		return CreativeProcessResult{RequeueAfter: time.Until(*run.NextReconcileAt)}, nil
+	now := time.Now()
+	deadline := w.creativeUnconfirmedDeadline(run)
+	if !now.Before(deadline) {
+		return w.releaseUnavailableExecution(ctx, run.RunID)
 	}
-	if err := w.repo.MarkCreativeRunExecutionUnconfirmed(ctx, run.RunID, time.Now().Add(defaultCreativeUnconfirmedRequeueDelay)); err != nil {
+	wait := deadline.Sub(now)
+	if wait > defaultCreativeUnconfirmedRequeueDelay {
+		wait = defaultCreativeUnconfirmedRequeueDelay
+	}
+	if err := w.repo.MarkCreativeRunExecutionUnconfirmed(ctx, run.RunID, now.Add(wait)); err != nil {
 		return CreativeProcessResult{}, err
 	}
-	return CreativeProcessResult{RequeueAfter: defaultCreativeUnconfirmedRequeueDelay}, nil
+	return CreativeProcessResult{RequeueAfter: wait}, nil
+}
+
+// creativeUnconfirmedDeadline 只用持久化时间推算原执行者最晚可能返回的时刻，重启或改配置不能无限延长冻结。
+func (w *CreativeRunWorker) creativeUnconfirmedDeadline(run *CreativeRun) time.Time {
+	if run.Operation != CreativeOperationTTS && run.ImageExecutionDeadlineAt != nil {
+		return run.ImageExecutionDeadlineAt.Add(defaultCreativeUnconfirmedGrace)
+	}
+	start := run.CreatedAt
+	if run.StartedAt != nil {
+		start = *run.StartedAt
+	}
+	return start.Add(w.creativeImageExecutionBudget() + defaultCreativeUnconfirmedGrace)
+}
+
+// releaseUnavailableExecution 用户没有拿到任何成品时不扣费：先确认没有已落库结果，再失败并释放冻结。
+func (w *CreativeRunWorker) releaseUnavailableExecution(ctx context.Context, runID string) (CreativeProcessResult, error) {
+	run, err := w.repo.GetCreativeRunByRunID(ctx, runID)
+	if err != nil {
+		return CreativeProcessResult{}, err
+	}
+	if recovered, recoverErr := w.recoverPersistedProviderResult(ctx, run); recoverErr != nil {
+		return CreativeProcessResult{}, recoverErr
+	} else if recovered {
+		return CreativeProcessResult{Terminal: true}, nil
+	}
+	if err := w.service.FailRun(ctx, runID, CreativeResultUnavailableCode, "上游未返回可用结果，未扣费，冻结已释放"); err != nil {
+		return CreativeProcessResult{}, err
+	}
+	return CreativeProcessResult{Terminal: true}, nil
+}
+
+// CreativeResultUnavailableCode 表示上游结果超时、未知或不可用，任务已失败且冻结全部释放。
+const CreativeResultUnavailableCode = "CREATIVE_RESULT_UNAVAILABLE"
+
+// creativeOutputResults 把执行器输出转换为结果落库参数。
+func creativeOutputResults(outputs []CreativeOutput) []CreativeOutputResult {
+	results := make([]CreativeOutputResult, 0, len(outputs))
+	for _, output := range outputs {
+		results = append(results, CreativeOutputResult{
+			Index:   output.Index,
+			Success: true,
+			Bytes:   output.Bytes,
+			Mime:    output.Mime,
+		})
+	}
+	return results
 }
 
 // loadPayload 从临时存储加载任务载荷与输入字节；缺失即视为结果丢失。
@@ -712,6 +778,13 @@ func (w *CreativeRunWorker) runJobHeartbeat(ctx context.Context, runID, leaseTok
 			}
 		}
 	}
+	// Redis 短暂抖动时锁仍在有效期内，继续执行；只有超过锁有效期的七成仍无法续期才判定失去租约。
+	tolerance := w.opts.JobLockTTL
+	if w.opts.StaleActiveAfter > 0 && w.opts.StaleActiveAfter < tolerance {
+		tolerance = w.opts.StaleActiveAfter
+	}
+	tolerance = tolerance * 7 / 10
+	lastRenewed := time.Now()
 	for {
 		select {
 		case <-stop:
@@ -725,7 +798,10 @@ func (w *CreativeRunWorker) runJobHeartbeat(ctx context.Context, runID, leaseTok
 					zap.String("run_id", runID),
 					zap.Error(err),
 				)
-				// 无法确认租约归属时按失去租约处理，避免 Redis 分区期间旧 worker 继续写结果。
+				if time.Since(lastRenewed) < tolerance {
+					continue
+				}
+				// 长时间无法确认租约归属时按失去租约处理，避免 Redis 分区期间旧 worker 继续写结果。
 				markLost()
 				return
 			} else if err == nil && !owned {
@@ -742,6 +818,9 @@ func (w *CreativeRunWorker) runJobHeartbeat(ctx context.Context, runID, leaseTok
 						zap.String("run_id", runID),
 						zap.Error(err),
 					)
+					if time.Since(lastRenewed) < tolerance {
+						continue
+					}
 					markLost()
 					return
 				} else if err == nil && !owned {
@@ -752,6 +831,7 @@ func (w *CreativeRunWorker) runJobHeartbeat(ctx context.Context, runID, leaseTok
 					return
 				}
 			}
+			lastRenewed = time.Now()
 		}
 	}
 }
@@ -801,7 +881,7 @@ func (w *CreativeRunWorker) RecoverStaleActiveOnce(ctx context.Context) (int, er
 	return w.queue.RecoverStaleActive(ctx, w.opts.StaleActiveAfter, w.opts.RecoverLimit)
 }
 
-// RunStaleActiveRecovery 是 stale active 恢复主循环。
+// RunStaleActiveRecovery 是 stale active 恢复主循环，同时从数据库兜底恢复脱离队列的任务。
 func (w *CreativeRunWorker) RunStaleActiveRecovery(ctx context.Context) {
 	if w == nil {
 		return
@@ -811,6 +891,45 @@ func (w *CreativeRunWorker) RunStaleActiveRecovery(ctx context.Context) {
 			return
 		}
 		_, _ = w.RecoverStaleActiveOnce(ctx)
+		if _, err := w.RecoverOrphanedRunsOnce(ctx); err != nil && ctx.Err() == nil {
+			logger.L().Warn("creative.worker_orphan_recovery_failed", zap.Error(err))
+		}
 		sleepOrDone(ctx, w.opts.RecoveryInterval)
 	}
+}
+
+// CreativeRunQueueRecoveryLister 由仓储实现，列出长时间未推进的非终态任务 ID。
+type CreativeRunQueueRecoveryLister interface {
+	ListCreativeRunIDsForQueueRecovery(ctx context.Context, staleBefore time.Time, limit int) ([]string, error)
+}
+
+// RecoverOrphanedRunsOnce 以数据库为准把 Redis 中已丢失的非终态任务重新入队；
+// 已在队列中的任务由去重键跳过，重复投递也只会被任务锁和状态机幂等处理。
+func (w *CreativeRunWorker) RecoverOrphanedRunsOnce(ctx context.Context) (int, error) {
+	if w == nil || w.queue == nil {
+		return 0, nil
+	}
+	lister, ok := w.repo.(CreativeRunQueueRecoveryLister)
+	if !ok {
+		return 0, nil
+	}
+	runIDs, err := lister.ListCreativeRunIDsForQueueRecovery(ctx, time.Now().Add(-w.opts.OrphanRecoveryAfter), w.opts.RecoverLimit)
+	if err != nil {
+		return 0, err
+	}
+	recovered := 0
+	for _, runID := range runIDs {
+		err := w.queue.Enqueue(ctx, runID)
+		if errors.Is(err, ErrCreativeAlreadyQueued) {
+			continue
+		}
+		if err != nil {
+			return recovered, err
+		}
+		recovered++
+	}
+	if recovered > 0 {
+		logger.L().Warn("creative.worker_orphan_runs_requeued", zap.Int("count", recovered))
+	}
+	return recovered, nil
 }

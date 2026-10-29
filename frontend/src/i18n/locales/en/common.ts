@@ -106,6 +106,7 @@ export default {
   },
 // Navigation
   nav: {
+    videoProtocolProfiles: 'Protocol Templates',
     tickets: 'My Tickets',
     ticketManagement: 'Tickets',
     dashboard: 'Dashboard',

@@ -47,6 +47,16 @@ func (h *VideoHandler) handle(c *gin.Context, legacy gin.HandlerFunc) {
 		legacy(c)
 		return
 	}
+	// 未分组或复合 Key 不属于独立视频平台：旧 Seedance 创建交回原链路；查询仍先查本站任务再回落旧归属。
+	if legacy != nil && route.Protocol != "openai_videos" && key.Group == nil && route.Create {
+		legacy(c)
+		return
+	}
+	// 独立视频平台只保留统一入口 /v1/videos；旧统一与各家原生入口已下线，提示客户端迁移。
+	if route.Protocol != "openai_videos" && (key.Group != nil && key.Group.Platform == service.PlatformVideo || key.Group == nil && legacy == nil) {
+		writeVideoError(c, infraerrors.New(http.StatusGone, "VIDEO_ENDPOINT_RETIRED", "This video endpoint has been retired; use POST /v1/videos, GET /v1/videos/{task_id} and GET /v1/videos/{task_id}/content"))
+		return
+	}
 	if h == nil || h.lifecycle == nil {
 		if legacy != nil && (route.Protocol != "openai_videos" || key.Group == nil || key.Group.Platform != service.PlatformVideo) {
 			legacy(c)
@@ -93,7 +103,13 @@ func (h *VideoHandler) handle(c *gin.Context, legacy gin.HandlerFunc) {
 		if release != nil {
 			defer release()
 		}
-		result, err = h.lifecycle.Submit(c.Request.Context(), key, service.VideoTaskSubmitRequest{Body: body, ContentType: mediaType, InboundProtocol: route.Protocol, ModelPath: route.Model, NativePath: route.PathTemplate, Native: route.Native, IdempotencyKey: c.GetHeader("Idempotency-Key")})
+		// 统一入口先严格解析规范请求；未知字段、别名冲突在选号与预扣前拒绝。
+		canonical, parseErr := service.ParseVideoCanonicalRequest(body)
+		if parseErr != nil {
+			writeVideoError(c, parseErr)
+			return
+		}
+		result, err = h.lifecycle.Submit(c.Request.Context(), key, service.VideoTaskSubmitRequest{Body: body, ContentType: mediaType, InboundProtocol: route.Protocol, Canonical: canonical, IdempotencyKey: c.GetHeader("Idempotency-Key")})
 	} else {
 		id := route.TaskID
 		if route.Protocol == "kling" {

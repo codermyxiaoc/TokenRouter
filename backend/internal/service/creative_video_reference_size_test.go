@@ -115,7 +115,9 @@ func TestCreativeVideoReferenceSizePreservesAssetAndBillingBoundary(t *testing.T
 			}
 			require.NoError(t, err)
 			require.NotEmpty(t, id)
-			require.Equal(t, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(original), gjson.GetBytes(transport.request.Body, "images.0").String())
+			// 画布统一请求把参考图写成带角色的素材对象，原图字节不得被改写。
+			require.Equal(t, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(original), gjson.GetBytes(transport.request.Body, "images.0.url").String())
+			require.Equal(t, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(original), transport.request.Canonical.Images[0].URL)
 			require.Equal(t, 1, upstream.submitted)
 			require.Equal(t, 1, billing.reserves)
 			// 已有任务不因素材后来变化、目录移除或新限制而重新生成或触碰账务。

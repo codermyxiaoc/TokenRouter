@@ -27,15 +27,15 @@ function stream(events: object[]) {
   }
 }
 
-// 两个账号测试入口共用同一视频契约，禁止在任一入口补开未配置的端点。
+// 两个账号测试入口共用同一视频契约：协议来自模型绑定，测试不再选择端点。
 describe.each([
   ['admin', AdminAccountTestModal], ['legacy', LegacyAccountTestModal]
 ] as const)('%s video account tests', (_, component) => {
   beforeEach(() => {
     getAvailableModels.mockReset()
     getAvailableModels.mockResolvedValue([
-      { id: 'seed-alias', display_name: 'Seed alias', video_endpoints: ['compat', 'seedance'] },
-      { id: 'minimax-model', display_name: 'MiniMax model', video_endpoints: ['minimax'] }
+      { id: 'seed-alias', display_name: 'Seed alias', video_protocol: 'compat.legacy_v1' },
+      { id: 'minimax-model', display_name: 'MiniMax model', video_protocol: 'minimax.legacy_v1' }
     ])
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => stream([{ type: 'test_complete', success: true }])))
   })
@@ -48,7 +48,7 @@ describe.each([
     const wrapper = mount(component, {
       props: { show: false, account: {
         id: 1, platform: 'video', type: 'apikey', name: 'test', status: 'active',
-        credentials: { video_endpoints: [...VIDEO_ENDPOINTS], ...(profile ? { video_openai_profile: profile } : {}) }
+        credentials: { video_model_protocols: { '*': { protocol: 'compat.legacy_v1' } }, ...(profile ? { video_openai_profile: profile } : {}) }
       } as Account },
       global: { stubs: {
         BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
@@ -64,7 +64,7 @@ describe.each([
 
   // 两个测试入口仅提交规范化前的测试参数，签名参考图与最终供应商协议由服务端统一处理。
   it('tests Yezonghui with separate resolution, optional ratio and uploaded reference without OpenAI pixel hints', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'relay-model', display_name: 'Relay', video_endpoints: ['openai_videos'], video_protocol_adapters: { openai_videos: 'yezonghui_v1' } }])
+    getAvailableModels.mockResolvedValue([{ id: 'relay-model', display_name: 'Relay', video_protocol: 'openai_videos.yezonghui_v1' }])
     const wrapper = await open('metaso_h3')
     const vm = wrapper.vm as any
     expect(vm.videoProtocolAdapter).toBe('yezonghui_v1')
@@ -86,7 +86,7 @@ describe.each([
     await vm.startTest()
     expect(fetch).toHaveBeenCalledTimes(1)
     const payload = JSON.parse((fetch as any).mock.calls[0][1].body)
-    expect(payload).toMatchObject({ model_id: 'relay-model', test_type: 'video', video_endpoint: 'openai_videos', duration: 10, resolution: '1080p', image_data_url: 'data:image/png;base64,aGVsbG8=' })
+    expect(payload).toMatchObject({ model_id: 'relay-model', test_type: 'video', duration: 10, resolution: '1080p', image_data_url: 'data:image/png;base64,aGVsbG8=' })
     expect(payload).not.toHaveProperty('ratio')
     expect(payload).not.toHaveProperty('video_protocol_adapter')
     expect(payload).not.toHaveProperty('size')
@@ -209,21 +209,23 @@ describe.each([
     wrapper.unmount()
   })
 
-  // 可美名称不能被 compat 的旧透传文案覆盖；相同方案下切换端点也要更新未编辑的默认值。
+  // 可美名称不能被 compat 的旧透传文案覆盖；不同模型绑定不同端点时也要更新未编辑的默认值。
   it('shows Kemei for compat and applies endpoint-specific test defaults without replacing handwritten values', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'shared', display_name: 'Shared', video_endpoints: ['compat', 'seedance', 'minimax', 'wan', 'kling'], video_protocol_adapters: { compat: 'kemei_v1', seedance: 'kemei_v1', minimax: 'kemei_v1', wan: 'kemei_v1', kling: 'kemei_v1' } }])
+    getAvailableModels.mockResolvedValue(['compat', 'seedance', 'minimax', 'wan', 'kling'].map(endpoint => (
+      { id: `kemei-${endpoint}`, display_name: endpoint, video_protocol: `${endpoint}.kemei_v1` })))
     const wrapper = await open()
     const vm = wrapper.vm as any
-    expect(wrapper.get('[data-testid="account-test-video-adapter"]').text()).toContain('admin.accounts.video.adapters.kemei_v1')
+    expect(wrapper.get('[data-testid="account-test-video-protocol"]').text()).toContain('admin.accounts.video.adapters.kemei_v1')
     expect(vm.videoDuration).toBe(5)
     for (const [endpoint, resolution] of [['seedance', '720p'], ['minimax', '768P'], ['wan', '720P'], ['kling', '720p']]) {
-      vm.videoEndpoint = endpoint
+      vm.selectedModelId = `kemei-${endpoint}`
       await flushPromises()
+      expect(vm.videoEndpoint).toBe(endpoint)
       expect(vm.videoResolution).toBe(resolution)
     }
     vm.videoResolution = '1080p'
     vm.videoDuration = 10
-    vm.videoEndpoint = 'minimax'
+    vm.selectedModelId = 'kemei-minimax'
     await flushPromises()
     expect(vm.videoResolution).toBe('1080p')
     expect(vm.videoDuration).toBe(10)
@@ -232,7 +234,7 @@ describe.each([
 
   // 两个入口的 Seedance 官方提示不能沿用 768p，也不能把占位文字变成请求默认值。
   it('uses Seedance official resolution guidance while leaving the request default to the upstream', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'seed-official', display_name: 'Seed official', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: 'seedance_v1' } }])
+    getAvailableModels.mockResolvedValue([{ id: 'seed-official', display_name: 'Seed official', video_protocol: 'seedance.seedance_v1' }])
     const wrapper = await open()
     const vm = wrapper.vm as any
     expect(vm.videoResolution).toBe('')
@@ -241,7 +243,7 @@ describe.each([
     expect(vm.canStartTest).toBe(true)
     await vm.startTest()
     expect(JSON.parse(vi.mocked(fetch).mock.calls.at(-1)![1]!.body as string)).toMatchObject({
-      model_id: 'seed-official', video_endpoint: 'seedance', duration: 5,
+      model_id: 'seed-official', duration: 5,
     })
     expect(JSON.parse(vi.mocked(fetch).mock.calls.at(-1)![1]!.body as string)).not.toHaveProperty('resolution')
     expect(JSON.parse(vi.mocked(fetch).mock.calls.at(-1)![1]!.body as string)).not.toHaveProperty('ratio')
@@ -254,7 +256,7 @@ describe.each([
     ['doubao-seedance-2-5-261014', true], ['public-model-alias', true],
     ['doubao-seedance-1-0-pro', true], ['doubao-seedance-2-0-mini', false],
   ] as const)('omits an unedited official Seedance ratio for %s with image=%s', async (model, image) => {
-    getAvailableModels.mockResolvedValue([{ id: model, display_name: model, video_endpoints: ['seedance'], video_protocol_adapters: { seedance: 'seedance_v1' } }])
+    getAvailableModels.mockResolvedValue([{ id: model, display_name: model, video_protocol: 'seedance.seedance_v1' }])
     const wrapper = await open()
     const vm = wrapper.vm as any
     expect(vm.videoRatio).toBe('')
@@ -269,7 +271,7 @@ describe.each([
     expect(vm.canStartTest).toBe(true)
     await vm.startTest()
     const request = JSON.parse(vi.mocked(fetch).mock.calls.at(-1)![1]!.body as string)
-    expect(request).toMatchObject({ model_id: model, video_endpoint: 'seedance', duration: 5 })
+    expect(request).toMatchObject({ model_id: model, duration: 5 })
     expect(request).not.toHaveProperty('ratio')
     expect(request).not.toHaveProperty('resolution')
     if (image) expect(request.image_data_url).toBe(referenceImage)
@@ -281,8 +283,8 @@ describe.each([
   // 旧协议和可美仍使用原默认比例；只有切到官方方案时清空未编辑的默认值。
   it.each(['legacy_v1', 'kemei_v1'] as const)('isolates Seedance official ratio defaults from %s', async adapter => {
     getAvailableModels.mockResolvedValue([
-      { id: 'seed-existing', display_name: 'Existing', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: adapter } },
-      { id: 'seed-official', display_name: 'Official', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: 'seedance_v1' } },
+      { id: 'seed-existing', display_name: 'Existing', video_protocol: `seedance.${adapter}` },
+      { id: 'seed-official', display_name: 'Official', video_protocol: 'seedance.seedance_v1' },
     ])
     const wrapper = await open()
     const vm = wrapper.vm as any
@@ -307,8 +309,8 @@ describe.each([
   // 手工输入值（包括原默认值和清空）不能被方案切换覆盖；最终模型规则由后端校验。
   it.each(['16:9', ' adaptive ', ''])('preserves explicit Seedance ratio %j across protocol changes', async ratio => {
     getAvailableModels.mockResolvedValue([
-      { id: 'seed-existing', display_name: 'Existing', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: 'legacy_v1' } },
-      { id: 'mapped-alias', display_name: 'Official alias', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: 'seedance_v1' } },
+      { id: 'seed-existing', display_name: 'Existing', video_protocol: 'seedance.legacy_v1' },
+      { id: 'mapped-alias', display_name: 'Official alias', video_protocol: 'seedance.seedance_v1' },
     ])
     const wrapper = await open()
     const vm = wrapper.vm as any
@@ -328,7 +330,7 @@ describe.each([
   })
 
   it('shows a mapped-model ratio rejection without retrying or silently changing the input', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'mapped-alias', display_name: 'Alias', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: 'seedance_v1' } }])
+    getAvailableModels.mockResolvedValue([{ id: 'mapped-alias', display_name: 'Alias', video_protocol: 'seedance.seedance_v1' }])
     vi.mocked(fetch).mockResolvedValue(stream([{ type: 'error', error: 'Seedance 2.5 首帧/尾帧模式仅支持 adaptive 比例' }]) as unknown as Response)
     const wrapper = await open()
     const vm = wrapper.vm as any
@@ -346,7 +348,7 @@ describe.each([
 
   // 切换账号必须重置编辑标记，不能把上一账号的手填比例带入新账号的官方测试。
   it('resets a handwritten ratio when switching to another official Seedance account', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'seed-official', display_name: 'Official', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: 'seedance_v1' } }])
+    getAvailableModels.mockResolvedValue([{ id: 'seed-official', display_name: 'Official', video_protocol: 'seedance.seedance_v1' }])
     const wrapper = await open()
     const vm = wrapper.vm as any
     await wrapper.get('[data-testid="account-test-video-ratio"]').setValue('16:9')
@@ -361,8 +363,8 @@ describe.each([
 
   it('preserves an explicitly confirmed empty official ratio when selecting a legacy model', async () => {
     getAvailableModels.mockResolvedValue([
-      { id: 'seed-official', display_name: 'Official', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: 'seedance_v1' } },
-      { id: 'seed-existing', display_name: 'Existing', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: 'legacy_v1' } },
+      { id: 'seed-official', display_name: 'Official', video_protocol: 'seedance.seedance_v1' },
+      { id: 'seed-existing', display_name: 'Existing', video_protocol: 'seedance.legacy_v1' },
     ])
     const wrapper = await open()
     const vm = wrapper.vm as any
@@ -379,7 +381,7 @@ describe.each([
 
   // 分辨率可大小写混写；浏览器不能根据公开别名猜测最终模型的档位限制。
   it.each(['480p', '720P', '1080p', ' 4K '])('accepts official Seedance resolution %s without rewriting the input', async resolution => {
-    getAvailableModels.mockResolvedValue([{ id: 'public-model-alias', display_name: 'Alias', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: 'seedance_v1' } }])
+    getAvailableModels.mockResolvedValue([{ id: 'public-model-alias', display_name: 'Alias', video_protocol: 'seedance.seedance_v1' }])
     const wrapper = await open()
     const vm = wrapper.vm as any
     await wrapper.get('[data-testid="account-test-video-resolution"]').setValue(resolution)
@@ -392,7 +394,7 @@ describe.each([
 
   // 非官方档位在付费创建前拦截，保留管理员输入供修正，不自动替换为另一种分辨率。
   it.each(['768p', '2K', '1280x720'])('rejects official Seedance resolution %s before sending a request', async resolution => {
-    getAvailableModels.mockResolvedValue([{ id: 'seed-official', display_name: 'Seed official', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: 'seedance_v1' } }])
+    getAvailableModels.mockResolvedValue([{ id: 'seed-official', display_name: 'Seed official', video_protocol: 'seedance.seedance_v1' }])
     const wrapper = await open()
     const vm = wrapper.vm as any
     await wrapper.get('[data-testid="account-test-video-resolution"]').setValue(resolution)
@@ -407,8 +409,8 @@ describe.each([
   // 只约束官方方案，切换模型时不能覆盖手填值，也不能把官方限制套用到已有协议或可美。
   it.each(['legacy_v1', 'kemei_v1'] as const)('preserves handwritten resolution and existing %s behavior across Seedance model changes', async adapter => {
     getAvailableModels.mockResolvedValue([
-      { id: 'seed-existing', display_name: 'Existing', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: adapter } },
-      { id: 'seed-official', display_name: 'Official', video_endpoints: ['seedance'], video_protocol_adapters: { seedance: 'seedance_v1' } },
+      { id: 'seed-existing', display_name: 'Existing', video_protocol: `seedance.${adapter}` },
+      { id: 'seed-official', display_name: 'Official', video_protocol: 'seedance.seedance_v1' },
     ])
     const wrapper = await open()
     const vm = wrapper.vm as any
@@ -425,18 +427,18 @@ describe.each([
     expect(vm.canStartTest).toBe(true)
     await vm.startTest()
     expect(JSON.parse(vi.mocked(fetch).mock.calls.at(-1)![1]!.body as string)).toMatchObject({
-      model_id: 'seed-existing', video_endpoint: 'seedance', resolution: '768p',
+      model_id: 'seed-existing', resolution: '768p',
     })
     wrapper.unmount()
   })
 
   // 参数格式切换不能改变兼容入口路径，也不能在浏览器伪造服务端生效方案。
   it('uses OpenAI test fields on compat while preserving the selected compatibility endpoint', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'shared', display_name: 'Shared', video_endpoints: ['compat'], video_protocol_adapters: { compat: 'openai_v1' } }])
+    getAvailableModels.mockResolvedValue([{ id: 'shared', display_name: 'Shared', video_protocol: 'compat.openai_v1' }])
     const wrapper = await open()
     const vm = wrapper.vm as any
     expect(vm.videoProtocolAdapter).toBe('openai_v1')
-    expect(wrapper.get('[data-testid="account-test-video-adapter"]').text()).toContain('admin.accounts.video.adapters.compat_openai')
+    expect(wrapper.get('[data-testid="account-test-video-protocol"]').text()).toContain('admin.accounts.video.adapters.compat_openai')
     expect(vm.videoDuration).toBe(4)
     expect(vm.videoResolution).toBe('')
     expect(vm.videoRatio).toBe('')
@@ -444,7 +446,7 @@ describe.each([
     await wrapper.get('[data-testid="account-test-video-resolution"]').setValue('1280x720')
     await vm.startTest()
     const body = JSON.parse((fetch as any).mock.calls.at(-1)[1].body)
-    expect(body).toMatchObject({ model_id: 'shared', video_endpoint: 'compat', duration: 4, resolution: '1280x720' })
+    expect(body).toMatchObject({ model_id: 'shared', duration: 4, resolution: '1280x720' })
     expect(body).not.toHaveProperty('ratio')
     expect(body).not.toHaveProperty('video_protocol_adapter')
     wrapper.unmount()
@@ -454,14 +456,14 @@ describe.each([
     const wrapper = await open()
     const vm = wrapper.vm as any
     expect(vm.videoEndpoint).toBe('compat')
-    expect(wrapper.get('[data-testid="account-test-video-adapter"]').text()).toContain('admin.accounts.video.adapters.legacy_v1')
+    expect(wrapper.get('[data-testid="account-test-video-protocol"]').text()).toContain('admin.accounts.video.adapters.legacy_v1')
     expect(vm.videoDuration).toBe(5)
     expect(vm.videoRatio).toBe('16:9')
     wrapper.unmount()
   })
 
   it('does not inject Kemei resolution or ratio into an official Vidu account test', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'vidu-official', display_name: 'Vidu official', video_endpoints: ['vidu'], video_protocol_adapters: { vidu: 'vidu_v2' }, video_vidu_operation: '/ent/v2/text2video' }])
+    getAvailableModels.mockResolvedValue([{ id: 'vidu-official', display_name: 'Vidu official', video_protocol: 'vidu.vidu_v2' }])
     const wrapper = await open()
     const vm = wrapper.vm as any
     expect(vm.videoProtocolAdapter).toBe('vidu_v2')
@@ -469,11 +471,15 @@ describe.each([
     expect(vm.videoResolution).toBe('')
     expect(vm.videoRatio).toBe('')
     expect(wrapper.text()).toContain('admin.accounts.video.testViduResolutionHint')
+    expect(wrapper.text()).toContain('admin.accounts.video.testViduImageHint')
     expect(wrapper.get('[data-testid="account-test-video-resolution"]').attributes('placeholder')).toBe('admin.accounts.video.testViduResolutionPlaceholder')
     expect(vm.canStartTest).toBe(true)
     await vm.startTest()
     const body = JSON.parse((fetch as any).mock.calls.at(-1)[1].body)
-    expect(body).toMatchObject({ video_endpoint: 'vidu', video_operation: '/ent/v2/text2video', duration: 5 })
+    expect(body).toMatchObject({ test_type: 'video', duration: 5 })
+    // 操作路径由账号绑定决定，测试不再提交端点或操作。
+    expect(body).not.toHaveProperty('video_endpoint')
+    expect(body).not.toHaveProperty('video_operation')
     expect(body).not.toHaveProperty('resolution')
     expect(body).not.toHaveProperty('ratio')
     expect(body).not.toHaveProperty('video_protocol_adapter')
@@ -481,7 +487,7 @@ describe.each([
   })
 
   it('omits only the unedited MiniMax Kemei image ratio and keeps text-to-video or explicit ratios', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_endpoints: ['minimax'], video_protocol_adapters: { minimax: 'kemei_v1' } }])
+    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_protocol: 'minimax.kemei_v1' }])
     const wrapper = await open()
     const vm = wrapper.vm as any
     await vm.startTest()
@@ -497,75 +503,59 @@ describe.each([
     wrapper.unmount()
   })
 
-  // Vidu 操作必须明确，测试的图片数量限制在 POST 前校验，不能消耗上游额度后才发现缺图。
-  it('requires an explicit Vidu operation and validates reference images before testing', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'vidu-model', display_name: 'Vidu', video_endpoints: ['vidu'], video_protocol_adapters: { vidu: 'kemei_v1' } }])
+  // Vidu 操作随模型绑定，测试界面不再提供端点或操作选择，参考图仍按需上传。
+  it('shows the bound Vidu protocol read-only without endpoint or operation selectors', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'vidu-model', display_name: 'Vidu', video_protocol: 'vidu.kemei_v1' }])
     const wrapper = await open()
     const vm = wrapper.vm as any
     expect(vm.videoDuration).toBe(5)
     expect(vm.videoResolution).toBe('540p')
     expect(vm.videoRatio).toBe('16:9')
-    expect(vm.canStartTest).toBe(false)
-    expect(wrapper.text()).toContain('admin.accounts.video.testViduOperationRequired')
-    vm.videoOperation = '/ent/v2/img2video'
-    await flushPromises()
-    expect(vm.canStartTest).toBe(false)
-    expect(wrapper.text()).toContain('admin.accounts.video.testViduImageRequired')
-    await vm.startTest()
-    expect(fetch).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="account-test-video-endpoint"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="account-test-video-operation"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="account-test-video-protocol"]').text()).toBe('admin.accounts.video.endpoints.vidu · admin.accounts.video.adapters.kemei_v1')
+    expect(wrapper.get('[data-testid="account-test-video-protocol-raw"]').text()).toBe('vidu.kemei_v1')
+    expect(vm.canStartTest).toBe(true)
     vm.uploadImageDataURL = 'data:image/png;base64,AAAA'
-    await flushPromises()
-    expect(vm.canStartTest).toBe(true)
     await vm.startTest()
-    expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body)).toMatchObject({ video_endpoint: 'vidu', video_operation: '/ent/v2/img2video', duration: 5, resolution: '540p', image_data_url: 'data:image/png;base64,AAAA' })
-    vm.videoOperation = '/ent/v2/text2video'
-    await flushPromises()
-    expect(vm.canStartTest).toBe(false)
-    vm.clearMediaUploads()
-    await flushPromises()
-    expect(vm.canStartTest).toBe(true)
-    await vm.startTest()
-    expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body)).not.toHaveProperty('image_data_url')
-    vm.videoOperation = '/ent/v2/start-end2video'
-    await flushPromises()
-    expect(vm.canStartTest).toBe(false)
-    expect(wrapper.text()).toContain('admin.accounts.video.testViduTwoImagesRequired')
-    vm.videoOperation = 'https://other.test/ent/v2/img2video'
-    await flushPromises()
-    expect(vm.canStartTest).toBe(false)
-    expect(fetch).toHaveBeenCalledTimes(2)
+    const body = JSON.parse((fetch as any).mock.calls.at(-1)[1].body)
+    expect(body).toMatchObject({ duration: 5, resolution: '540p', image_data_url: 'data:image/png;base64,AAAA' })
+    expect(body).not.toHaveProperty('video_operation')
     wrapper.unmount()
   })
 
-  it('restores the model-specific Vidu operation and clears it when switching to an unconfigured model', async () => {
-    getAvailableModels.mockResolvedValue([
-      { id: 'configured', display_name: 'Configured', video_endpoints: ['vidu'], video_protocol_adapters: { vidu: 'kemei_v1' }, video_vidu_operation: '/ent/v2/reference2video' },
-      { id: 'unconfigured', display_name: 'Unconfigured', video_endpoints: ['vidu'], video_protocol_adapters: { vidu: 'kemei_v1' } },
-    ])
+  // 模板协议使用通用参数，不提交端点，也不套用内置供应商的限制。
+  it('tests a template protocol with generic parameters', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'vendor-model', display_name: 'Vendor', video_protocol: 'profile:vendor_x' }])
     const wrapper = await open()
     const vm = wrapper.vm as any
-    expect(vm.videoOperation).toBe('/ent/v2/reference2video')
-    vm.selectedModelId = 'unconfigured'
+    expect(wrapper.get('[data-testid="account-test-video-protocol"]').text()).toBe('admin.accounts.video.profileOption')
+    expect(wrapper.text()).toContain('admin.accounts.video.testProfileResolutionHint')
+    expect(vm.videoRatio).toBe('')
+    vm.videoResolution = '768p'
     await flushPromises()
-    expect(vm.videoOperation).toBe('')
-    expect(vm.canStartTest).toBe(false)
+    expect(vm.canStartTest).toBe(true)
+    await vm.startTest()
+    const body = JSON.parse((fetch as any).mock.calls.at(-1)[1].body)
+    expect(body).toEqual({ model_id: 'vendor-model', prompt: expect.any(String), test_type: 'video', duration: 5, resolution: '768p' })
     wrapper.unmount()
   })
 
-  // 服务器返回的有效适配器包含最终模型覆盖，应优先于账号旧 H3 字段。
-  it('uses mapped model adapter metadata and keeps handwritten inputs when switching endpoints', async () => {
+  // 服务器返回的绑定协议包含最终模型覆盖，切换模型时保留手填输入。
+  it('uses mapped model protocol metadata and keeps handwritten inputs when switching models', async () => {
     getAvailableModels.mockResolvedValue([
-      { id: 'public-alias', display_name: 'Alias', video_endpoints: ['openai_videos', 'minimax'], video_protocol_adapters: { openai_videos: 'openai_v1', minimax: 'minimax_v2' } },
-      { id: 'h3-alias', display_name: 'H3', video_endpoints: ['openai_videos'], video_protocol_adapters: { openai_videos: 'metaso_h3_v1' } },
+      { id: 'public-alias', display_name: 'Alias', video_protocol: 'openai_videos.openai_v1' },
+      { id: 'minimax-alias', display_name: 'MiniMax', video_protocol: 'minimax.minimax_v2' },
+      { id: 'h3-alias', display_name: 'H3', video_protocol: 'openai_videos.metaso_h3_v1' },
     ])
-    const wrapper = await open('metaso_h3')
+    const wrapper = await open()
     const vm = wrapper.vm as any
     expect(vm.videoProtocolAdapter).toBe('openai_v1')
     expect(vm.videoDuration).toBe(4)
     expect(vm.videoRatio).toBe('')
     expect(wrapper.get('[data-testid="account-test-video-resolution"]').attributes('placeholder')).toBe('1280x720')
     expect(wrapper.text()).toContain('admin.accounts.video.testOpenAIResolutionHint')
-    vm.videoEndpoint = 'minimax'
+    vm.selectedModelId = 'minimax-alias'
     await flushPromises()
     expect(vm.videoDuration).toBe(5)
     expect(vm.videoResolution).toBe('768P')
@@ -581,7 +571,7 @@ describe.each([
     expect(vm.canStartTest).toBe(true)
     await vm.startTest()
     expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body)).toMatchObject({
-      model_id: 'h3-alias', video_endpoint: 'openai_videos', duration: 8, resolution: '2K', ratio: '9:16',
+      model_id: 'h3-alias', duration: 8, resolution: '2K', ratio: '9:16',
     })
     // 客户端不能用测试载荷临时改写账号中的协议方案，最终选择由服务端决定。
     expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body)).not.toHaveProperty('video_protocol_adapter')
@@ -595,7 +585,7 @@ describe.each([
   })
 
   it('does not apply H3 validation when the model explicitly overrides its endpoint with legacy protocol', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'h3-alias', display_name: 'H3', video_endpoints: ['openai_videos'], video_protocol_adapters: { openai_videos: 'legacy_v1' } }])
+    getAvailableModels.mockResolvedValue([{ id: 'h3-alias', display_name: 'H3', video_protocol: 'openai_videos.legacy_v1' }])
     const wrapper = await open('metaso_h3')
     const vm = wrapper.vm as any
     expect(vm.videoProtocolAdapter).toBe('legacy_v1')
@@ -606,26 +596,28 @@ describe.each([
   })
 
   it('preserves an explicitly entered default duration instead of resetting it on an adapter switch', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'video', display_name: 'Video', video_endpoints: ['minimax', 'openai_videos'], video_protocol_adapters: { minimax: 'minimax_v2', openai_videos: 'openai_v1' } }])
+    getAvailableModels.mockResolvedValue([
+      { id: 'minimax', display_name: 'MiniMax', video_protocol: 'minimax.minimax_v2' },
+      { id: 'openai', display_name: 'OpenAI', video_protocol: 'openai_videos.openai_v1' },
+    ])
     const wrapper = await open()
     const vm = wrapper.vm as any
-    vm.videoEndpoint = 'minimax'
-    await flushPromises()
     expect(vm.videoDuration).toBe(5)
     await wrapper.get('[data-testid="account-test-video-duration"]').setValue('5')
-    vm.videoEndpoint = 'openai_videos'
+    vm.selectedModelId = 'openai'
     await flushPromises()
     expect(vm.videoDuration).toBe(5)
     wrapper.unmount()
   })
 
-  // 两个入口都在发送前提示 H3 限制，但不把这些限制施加给透传或其他原生端点。
+  // 两个入口都在发送前提示 H3 限制，但不把这些限制施加给其他协议。
   it('validates explicit H3 geometry and preserves the five-second test default', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_endpoints: ['openai_videos', 'compat'] }])
-    const wrapper = await open('metaso_h3')
+    getAvailableModels.mockResolvedValue([
+      { id: 'h3', display_name: 'H3', video_protocol: 'openai_videos.metaso_h3_v1' },
+      { id: 'compat', display_name: 'Compat', video_protocol: 'compat.legacy_v1' },
+    ])
+    const wrapper = await open()
     const vm = wrapper.vm as any
-    vm.videoEndpoint = 'openai_videos'
-    await flushPromises()
     expect(vm.canStartTest).toBe(false)
     expect(wrapper.text()).toContain('admin.accounts.video.testH3ResolutionInvalid')
     expect(wrapper.text()).toContain('admin.accounts.video.testH3ImageHint')
@@ -642,21 +634,21 @@ describe.each([
       await flushPromises()
       expect(vm.canStartTest).toBe(true)
       await vm.startTest()
-      expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body)).toMatchObject({ duration: 5, resolution, ratio, video_endpoint: 'openai_videos' })
+      expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body)).toMatchObject({ model_id: 'h3', duration: 5, resolution, ratio })
     }
-    vm.videoEndpoint = 'compat'
+    vm.selectedModelId = 'compat'
     vm.videoResolution = '540p'
     vm.videoRatio = '1:1'
     await flushPromises()
     expect(vm.canStartTest).toBe(true)
     expect(wrapper.text()).not.toContain('admin.accounts.video.testH3ImageHint')
     await vm.startTest()
-    expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body)).toMatchObject({ resolution: '540p', ratio: '1:1', video_endpoint: 'compat' })
+    expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body)).toMatchObject({ model_id: 'compat', resolution: '540p', ratio: '1:1' })
     wrapper.unmount()
   })
 
   it('does not infer H3 restrictions from the model name for passthrough accounts', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_endpoints: ['openai_videos'] }])
+    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_protocol: 'openai_videos.legacy_v1' }])
     const wrapper = await open('passthrough')
     const vm = wrapper.vm as any
     vm.videoResolution = '540p'
@@ -677,7 +669,7 @@ describe.each([
     { profile: 'metaso_h3', image: false },
     { profile: 'metaso_h3', image: true },
   ])('submits optional reference image=$image with profile=$profile', async ({ profile, image }) => {
-    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_endpoints: ['openai_videos'] }])
+    getAvailableModels.mockResolvedValue([{ id: 'MiniMax-H3', display_name: 'H3', video_protocol: 'openai_videos.legacy_v1' }])
     const wrapper = await open(profile)
     const vm = wrapper.vm as any
     vm.testPrompt = 'A cat walks through a garden.'
@@ -698,7 +690,7 @@ describe.each([
     const request = JSON.parse((fetch as any).mock.calls[0][1].body)
     expect(request).toEqual({
       model_id: 'MiniMax-H3', prompt: 'A cat walks through a garden.', test_type: 'video',
-      video_endpoint: 'openai_videos', duration: 5, resolution: '768p', ratio: '16:9',
+      duration: 5, resolution: '768p', ratio: '16:9',
       ...(image ? { image_data_url: referenceImage } : {}),
     })
     expect(vm.status).toBe('success')
@@ -714,59 +706,50 @@ describe.each([
     wrapper.unmount()
   })
 
-  // 账号编辑后重开测试必须采用新配置，移除标准端点不能留下可发起的旧选项。
-  it('refreshes profile validation and endpoint visibility when the same account configuration changes', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_endpoints: ['openai_videos'] }])
-    const wrapper = await open('passthrough')
+  // 账号编辑后重开测试必须采用新的模型协议目录，不能沿用旧协议的校验。
+  it('refreshes protocol validation when the same account configuration changes', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_protocol: 'openai_videos.legacy_v1' }])
+    const wrapper = await open()
     const vm = wrapper.vm as any
     expect(vm.canStartTest).toBe(true)
+    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_protocol: 'openai_videos.metaso_h3_v1' }])
     await wrapper.setProps({ account: {
-      ...wrapper.props('account')!, credentials: { video_endpoints: ['openai_videos'], video_openai_profile: 'metaso_h3' }
+      ...wrapper.props('account')!, credentials: { video_model_protocols: { h3: { protocol: 'openai_videos.metaso_h3_v1' } } }
     } as Account })
     await flushPromises()
     expect(vm.canStartTest).toBe(false)
     expect(wrapper.text()).toContain('admin.accounts.video.testH3ResolutionInvalid')
     expect(wrapper.find('label[for="account-test-video-resolution"]').text()).toBe('admin.accounts.video.testH3Resolution')
-    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_endpoints: ['compat'] }])
+    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_protocol: 'compat.legacy_v1' }])
     await wrapper.setProps({ account: {
-      ...wrapper.props('account')!, credentials: { video_endpoints: ['compat'], video_openai_profile: 'metaso_h3' }
+      ...wrapper.props('account')!, credentials: { video_model_protocols: { h3: { protocol: 'compat.legacy_v1' } } }
     } as Account })
     await flushPromises()
     expect(vm.videoEndpoint).toBe('compat')
-    expect(vm.videoEndpointOptions.map((option: { value: string }) => option.value)).toEqual(['compat'])
     expect(vm.canStartTest).toBe(true)
     expect(wrapper.text()).not.toContain('admin.accounts.video.testH3ImageHint')
     expect(wrapper.find('label[for="account-test-video-resolution"]').text()).toBe('admin.accounts.video.testResolution')
     await vm.startTest()
-    expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body).video_endpoint).toBe('compat')
-    getAvailableModels.mockResolvedValue([{ id: 'h3', display_name: 'H3', video_endpoints: ['openai_videos'] }])
-    await wrapper.setProps({ account: {
-      ...wrapper.props('account')!, credentials: { video_endpoints: ['openai_videos'], video_openai_profile: 'passthrough' }
-    } as Account })
-    await flushPromises()
-    expect(vm.videoEndpoint).toBe('openai_videos')
-    expect(vm.canStartTest).toBe(true)
-    expect(wrapper.text()).not.toContain('admin.accounts.video.testH3ResolutionInvalid')
+    expect(JSON.parse((fetch as any).mock.calls.at(-1)[1].body)).not.toHaveProperty('video_endpoint')
     wrapper.unmount()
   })
 
-  it('uses model endpoint metadata instead of expanding account-wide capabilities', async () => {
+  it('uses per-model protocol metadata instead of account-wide endpoint selection', async () => {
     const wrapper = await open()
     const vm = wrapper.vm as any
     expect(vm.testType).toBe('video')
     expect(wrapper.find('[data-testid="account-test-type"]').exists()).toBe(false)
-    expect(vm.videoEndpointOptions.map((option: { value: string }) => option.value)).toEqual(['compat', 'seedance'])
-    vm.videoEndpoint = 'seedance'
+    expect(vm.videoEndpoint).toBe('compat')
     vm.selectedModelId = 'minimax-model'
     await flushPromises()
     expect(vm.videoEndpoint).toBe('minimax')
-    expect(vm.videoEndpointOptions.map((option: { value: string }) => option.value)).toEqual(['minimax'])
+    expect(wrapper.get('[data-testid="account-test-video-protocol-raw"]').text()).toBe('minimax.legacy_v1')
     expect(wrapper.find('[data-testid="account-test-endpoint"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it.each(VIDEO_ENDPOINTS.filter(endpoint => endpoint !== 'vidu'))('submits explicit %s with video parameters and no text transport', async endpoint => {
-    getAvailableModels.mockResolvedValue([{ id: 'model-alias', display_name: 'Video', video_endpoints: [endpoint] }])
+  it.each(VIDEO_ENDPOINTS.map(endpoint => `${endpoint}.legacy_v1`))('submits %s with video parameters and no text transport', async protocol => {
+    getAvailableModels.mockResolvedValue([{ id: 'model-alias', display_name: 'Video', video_protocol: protocol }])
     const wrapper = await open()
     const vm = wrapper.vm as any
     vm.testPrompt = 'A cat jumps.'
@@ -777,7 +760,7 @@ describe.each([
     await vm.startTest()
     expect(JSON.parse((fetch as any).mock.calls[0][1].body)).toEqual({
       model_id: 'model-alias', prompt: 'A cat jumps.', test_type: 'video',
-      video_endpoint: endpoint, duration: 8, resolution: '768p', ratio: '9:16',
+      duration: 8, resolution: '768p', ratio: '9:16',
       image_data_url: 'data:image/png;base64,AAAA'
     })
     wrapper.unmount()
@@ -816,13 +799,12 @@ describe.each([
   it.each([
     { models: [] },
     { models: [{ id: 'missing', display_name: 'Missing metadata' }] },
-    { models: [{ id: 'empty', display_name: 'No endpoints', video_endpoints: [] }] },
-    { models: [{ id: 'unknown', display_name: 'Unknown endpoint', video_endpoints: ['unknown'] }] }
-  ])('blocks missing models or usable endpoints', async ({ models }) => {
+    { models: [{ id: 'empty', display_name: 'No protocol', video_protocol: '' }] },
+    { models: [{ id: 'unknown', display_name: 'Unknown protocol', video_protocol: 'unknown.legacy_v1' }] }
+  ])('blocks missing models or usable protocols', async ({ models }) => {
     getAvailableModels.mockResolvedValue(models)
     const wrapper = await open()
     const vm = wrapper.vm as any
-    expect(vm.videoEndpointOptions).toHaveLength(0)
     expect(vm.canStartTest).toBe(false)
     expect(wrapper.find('[role="alert"]').exists()).toBe(true)
     await vm.startTest()
@@ -847,7 +829,7 @@ describe.each([
     expect(vm.status).toBe('success')
     expect(wrapper.text()).toContain('Waiting for video task')
     expect(wrapper.find('video').attributes('src')).toBe('data:video/mp4;base64,AAAA')
-    getAvailableModels.mockResolvedValueOnce([{ id: 'other', display_name: 'Other', video_endpoints: ['openai_videos'] }])
+    getAvailableModels.mockResolvedValueOnce([{ id: 'other', display_name: 'Other', video_protocol: 'openai_videos.legacy_v1' }])
     await wrapper.setProps({ account: { id: 2, platform: 'video', type: 'apikey' } as Account })
     await flushPromises()
     expect(vm.videoEndpoint).toBe('openai_videos')

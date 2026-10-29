@@ -56,7 +56,7 @@ RequestLogger
 | `/api/v1/payment/webhook/*` | 提供商验签 | EasyPay、Alipay、WeChat Pay、Stripe、Airwallex 通知 |
 | `/v1/*` 和兼容裸别名 | TokenRouter API Key | Anthropic/OpenAI 兼容消息、Responses、Chat、图片、视频、模型、用量与批任务 |
 | `/v1/images/generations/async`、`/v1/images/edits/async`、`/v1/images/tasks/:task_id` 及裸别名 | TokenRouter API Key；查询限定原用户和 Key | 显式提交异步图片、轮询结果，存储预检失败返回 503 且不生成，HTTP 202 接受后由后台执行；默认关闭，见[异步图片](../domains/media_tasks.md#async_image_lifecycle) |
-| `/v1/video/generations`、`/v1/tasks/:id`、`/v1/videos`、`/v1/videos/:id`、`/v1/videos/:id/content` 及 Kling/Wan/MiniMax/Vidu 原生视频路径 | TokenRouter API Key；Video 创建仅 Video 分组，任务按原用户/Key/端点归属查询 | 独立 Video 平台统一 URL 与原生参数保真；`/v1/videos` 与 Grok 按平台分流，Grok 原链路保留。内容 GET 只读取已完成且已结算的任务，见[独立 Video 上游](video_upstream.md#video_openai_content) |
+| `/v1/videos`、`/v1/videos/:id`、`/v1/videos/:id/content` | TokenRouter API Key；Video 创建仅 Video 分组，任务按原用户/Key 归属查询 | 独立 Video 平台唯一入口，统一请求格式由账号模型协议绑定转换；`/v1/videos` 与 Grok 按平台分流，Grok 原链路保留。Video 分组访问旧 `/v1/video/generations`、`/v1/tasks/:id` 与各家原生视频路径返回 `410 VIDEO_ENDPOINT_RETIRED`。内容 GET 只读取已完成且已结算的任务，见[独立 Video 上游](video_upstream.md#video_unified_api) |
 | `/api/v1/admin/backups/image-storage` 及 `/test` | 管理员；PUT 和 POST 测试另需 step-up | 异步图片存储 GET/PUT 配置与 POST 连通性测试，密钥脱敏/空值保留 |
 | `/v1beta/*` | TokenRouter API Key | Gemini 原生模型 URL、生成、流式生成、token 统计及显式缓存资源 |
 | `/v1beta/cachedContents`、`/v1beta/cachedContents/:id` | 固定 Gemini 分组的 TokenRouter API Key | POST 创建、GET 分页列表，单资源 GET/PATCH/DELETE；绑定原用户、Key、分组和账号，复合及智能路由 Key 不支持，见[显式上下文缓存](gemini_upstream.md#gemini_explicit_cache) |

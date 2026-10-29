@@ -185,9 +185,9 @@ func TestCreativeImagePollReconciliationStagesAndOwnership(t *testing.T) {
 				require.NotContains(t, result.ErrorMessage, "private-provider")
 				require.NotContains(t, result.ErrorMessage, "do-not-display")
 				if tt.code == "CREATIVE_IMAGE_SUBMISSION_UNCONFIRMED" {
-					require.Contains(t, result.ErrorMessage, "请联系管理员")
+					require.Contains(t, result.ErrorMessage, "自动失败并释放预扣")
 					require.Contains(t, result.ErrorMessage, runID)
-					require.Contains(t, result.ErrorMessage, "预扣尚未结算")
+					require.Contains(t, result.ErrorMessage, "不会扣费")
 				}
 				if tt.status == CreativeRunStatusSucceeded {
 					require.Equal(t, "succeeded", result.Status)

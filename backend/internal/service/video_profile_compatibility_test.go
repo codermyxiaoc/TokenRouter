@@ -125,7 +125,14 @@ func TestVideoProfileCompatibilityGenerationContract(t *testing.T) {
 					require.NoError(t, err)
 					require.Equal(t, "queued", task.Status)
 					require.Equal(t, "reserved", task.BillingStatus)
-					require.Equal(t, profile.value, task.Target.OpenAIProfile)
+					// 旧 OpenAI profile 在读取时换算为模型绑定，任务冻结第 2 版目标与显式方案，不再记录旧 profile 字段。
+					wantAdapter := VideoProtocolAdapterLegacy
+					if profile.value == VideoOpenAIProfileMetasoH3 {
+						wantAdapter = VideoProtocolAdapterMetasoH3
+					}
+					require.Equal(t, 2, task.Target.Version)
+					require.Equal(t, wantAdapter, task.Target.ProtocolAdapter)
+					require.Empty(t, task.Target.OpenAIProfile)
 					require.Equal(t, VideoEndpointOpenAIVideos, task.Target.Endpoint)
 					require.Equal(t, "provider-model", task.Target.Model)
 					require.Equal(t, "video-model", task.Quote.Model)
@@ -228,7 +235,8 @@ func TestVideoProfileCompatibilityRejectsBeforeReserve(t *testing.T) {
 	}
 }
 
-// 兼容端点不会因保存 H3 配置而转换协议，也不能借该配置开放未绑定的 /v1/videos。
+// 统一入口 /v1/videos 按模型绑定选择协议：只启用兼容端点的账号经 compat 绑定转发到 /v1/video/generations，
+// 保存的 H3 profile 只属于 openai_videos 端点，不会改写兼容协议的请求体。
 func TestVideoProfileCompatibilityLegacyEndpointIsolation(t *testing.T) {
 	for _, profile := range []string{"", VideoOpenAIProfilePassthrough, VideoOpenAIProfileMetasoH3} {
 		for _, hasImage := range []bool{false, true} {
@@ -239,11 +247,7 @@ func TestVideoProfileCompatibilityLegacyEndpointIsolation(t *testing.T) {
 				}
 				body += `}`
 				svc, key, _, upstream, billing, _ := videoProfileCompatibilityFixture(t, VideoEndpointCompat, profile, "540p", "")
-				_, err := svc.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(body), InboundProtocol: "openai_videos"})
-				require.Error(t, err)
-				require.Zero(t, billing.reserves)
-				require.Empty(t, upstream.requests)
-				response, err := svc.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(body), InboundProtocol: "unified"})
+				response, err := svc.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(body), InboundProtocol: "openai_videos"})
 				require.NoError(t, err)
 				require.Len(t, upstream.requests, 1)
 				require.Equal(t, "/prefix/v1/video/generations", upstream.requests[0].URL.Path)
@@ -251,6 +255,8 @@ func TestVideoProfileCompatibilityLegacyEndpointIsolation(t *testing.T) {
 				task, err := svc.repo.Get(context.Background(), response.LocalTaskID)
 				require.NoError(t, err)
 				require.Empty(t, task.Target.OpenAIProfile)
+				require.Equal(t, VideoEndpointCompat, task.Target.Endpoint)
+				require.Equal(t, VideoProtocolAdapterLegacy, task.Target.ProtocolAdapter)
 				require.Equal(t, "540p", task.Metadata.Resolution)
 				require.Equal(t, map[bool]int{false: 0, true: 1}[hasImage], *task.Metadata.ReferenceImageCount)
 				require.Equal(t, 1, billing.reserves)

@@ -215,20 +215,25 @@ func TestCreativeAudioExecutorUnconfirmedAndKnownReject(t *testing.T) {
 	}
 }
 
+// 语音结果无法确认时不重发，也不让用户为未拿到的成品付费：一次执行后直接失败并释放。
 func TestCreativeAudioWorkerDoesNotResubmitUnconfirmed(t *testing.T) {
 	f := newCreativeWorkerFixture()
 	seedCreativeRun(f, "audio-unknown", true)
 	f.repo.runs["audio-unknown"].Operation = CreativeOperationTTS
 	f.exec.err = creativeResultUnconfirmedError()
-	for range 3 {
-		result, err := f.worker.process(context.Background(), "audio-unknown")
+	result, err := f.worker.process(context.Background(), "audio-unknown")
+	require.NoError(t, err)
+	require.True(t, result.Terminal)
+	for range 2 {
+		result, err = f.worker.process(context.Background(), "audio-unknown")
 		require.NoError(t, err)
-		require.False(t, result.Terminal)
+		require.True(t, result.Terminal)
 	}
 	require.Equal(t, 1, f.exec.calls)
 	require.Zero(t, f.billing.captureN)
-	require.Zero(t, f.billing.releaseN)
-	require.Equal(t, CreativeProvisioningPhaseProviderInflight, f.repo.runs["audio-unknown"].ProvisioningPhase)
+	require.Equal(t, 1, f.billing.releaseN)
+	require.Equal(t, CreativeRunStatusFailed, f.repo.runs["audio-unknown"].Status)
+	require.Equal(t, CreativeResultUnavailableCode, *f.repo.runs["audio-unknown"].ErrorCode)
 }
 
 type creativeAudioFailSink struct{ calls int }
@@ -238,6 +243,7 @@ func (s *creativeAudioFailSink) PersistCreativeOutput(context.Context, string, i
 	return errors.New("storage unavailable")
 }
 
+// 非画布任务的归档钩子失败不阻断结算：Redis 副本可取回即按交付计费，且绝不重新请求供应商。
 func TestCreativeAudioArchiveFailureRetainsBytesAndSettlesWithoutResubmit(t *testing.T) {
 	f := newCreativeWorkerFixture()
 	seedCreativeRun(f, "audio-archive", true)
@@ -249,7 +255,7 @@ func TestCreativeAudioArchiveFailureRetainsBytesAndSettlesWithoutResubmit(t *tes
 	f.exec.result = &CreativeExecuteResult{AccountID: 55, Outputs: []CreativeOutput{{Index: 0, Mime: "audio/wav", Bytes: minimalGrokTestWAV()}}}
 	result, err := f.worker.process(context.Background(), run.RunID)
 	require.NoError(t, err)
-	require.False(t, result.Terminal)
+	require.True(t, result.Terminal)
 	data, err := f.store.LoadOutput(context.Background(), run.RunID, 0)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)

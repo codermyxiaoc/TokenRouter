@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"io"
 	"mime"
 	"net/http"
@@ -41,6 +42,13 @@ func (s *VideoTaskService) OpenContent(ctx context.Context, key *APIKey, id, pro
 	if task.Status != "completed" || task.BillingStatus != "settled" {
 		return nil, ErrVideoTaskConflict
 	}
+	client, slots := s.videoContentClient()
+	transport, _ := s.upstream.(videoTaskContentTransport)
+	return openVideoTaskContent(ctx, task, byteRange, s.accounts, transport, client, slots)
+}
+
+// videoContentClient 懒加载内容下载客户端与并发槽，优先复用媒体预览的安全下载器。
+func (s *VideoTaskService) videoContentClient() (*http.Client, chan struct{}) {
 	s.contentOnce.Do(func() {
 		if s.media != nil && s.media.previewHTTP != nil && s.media.previewSlots != nil {
 			s.contentHTTP, s.contentSlots = s.media.previewHTTP, s.media.previewSlots
@@ -54,9 +62,47 @@ func (s *VideoTaskService) OpenContent(ctx context.Context, key *APIKey, id, pro
 			s.contentSlots = make(chan struct{}, 16)
 		}
 	})
-	transport, _ := s.upstream.(videoTaskContentTransport)
-	return openVideoTaskContent(ctx, task, byteRange, s.accounts, transport, s.contentHTTP, s.contentSlots)
+	return s.contentHTTP, s.contentSlots
 }
+
+// videoDeliveryProbeSlots 限制结算前可取回性探测的并发；探测只读 1 字节，独立于用户下载槽，
+// 避免下载高峰把可交付的视频误判为不可取回。
+var videoDeliveryProbeSlots = make(chan struct{}, 64)
+
+// probeVideoContent 在扣费前确认成品真实可取回：沿用用户下载的同一安全路径（公网校验、凭据不跟随跳转、
+// 只接受视频类型），只请求首字节。URL 格式正确或模板声明了内容路径都不能代替实际取回。
+// @project-doc docs/domains/video_tasks.md#video_task_delivery_release
+func (s *VideoTaskService) probeVideoContent(ctx context.Context, t *VideoTaskRecord) error {
+	if t == nil {
+		return errVideoContentUnavailable
+	}
+	client, _ := s.videoContentClient()
+	transport, _ := s.upstream.(videoTaskContentTransport)
+	// 探测发生在结算之前，按“已完成且已结算”的读取规则检查同一产物，不修改原记录。
+	probe := *t
+	probe.Status, probe.BillingStatus = "completed", "settled"
+	work, cancel := context.WithTimeout(context.WithoutCancel(ctx), videoDeliveryProbeTimeout)
+	defer cancel()
+	response, err := openVideoTaskContent(work, &probe, "bytes=0-0", s.accounts, transport, client, videoDeliveryProbeSlots)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = response.Body.Close() }()
+	// 416 只说明范围不满足，不能证明产物存在；只有 200/206 的视频内容算可取回。
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusPartialContent {
+		return errVideoContentUnavailable
+	}
+	// 状态码和类型不能证明有内容：必须实际读到至少一个字节，空正文或首读报错都视为不可取回。
+	var first [1]byte
+	n, readErr := io.ReadFull(response.Body, first[:])
+	if n < 1 || (readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF)) {
+		return errVideoContentUnavailable
+	}
+	return nil
+}
+
+// videoDeliveryProbeTimeout 是单次取回探测的上限；扣费在探测之后另起独立预算，慢探测不会让扣费上下文过期。
+const videoDeliveryProbeTimeout = 30 * time.Second
 
 // openVideoTaskContent 只读取已授权任务的产物，供站内 Key 与面板票据共用，不依赖生成、查询或账务服务。
 func openVideoTaskContent(ctx context.Context, task *VideoTaskRecord, byteRange string, accounts AccountRepository,
@@ -83,7 +129,7 @@ func openVideoTaskContent(ctx context.Context, task *VideoTaskRecord, byteRange 
 	if task.VideoURL != "" {
 		response, err = openPublicVideoContent(work, client, task.VideoURL, byteRange)
 	} else {
-		if transport == nil || task.Target.Endpoint != VideoEndpointOpenAIVideos || accounts == nil {
+		if _, credentialed, _ := videoContentPath(task.Target, task.UpstreamTaskID); transport == nil || !credentialed || accounts == nil {
 			release()
 			return nil, errVideoContentUnavailable
 		}
@@ -97,8 +143,8 @@ func openVideoTaskContent(ctx context.Context, task *VideoTaskRecord, byteRange 
 			// 凭据请求绝不跟随跳转；公开媒体另建空凭据请求并重新执行公共地址校验。
 			location := response.Header.Get("Location")
 			_ = response.Body.Close()
-			path, pathErr := videoTaskPath(task.Target, task.UpstreamTaskID)
-			base, baseErr := url.Parse(videoEndpointURL(task.Target.BaseURL, path+"/content"))
+			path, _, pathErr := videoContentPath(task.Target, task.UpstreamTaskID)
+			base, baseErr := url.Parse(videoEndpointURL(task.Target.BaseURL, path))
 			target, targetErr := url.Parse(location)
 			if pathErr != nil || baseErr != nil || targetErr != nil || strings.TrimSpace(location) == "" {
 				err = errVideoContentUnavailable

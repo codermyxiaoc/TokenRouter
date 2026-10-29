@@ -12,7 +12,7 @@ TokenRouter 创作台（Creative Studio）提供面向个人用户的图片生�
 - 生成期间服务端临时接收并转发：在服务端侧素材与 prompt 明文只存在于 Redis 临时键，TTL 默认 30 分钟，到期即不可恢复。
 - 浏览器可在当前创作台 IndexedDB 中保存画布快照、图片 Blob 和当前表单草稿（包括提示词）；这些数据只留在当前浏览器配置文件，提交任务时才会上传提示词与素材。
 - 上游供应商可能有自己的留存策略：素材与 prompt 会按上游 API 要求发送给对应平台，供应商侧的数据边界不受 TokenRouter 控制。
-- 断线/过期后结果可能丢失且不算成功：客户端未及时取回输出时任务降级为 `result_lost`，服务端绝不明示成功，也不会从服务端恢复素材；上游已成功但结果丢失的任务仍保持计费。
+- 断线/过期后结果可能丢失且不算成功：客户端未及时取回输出时任务降级为 `result_lost`，服务端绝不明示成功，也不会从服务端恢复素材；上游已成功但成品未交付的任务不扣费；已交付后客户端未及时取回的费用不回退。
 - 浏览器本地存储不保证永久：输出图片只保存在当前浏览器的 IndexedDB 中，清理站点数据、换浏览器或换设备都会丢失素材，且无跨设备同步。任务历史与详情同时按登录用户和浏览器工作区隔离，不同浏览器不会互相看到任务行。
 
 ## 章节导航
@@ -100,6 +100,7 @@ queued -> running -> provider_succeeded -> settlement_pending -> succeeded
 queued -> running -> failed/release_pending -> failed
 queued -> running -> cancelled/release_pending -> cancelled
 queued -> running -> result_lost/release_pending -> result_lost
+provider_succeeded/settlement_pending -> release_pending -> result_lost   # 成品一张都未交付
 succeeded -> result_lost
 ```
 
@@ -110,16 +111,29 @@ provision 恢复在拿到锁后重新读取任务状态，不使用等锁前的�
 `succeeded`、`failed`、`cancelled`、`result_lost` 均为终态。`result_lost` 的语义必须按丢失处理，不能当作成功：
 
 - 客户端在 TTL 内未取回并 ack 输出、worker 发现输入载荷已过期时，任务进入 `result_lost`；服务端不保留、也不能恢复图片本体。
-- worker 加载不到 payload 或输入（TTL 过期，provider 未执行）时标记 `result_lost` 并释放预占；上游已确认成功但结果丢失的路径保持计费（见[计费](#计费)）。
-- 输出读取路径发现临时输出过期或缺失时，把 `succeeded` 任务降级为 `result_lost`（错误码 `RESULT_EXPIRED`）并返回 410。
+- worker 加载不到 payload 或输入（TTL 过期，provider 未执行）时标记 `result_lost` 并释放预占；上游已成功但成品一张都未交付时同样释放，不扣费（见[计费](#计费)）。
+- 输出读取路径发现临时输出过期或缺失时，把 `succeeded` 任务降级为 `result_lost`（错误码 `RESULT_EXPIRED`）并返回 410。这是交付之后客户端未及时取回，已按交付结算的费用不回退。
 
-worker 从 Redis 预留任务后先读取用户最新并发配置，并通过现有用户并发槽位执行一次非阻塞准入；随后由平台对应的现有账号调度器选择账号并预占账号槽位。两类槽位任一暂时不可用时，任务保持 `queued`，不增加执行次数、不改变计费预占，按约 1 秒短延迟重排以释放 worker。只有用户和账号都准入后才幂等推进 `running`，provider 返回结果后在结算前持久化真实执行账号；执行前检查任务是否已处于 `cancelled`。历史竞态任务若 provider 已成功，仍按实际成功输出捕获费用并记录用量，但终态保持 `cancelled`，绝不回写为 `succeeded`。
+worker 从 Redis 预留任务后先读取用户最新并发配置，并通过现有用户并发槽位执行一次非阻塞准入；随后由平台对应的现有账号调度器选择账号并预占账号槽位。两类槽位任一暂时不可用时，任务保持 `queued`，不增加执行次数、不改变计费预占，按约 1 秒短延迟重排以释放 worker。只有用户和账号都准入后才幂等推进 `running`，provider 返回结果后在结算前持久化真实执行账号；执行前检查任务是否已处于 `cancelled`。历史竞态任务若 provider 已成功，因界面显示失败、用户拿不到成品，只释放预占不扣费，终态保持 `cancelled`，绝不回写为 `succeeded`。
 
 图片执行在同一分组最多使用两个不同账号，每账号至多发送一次；首次执行保存 `image_attempt_account_ids` 和 `image_execution_deadline_at`，备用账号沿用首次执行的总时限（默认 300 秒），重启、重新领取和管理员改超时都不刷新预算。本地并发排队和冷却候选不消耗发送预算。只有明确未发送的连接建立失败，或认证、限流、账号额度、模型不可用等确定拒绝，才在释放当前槽位后立即选备用账号，不再等待旧的 60 秒重排。参数、参考图及内容审核拒绝直接失败释放且不处罚账号；纯取消不写账号故障。音频继续使用原有执行器与重试契约，不套用图片预算。
 
-上游调用前，worker 原子保存账号、总时限和 `provider_inflight` 栅栏；只有有明确未受理证据的结果才以版本及账号条件打开 `provider_retry`。泛 5xx、写入后断连/超时、HTTP 200 读体或解析失败一律不能自动重生；已有任务 ID、用量、文本或图片输出的证据优先于错误码，也不能降级为可重试拒绝。账号故障写入按“账号 + 最终映射模型 + generate/edit/inpaint”隔离的短冷却；其它模型、操作和正常的存储/结算恢复不受影响。旧执行计数缺少账号证据的任务保持核对，不因升级获得新发送资格。创建补偿 outbox 仅能更新 `queued` 的创建阶段，不能覆盖执行栅栏。
+上游调用前，worker 原子保存账号、总时限和 `provider_inflight` 栅栏；只有有明确未受理证据的结果才以版本及账号条件打开 `provider_retry`。泛 5xx、写入后断连/超时、HTTP 200 读体或解析失败一律不能自动重生；已有任务 ID、用量、文本或图片输出的证据优先于错误码，也不能降级为可重试拒绝。账号故障写入按“账号 + 最终映射模型 + generate/edit/inpaint”隔离的短冷却；其它模型、操作和正常的存储/结算恢复不受影响。创建补偿 outbox 仅能更新 `queued` 的创建阶段，不能覆盖执行栅栏。
 
-provider 返回成功后，真实输出的索引、状态、MIME、长度、过期时间与 `provider_succeeded`、结算 outbox 同事务写入 PostgreSQL，再把图片字节保存到 Redis；数据库仍不存图片或提示词。后续只重试结果核对和结算，不重新调用 provider。若图片缓存明确丢失，按已确认的成功输出数量结算，并原子进入 `result_lost`，不展示假成功；Redis 暂时不可用时保持结算等待。若成功事实尚未落库就发生进程退出或数据库故障，且无法从已保存的完整输出元数据恢复，则保留 `running` 与原预占，错误码为 `PROVIDER_RESULT_UNCONFIRMED`，约每 15 分钟低频核对并等待管理员处理，不推断失败、不释放款、不重发生成。结算失败保持 `settlement_pending`，绝不 ACK 非终态任务。
+<a id="creative_unconfirmed_release"></a>
+**结果未知即释放。** 同步图片和语音接口没有可查询的上游任务，等待不会带来成品，因此资金按“用户没拿到成品就不扣费”处理：
+
+- 当前 worker 亲自执行且得到未知、已受理但无图、解析或下载失败、0 张输出等不可用结果时，先确认没有已落库的成功结果，再以 `CREATIVE_RESULT_UNAVAILABLE` 失败并释放全部预占；不换号、不重发生成。
+- 领取任务时发现执行栅栏（进程中断、租约转移或旧版本遗留），原执行者可能仍在运行：只在原执行时限加 2 分钟宽限期内每分钟巡检一次（错误码 `PROVIDER_RESULT_UNCONFIRMED`），期间原执行者落库的结果照常结算；到期仍无结果即失败释放。截止时间只取持久化的 `image_execution_deadline_at`，语音或缺少该字段时取 `started_at`（再退回 `created_at`）加执行时限，重启或改配置不能延长冻结。旧版本遗留的无终点核对任务在升级后首次巡检时直接释放。
+- 迟到的失败路径不能整笔释放已记录上游成功结果的任务，改交结算按交付张数处理；与成功落库的竞争由版本 CAS 决定，二者只有一方生效。
+
+provider 返回成功后，真实输出的索引、状态、MIME、长度、过期时间与 `provider_succeeded`、结算 outbox 同事务写入 PostgreSQL；之后的存储只做尽力交付，任何存储失败都不阻断结算，也不重新调用 provider。字节先写 Redis（短暂重试三次），画布任务再归档为私有素材；归档失败只记录日志，由结算阶段从 Redis 副本补做。成功事实尚未落库就发生进程退出或数据库故障时，按上一段的栅栏截止规则处理。结算失败保持 `settlement_pending`，绝不 ACK 非终态任务。
+
+worker 心跳以 Redis 锁有效期为准容忍短暂抖动：续期失败但距上次成功不足锁有效期（与 stale 判定取小）的七成时继续执行，超过才判定失去租约；明确不再持有租约时立即停止。失去租约时若成品已经到手，先在独立的 30 秒预算内把结果落库交给新的持有者结算，本 worker 不再 ACK 或重排。
+
+停机时 runtime 先让全部 worker 停止领取新任务并等待在途任务自然完成，最长 `creative.shutdown_drain_seconds`（默认 120 秒）后才取消执行；排空期间不补齐 worker。部署层终止宽限期必须覆盖排空时长，见[配置](#配置)。
+
+Redis 队列不是唯一恢复依据：恢复循环每轮还按 `updated_at` 从 PostgreSQL 读取超过 `creative.orphan_recovery_after_seconds`（默认 20 分钟）未推进的 `queued`/`running`/`provider_succeeded`/`settlement_pending`/`release_pending` 任务并重新入队。已在队列中的任务由 Redis 去重键跳过，重复投递也只会被任务锁和状态机幂等处理；迁移 `321_creative_run_queue_recovery_index_notx.sql` 为此建立非终态部分索引。
 
 ## 幂等
 
@@ -152,10 +166,13 @@ creative_settle:{run_id}    写 usage_logs 的结算记录 ID
 
 - 创建任务时先估价并冻结（auto 模式先预留订阅额度、只冻结未覆盖部分的钱包余额）；只有能够确定免费的合同才跳过资金动作。图片独立倍率开启[订阅倍率优先](routing_and_billing.md#media_subscription_rate_priority)时，各订阅的有效套餐覆盖可替换订阅部分，余额和未配置覆盖的订阅仍用独立倍率。基础金额为正且允许套餐覆盖时，即使预估为零也必须进入资金事务解析实际订阅；快照保存优先规则，TTS 仍使用原普通倍率。
 - 资金分配后需要冻结余额时，同一事务按原平台检查当前有效日／周／月限额；纯订阅和免费任务豁免。耗尽返回平台专用 429 和重置时间，全部资金预占、任务资金快照与去重回滚。检查不预占平台额度，完成捕获不因后来额度耗尽而拒绝，捕获平台用量与实际钱包八位小数扣款保持一致。
-- 成功时按实际成功输出数捕获，并可靠写入一条 `usage_logs`：`BillingMode` 为 `"image"`，`ImageCount` 为成功输出数，`request_id` 为 `creative_settle:{run_id}`，入站端点记录 `/v1/creative/runs`，上游端点记录 `creative:{operation}`。日志与 `usage_recorded_at` 投递标记保存后才能进入完成终态；日志失败保留结算等待，重试捕获按原请求 ID 幂等去重，从首次预占合同恢复余额/订阅分摊，不读取后来的套餐和价格。
+- 成功时按实际已交付输出数捕获，并可靠写入一条 `usage_logs`：`BillingMode` 为 `"image"`，`ImageCount` 为已交付输出数，`request_id` 为 `creative_settle:{run_id}`，入站端点记录 `/v1/creative/runs`，上游端点记录 `creative:{operation}`。日志与 `usage_recorded_at` 投递标记保存后才能进入完成终态；日志失败保留结算等待，重试捕获按原请求 ID 幂等去重，从首次预占合同恢复余额/订阅分摊，不读取后来的套餐和价格。
 - 失败与内部取消状态通过幂等路径释放全部未使用预占；指纹冲突按已释放处理，避免毒消息循环。
-- provider 已成功但结果丢失（`result_lost` 且已捕获）时保持计费；payload 过期导致 provider 未执行的 `result_lost` 释放预占。
-- 任务执行期间进入 `cancelled` 但 provider 已成功：费用按实际成功输出捕获、用量照写，终态保持 `cancelled`。
+<a id="creative_delivery_billing"></a>
+- **只为已交付的成品扣费。** 结算逐张判断成品是否已交付到用户可取回的位置：画布任务以私有素材 `ready` 为准，素材未就绪时用 Redis 副本补做一次归档；普通任务以 Redis 副本可读或客户端已 ack 为准。捕获只按已交付张数计算，其余输出标记 `OUTPUT_UNDELIVERED` 且不计费。一张都未交付时不捕获、不写用量日志，转 `release_pending` 整笔释放并以 `result_lost` 结束。
+- 归档永久失败（格式不符、超过单张 32 MiB 或个人配额、画布已删除、素材冲突）按未交付处理；Redis 暂时不可用或对象存储临时故障只保留结算重试，不扣费也不释放，Redis 副本过期后自然转为未交付并释放。
+- provider 已成功但没有可交付成品时（`result_lost`）释放预占；payload 过期导致 provider 未执行的 `result_lost` 同样释放。
+- 任务执行期间进入 `cancelled` 而 provider 已成功：界面显示失败、用户拿不到成品，只释放预占不扣费，终态保持 `cancelled`。
 
 结算与退款 outbox 在取得与执行 worker 相同的任务锁后直接调用幂等结算或释放；结算须资金与日志都成功，退款须释放成功并推进终态，才能确认 outbox 完成。因此 Redis 队列条目丢失也不会丢失尚未处理的结算或退款意图；锁竞争、数据库故障仍保留持久重试。账号执行仍由原 worker 负责，outbox 不重新生成图片，迟到的退款事件也不释放已成功结算任务。后台另以主键分页、每轮最多 50 条核对启动前 24 小时以来的已结算终态记录：必须存在 `creative_capture:` 捕获账本，保留真实成本、完整输出元数据和首次预占快照，且还原金额与保存金额一致，才补写日志。该补偿不会再次调用资金捕获/释放；证据不足只报告待核对。投递标记持久保留，正常清理过的日志不会反复补回。
 
@@ -195,7 +212,7 @@ creative_settle:{run_id}    写 usage_logs 的结算记录 ID
 - `grok`：`generate` 走 `/v1/images/generations`；`edit` 走 `/v1/images/edits` 的 JSON 契约，单张源图放入 `image: {type: "image_url", url: "data:image/...;base64,..."}`，多张放入 `images` 数组，最多 3 张；两条路径都透传分辨率、比例和 `grok-imagine-image-2.0` 的质量，并固定请求单张 `n=1` 与 `response_format: "b64_json"`；`inpaint` 直接拒绝。
 - `gemini`：`generate` 与普通参考图 `edit` 统一使用原生 `generateContent`，prompt 与源图以 inlineData 放入 parts，不发送独立 mask；图片尺寸与比例位于 `generationConfig.imageConfig`，支持的 3.1 图片模型可附加 `generationConfig.thinkingConfig`，`includeThoughts` 固定为 false；执行器取最后一个图片 part 作为最终输出。凭据按账号类型选择：API Key 账号用 `x-goog-api-key`，Vertex 服务账号与 OAuth 用 Bearer token。
 
-OpenAI API Key 与 Grok 图片结果同时接受 `data[].b64_json`、`data[].url` 及图片 Base64 data URI。有效内联图片优先，同项内联编码无效时可读取其 URL；普通模型仍只交付首张有效图片，不能借多项响应突破原单张报价。URL 复用仅公网下载器，不携带生成请求的鉴权或 Cookie，限制重定向、私网地址、每张 32 MiB 和像素预算，并完整解码验证，拒绝 HTML/SVG 与截断图片。临时网络故障只重试 GET 同一产物，不能重发付费生成。无有效图片、下载失败或响应超过 64 MiB 均保持原任务结果待确认；普通响应读取多取一字节确认越界，不把截断内容当作完整成功。
+OpenAI API Key 与 Grok 图片结果同时接受 `data[].b64_json`、`data[].url` 及图片 Base64 data URI。有效内联图片优先，同项内联编码无效时可读取其 URL；普通模型仍只交付首张有效图片，不能借多项响应突破原单张报价。URL 复用仅公网下载器，不携带生成请求的鉴权或 Cookie，限制重定向、私网地址、每张 32 MiB 和像素预算，并完整解码验证，拒绝 HTML/SVG 与截断图片。临时网络故障只重试 GET 同一产物，不能重发付费生成。无有效图片、下载失败或响应超过 64 MiB 均视为结果不可用，按[结果未知即释放](#creative_unconfirmed_release)失败并释放预占，不重发生成；普通响应读取多取一字节确认越界，不把截断内容当作完整成功。
 
 当前不暴露无法与异步任务、存储或计费边界稳定对应的上游参数：OpenAI `moderation`、`input_fidelity`、`stream`、`partial_images`，Gemini `includeThoughts`、`temperature`、`topP`、`topK`、`seed`、Google Search grounding 和通用 `candidateCount`，以及任意自定义 OpenAI `WxH` 尺寸。审核策略由服务端统一控制，`gpt-image-2` 固定高保真，Gemini 中间 thought image 固定不返回。
 
@@ -262,9 +279,11 @@ creative:
   recover_limit: 100
   execute_timeout_seconds: 300        # 图片任务首次及备用账号共享的执行总时限
   max_execute_attempts: 3             # provider 瞬时错误最大执行次数（含首次）
+  shutdown_drain_seconds: 120         # 停机时等待在途任务完成的最长时间，须小于容器终止宽限期
+  orphan_recovery_after_seconds: 1200 # 非终态任务超过该时长未推进即从数据库重新入队
 ```
 
-校验约束：`max_total_input_bytes` 不得小于 `max_asset_bytes`；启用队列时所有队列键非空。创作台按持久化的固定输出张数乘以所选尺寸单价预占（MJ 四张，其余单张）。与批量图片不同，创作台的 `enabled` 与 `queue_enabled` 默认开启，但缺少 Redis 时任务创建会失败。
+校验约束：`max_total_input_bytes` 不得小于 `max_asset_bytes`；启用队列时所有队列键非空。仓库自带的 compose 文件为应用容器设置 `stop_grace_period: 150s`，自定义部署须保证终止宽限期大于 `shutdown_drain_seconds` 加收尾时间，否则停机会强制打断在途生成，使其按结果未知失败释放。创作台按持久化的固定输出张数乘以所选尺寸单价预占（MJ 四张，其余单张）。与批量图片不同，创作台的 `enabled` 与 `queue_enabled` 默认开启，但缺少 Redis 时任务创建会失败。
 
 除进程配置外，创作台还有数据库运行时开关 `creative_enabled`（默认 true，管理端系统设置的独立“创作台”标签页可切换，经公开设置下发给前端）以及 `creative_worker_count`（默认 128，要求为正整数，管理端保存后热更新当前 worker 池）：仅当进程配置 `creative.enabled` 与运行时开关同时开启时创作台才可用，管理服务 `enabled()` 判定在请求期读取该开关。创作台不使用 HTTP 网关的进程级图片 limiter；实际执行并发由 worker 池、用户 Redis 并发槽位和账号调度器的账号槽位共同约束。
 
@@ -276,7 +295,9 @@ creative:
 - 确认上游账号凭据有效（Gemini apikey/Vertex/OAuth、OpenAI、xAI）。
 - 确认分组图片定价与倍率，验证估价的 hold/capture/release 行为。
 - 明白临时输出默认 30 分钟过期：通知用户及时取回，或按需调大 `transient_ttl_seconds`。
-- 排查 `result_lost` 时先检查客户端是否在 TTL 内完成取回与 ack，再检查 worker 日志。
+- 排查 `result_lost` 时先看错误码：`OUTPUT_UNDELIVERED` 表示上游成功但成品未能保存交付（已释放、未扣费），检查 Redis 写入与画布归档日志 `creative.save_output_failed`、`creative.cloud_output_persist_failed`、`creative.cloud_output_rejected`；`RESULT_EXPIRED` 表示交付后客户端未在 TTL 内取回。
+- `CREATIVE_RESULT_UNAVAILABLE` 表示上游结果未知或不可用，已失败释放；占比升高时检查上游超时、账号健康和 `creative.execute_timeout_seconds`。
+- `creative.worker_orphan_runs_requeued` 日志出现说明有任务脱离 Redis 队列后被数据库兜底恢复，应排查 Redis 淘汰策略或持久化配置。
 
 ## 安全检查清单
 

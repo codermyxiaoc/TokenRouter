@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -248,6 +250,39 @@ func (h *AsyncImageHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, task)
 }
 
+// File 通过签名链接下载本地存储的图片；签名无效、过期或文件不存在统一返回 404。
+// GET/HEAD /api/v1/image-files/*key?exp=&sig=
+func (h *AsyncImageHandler) File(c *gin.Context) {
+	key := strings.TrimPrefix(c.Param("key"), "/")
+	expires, err := strconv.ParseInt(c.Query("exp"), 10, 64)
+	if err != nil || key == "" || h.tasks == nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	file, info, err := h.tasks.OpenLocalImage(c.Request.Context(), key, expires, c.Query("sig"))
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	defer func() { _ = file.Close() }()
+	// 内容类型按真实字节判定，禁止把非位图当作 HTML 渲染。
+	head := make([]byte, 512)
+	n, _ := io.ReadFull(file, head)
+	contentType := http.DetectContentType(head[:n])
+	if !strings.HasPrefix(contentType, "image/") {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	c.Header("Content-Type", contentType)
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Cache-Control", "private, max-age=3600")
+	http.ServeContent(c.Writer, c.Request, "", info.ModTime(), file)
+}
+
 func (h *AsyncImageHandler) validateRequest(c *gin.Context, platform string, body []byte) error {
 	if err := validateAsyncImagePrompt(c.GetHeader("Content-Type"), body); err != nil {
 		return err
@@ -293,6 +328,9 @@ func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, r
 	defer cancel()
 	// 终态从实际任务记录读取，包含对象转存失败，避免将已扣费但未存图的任务误报成功。
 	defer h.observeFinishedTask(observation)
+	// 先交付后扣费：任何未扣费成功的退出（失败、超时、扣费失败、panic）都释放已登记的预占。
+	deferred := service.AsyncImageDeferredCaptureFromContext(taskCtx.Request.Context())
+	defer h.releaseDeferredImageBilling(taskID, deferred)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			logger.L().Error("image_task.execution_panicked", zap.String("task_id", taskID), zap.Any("panic", recovered))
@@ -329,14 +367,74 @@ func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, r
 			h.failTask(taskID, http.StatusBadGateway, imageTaskErrorPayload("api_error", "upstream returned an invalid image response"))
 			return
 		}
-		storageCtx, storageCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		// 转存含按档位重试，预算独立于生成超时；转存成功后先扣费再标记完成，扣费失败则按未交付处理。
+		storageCtx, storageCancel := context.WithTimeout(context.Background(), h.tasks.DeliveryBudget())
 		defer storageCancel()
-		if err := h.tasks.CompleteWithUploader(storageCtx, taskID, statusCode, json.RawMessage(body), uploader); err != nil {
+		var settle func(context.Context) error
+		if deferred.Pending() {
+			settle = func(ctx context.Context) error { return h.captureDeferredImageBilling(ctx, taskID, deferred) }
+		}
+		if _, err := h.tasks.CompleteDelivered(storageCtx, taskID, statusCode, json.RawMessage(body), uploader, settle); err != nil {
 			logger.L().Error("image_task.complete_store_failed", zap.String("task_id", taskID), zap.Error(err))
 		}
 		return
 	}
 	h.failTask(taskID, statusCode, extractImageTaskError(body))
+}
+
+// deferredBillingRetryDelays 是扣费/释放失败后的重试间隔；数据库短暂故障通常在这一窗口内恢复。
+var deferredBillingRetryDelays = []time.Duration{0, 2 * time.Second, 10 * time.Second, 30 * time.Second, time.Minute}
+
+// retryDeferredBilling 按间隔重试一次账务动作，panic 只记录不外抛，避免改写任务终态。
+func retryDeferredBilling(ctx context.Context, taskID, action string, step func(context.Context) error) (err error) {
+	for _, delay := range deferredBillingRetryDelays {
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return errors.Join(err, ctx.Err())
+			case <-timer.C:
+			}
+		}
+		panicked := false
+		err = func() (stepErr error) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					logger.L().Error("image_task.deferred_billing_panicked", zap.String("task_id", taskID), zap.String("action", action), zap.Any("panic", recovered))
+					panicked = true
+					stepErr = fmt.Errorf("deferred billing %s panicked", action)
+				}
+			}()
+			attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			return step(attemptCtx)
+		}()
+		// panic 是确定性缺陷而非临时故障，重试只会拖住任务；成功或已扣费也直接返回。
+		if err == nil || panicked || errors.Is(err, service.ErrAsyncImageAlreadyCaptured) {
+			return err
+		}
+		logger.L().Warn("image_task.deferred_billing_retry", zap.String("task_id", taskID), zap.String("action", action), zap.Error(err))
+	}
+	return err
+}
+
+// captureDeferredImageBilling 在图片转存成功后扣费；失败时任务按未交付处理，由退出路径释放预占。
+func (h *AsyncImageHandler) captureDeferredImageBilling(ctx context.Context, taskID string, deferred *service.AsyncImageDeferredCapture) error {
+	return retryDeferredBilling(ctx, taskID, "capture", deferred.Capture)
+}
+
+// releaseDeferredImageBilling 在任务未扣费成功时释放预占；已扣费或无登记时直接返回。
+// 释放最终失败时预占保持待核对冻结，任务为失败终态，由失败任务账务处理按期限释放。
+func (h *AsyncImageHandler) releaseDeferredImageBilling(taskID string, deferred *service.AsyncImageDeferredCapture) {
+	if !deferred.Pending() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if err := retryDeferredBilling(ctx, taskID, "release", deferred.Release); err != nil {
+		logger.L().Error("image_task.deferred_billing_release_failed", zap.String("task_id", taskID), zap.Error(err))
+	}
 }
 
 func (h *AsyncImageHandler) failTask(taskID string, statusCode int, taskErr json.RawMessage) {
@@ -362,6 +460,8 @@ func newAsyncImageContext(c *gin.Context, body []byte, timeoutDuration time.Dura
 		}
 	}
 	base := context.WithoutCancel(source.Context())
+	// 安装延迟结算容器：生成成功只登记扣费，图片交付后由 run 统一结算。
+	base, _ = service.WithAsyncImageDeferredCapture(base)
 	executionCtx, cancel := context.WithTimeout(service.WithAsyncImageExecutionContext(base), timeoutDuration)
 	request := source.Clone(executionCtx)
 	request.Body = io.NopCloser(bytes.NewReader(body))

@@ -229,6 +229,8 @@ gateway:
   # 独立 Video 创建总预算，包含上传与安全换号；0 使用默认 180 秒，最大 600 秒。
   # 超时后不盲目重发；无上游 ID 且无完整响应的超时任务核对 15 分钟后释放预扣。
   video_create_timeout_seconds: 180
+  # 独立 Video 任务从创建起的最长排队与生成时间（分钟）；超时未交付成品即失败并释放预扣。0 使用默认 180，最大 10080。
+  video_max_processing_minutes: 180
   # OpenAI/Codex upstream response header timeout (seconds, 0=disabled)
   # OpenAI/Codex 等待上游响应头超时时间（秒，0=禁用本地响应头超时）
   openai_response_header_timeout: 0
@@ -874,6 +876,10 @@ creative:
   execute_timeout_seconds: 300
   # provider 瞬时错误的最大执行次数（含首次）
   max_execute_attempts: 3
+  # 停机时等待在途任务完成的最长时间（秒）；须小于容器终止宽限期（compose 的 stop_grace_period）
+  shutdown_drain_seconds: 120
+  # 数据库兜底扫描：非终态任务超过该时长（秒）未推进即重新入队，用于恢复 Redis 队列丢失的任务
+  orphan_recovery_after_seconds: 1200
 
 # =============================================================================
 # Database Configuration (PostgreSQL)

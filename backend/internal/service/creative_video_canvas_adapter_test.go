@@ -141,7 +141,11 @@ func TestCreativeVideoCanvasAdaptiveMetasoPreservesBilling(t *testing.T) {
 			assets := []CreativeCanvasInputAsset{{Asset: &CreativeCanvasAsset{ID: "portrait", UserID: e.UserID, MediaType: "image", MIMEType: "image/png"}, Content: makeTestPNG(t, 16, 24)}}
 			id, err := s.Submit(context.Background(), e, assets)
 			require.Equal(t, "9:16", transport.request.canvasAdaptiveRatio)
-			require.Equal(t, "adaptive", gjson.GetBytes(transport.request.Body, "ratio").String())
+			// 画布提交统一规范请求：比例写在 aspect_ratio，协议转换由所选账号的绑定完成。
+			require.NotNil(t, transport.request.Canonical)
+			require.Equal(t, "adaptive", transport.request.Canonical.AspectRatio)
+			require.Equal(t, "adaptive", gjson.GetBytes(transport.request.Body, "aspect_ratio").String())
+			require.Equal(t, "openai_videos", transport.request.InboundProtocol)
 			require.NotContains(t, string(transport.request.Body), "canvasAdaptiveRatio")
 			if terminal == "missing_price" {
 				require.Error(t, err)

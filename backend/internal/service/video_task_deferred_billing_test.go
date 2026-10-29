@@ -42,7 +42,7 @@ func TestVideoTaskDeferredBillingSurvivesRestartAndSettlesActualUsageOnce(t *tes
 			upstream.selection.Account.Credentials["video_max_output_tokens"] = 1
 			restarted := *s
 			count := int64(2_000_000)
-			upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Metadata: VideoRequestMetadata{Tokens: &count}, Body: []byte(`{"status":"completed"}`)}
+			upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Metadata: VideoRequestMetadata{Tokens: &count}, Body: []byte(`{"status":"completed"}`)}
 			restarted.advance(context.Background(), task)
 			fresh, err := s.repo.Get(context.Background(), task.ID)
 			require.NoError(t, err)
@@ -77,7 +77,7 @@ func TestVideoTaskDeferredBillingMissingUsageAndRejectedCaptureRemainUnsettled(t
 	require.NoError(t, err)
 	task, err := s.repo.Get(context.Background(), response.LocalTaskID)
 	require.NoError(t, err)
-	upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Body: []byte(`{"status":"completed"}`)}
+	upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Body: []byte(`{"status":"completed"}`)}
 	s.advance(context.Background(), task)
 	require.Equal(t, "reconciliation", task.BillingStatus)
 	require.Empty(t, billing.captureCommands)
@@ -124,7 +124,7 @@ func TestVideoTaskDeferredBillingDoesNotOverrideLegacyHoldOrFreePrice(t *testing
 		require.Equal(t, 1.0, task.Hold.BaseAmountUSD)
 		delete(upstream.selection.Account.Credentials, "video_max_output_tokens")
 		count := int64(2_000_000)
-		upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Metadata: VideoRequestMetadata{Tokens: &count}, Body: []byte(`{"status":"completed"}`)}
+		upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Metadata: VideoRequestMetadata{Tokens: &count}, Body: []byte(`{"status":"completed"}`)}
 		s.advance(context.Background(), task)
 		require.Equal(t, "reconciliation", task.BillingStatus)
 		require.Zero(t, billing.captures)
@@ -140,7 +140,7 @@ func TestVideoTaskDeferredBillingDoesNotOverrideLegacyHoldOrFreePrice(t *testing
 		task, err := s.repo.Get(context.Background(), response.LocalTaskID)
 		require.NoError(t, err)
 		require.True(t, task.Hold.VideoDeferredBilling)
-		upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Body: []byte(`{"status":"completed"}`)}
+		upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Body: []byte(`{"status":"completed"}`)}
 		s.advance(context.Background(), task)
 		require.Equal(t, "settled", task.BillingStatus)
 		require.Zero(t, task.BillingResult.ActualAmountUSD)
@@ -182,7 +182,7 @@ func TestVideoTaskDeferredBillingAcceptsConfirmedZeroUsage(t *testing.T) {
 	task, err := s.repo.Get(context.Background(), response.LocalTaskID)
 	require.NoError(t, err)
 	zero := int64(0)
-	upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Metadata: VideoRequestMetadata{Tokens: &zero}, Body: []byte(`{"status":"completed"}`)}
+	upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Metadata: VideoRequestMetadata{Tokens: &zero}, Body: []byte(`{"status":"completed"}`)}
 	s.advance(context.Background(), task)
 	require.Equal(t, "settled", task.BillingStatus)
 	require.Zero(t, task.BillingResult.ActualAmountUSD)

@@ -101,7 +101,7 @@ func doGeminiImageAwareRequest(ctx context.Context, upstream HTTPUpstream, req *
 		}
 		decision := ClassifyImageTransportFailure(err)
 		if decision.AttemptFault {
-			_ = RecordImageModelCooldown(ctx, cache, account.ID, finalModel, operation, DefaultImageModelCooldown)
+			_ = RecordImageModelFailure(ctx, cache, account.ID, finalModel, operation, decision)
 		}
 		return nil, RecordImageAttemptFailure(ctx, err, decision)
 	}
@@ -139,7 +139,7 @@ func doGeminiImageAwareRequest(ctx context.Context, upstream HTTPUpstream, req *
 		}
 		RecordImageAttemptDecision(ctx, decision)
 		if decision.AttemptFault {
-			_ = RecordImageModelCooldown(ctx, cache, account.ID, finalModel, operation, DefaultImageModelCooldown)
+			_ = RecordImageModelFailure(ctx, cache, account.ID, finalModel, operation, decision)
 		}
 		return resp, nil
 	}
@@ -167,9 +167,12 @@ func (b *imageAttemptResponseBody) Read(p []byte) (int, error) {
 			RecordImageAttemptDecision(b.ctx, decision)
 			// 生成总预算耗尽仍是账号故障；只有调用方主动取消不写冷却。
 			if decision.AttemptFault && !errors.Is(b.ctx.Err(), context.Canceled) {
-				_ = RecordImageModelCooldown(b.ctx, b.cache, b.accountID, b.model, b.operation, DefaultImageModelCooldown)
+				_ = RecordImageModelFailure(b.ctx, b.cache, b.accountID, b.model, b.operation, decision)
 			}
 		})
+	} else if errors.Is(err, io.EOF) {
+		// 成功响应完整读完说明该模型已恢复，清零连续失败计数。
+		b.once.Do(func() { RecordImageModelSuccess(b.ctx, b.cache, b.accountID, b.model, b.operation) })
 	}
 	return n, err
 }

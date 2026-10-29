@@ -64,7 +64,7 @@
 
 失败观测范围为 POST Messages、Responses（含 compact/input_tokens）、Chat Completions、Embeddings 和 Gemini generateContent/streamGenerateContent/countTokens 及其现有别名。普通推理历史中的 `reasoning.encrypted_content` 不关闭换组；协调器完整保存并重放原始历史，不预先删除密文，目标协议仍由原有适配器处理。工具参数 schema 中同名字段也不影响重试资格。客户端 `function/custom/local_shell` 工具声明及已有工具结果本身不代表本轮已执行远端副作用。
 
-是否允许重放与是否冷却分别判断：带 `previous_response_id`、带密文的 `input` 类型 `compaction/compaction_summary`、后台任务、Responses 生图意图及服务端执行工具仍不跨组重放，但实际失败账号可进入冷却。对 `previous_response_id`，选组器在当前已授权候选内验证既有响应所有权并查询真实分组和账号归属，查询共享一秒预算；确定归属后固定原组原账号，不能因无关首组故障挡住合法续接，也不能因繁忙换号。归属冲突、已知 owner 却丢失账号绑定等情况拒绝继续。无法证明归属或不透明压缩历史仍保守固定首个模型匹配候选；相应归属冷却时返回兼容错误码 `SMART_ROUTING_CONTINUATION_GROUP_COOLING` 和 `Retry-After`。独立的新后台或工具请求可以在开始前避开冷却账号，但已发出的任务失败后不再次执行。Gemini/Antigravity 等入口在真实分派后才识别出的图片意图一旦挂载图片执行策略，也禁止跨组重放；仍可记录实际失败账号及当前 Key 冷却，图片同组执行预算不能被换组刷新。独立图片/视频等任务端点仍不纳入本协调器。普通与复合前缀 Key 保持原行为。
+是否允许重放与是否冷却分别判断：带 `previous_response_id`、带密文的 `input` 类型 `compaction/compaction_summary`、后台任务、Responses 生图意图及服务端执行工具仍不跨组重放，但实际失败账号可进入冷却。对 `previous_response_id`，选组器在当前已授权候选内验证既有响应所有权并查询真实分组和账号归属，查询共享一秒预算；确定归属后固定原组原账号，不能因无关首组故障挡住合法续接，也不能因繁忙换号。归属冲突、已知 owner 却丢失账号绑定等情况拒绝继续。无法证明归属或不透明压缩历史仍保守固定首个模型匹配候选；相应归属冷却时返回兼容错误码 `SMART_ROUTING_CONTINUATION_GROUP_COOLING` 和 `Retry-After`。独立的新后台或工具请求可以在开始前避开冷却账号，但已发出的任务失败后不再次执行。Gemini/Antigravity 等入口在真实分派后才识别出的图片意图一旦挂载图片执行策略，只在有“未生成”正向证据时允许跨组：本组没有可用账号且一次都未发送（通常是生图模型全部冷却），或最后一次为可换号的确定拒绝（如 429、模型不存在）；结果未知或已受理时仍禁止跨组重放，仍可记录实际失败账号及当前 Key 冷却。`/v1/images/generations` 与 `/v1/images/edits` 按同一规则纳入本协调器，详见[生图模型冷却](../architecture/account_scheduling_and_cache.md#image_model_cooldown)。异步图片、批量图片和视频等任务端点仍不纳入本协调器。普通与复合前缀 Key 保持原行为。
 
 后台日志记录失败组、原始上游状态、冷却秒数、重放限制原因及实际切换的目标组，并携带请求 ID；不记录请求正文或密钥。Responses 转 Chat Completions 的 HTTP 503 在原有 handler 中可能映射为客户端 502，换组判定仍使用真实上游 503。
 

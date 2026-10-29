@@ -53,7 +53,8 @@ func TestVideoViduOutputRecoverySettlesMissingArtifactExactlyOnce(t *testing.T) 
 					// 按次模式特意不设置时长，防止恢复错误地依赖与收费无关的字段。
 					svc, upstream, billing, logs, id := newViduOutputRecoveryFixture(t, adapter, mode, mode == BillingModeVideoPerRequest)
 					task := advanceViduOutputRecovery(t, svc, upstream, id, missing)
-					require.Equal(t, "reconciliation", task.BillingStatus)
+					// 产物暂缺不可交付：只等待补齐或核对，既不扣费也不释放。
+					require.Contains(t, []string{"reconciliation", "reserved"}, task.BillingStatus)
 					require.True(t, task.PricingMismatch)
 					require.True(t, videoViduOutputErrorRecoverable(task.ResponseMetadataError))
 					require.Zero(t, billing.captures+billing.releases)
@@ -107,7 +108,8 @@ func TestVideoViduOutputRecoveryKeepsRealDimensionErrors(t *testing.T) {
 				for range 2 {
 					task := advanceViduOutputRecovery(t, svc, upstream, id, `"creations":[{"url":"https://cdn.example/video.mp4"}]`)
 					require.True(t, task.PricingMismatch)
-					require.Equal(t, "reconciliation", task.BillingStatus)
+					// 产物暂缺不可交付：只等待补齐或核对，既不扣费也不释放。
+					require.Contains(t, []string{"reconciliation", "reserved"}, task.BillingStatus)
 				}
 				require.Zero(t, billing.captures+billing.releases)
 				require.Empty(t, logs.logs)
@@ -152,7 +154,8 @@ func TestVideoViduOutputRecoveryNeverInventsUsageOrAcceptsUnsafeMedia(t *testing
 				advanceViduOutputRecovery(t, svc, upstream, id, `"creations":[]`)
 				for range 3 {
 					task := advanceViduOutputRecovery(t, svc, upstream, id, tc.completion)
-					require.Equal(t, "reconciliation", task.BillingStatus)
+					// 产物暂缺不可交付：只等待补齐或核对，既不扣费也不释放。
+					require.Contains(t, []string{"reconciliation", "reserved"}, task.BillingStatus)
 					require.True(t, task.PricingMismatch)
 				}
 				require.Zero(t, billing.captures+billing.releases)

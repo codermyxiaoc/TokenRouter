@@ -333,6 +333,31 @@ func TestBuildSchedulerMetadataAccount_KeepsOpenAIAPIKeyProtocolFields(t *testin
 	require.Nil(t, got.Credentials["access_token"])
 }
 
+// 视频账号的调度快照必须保留模型协议绑定与预算，否则新建账号在选号时没有任何可用模型。
+func TestBuildSchedulerMetadataAccount_KeepsVideoProtocolBindings(t *testing.T) {
+	protocols := map[string]any{"*": map[string]any{"protocol": "profile:metaso-h3"}}
+	account := service.Account{
+		ID:       43,
+		Platform: service.PlatformVideo,
+		Type:     service.AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key": "video-secret", "base_url": "https://relay.example",
+			"video_model_protocols": protocols, "video_max_pending_tasks": 5, "video_max_duration_seconds": 15,
+			"unrelated": "drop-me",
+		},
+	}
+	got := buildSchedulerMetadataAccount(account)
+	require.Equal(t, protocols, got.Credentials["video_model_protocols"])
+	require.Equal(t, 5, got.Credentials["video_max_pending_tasks"])
+	require.Equal(t, 15, got.Credentials["video_max_duration_seconds"])
+	require.Equal(t, "video-secret", got.Credentials["api_key"])
+	require.Nil(t, got.Credentials["unrelated"])
+	cfg, err := got.VideoConfiguration()
+	require.NoError(t, err)
+	_, bound := cfg.Protocol("any-model")
+	require.True(t, bound)
+}
+
 func TestBuildSchedulerMetadataAccount_KeepsGrokMediaEligibility(t *testing.T) {
 	t.Run("explicit override", func(t *testing.T) {
 		account := service.Account{

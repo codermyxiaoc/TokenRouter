@@ -106,16 +106,9 @@ func (s *ModelMarketplaceService) attachMarketplaceVideoEndpoints(ctx context.Co
 				if !account.IsModelSupported(channelModel) {
 					continue
 				}
-				for _, endpoint := range marketplaceVideoCreateEndpoints {
-					// 模板在展示层保留客户端模型占位符，绝不替换成私有上游模型。
-					route, ok := MatchVideoGatewayRoute(endpoint.Method, endpoint.Path)
-					if !ok {
-						continue
-					}
-					_, err := video.resolveTarget(account, upstreamModel, VideoTaskSubmitRequest{InboundProtocol: route.Protocol, Native: route.Native, NativePath: route.PathTemplate})
-					if err == nil {
-						paths[endpoint.Path] = endpoint
-					}
+				// 独立视频平台只开放统一入口；模型在账号上绑定了协议且绑定可被正式选号解析时才展示。
+				if marketplaceVideoBindingServable(ctx, video, account, upstreamModel) {
+					paths[marketplaceVideoCreateEndpoints[1].Path] = marketplaceVideoCreateEndpoints[1]
 				}
 			case PlatformGrok:
 				for _, path := range []string{"/v1/videos", "/v1/videos/generations"} {
@@ -150,4 +143,27 @@ func marketplaceModelHasVideoOutput(model ModelMarketplaceModel) bool {
 		}
 	}
 	return model.Pricing.PricingMode == "video" || model.Pricing.PricingMode == "video_token" || model.Pricing.PricingMode == "video_per_request"
+}
+
+// marketplaceVideoBindingServable 复用正式选号的静态解析，拒绝不安全地址与不能放入路径的模型；
+// 模板协议只校验地址，目录展示不读取模板仓库，模板缺失或停用仍由提交时拒绝。
+func marketplaceVideoBindingServable(ctx context.Context, video *VideoUpstreamService, account *Account, model string) bool {
+	cfg, err := account.VideoConfiguration()
+	if err != nil {
+		return false
+	}
+	binding, bound := cfg.Protocol(model)
+	if !bound {
+		return false
+	}
+	if !binding.IsProfile() {
+		_, err = video.resolveTarget(ctx, account, model)
+		return err == nil
+	}
+	base := binding.BaseURL
+	if base == "" {
+		base = account.GetCredential("base_url")
+	}
+	_, err = video.gateway.validateUpstreamBaseURL(base)
+	return err == nil
 }

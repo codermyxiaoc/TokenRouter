@@ -67,6 +67,9 @@ const (
 	// 它用于区分文本端点错配与账号真实缺少图片能力。
 	OpenAIImagesEndpoint Key = "ctx_openai_images_endpoint"
 
+	// ImageModelOperation 标识本次生图请求的图片操作（generate/edit/inpaint），调度阶段据此查询模型冷却。
+	ImageModelOperation Key = "ctx_image_model_operation"
+
 	// Group 认证后的分组信息，由 API Key 认证中间件设置
 	Group Key = "ctx_group"
 

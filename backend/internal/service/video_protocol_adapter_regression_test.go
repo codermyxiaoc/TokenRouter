@@ -10,14 +10,15 @@ import (
 )
 
 // 模型覆盖必须匹配最终上游模型；旧账号和显式保留旧协议都不能被新默认值迁移。
+// 旧配置在读取时换算为模型绑定，统一冻结第 2 版目标：缺省保持 legacy_v1，旧 H3 profile 换算为 metaso_h3_v1。
 func TestVideoProtocolAdapterConfigurationPriority(t *testing.T) {
 	for _, tc := range []struct {
 		name, profile, endpointAdapter, overrideModel, overrideAdapter string
 		wantAdapter, wantProfile                                       string
 		wantVersion                                                    int
 	}{
-		{name: "old_default", wantVersion: 1},
-		{name: "old_h3", profile: "metaso_h3", wantProfile: "metaso_h3", wantVersion: 1},
+		{name: "old_default", wantAdapter: "legacy_v1", wantVersion: 2},
+		{name: "old_h3", profile: "metaso_h3", wantAdapter: "metaso_h3_v1", wantVersion: 2},
 		{name: "endpoint_official", endpointAdapter: "openai_v1", wantAdapter: "openai_v1", wantVersion: 2},
 		{name: "final_model_override", endpointAdapter: "openai_v1", overrideModel: "provider-model", overrideAdapter: "metaso_h3_v1", wantAdapter: "metaso_h3_v1", wantVersion: 2},
 		{name: "requested_alias_cannot_override", endpointAdapter: "openai_v1", overrideModel: "public-model", overrideAdapter: "metaso_h3_v1", wantAdapter: "openai_v1", wantVersion: 2},
@@ -66,14 +67,11 @@ func TestVideoProtocolAdapterDoesNotGrantEndpoint(t *testing.T) {
 	account.Credentials["video_model_adapters"] = map[string]any{"video-model": map[string]string{"openai_videos": "openai_v1"}}
 	cfg, err := account.VideoConfiguration()
 	require.NoError(t, err)
-	_, err = cfg.SelectEndpoint("video-model", "openai_videos", false)
-	require.Error(t, err)
-	endpoint, err := cfg.SelectEndpoint("video-model", "seedance", true)
-	require.NoError(t, err)
-	require.Equal(t, VideoEndpointSeedance, endpoint)
-	id, explicit := cfg.ProtocolAdapter("video-model", endpoint)
-	require.Equal(t, "legacy_v1", id)
-	require.False(t, explicit)
+	// 未启用端点上的方案配置在迁移时被忽略，模型仍只绑定到已启用端点的原有协议。
+	binding, bound := cfg.Protocol("video-model")
+	require.True(t, bound)
+	require.Equal(t, VideoEndpointSeedance, binding.Endpoint)
+	require.Equal(t, VideoProtocolAdapterLegacy, binding.Adapter)
 }
 
 // 非法配置须在保存或调度前失败，不能默默回退成另一种会产生费用的请求协议。
@@ -100,6 +98,27 @@ func TestVideoProtocolAdapterRejectsMalformedConfiguration(t *testing.T) {
 			}
 			_, err := a.VideoConfiguration()
 			require.Error(t, err)
+		})
+	}
+	// 新格式绑定在保存边界拒绝：非精确模型、未知或跨端点协议、非原生端点携带路径、模板协议携带路径。
+	for name, protocols := range map[string]map[string]any{
+		"protocols_empty":         {},
+		"protocol_model_wildcard": {"gpt-*": map[string]any{"protocol": "openai_videos.openai_v1"}},
+		"protocol_model_space":    {" gpt-model": map[string]any{"protocol": "openai_videos.openai_v1"}},
+		"protocol_model_empty":    {"": map[string]any{"protocol": "openai_videos.openai_v1"}},
+		"protocol_unknown":        {"model": map[string]any{"protocol": "openai_videos.custom_script"}},
+		"protocol_wrong_endpoint": {"model": map[string]any{"protocol": "minimax.openai_v1"}},
+		"protocol_no_adapter":     {"model": map[string]any{"protocol": "openai_videos"}},
+		"protocol_path_on_openai": {"model": map[string]any{"protocol": "openai_videos.openai_v1", "path": "/omni-video/{model}"}},
+		"protocol_kling_no_path":  {"model": map[string]any{"protocol": "kling.kling_v1"}},
+		"protocol_profile_path":   {"model": map[string]any{"protocol": "profile:custom", "path": "/x"}},
+		"protocol_unsafe_base":    {"model": map[string]any{"protocol": "seedance.seedance_v1", "base_url": "file:///video"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := videoFixtureAccount(VideoEndpointOpenAIVideos)
+			delete(a.Credentials, "video_endpoints")
+			a.Credentials["video_model_protocols"] = protocols
+			require.Error(t, normalizeVideoCredentials(a))
 		})
 	}
 }
@@ -192,7 +211,12 @@ func TestVideoProtocolAdapterFrozenLifecycleAndBilling(t *testing.T) {
 					require.NoError(t, err)
 					task, err := s.repo.Get(context.Background(), created.LocalTaskID)
 					require.NoError(t, err)
-					require.Equal(t, adapter, task.Target.ProtocolAdapter)
+					// 未显式配置方案的旧账号换算为 legacy_v1 绑定，任务冻结显式方案。
+					wantAdapter := adapter
+					if wantAdapter == "" {
+						wantAdapter = VideoProtocolAdapterLegacy
+					}
+					require.Equal(t, wantAdapter, task.Target.ProtocolAdapter)
 					require.InDelta(t, wantHold, task.Hold.HoldAmount, 1e-9)
 					frozen := task.Target
 					quote, err := json.Marshal(task.Quote)
@@ -201,6 +225,7 @@ func TestVideoProtocolAdapterFrozenLifecycleAndBilling(t *testing.T) {
 					a.Credentials["video_endpoints"] = []string{"minimax"}
 					a.Credentials["video_base_urls"] = map[string]string{"minimax": "https://changed.example"}
 					a.Credentials["video_endpoint_adapters"] = map[string]string{"minimax": "minimax_v2"}
+					a.Credentials["video_model_protocols"] = map[string]any{"*": map[string]any{"protocol": "minimax.minimax_v2", "base_url": "https://changed.example"}}
 					*key.Group.ModelPricing[0].VideoPrices[0].Price = 99
 					httpFixture.status = http.StatusOK
 					httpFixture.response = `{"id":"frozen-adapter-task","status":"` + status + `","seconds":"4","size":"1280x720","usage":{"completion_tokens":100000}}`

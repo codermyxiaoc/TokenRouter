@@ -114,13 +114,13 @@ func (s *MediaTaskService) readPreviewVideoTask(ctx context.Context, identity Me
 	return task, nil
 }
 
-// 仅对明确支持固定内容端点且没有直链的任务兜底，不猜测其他供应商路径或替换不安全地址。
+// 仅对冻结协议声明了凭据内容路径且没有直链的任务兜底，不猜测其他供应商路径或替换不安全地址。
 func (s *MediaTaskService) canPreviewVideoContent(task *VideoTaskRecord) bool {
 	if task == nil || task.VideoURL != "" || s.videoContentTransport == nil || s.videoAccounts == nil ||
-		ValidateVideoProtocolTarget(task.Target) != nil || task.Target.Endpoint != VideoEndpointOpenAIVideos ||
+		ValidateVideoProtocolTarget(task.Target) != nil ||
 		task.AccountID <= 0 || task.Target.AccountID != task.AccountID || !safeMediaPreviewURL(task.Target.BaseURL) {
 		return false
 	}
-	_, err := VideoProtocolTaskPath(task.Target, task.UpstreamTaskID)
-	return err == nil
+	_, credentialed, err := videoContentPath(task.Target, task.UpstreamTaskID)
+	return err == nil && credentialed
 }

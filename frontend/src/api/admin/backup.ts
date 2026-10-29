@@ -101,6 +101,8 @@ export interface TestS3Response {
 // 异步图片可复用备份 S3 凭据，独立保存图片桶、路径和链接有效期。
 export interface ImageStorageConfig {
   enabled: boolean
+  // 存储后端：s3（默认，兼容 R2/OSS/MinIO）或 local（本机目录，Windows/Linux 通用）
+  backend?: 's3' | 'local' | ''
   reuse_backup_s3: boolean
   bucket: string
   prefix: string
@@ -113,6 +115,9 @@ export interface ImageStorageConfig {
   access_key_id: string
   secret_access_key?: string
   force_path_style: boolean
+  // 仅 local 后端使用：存储目录与总容量上限（字节，0 表示不限）
+  local_dir?: string
+  local_max_total_bytes?: number
 }
 
 export interface ImageStorageConfigResponse {

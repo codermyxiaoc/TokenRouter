@@ -740,6 +740,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					continue
 				}
 				c.Header("Retry-After", strconv.Itoa(max(1, int((max(0, remaining)+time.Second-1)/time.Second))))
+				service.MarkImageAttemptGroupUnsent(c.Request.Context())
 				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "image_models_cooling_down", "Compatible image accounts are temporarily cooling down", streamStarted)
 				return
 			}

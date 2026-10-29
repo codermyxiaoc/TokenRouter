@@ -200,7 +200,7 @@ func TestCreativeWorkerAccountConcurrencyPending(t *testing.T) {
 	require.Equal(t, CreativeRunStatusQueued, f.repo.runs["crun_worker_account_pending"].Status)
 }
 
-// 输出保存失败后再次领取只按已记录的成功结果结算，绝不重新发起付费生成。
+// 输出无处保存时用户拿不到成品：结算整笔释放并以 result_lost 结束，绝不重新发起付费生成。
 func TestCreativeWorkerRetriesTransientOutputFailure(t *testing.T) {
 	f := newCreativeWorkerFixture()
 	runID := "crun_workeroutputretry1"
@@ -213,24 +213,20 @@ func TestCreativeWorkerRetriesTransientOutputFailure(t *testing.T) {
 
 	result, err := f.worker.process(context.Background(), runID)
 	require.NoError(t, err)
-	require.False(t, result.Terminal)
-	require.Greater(t, result.RequeueAfter, time.Duration(0))
+	require.True(t, result.Terminal)
 	require.Equal(t, 0, f.repo.runs[runID].AttemptCount)
-	require.Equal(t, 1, f.repo.runs[runID].SettlementAttemptCount)
-	require.Equal(t, CreativeRunStatusProviderSucceeded, f.repo.runs[runID].Status)
-	require.Equal(t, CreativeRunOutputStatusSucceeded, f.repo.outputs[runID][0].Status)
-	require.Equal(t, 0, f.billing.captureN)
+	require.Equal(t, CreativeRunStatusResultLost, f.repo.runs[runID].Status)
+	require.Equal(t, CreativeRunOutputStatusFailed, f.repo.outputs[runID][0].Status)
 
 	result, err = f.worker.process(context.Background(), runID)
 	require.NoError(t, err)
 	require.True(t, result.Terminal)
 	require.Equal(t, 1, f.exec.calls)
-	require.Equal(t, 1, f.billing.captureN)
-	require.Equal(t, 0, f.billing.releaseN)
-	require.Equal(t, CreativeRunStatusResultLost, f.repo.runs[runID].Status)
+	require.Equal(t, 0, f.billing.captureN)
+	require.Equal(t, 1, f.billing.releaseN)
 }
 
-// 成功结果未写入数据库时保留冻结资金并进入人工核对，重复领取也不能再次调用上游。
+// 成功结果未写入数据库时成品已丢失：栅栏期内不重发、不提前释放，超过原执行时限后失败并释放。
 func TestCreativeWorkerProviderPersistenceFailureDoesNotReplay(t *testing.T) {
 	f := newCreativeWorkerFixture()
 	runID := "crun_providerdbfail"
@@ -247,13 +243,21 @@ func TestCreativeWorkerProviderPersistenceFailureDoesNotReplay(t *testing.T) {
 		next, err := f.worker.process(context.Background(), runID)
 		require.NoError(t, err)
 		require.False(t, next.Terminal)
-		require.Greater(t, next.RequeueAfter, 14*time.Minute)
+		require.LessOrEqual(t, next.RequeueAfter, defaultCreativeUnconfirmedRequeueDelay)
 	}
 	require.Equal(t, 1, f.exec.calls)
 	require.Equal(t, CreativeRunStatusRunning, f.repo.runs[runID].Status)
 	require.Equal(t, "PROVIDER_RESULT_UNCONFIRMED", *f.repo.runs[runID].ErrorCode)
-	require.Equal(t, 0, f.billing.captureN)
 	require.Equal(t, 0, f.billing.releaseN)
+	past := time.Now().Add(-defaultCreativeUnconfirmedGrace - time.Second)
+	f.repo.runs[runID].ImageExecutionDeadlineAt = &past
+	last, err := f.worker.process(context.Background(), runID)
+	require.NoError(t, err)
+	require.True(t, last.Terminal)
+	require.Equal(t, 1, f.exec.calls)
+	require.Equal(t, CreativeRunStatusFailed, f.repo.runs[runID].Status)
+	require.Equal(t, 0, f.billing.captureN)
+	require.Equal(t, 1, f.billing.releaseN)
 }
 
 // 创建 outbox 延迟到执行期间才处理时，不能擦除栅栏或释放尚未核对的预占。
@@ -271,7 +275,7 @@ func TestCreativeProvisionRecoveryPreservesExecutionFence(t *testing.T) {
 	require.Equal(t, 0, f.billing.releaseN)
 }
 
-// 泛5xx无法证明未受理，不能沿用旧“三次生成后释放”的假设。
+// 泛5xx无法证明未受理，不能换号重发；用户没拿到成品，一次执行后直接失败并释放。
 func TestCreativeWorkerRetryableError(t *testing.T) {
 	f := newCreativeWorkerFixture()
 	id := "crun_workerretry0001"
@@ -280,12 +284,12 @@ func TestCreativeWorkerRetryableError(t *testing.T) {
 	for range 3 {
 		result, err := f.worker.process(context.Background(), id)
 		require.NoError(t, err)
-		require.False(t, result.Terminal)
+		require.True(t, result.Terminal)
 	}
 	require.Equal(t, 1, f.exec.calls)
 	require.Zero(t, f.repo.runs[id].AttemptCount)
-	require.Zero(t, f.billing.releaseN)
-	require.Equal(t, CreativeProvisioningPhaseProviderInflight, f.repo.runs[id].ProvisioningPhase)
+	require.Equal(t, 1, f.billing.releaseN)
+	require.Equal(t, CreativeRunStatusFailed, f.repo.runs[id].Status)
 }
 
 func TestCreativeWorkerNonRetryableError(t *testing.T) {
@@ -305,7 +309,7 @@ func TestCreativeWorkerNonRetryableError(t *testing.T) {
 	require.Equal(t, 1, f.billing.releaseN)
 }
 
-// TestCreativeWorkerCancelRace 校验执行期间进入 cancelled：仍捕获计费，但保留该终态。
+// TestCreativeWorkerCancelRace 校验执行期间进入 cancelled：界面显示失败、用户拿不到成品，因此只释放不扣费。
 func TestCreativeWorkerCancelRace(t *testing.T) {
 	f := newCreativeWorkerFixture()
 	runID := "crun_workercancel001"
@@ -326,12 +330,13 @@ func TestCreativeWorkerCancelRace(t *testing.T) {
 
 	run := f.repo.runs[runID]
 	require.Equal(t, CreativeRunStatusCancelled, run.Status)
-	// provider 已确认成功：仍完成捕获与用量记录，不回写 succeeded。
-	require.Equal(t, 1, f.billing.captureN)
-	require.Equal(t, 0, f.billing.releaseN)
-	require.NotNil(t, run.ActualCost)
-	output := f.repo.outputs[runID][0]
-	require.Equal(t, CreativeRunOutputStatusSucceeded, output.Status)
+	require.Equal(t, 0, f.billing.captureN)
+	// 同步结算与 worker 结算都可能触发释放，但只使用同一幂等请求号，账本只生效一次。
+	require.NotEmpty(t, f.billing.releaseIDs)
+	for _, id := range f.billing.releaseIDs {
+		require.Equal(t, CreativeReleaseRequestID(runID), id)
+	}
+	require.Nil(t, run.ActualCost)
 }
 
 // TestCreativeWorkerPayloadLost 校验载荷过期：result_lost 且未执行的预占被释放。

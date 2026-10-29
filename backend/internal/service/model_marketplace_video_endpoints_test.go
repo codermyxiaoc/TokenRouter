@@ -10,35 +10,39 @@ import (
 )
 
 // 市场端点只用本地配置推导，测试不会请求供应商或创建付费任务。
+// 独立视频平台只公开统一入口 POST /v1/videos：模型在账号上有可解析的协议绑定才展示，旧端点配置按迁移规则换算，
+// 原生入口与 /v1/video/generations 均不再出现在市场中。
 func TestMarketplaceVideoEndpointsFollowAdaptiveSelection(t *testing.T) {
-	const unified = "/v1/video/generations"
 	const videos = "/v1/videos"
-	const ark = "/api/v3/contents/generations/tasks"
-	const wan = "/api/v1/services/aigc/video-generation/video-synthesis"
 	for _, fixture := range []struct {
 		name      string
 		endpoints []string
 		binding   any
 		modelPath string
+		protocols map[string]any
 		want      []string
 	}{
-		{"compat does not enable plural", []string{"compat"}, nil, "", []string{unified}},
-		{"plural does not enable compat", []string{"openai_videos"}, nil, "", []string{videos}},
-		{"both OpenAI endpoints explicitly enabled", []string{"compat", "openai_videos"}, nil, "", []string{unified, videos}},
-		{"plural and native do not enable compat", []string{"openai_videos", "seedance"}, nil, "", []string{videos, ark}},
-		{"two native endpoints never enable OpenAI", []string{"seedance", "wan"}, nil, "", []string{ark, wan}},
-		{"single native never enables OpenAI", []string{"wan"}, nil, "", []string{wan}},
-		{"native binding excludes enabled OpenAI endpoints", []string{"compat", "openai_videos", "seedance", "wan"}, "seedance", "", []string{ark}},
-		{"multi binding narrows enabled", []string{"compat", "openai_videos", "seedance", "wan"}, []string{"compat", "wan"}, "", []string{unified, wan}},
-		{"plural binding excludes compat", []string{"compat", "openai_videos", "seedance"}, "openai_videos", "", []string{videos}},
-		{"compat binding excludes plural", []string{"compat", "openai_videos", "seedance"}, "compat", "", []string{unified}},
-		{"kling without model path remains native", []string{"kling"}, nil, "", []string{"/text-to-video/{model}", "/image-to-video/{model}", "/omni-video/{model}", "/v1/videos/text2video", "/v1/videos/omni-video"}},
-		{"kling model path cannot enable OpenAI", []string{"kling"}, nil, "/omni-video/{model}", []string{"/text-to-video/{model}", "/image-to-video/{model}", "/omni-video/{model}", "/v1/videos/text2video", "/v1/videos/omni-video"}},
-		{"disabled binding omitted", []string{"compat"}, "seedance", "", nil},
+		{"legacy compat converts to unified entry", []string{"compat"}, nil, "", nil, []string{videos}},
+		{"legacy plural converts to unified entry", []string{"openai_videos"}, nil, "", nil, []string{videos}},
+		{"legacy natives convert to unified entry", []string{"seedance", "wan"}, nil, "", nil, []string{videos}},
+		{"legacy native binding converts to unified entry", []string{"compat", "openai_videos", "seedance", "wan"}, "seedance", "", nil, []string{videos}},
+		{"legacy kling without model path has no binding", []string{"kling"}, nil, "", nil, nil},
+		{"legacy kling model path binds the model", []string{"kling"}, nil, "/omni-video/{model}", nil, []string{videos}},
+		{"legacy disabled binding omitted", []string{"compat"}, "seedance", "", nil, nil},
+		{"exact protocol binding", nil, nil, "", map[string]any{"private-model": map[string]any{"protocol": "seedance.seedance_v1"}}, []string{videos}},
+		{"wildcard protocol binding", nil, nil, "", map[string]any{"*": map[string]any{"protocol": "wan.wan_v1"}}, []string{videos}},
+		{"other model binding omitted", nil, nil, "", map[string]any{"other-model": map[string]any{"protocol": "seedance.seedance_v1"}}, nil},
+		{"unsafe binding address omitted", nil, nil, "", map[string]any{"private-model": map[string]any{"protocol": "seedance.seedance_v1", "base_url": "file:///video"}}, nil},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			account := videoFixtureAccount(VideoEndpointCompat)
-			account.Credentials["video_endpoints"] = fixture.endpoints
+			delete(account.Credentials, "video_endpoints")
+			if fixture.endpoints != nil {
+				account.Credentials["video_endpoints"] = fixture.endpoints
+			}
+			if fixture.protocols != nil {
+				account.Credentials["video_model_protocols"] = fixture.protocols
+			}
 			account.Credentials["model_mapping"] = map[string]any{"public-model": "private-model"}
 			if fixture.binding != nil {
 				account.Credentials["video_model_bindings"] = map[string]any{"private-model": fixture.binding}
@@ -52,6 +56,7 @@ func TestMarketplaceVideoEndpointsFollowAdaptiveSelection(t *testing.T) {
 			var paths []string
 			for _, endpoint := range models[0].VideoEndpoints {
 				require.Equal(t, http.MethodPost, endpoint.Method)
+				require.Equal(t, "openai_videos", endpoint.Protocol)
 				require.NotContains(t, endpoint.Path, "private-model")
 				require.NotContains(t, endpoint.Path, "relay.example")
 				paths = append(paths, endpoint.Path)
@@ -79,8 +84,9 @@ func TestMarketplaceVideoEndpointsRespectMappingAndAccountRestrictions(t *testin
 	svc := &ModelMarketplaceService{gatewayService: &GatewayService{channelService: channelService}}
 	models := []ModelMarketplaceModel{{ID: "public-model"}}
 	svc.attachMarketplaceVideoEndpoints(context.Background(), &Group{ID: 5, Platform: PlatformVideo}, models, []Account{*allowed, *denied})
+	// 被拒绝账号的协议不会合并进来；允许账号的绑定只表现为统一入口。
 	require.Equal(t, []ModelMarketplaceVideoEndpoint{
-		{Method: "POST", Path: "/api/v3/contents/generations/tasks", Protocol: "seedance"},
+		{Method: "POST", Path: "/v1/videos", Protocol: "openai_videos"},
 	}, models[0].VideoEndpoints)
 }
 
@@ -101,6 +107,8 @@ func TestMarketplaceVideoEndpointsExcludeInvalidAccounts(t *testing.T) {
 		{"unsafe Kling model", func(a *Account) {
 			a.Credentials["video_endpoints"] = []string{"kling"}
 			a.Credentials["model_mapping"] = map[string]any{"m": "../secret"}
+			// 显式绑定路径，确保拒绝来自路径模型校验而不是缺少绑定。
+			a.Credentials["video_model_paths"] = map[string]string{"../secret": "/omni-video/{model}"}
 		}},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
@@ -156,7 +164,8 @@ func TestMarketplaceVideoEndpointsAttachThroughPrefetchedListing(t *testing.T) {
 	models := svc.listPublicModelsForGroupWithAccounts(context.Background(), &Group{ID: 5, Platform: PlatformVideo}, []Account{*account})
 	require.Len(t, models, 1)
 	require.Equal(t, "my-video", models[0].ID)
-	require.Equal(t, []ModelMarketplaceVideoEndpoint{{Method: "POST", Path: "/v2/video_generation", Protocol: "minimax"}}, models[0].VideoEndpoints)
+	// 旧 MiniMax 端点换算为模型绑定后，市场只公开统一入口。
+	require.Equal(t, []ModelMarketplaceVideoEndpoint{{Method: "POST", Path: "/v1/videos", Protocol: "openai_videos"}}, models[0].VideoEndpoints)
 	require.Equal(t, "unpriced", models[0].Pricing.PriceStatus, "缺少定价不应伪造价格或隐藏已有端点")
 }
 
@@ -180,5 +189,5 @@ func TestMarketplaceVideoEndpointsFallbackUsesSameAccountSnapshot(t *testing.T) 
 	models := svc.listPublicModelsForGroup(context.Background(), &Group{ID: 5, Platform: PlatformVideo})
 	require.Equal(t, 1, repo.calls)
 	require.Len(t, models, 1)
-	require.Equal(t, []ModelMarketplaceVideoEndpoint{{Method: "POST", Path: "/v2/video_generation", Protocol: "minimax"}}, models[0].VideoEndpoints)
+	require.Equal(t, []ModelMarketplaceVideoEndpoint{{Method: "POST", Path: "/v1/videos", Protocol: "openai_videos"}}, models[0].VideoEndpoints)
 }

@@ -10,7 +10,19 @@ import (
 const CreativeVideoH3ReferenceImageLimit int64 = 2 << 20
 
 // 只检查内部可信原图长度，并遵循模型覆盖后的真实方案；旧任务恢复不经过新准入。
+// 模板协议按 capabilities.max_reference_bytes 限制，旧 H3 方案沿用固定上限。
 func validateCreativeVideoReferenceImageSize(target VideoUpstreamTarget, maxBytes int64) error {
+	tooLarge := infraerrors.BadRequest("CREATIVE_VIDEO_REFERENCE_TOO_LARGE", creativeCanvasFailureMessage("CREATIVE_VIDEO_REFERENCE_TOO_LARGE"))
+	if target.Version == videoTargetVersionProfile {
+		caps, err := videoTargetProfileCapabilities(target)
+		if err != nil {
+			return err
+		}
+		if caps != nil && caps.MaxReferenceBytes > 0 && maxBytes > caps.MaxReferenceBytes {
+			return tooLarge
+		}
+		return nil
+	}
 	if maxBytes <= CreativeVideoH3ReferenceImageLimit {
 		return nil
 	}
@@ -19,9 +31,21 @@ func validateCreativeVideoReferenceImageSize(target VideoUpstreamTarget, maxByte
 		return err
 	}
 	if adapter == VideoProtocolAdapterMetasoH3 {
-		return infraerrors.BadRequest("CREATIVE_VIDEO_REFERENCE_TOO_LARGE", creativeCanvasFailureMessage("CREATIVE_VIDEO_REFERENCE_TOO_LARGE"))
+		return tooLarge
 	}
 	return nil
+}
+
+// videoTargetProfileCapabilities 返回模板快照声明的能力；内置协议返回 nil。
+func videoTargetProfileCapabilities(target VideoUpstreamTarget) (*VideoProfileCapabilities, error) {
+	if target.Version != videoTargetVersionProfile {
+		return nil, nil
+	}
+	spec, err := videoProfileSpecFromTarget(target)
+	if err != nil {
+		return nil, err
+	}
+	return spec.Capabilities, nil
 }
 
 // 画布自动比例先从已经过归属、格式与尺寸校验的参考图取方向；没有参考图时沿用
@@ -54,6 +78,23 @@ func creativeVideoCanvasAdaptiveRatio(e *CreativeCanvasExecution, model *Creativ
 // H3 解析横竖屏，Yezonghui 省略比例让上游自动选择，其它协议保持原行为。
 func prepareCreativeVideoAdaptiveRatio(body []byte, target VideoUpstreamTarget, hint string) ([]byte, error) {
 	if hint != "16:9" && hint != "9:16" {
+		return body, nil
+	}
+	if target.Version == videoTargetVersionProfile {
+		// 模板协议的发送前正文是规范请求，比例位于 aspect_ratio，由 capabilities.adaptive_ratio 决定换算或省略。
+		caps, err := videoTargetProfileCapabilities(target)
+		if err != nil {
+			return nil, err
+		}
+		if caps == nil || gjson.GetBytes(body, "aspect_ratio").String() != "adaptive" {
+			return body, nil
+		}
+		switch caps.AdaptiveRatio {
+		case "orientation":
+			return sjson.SetBytes(body, "aspect_ratio", hint)
+		case "omit":
+			return sjson.DeleteBytes(body, "aspect_ratio")
+		}
 		return body, nil
 	}
 	adapter, err := VideoTargetProtocolAdapter(target)

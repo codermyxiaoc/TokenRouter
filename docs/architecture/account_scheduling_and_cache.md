@@ -11,6 +11,7 @@
 - [账号自动停调阈值](#账号自动停调阈值)：修改平台用量阈值或恢复窗口时读取。
 - [评分诊断](#评分诊断)：修改管理员评分解释或模拟接口时读取。
 - [粘性与等待](#粘性与等待)：修改会话复用、并发等待或超时边界时读取。
+- [生图模型冷却](#image_model_cooldown)：修改生图故障冷却分级、调度过滤或生图换组条件时读取。
 - [失效与恢复](#失效与恢复)：修改账号更新后的跨实例可见性时读取。
 - [诊断不变量](#诊断不变量)：排查无可用账号或陈旧选择时读取。
 
@@ -113,9 +114,29 @@ Responses、Chat、Messages 与 Gemini 原生生成在选择后发生账号队�
 
 流式请求一旦向客户端写出首个分块就固定当前 attempt。之后账号释放、错误处理和流尾事件仍要完成，但不能切换到另一个账号拼接响应。
 
+<a id="image_model_cooldown"></a>
+## 生图模型冷却
+
+生图故障按“账号 + 映射后的实际模型 + 图片操作（generate/edit/inpaint）”冷却，不停调整个账号，也不影响同账号的对话模型。冷却时长按故障类型分级（`ImageModelCooldownPolicy`，可由 `gateway.image_model_cooldown` 覆盖）：
+
+- 模型不存在、余额不足、401/403 凭据失效：1 小时，需要人工处理。
+- 429：1 分钟。
+- 其它账号级拒绝：按连续失败 1→5→30 分钟。
+- 5xx、超时、传输错误等结果未知：按连续失败 2→10→30 分钟。
+
+连续失败次数存于 `image:model_strikes:*`，首次失败开启计数窗口（默认 2 小时）且不续期；冷却窗口仍生效时的并发失败不再累加。确认产出图片后计数清零，已开启的冷却仍按原期限结束。Redis 不可用时冷却与计数都退回有界本地状态。冷却键值保存“模型 NUL 操作”，管理端通过 `GET/DELETE /admin/accounts/:id/image-model-cooldowns` 按账号前缀列出并手动解除。
+
+生图入口通过 `WithImageModelOperation` 把操作写入选号上下文，OpenAI 调度器在候选过滤阶段直接排除冷却中的组合（原因 `image_model_cooling`），粘性账号命中冷却时解除绑定，用户重试会落到健康账号。若本组全部被过滤，入口再按旧路径逐个识别冷却账号一次，以返回带 `Retry-After` 的 `image_models_cooling_down`。
+
+智能路由 Key 的生图请求只在有“未生成”正向证据时换组：本组没有可用账号且一次都未发送（`MarkImageAttemptGroupUnsent`），或最后一次为可换号的确定拒绝（`ImageAttemptAllowsGroupFallback`）。结果未知或已受理时仍禁止换组，避免重复生成和重复扣费。普通单分组 Key 没有可换的分组，只依赖冷却避开故障模型。
+
+生图执行策略由智能路由协调器为 `/images/*` 安装一次，各分组的处理器复用它：处理器返回时的取消不会被误判为客户端取消；跨组共用同一发送预算（最多两个不同账号各一次）、账号去重和首次截止时间，换组不会刷新期限。缺少策略的生图请求按结果未知处理，绝不重放。异步图片一旦冻结资金（预占按请求 ID 冻结且报价含分组），本请求不再跨组，组内安全换号仍复用原预占。
+
 ## 失效与恢复
 
 OpenCode 的模式和模型规则不能在候选投影中丢失。其 GO 统一用量快照校验依赖完整查询身份，因此 OpenCode 元数据额外保留 Credentials、代理身份及用量查询/TLS 配置，保证窗口阈值与完整账号一致；这些内容仅供内部调度缓存使用，不进入浏览器用量结果。详见 [OpenCode 用量与调度](../interfaces/opencode_upstream.md#opencode_usage_and_scheduling)。
+
+Video 账号的选号与预算校验直接读取候选投影，精简凭据（`filterSchedulerCredentials`）必须保留 `video_model_protocols`、`video_max_pending_tasks`、`video_max_duration_seconds` 以及 `api_key`、`base_url`。新增视频账号字段时同步加入该白名单，否则新建账号在快照中没有模型绑定，要等一次编辑重建快照才可用。
 
 以下变化必须使相关账号投影或 bucket 失效：账号启停/删除、凭据刷新、分组关系、优先级、模型映射/白名单、代理可用性、限流与临时不可调度、mixed scheduling、privacy 和可调度资格。影响多个平台 bucket 的 Antigravity 混合账号要同时更新原生目标平台与 Antigravity bucket。
 

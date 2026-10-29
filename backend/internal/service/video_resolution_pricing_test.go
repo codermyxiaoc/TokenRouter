@@ -101,7 +101,7 @@ func TestVideoResolutionPriceLifecycleAndUsageTier(t *testing.T) {
 			created, err := s.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(`{"model":"video-model"}`), IdempotencyKey: "one"})
 			require.NoError(t, err)
 			tokens := int64(250_000)
-			upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Body: []byte(`{"status":"completed"}`), Metadata: VideoRequestMetadata{Resolution: "720p", DurationSeconds: 8, Tokens: &tokens}}
+			upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Body: []byte(`{"status":"completed"}`), Metadata: VideoRequestMetadata{Resolution: "720p", DurationSeconds: 8, Tokens: &tokens}}
 			task, err := s.repo.Get(context.Background(), created.LocalTaskID)
 			require.NoError(t, err)
 			// 受理后即使改价，也必须依原快照处理完成事件。

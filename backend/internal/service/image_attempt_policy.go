@@ -33,20 +33,26 @@ type ImageAttemptDecision struct {
 	RetryDifferentAccount bool
 	AttemptFault          bool
 	Reason                string
+	// UpstreamStatus 是分类依据的 HTTP 状态（传输错误为 0），只用于按故障类型分级冷却。
+	UpstreamStatus int
 }
 
 type imageAttemptPolicyKey struct{}
 
 type imageAttemptPolicy struct {
-	mu         sync.Mutex
-	origin     context.Context
-	cancel     context.CancelFunc
+	mu     sync.Mutex
+	origin context.Context
+	cancel context.CancelFunc
+	// parent 是安装策略前的上下文，用于区分“策略自身被收尾取消”与“客户端取消”。
+	parent     context.Context
 	deadline   time.Time
 	accounts   map[int64]struct{}
 	sends      int
 	last       ImageAttemptDecision
 	lastSet    bool
 	mayProceed bool
+	// allCooling 表示本组没有可用账号（含全部处于生图冷却），且一次都没有发送。
+	allCooling bool
 }
 
 type imageAttemptError struct {
@@ -68,10 +74,21 @@ func WithImageAttemptPolicy(ctx context.Context, timeout time.Duration) (context
 	if timeout <= 0 {
 		timeout = DefaultPublicImageAttemptTimeout
 	}
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	deadline, _ := ctx.Deadline()
-	policy := &imageAttemptPolicy{origin: ctx, cancel: cancel, deadline: deadline, accounts: map[int64]struct{}{}, mayProceed: true}
+	policy := &imageAttemptPolicy{origin: ctx, cancel: cancel, parent: parent, deadline: deadline, accounts: map[int64]struct{}{}, mayProceed: true}
 	return context.WithValue(ctx, imageAttemptPolicyKey{}, policy), cancel
+}
+
+// ImageAttemptCancelledByCleanupOnly 判断上下文的取消是否仅来自生图策略的收尾取消（处理器返回时的 cancel），
+// 而客户端及外层上下文仍然有效。生图总截止到期不算：超时后必须停止，不能借换组继续执行。
+func ImageAttemptCancelledByCleanupOnly(ctx context.Context) bool {
+	policy := imagePolicyFromContext(ctx)
+	if policy == nil || ctx.Err() == nil || policy.parent == nil {
+		return false
+	}
+	return errors.Is(policy.origin.Err(), context.Canceled) && policy.parent.Err() == nil
 }
 
 func imagePolicyFromContext(ctx context.Context) *imageAttemptPolicy {
@@ -145,6 +162,35 @@ func ImageAttemptCanSwitch(decision ImageAttemptDecision) bool {
 	return decision.RetryDifferentAccount && (decision.Outcome == ImageAttemptNotSent || decision.Outcome == ImageAttemptRejected)
 }
 
+// MarkImageAttemptGroupUnsent 由入口在本组没有可用账号（含全部处于生图冷却）且一次都未发送时调用，
+// 作为“未发送”的正向证据，允许智能路由换到下一个分组。
+func MarkImageAttemptGroupUnsent(ctx context.Context) {
+	if policy := imagePolicyFromContext(ctx); policy != nil {
+		policy.mu.Lock()
+		defer policy.mu.Unlock()
+		if !policy.lastSet && policy.sends == 0 {
+			policy.allCooling = true
+		}
+	}
+}
+
+// ImageAttemptAllowsGroupFallback 判断智能路由能否把生图请求换到下一个分组：
+// 只接受“全组冷却未发送”或“最后一次为确定未生成且可换号的拒绝”两种正向证据；
+// 结果未知、已受理或缺少证据时一律禁止，避免重复生成和重复扣费。
+// @project-doc docs/architecture/account_scheduling_and_cache.md#image_model_cooldown
+func ImageAttemptAllowsGroupFallback(ctx context.Context) bool {
+	policy := imagePolicyFromContext(ctx)
+	if policy == nil {
+		return true
+	}
+	policy.mu.Lock()
+	defer policy.mu.Unlock()
+	if !policy.lastSet {
+		return policy.allCooling && policy.sends == 0
+	}
+	return ImageAttemptCanSwitch(policy.last)
+}
+
 func RecordImageAttemptDecision(ctx context.Context, decision ImageAttemptDecision) {
 	if policy := imagePolicyFromContext(ctx); policy != nil {
 		policy.mu.Lock()
@@ -203,6 +249,12 @@ func ClassifyImageTransportFailure(err error) ImageAttemptDecision {
 
 // ClassifyImageHTTPFailure 不把普通 5xx 当作未受理保证；任务、产物或用量证据优先于 HTTP 错误码。
 func ClassifyImageHTTPFailure(status int, body []byte) ImageAttemptDecision {
+	decision := classifyImageHTTPFailure(status, body)
+	decision.UpstreamStatus = status
+	return decision
+}
+
+func classifyImageHTTPFailure(status int, body []byte) ImageAttemptDecision {
 	unknown := ImageAttemptDecision{Outcome: ImageAttemptUnknown, AttemptFault: true, Reason: "image_submission_unknown"}
 	if gjson.ValidBytes(body) {
 		hasTextOutput := false

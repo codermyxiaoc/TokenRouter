@@ -158,6 +158,10 @@ func validGeneratedImageObjectKey(prefix, key string) bool {
 func imageObjectCleanupID(cfg *config.ImageStorageConfig, key string) string {
 	// 身份只使用目标位置，不包含凭据；同桶密钥轮换或传输重试不产生重复清理条目。
 	target, _ := json.Marshal([]string{cfg.Endpoint, cfg.Bucket, key})
+	if cfg.IsLocal() {
+		// 本地目录与 S3 位置分开命名，S3 的既有登记 ID 保持不变。
+		target, _ = json.Marshal([]string{config.ImageStorageBackendLocal, cfg.LocalDir, key})
+	}
 	sum := sha256.Sum256(target)
 	return hex.EncodeToString(sum[:])
 }

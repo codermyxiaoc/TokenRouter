@@ -12,10 +12,12 @@
 
 services:
   sub2api:
-    image: ${SUB2API_IMAGE:-coderxiaoc/tokenrouter:v0.1.278-ct-v3.32}
+    image: ${SUB2API_IMAGE:-coderxiaoc/tokenrouter:v0.1.278-ct-v3.33}
     # 从 DockerHub 拉取本地源码发布的版本；可在 .env 中指定其他标签或镜像摘要。
     pull_policy: always
     container_name: sub2api
+    # 停机时创作台 worker 最多排空 120 秒在途任务，宽限期需覆盖排空与收尾，避免被强制终止打断生成
+    stop_grace_period: 150s
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

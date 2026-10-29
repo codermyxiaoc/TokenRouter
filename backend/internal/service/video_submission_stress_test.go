@@ -259,7 +259,7 @@ func (u *videoStressTransport) Poll(_ context.Context, _ *Account, _ VideoUpstre
 	u.mu.Lock()
 	u.polls++
 	u.mu.Unlock()
-	response := retryVideoResponse(200, fmt.Sprintf(`{"id":%q,"status":"completed","duration":8,"resolution":"720p","usage":{"completion_tokens":250000}}`, id))
+	response := retryVideoResponse(200, fmt.Sprintf(`{"id":%q,"status":"completed","video":{"url":"https://cdn.example.test/video.mp4"},"duration":8,"resolution":"720p","usage":{"completion_tokens":250000}}`, id))
 	tokens := int64(250_000)
 	response.Metadata = VideoRequestMetadata{DurationSeconds: 8, Resolution: "720p", Tokens: &tokens}
 	return response, nil

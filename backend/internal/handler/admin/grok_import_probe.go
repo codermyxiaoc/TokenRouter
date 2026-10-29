@@ -238,5 +238,8 @@ func ProvideAccountHandler(
 	diagnostics := service.NewAdvancedSchedulerScoreDiagnosticService(adminService, concurrencyService, rateLimitService)
 	diagnostics.SetSchedulingServices(gatewayService, openAIGatewayService)
 	handler.SetAdvancedSchedulerScoreDiagnosticService(diagnostics)
+	if openAIGatewayService != nil {
+		handler.SetImageModelCooldownManager(openAIGatewayService)
+	}
 	return handler
 }

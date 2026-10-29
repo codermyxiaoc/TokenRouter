@@ -461,6 +461,10 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		return nil, false, nil
 	}
 	if !s.isAccountRequestCompatible(ctx, account, req) {
+		// 粘性账号的生图模型进入冷却时解除绑定，用户重试会重新调度到健康账号。
+		if imageCooldownAccountBlocked(ctx, s.service.cache, account, req.routingModel()) {
+			clearBinding()
+		}
 		return nil, false, nil
 	}
 	if !s.isAccountTransportCompatible(account, req.RequiredTransport) {
@@ -1321,6 +1325,10 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	}
 	if !accountSupportsOpenAICapabilities(account, req.RequiredCapability, req.RequiredImageCapability) {
 		return false, "capability_mismatch"
+	}
+	// 生图请求在候选过滤阶段就排除冷却中的“账号 + 实际模型 + 操作”，避免 TopK 被故障模型占满。
+	if s != nil && s.service != nil && imageCooldownAccountBlocked(ctx, s.service.cache, account, req.routingModel()) {
+		return false, "image_model_cooling"
 	}
 	return true, ""
 }

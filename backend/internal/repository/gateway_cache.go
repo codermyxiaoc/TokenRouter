@@ -28,6 +28,7 @@ type gatewayCache struct {
 	smartRoutingCooldowns        smartRoutingLocalCooldowns
 	smartRoutingAccountCooldowns smartRoutingLocalAccountCooldowns
 	imageModelCooldowns          imageModelCooldownLocal
+	imageModelStrikes            imageModelStrikeLocal
 }
 
 func NewGatewayCache(rdb *redis.Client) service.GatewayCache {

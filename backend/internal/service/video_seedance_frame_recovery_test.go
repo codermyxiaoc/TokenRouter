@@ -22,6 +22,8 @@ func seedanceFrameRecoveryFixture(t *testing.T, reservedSeconds float64) (*Video
 	task, err := s.repo.Get(context.Background(), created.LocalTaskID)
 	require.NoError(t, err)
 	task.Status = "completed"
+	// 完成任务必须有可取回的成品才会结算。
+	task.VideoURL = "https://cdn.example.test/video.mp4"
 	task.Metadata.DurationSeconds = 2
 	task.ResponseStatus = 200
 	task.RawResponse = []byte(`{"id":"upstream-task","status":"succeeded","frames":57,"framespersecond":24,"resolution":"720p","content":{"video_url":"https://cdn.example.com/result.mp4"}}`)

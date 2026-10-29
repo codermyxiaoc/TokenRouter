@@ -27,20 +27,23 @@ type OpenAIRecordUsageInput struct {
 	// SubscriptionScopeID 只接受异步任务创建快照中的订阅 ID，禁止重新选择后来购买的套餐。
 	SubscriptionScopeID *int64 `json:"-"`
 	// 异步图片沿用受理时的报价和资金预占，防止完成时配置变化或再次扣款。
-	ImageReservation   *ImageBillingReservation `json:"-"`
-	ImageQuote         *OpenAIImageBillingQuote `json:"-"`
-	Result             *OpenAIForwardResult
-	APIKey             *APIKey
-	User               *User
-	Account            *Account
-	Subscription       *UserSubscription
-	InboundEndpoint    string
-	UpstreamEndpoint   string
-	UserAgent          string // 请求的 User-Agent
-	IPAddress          string // 请求的客户端 IP 地址
-	ClientSessionID    string // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
-	RequestPayloadHash string
-	RequestBody        []byte // 原始请求体，用于解析客户端请求的计费推理档位
+	ImageReservation *ImageBillingReservation `json:"-"`
+	ImageQuote       *OpenAIImageBillingQuote `json:"-"`
+	// SkipImageSettlementEvidence 用于“先交付后扣费”：扣费在交付前同步重试，失败即释放；
+	// 不写恢复证据，避免后台恢复在任务未交付（如进程中断）时补扣。
+	SkipImageSettlementEvidence bool `json:"-"`
+	Result                      *OpenAIForwardResult
+	APIKey                      *APIKey
+	User                        *User
+	Account                     *Account
+	Subscription                *UserSubscription
+	InboundEndpoint             string
+	UpstreamEndpoint            string
+	UserAgent                   string // 请求的 User-Agent
+	IPAddress                   string // 请求的客户端 IP 地址
+	ClientSessionID             string // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
+	RequestPayloadHash          string
+	RequestBody                 []byte // 原始请求体，用于解析客户端请求的计费推理档位
 	// PricingAt 是 WS turn 开始时刻；普通 HTTP 调用留空并在记录时取当前时间。
 	PricingAt     time.Time
 	APIKeyService APIKeyQuotaUpdater
@@ -596,7 +599,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			SimpleModeKeyRateLimitOnly: simpleModeKeyRateLimitOnly}
 		return nil
 	}
-	if input.ImageReservation != nil {
+	if input.ImageReservation != nil && !input.SkipImageSettlementEvidence {
 		// 捕获前先保存不可变的成功证据；失败时只恢复同一命令，不重新选价、选组或生成。
 		if recovery, ok := s.usageBillingRepo.(ImageBillingSettlementRepository); ok {
 			evidence := &ImageBillingSettlementEvidence{Version: 1, Command: *buildUsageBillingCommand(requestID, usageLog, params), Usage: *usageLog}

@@ -26,6 +26,11 @@
               <Icon name="clock" size="sm" class="text-orange-500" />
               {{ t('admin.scheduledTests.schedule') }}
             </button>
+            <!-- 生图模型冷却：查看/手动解除“账号 + 模型 + 操作”故障冷却 -->
+            <button v-if="account.platform !== 'video'" @click="$emit('image-model-cooldowns', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-dark-700">
+              <Icon name="clock" size="sm" class="text-sky-500" />
+              {{ t('admin.accounts.imageModelCooldowns.action') }}
+            </button>
             <button v-if="canDuplicate" @click="$emit('duplicate', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-dark-700">
               <Icon name="copy" size="sm" class="text-sky-500" />
               {{ t('admin.accounts.duplicateAccount') }}
@@ -85,7 +90,7 @@ import type { Account } from '@/types'
 import { supportsAccountQuota } from '@/utils/accountQuota'
 
 const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>()
-const emit = defineEmits(['close', 'test', 'stats', 'advanced-scheduler-score', 'schedule', 'duplicate', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'invite-reset', 'create-spark-shadow', 'delete'])
+const emit = defineEmits(['close', 'test', 'stats', 'advanced-scheduler-score', 'schedule', 'image-model-cooldowns', 'duplicate', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'invite-reset', 'create-spark-shadow', 'delete'])
 const { t } = useI18n()
 const canDuplicate = computed(() => {
   if (!props.account || props.account.parent_account_id != null) return false

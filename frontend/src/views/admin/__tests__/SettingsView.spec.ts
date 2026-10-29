@@ -2572,6 +2572,24 @@ describe("admin SettingsView payment visible method controls", () => {
     wrapper.unmount();
   });
 
+  it("labels and saves a template-protocol (unified) video candidate", async () => {
+    // unified 表示模型绑定了声明式模板协议，选择框需显示模板协议标签并原样保存。
+    const video = { group_id: 3, model: 'vendor-model', media_type: 'video', operations: ['generate'], video_endpoint: 'unified' };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [video] });
+    getCreativeModelCandidates.mockResolvedValue([{ ...video, group_name: 'Video', platform: 'video', video_endpoints: ['unified'] }]);
+    const wrapper = mountView();
+    await flushPromises();
+    const endpoint = wrapper.get('[data-testid="creative-video-endpoint"]');
+    expect(endpoint.findAll('option').map(option => [option.attributes('value'), option.text()]))
+      .toEqual([['unified', 'admin.settings.features.creative.modelSettings.videoEndpointUnified']]);
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      creative_model_settings: [expect.objectContaining({ model: 'vendor-model', video_endpoint: 'unified' })],
+    }));
+    wrapper.unmount();
+  });
+
   it.each(['openai_videos', 'grok'])("loads, saves and clears %s video usage notes without changing capabilities", async (endpoint) => {
     // 说明是视频配置的纯文本附加字段；保存、端点参数和清空均不能互相覆盖。
     const caps = { durations: [5], resolutions: ['720p'], aspect_ratios: ['16:9'], max_reference_images: 1 };

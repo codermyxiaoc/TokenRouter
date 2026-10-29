@@ -53,6 +53,10 @@ func NewCreativeVideoCanvasExecutor(public *CreativePublicService, tasks *VideoT
 	// 避免将空具体指针装进非空接口后绕过依赖检查。
 	if tasks != nil {
 		executor.tasks, executor.content, executor.repo = tasks, tasks, tasks.repo
+		// 画布目录需要读取模板能力（参考图上限），复用视频上游的模板服务，避免额外依赖注入。
+		if upstream, ok := tasks.upstream.(*VideoUpstreamService); ok && public != nil && upstream != nil {
+			public.videoProfiles = upstream.profiles
+		}
 	}
 	if concurrency != nil {
 		executor.concurrency = concurrency
@@ -128,7 +132,7 @@ func (s *CreativeVideoCanvasExecutor) Submit(ctx context.Context, e *CreativeCan
 	if model == nil {
 		return "", ErrCreativeInvalidModel
 	}
-	body, images, err := creativeVideoCanvasRequest(e, model, assets, s.public.maxPromptChars())
+	body, canonical, images, err := creativeVideoCanvasRequest(e, model, assets, s.public.maxPromptChars())
 	if err != nil {
 		return "", err
 	}
@@ -168,11 +172,8 @@ func (s *CreativeVideoCanvasExecutor) Submit(ctx context.Context, e *CreativeCan
 	if err = s.billing.CheckBillingEligibility(ctx, user, key, group, subscription, PlatformVideo); err != nil {
 		return "", err
 	}
-	inboundProtocol := e.Params.Endpoint
-	if inboundProtocol == string(VideoEndpointCompat) {
-		inboundProtocol = "unified"
-	}
-	response, err := s.tasks.Submit(ctx, key, VideoTaskSubmitRequest{Body: body, ContentType: "application/json", InboundProtocol: inboundProtocol, Native: e.Params.Endpoint != string(VideoEndpointCompat) && e.Params.Endpoint != string(VideoEndpointOpenAIVideos), IdempotencyKey: idempotency, canvasAdaptiveRatio: adaptiveRatio, canvasMaxReferenceImageBytes: maxReferenceImageBytes, canvasPrepareReferences: newCreativeVideoReferencePreparer(s.references, user.ID)})
+	// 画布与正式 /v1/videos 走同一统一链路：协议由账号对该模型的绑定决定，画布端点只用于目录归类。
+	response, err := s.tasks.Submit(ctx, key, VideoTaskSubmitRequest{Body: body, Canonical: canonical, ContentType: "application/json", InboundProtocol: string(VideoEndpointOpenAIVideos), IdempotencyKey: idempotency, canvasAdaptiveRatio: adaptiveRatio, canvasMaxReferenceImageBytes: maxReferenceImageBytes, canvasPrepareReferences: newCreativeVideoReferencePreparer(s.references, user.ID)})
 	if err != nil {
 		// 预扣后保存失败也可能已经存在任务，必须先绑定原账本，不能让画布丢掉冻结金额。
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -225,11 +226,11 @@ func creativeVideoKeyMatches(key *APIKey, userID, groupID int64) bool {
 }
 
 // 素材只取已经鉴权读取的本站资产字节；不接收 URL，不触发额外网络下载。
-func creativeVideoCanvasRequest(e *CreativeCanvasExecution, model *CreativeModelPublic, assets []CreativeCanvasInputAsset, maxPrompt int) ([]byte, []map[string]string, error) {
+func creativeVideoCanvasRequest(e *CreativeCanvasExecution, model *CreativeModelPublic, assets []CreativeCanvasInputAsset, maxPrompt int) ([]byte, *VideoCanonicalRequest, []map[string]string, error) {
 	p := e.Params
 	caps := model.VideoCapabilities
 	if caps == nil || p.Operation != CreativeOperationGenerate || p.Prompt == "" || strings.TrimSpace(p.Prompt) == "" || utf8.RuneCountInString(p.Prompt) > maxPrompt || math.IsNaN(p.Duration) || math.IsInf(p.Duration, 0) || p.ImageSize != "" || p.Quality != "" || p.Background != "" || p.ThinkingLevel != "" || p.MaskAssetID != "" {
-		return nil, nil, ErrCanvasInvalid
+		return nil, nil, nil, ErrCanvasInvalid
 	}
 	durationAllowed := false
 	for _, duration := range caps.Durations {
@@ -240,7 +241,7 @@ func creativeVideoCanvasRequest(e *CreativeCanvasExecution, model *CreativeModel
 	resolution, resolutionAllowed := creativeVideoCanvasResolution(caps, p.Resolution)
 	ratio, ratioAllowed := creativeVideoCanvasAspectRatio(caps, p.AspectRatio)
 	if !durationAllowed || !resolutionAllowed || !ratioAllowed || len(assets) > caps.MaxReferenceImages || len(assets) != len(p.References) {
-		return nil, nil, ErrCanvasInvalid
+		return nil, nil, nil, ErrCanvasInvalid
 	}
 	urls := []string{}
 	moderationImages := []map[string]string{}
@@ -248,74 +249,37 @@ func creativeVideoCanvasRequest(e *CreativeCanvasExecution, model *CreativeModel
 	var total int64
 	for i, asset := range assets {
 		if asset.Asset == nil || asset.Asset.UserID != e.UserID || asset.Asset.ID != p.References[i].AssetID || asset.Asset.MediaType != "image" || seen[asset.Asset.ID] || asset.Role != p.References[i].Role {
-			return nil, nil, ErrCanvasInvalid
+			return nil, nil, nil, ErrCanvasInvalid
 		}
 		if asset.Role != "" && asset.Role != "first_frame" && asset.Role != "reference_image" {
-			return nil, nil, ErrCanvasInvalid
+			return nil, nil, nil, ErrCanvasInvalid
 		}
 		seen[asset.Asset.ID] = true
 		total += int64(len(asset.Content))
 		if total > 64<<20 {
-			return nil, nil, ErrCreativeAssetTooLarge
+			return nil, nil, nil, ErrCreativeAssetTooLarge
 		}
 		image, err := normalizeCreativeImageInput(CreativeInputImage{Bytes: asset.Content, Mime: asset.Asset.MIMEType}, 32<<20)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		width, height, err := creativeImageDimensions(image.Bytes, image.Mime)
 		if err != nil || width < 8 || height < 8 || width > 16384 || height > 16384 || int64(width)*int64(height) > 67108864 {
-			return nil, nil, ErrCreativeInvalidMime
+			return nil, nil, nil, ErrCreativeInvalidMime
 		}
 		url := "data:" + image.Mime + ";base64," + base64.StdEncoding.EncodeToString(image.Bytes)
 		urls = append(urls, url)
 		moderationImages = append(moderationImages, map[string]string{"image_url": url})
 	}
-	values := map[string]any{"model": p.Model, "prompt": p.Prompt, "duration": p.Duration, "resolution": resolution, "ratio": ratio}
-	if p.GenerateAudio != nil {
-		values["generate_audio"] = *p.GenerateAudio
+	values := &VideoCanonicalRequest{Model: p.Model, Prompt: p.Prompt, Resolution: resolution, AspectRatio: ratio, GenerateAudio: p.GenerateAudio, Watermark: p.Watermark}
+	duration := p.Duration
+	values.Duration = &duration
+	for i, url := range urls {
+		values.Images = append(values.Images, VideoCanonicalMedia{URL: url, Role: p.References[i].Role})
 	}
-	if p.Watermark != nil {
-		values["watermark"] = *p.Watermark
-	}
-	switch model.VideoEndpoint {
-	case VideoEndpointSeedance, VideoEndpointMiniMax:
-		content := []any{map[string]string{"type": "text", "text": p.Prompt}}
-		for i, url := range urls {
-			role := p.References[i].Role
-			if role == "" {
-				if len(urls) == 1 {
-					role = "first_frame"
-				} else {
-					role = "reference_image"
-				}
-			}
-			content = append(content, map[string]any{"type": "image_url", "image_url": map[string]string{"url": url}, "role": role})
-		}
-		delete(values, "prompt")
-		values["content"] = content
-	case VideoEndpointWan:
-		input := map[string]any{"prompt": p.Prompt}
-		if len(urls) > 0 {
-			input["img_url"] = urls[0]
-		}
-		values = map[string]any{"model": p.Model, "input": input, "parameters": map[string]any{"duration": p.Duration, "resolution": resolution, "ratio": ratio}}
-		if p.GenerateAudio != nil {
-			values["parameters"].(map[string]any)["generate_audio"] = *p.GenerateAudio
-		}
-		if p.Watermark != nil {
-			values["parameters"].(map[string]any)["watermark"] = *p.Watermark
-		}
-	default:
-		if len(urls) > 0 {
-			values["images"] = urls
-		}
-		if model.VideoEndpoint == VideoEndpointKling || model.VideoEndpoint == VideoEndpointVidu {
-			delete(values, "ratio")
-			values["aspect_ratio"] = ratio
-		}
-	}
+	// 画布只提交统一规范请求；各账号协议的请求体转换与正式 /v1/videos 共用同一实现。
 	body, err := json.Marshal(values)
-	return body, moderationImages, err
+	return body, values, moderationImages, err
 }
 
 // 自定义分辨率只开放数字 p；2K/4K 和精确尺寸仍须位于管理员白名单中。

@@ -152,7 +152,7 @@ func NormalizeCreativeModelSettings(input []CreativeModelSetting) ([]CreativeMod
 		}
 		var videoCapabilities *CreativeVideoCapabilities
 		if mediaType == "video" {
-			if item.VideoEndpoint != CreativeVideoEndpointGrok && !validVideoEndpoint(item.VideoEndpoint) {
+			if item.VideoEndpoint != CreativeVideoEndpointGrok && item.VideoEndpoint != CreativeVideoEndpointUnified && !validVideoEndpoint(item.VideoEndpoint) {
 				return nil, fmt.Errorf("creative video endpoint is required")
 			}
 			var capabilityErr error

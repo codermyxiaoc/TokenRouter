@@ -214,7 +214,8 @@ func TestVideoMiniMaxNestedTaskLifecycleSettlement(t *testing.T) {
 			{"failed", "failed", "released", 0, 1},
 			{"cancelled", "cancelled", "released", 0, 1},
 			{"running", "processing", "reserved", 0, 0},
-			{"expired", "expired", "reconciliation", 0, 0},
+			// 上游过期即未交付成品：失败并释放一次预扣，不再转人工核对。
+			{"expired", "failed", "released", 0, 1},
 		} {
 			t.Run(string(mode.mode)+"/"+tc.status, func(t *testing.T) {
 				s, key, upstream, billing, logs := newVideoLifecycleFixture(mode.mode)

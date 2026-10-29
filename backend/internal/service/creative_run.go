@@ -572,9 +572,10 @@ func CanTransitionCreativeRun(from, to string) bool {
 			return false
 		}
 	case CreativeRunStatusProviderSucceeded:
-		return to == CreativeRunStatusSettlementPending || to == CreativeRunStatusSucceeded || to == CreativeRunStatusCancelled || to == CreativeRunStatusResultLost
+		// 成品一张都未交付到用户可取回的位置时，结算改走释放，不能按上游成功扣费。
+		return to == CreativeRunStatusSettlementPending || to == CreativeRunStatusSucceeded || to == CreativeRunStatusCancelled || to == CreativeRunStatusResultLost || to == CreativeRunStatusReleasePending
 	case CreativeRunStatusSettlementPending:
-		return to == CreativeRunStatusSucceeded || to == CreativeRunStatusCancelled || to == CreativeRunStatusResultLost
+		return to == CreativeRunStatusSucceeded || to == CreativeRunStatusCancelled || to == CreativeRunStatusResultLost || to == CreativeRunStatusReleasePending
 	case CreativeRunStatusReleasePending:
 		return to == CreativeRunStatusFailed || to == CreativeRunStatusCancelled || to == CreativeRunStatusResultLost
 	default:

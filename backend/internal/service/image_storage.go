@@ -1,11 +1,16 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"mime"
 	"net"
@@ -193,8 +198,9 @@ func (u *ImageResultUploader) Rewrite(ctx context.Context, taskID string, result
 		if err != nil {
 			return nil, classifyImageStorageFailure("decode", imageResultInvalid, fmt.Errorf("image %d: %w", i, err))
 		}
-		// 只转存已知位图格式，禁止 SVG/HTML 伪装成图片落入公开存储桶。
-		if !isBackfillImageContent(data) {
+		// 只转存已知位图格式，禁止 SVG/HTML 伪装成图片落入公开存储桶；
+		// 还要能解析出有效尺寸，只有文件签名、正文损坏的结果不能算可交付的图片。
+		if !isBackfillImageContent(data) || !isDecodableStoredImage(data) {
 			return nil, classifyImageStorageFailure("decode", imageResultInvalid, fmt.Errorf("image %d: unsupported image content", i))
 		}
 		contentType = http.DetectContentType(data)
@@ -430,6 +436,23 @@ func (u *ImageResultUploader) downloadOnce(ctx context.Context, rawURL string) (
 func (u *ImageResultUploader) buildKey(taskID string, index int, contentType string) string {
 	return u.prefix + taskID + "-" + strconv.Itoa(index) + extensionForContentType(contentType)
 }
+
+// isDecodableStoredImage 要求图片能完整解码出正的宽高：只有合法头部而像素数据截断或缺失的结果不能算可交付。
+// 先读头部做尺寸上限检查，避免解压炸弹在完整解码时放大内存；WebP 解码器由本包的 x/image/webp 注册。
+func isDecodableStoredImage(data []byte) bool {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+		return false
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > maxStoredImagePixels {
+		return false
+	}
+	_, _, err = image.Decode(bytes.NewReader(data))
+	return err == nil
+}
+
+// maxStoredImagePixels 限制完整解码的像素数（约 1 亿像素，覆盖 8K 以上分辨率）。
+const maxStoredImagePixels = 100_000_000
 
 func detectImageContentType(data []byte) string {
 	if ct := detectedImageContentType(data); ct != "" {

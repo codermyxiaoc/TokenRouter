@@ -126,7 +126,7 @@ func TestVideoKemeiAdapterBoundaries(t *testing.T) {
 	require.Equal(t, "feature_video", gjson.GetBytes(body, "contents.2.type").String())
 }
 
-// 保存时阻止新适配搭配旧路径，同时保留原账号的旧协议路径配置。
+// 保存时阻止新适配搭配旧路径；可美路径改绑为 Kling 预置模板，原样协议只有官方操作路径能换为 kling_v1，其余需手动改绑。
 func TestVideoKemeiKlingConfigurationPaths(t *testing.T) {
 	for _, adapter := range []string{VideoProtocolAdapterKemei, VideoProtocolAdapterLegacy} {
 		for _, path := range []string{"/text-to-video/{model}", "/image-to-video/{model}", "/omni-video/{model}", "/v1/videos/text2video", "/v1/videos/omni-video"} {
@@ -134,7 +134,8 @@ func TestVideoKemeiKlingConfigurationPaths(t *testing.T) {
 			a.Credentials["video_endpoint_adapters"] = map[string]string{"kling": adapter}
 			a.Credentials["video_model_paths"] = map[string]string{"model": path}
 			err := normalizeVideoCredentials(a)
-			if adapter == VideoProtocolAdapterKemei && (path == "/v1/videos/text2video" || path == "/v1/videos/omni-video") {
+			legacyOnly := path == "/v1/videos/text2video" || path == "/v1/videos/omni-video" || adapter == VideoProtocolAdapterLegacy && path == "/omni-video/{model}"
+			if legacyOnly {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)

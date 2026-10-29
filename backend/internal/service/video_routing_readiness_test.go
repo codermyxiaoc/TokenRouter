@@ -8,7 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 智能选组必须按最终上游模型核对显式端点，不能把一个 OpenAI 入口当作另一个入口的授权。
+// 智能选组只为统一入口 /v1/videos 选择视频分组，并按最终上游模型核对账号上的协议绑定；
+// 已退役的 /v1/video/generations 与原生入口不再参与视频分组选择。
 func TestVideoSmartRoutingReadinessEndpointAndModelBindings(t *testing.T) {
 	for _, tc := range []struct {
 		name, path, model string
@@ -16,14 +17,15 @@ func TestVideoSmartRoutingReadinessEndpointAndModelBindings(t *testing.T) {
 		bindings          map[string]any
 		want              SmartRoutingGroupAvailability
 	}{
-		{"compat_enabled", "/v1/video/generations", "client-video", []string{"compat"}, nil, SmartRoutingGroupAvailability{HasModel: true, Schedulable: true}},
-		{"compat_does_not_grant_videos", "/v1/videos", "client-video", []string{"compat"}, nil, SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
+		{"compat_binding_serves_videos", "/v1/videos", "client-video", []string{"compat"}, nil, SmartRoutingGroupAvailability{HasModel: true, Schedulable: true}},
 		{"videos_enabled", "/v1/videos", "client-video", []string{"openai_videos"}, nil, SmartRoutingGroupAvailability{HasModel: true, Schedulable: true}},
-		{"videos_does_not_grant_compat", "/v1/video/generations", "client-video", []string{"openai_videos"}, nil, SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
-		{"native_does_not_grant_compat", "/v1/video/generations", "client-video", []string{"seedance"}, nil, SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
-		{"mapped_binding_excludes_compat", "/v1/video/generations", "client-video", []string{"compat", "seedance"}, map[string]any{"upstream-video": "seedance"}, SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
-		{"mapped_binding_allows_native", "/api/v3/contents/generations/tasks", "client-video", []string{"compat", "seedance"}, map[string]any{"upstream-video": "seedance"}, SmartRoutingGroupAvailability{HasModel: true, Schedulable: true}},
-		{"unknown_model", "/v1/video/generations", "not-configured", []string{"compat"}, nil, SmartRoutingGroupAvailability{}},
+		{"native_binding_serves_videos", "/v1/videos", "client-video", []string{"seedance"}, nil, SmartRoutingGroupAvailability{HasModel: true, Schedulable: true}},
+		{"mapped_binding_serves_videos", "/v1/videos", "client-video", []string{"compat", "seedance"}, map[string]any{"upstream-video": "seedance"}, SmartRoutingGroupAvailability{HasModel: true, Schedulable: true}},
+		{"unbound_kling_model_not_schedulable", "/v1/videos", "client-video", []string{"kling"}, nil, SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
+		{"disabled_binding_not_schedulable", "/v1/videos", "client-video", []string{"compat"}, map[string]any{"upstream-video": "seedance"}, SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}},
+		{"retired_compat_entry_excluded", "/v1/video/generations", "client-video", []string{"compat"}, nil, SmartRoutingGroupAvailability{}},
+		{"retired_native_entry_excluded", "/api/v3/contents/generations/tasks", "client-video", []string{"seedance"}, nil, SmartRoutingGroupAvailability{}},
+		{"unknown_model", "/v1/videos", "not-configured", []string{"compat"}, nil, SmartRoutingGroupAvailability{}},
 		{"text_responses_excluded", "/v1/responses", "client-video", []string{"compat"}, nil, SmartRoutingGroupAvailability{}},
 		{"text_chat_excluded", "/v1/chat/completions", "client-video", []string{"compat"}, nil, SmartRoutingGroupAvailability{}},
 		{"text_messages_excluded", "/v1/messages", "client-video", []string{"compat"}, nil, SmartRoutingGroupAvailability{}},
@@ -56,15 +58,15 @@ func TestVideoSmartRoutingReadinessMultipleAccounts(t *testing.T) {
 	cache := &smartRoutingConcurrencyCache{counts: map[int64]int{11: 1, 12: 0}}
 	svc := NewSmartRoutingService(&GatewayService{accountRepo: repo, concurrencyService: NewConcurrencyService(cache)}, nil)
 	group := &Group{ID: 5, Platform: PlatformVideo, Status: StatusActive}
-	got, err := svc.EvaluateSmartRoutingGroup(context.Background(), group, "client-video", "/v1/video/generations")
+	got, err := svc.EvaluateSmartRoutingGroup(context.Background(), group, "client-video", "/v1/videos")
 	require.NoError(t, err)
 	require.Equal(t, SmartRoutingGroupAvailability{HasModel: true, Schedulable: true}, got)
 	cache.counts[12] = 1
-	got, err = svc.EvaluateSmartRoutingGroup(context.Background(), group, "client-video", "/v1/video/generations")
+	got, err = svc.EvaluateSmartRoutingGroup(context.Background(), group, "client-video", "/v1/videos")
 	require.NoError(t, err)
 	require.Equal(t, SmartRoutingGroupAvailability{HasModel: true, Schedulable: false}, got)
 	cache.err = errors.New("fixture concurrency unavailable")
-	_, err = svc.EvaluateSmartRoutingGroup(context.Background(), group, "client-video", "/v1/video/generations")
+	_, err = svc.EvaluateSmartRoutingGroup(context.Background(), group, "client-video", "/v1/videos")
 	require.ErrorContains(t, err, "fixture concurrency unavailable", "读取故障不得伪装成没有可用账号")
 	require.Equal(t, []int64{5, 5, 5}, repo.groups)
 }

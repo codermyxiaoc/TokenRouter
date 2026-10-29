@@ -4,126 +4,110 @@
       <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ t('admin.accounts.video.title') }}</h3>
       <p class="input-hint">{{ t('admin.accounts.video.description') }}</p>
     </div>
-    <div class="flex flex-wrap gap-3">
-      <label v-for="endpoint in VIDEO_ENDPOINTS" :key="endpoint" class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-        <input type="checkbox" :checked="modelValue.endpoints.includes(endpoint)" :data-testid="`video-endpoint-${endpoint}`" class="rounded border-gray-300 text-violet-600" @change="toggleEndpoint(endpoint, ($event.target as HTMLInputElement).checked)" />
-        {{ endpointLabel(endpoint) }}
-      </label>
-    </div>
-    <div v-for="endpoint in modelValue.endpoints" :key="endpoint" class="space-y-3 rounded-lg border border-violet-100 p-3 dark:border-violet-900/50">
-      <div>
-        <label class="input-label break-all">{{ endpointLabel(endpoint) }} · {{ t('admin.accounts.video.protocolAdapter') }}</label>
-        <Select :model-value="endpointAdapterValue(endpoint)" :options="adapterOptions(endpoint)" :placeholder="t('admin.accounts.video.adapterPlaceholder')" :data-testid="`video-endpoint-adapter-${endpoint}`" @update:model-value="patch({ endpointAdapters: { ...modelValue.endpointAdapters, [endpoint]: $event as VideoProtocolAdapter } })" />
-        <p class="input-hint">{{ t(endpointAdapterHint(endpoint)) }}</p>
-      </div>
-      <div>
-        <label class="input-label break-all">{{ endpointUrlLabel(endpoint) }} · {{ t('admin.accounts.video.endpointUrl') }}</label>
-        <input class="input" type="url" :value="modelValue.baseUrls[endpoint] || ''" :data-testid="`video-endpoint-url-${endpoint}`" placeholder="https://api.example.com" @input="patch({ baseUrls: { ...modelValue.baseUrls, [endpoint]: ($event.target as HTMLInputElement).value } })" />
-        <p class="input-hint">{{ t('admin.accounts.video.endpointUrlHint') }}</p>
-      </div>
-    </div>
     <div class="space-y-3">
       <div class="flex items-center justify-between gap-2">
-        <label class="input-label mb-0">{{ t('admin.accounts.video.modelBindings') }}</label>
-        <button type="button" class="btn btn-secondary btn-sm" :disabled="!modelValue.endpoints.length" data-testid="video-add-binding" @click="addBinding">{{ t('common.add') }}</button>
+        <label class="input-label mb-0">{{ t('admin.accounts.video.protocolBindings') }}</label>
+        <button type="button" class="btn btn-secondary btn-sm" data-testid="video-add-binding" @click="addRow">{{ t('common.add') }}</button>
       </div>
-      <p class="input-hint">{{ t('admin.accounts.video.modelBindingsHint') }}</p>
-      <p class="input-hint">{{ t('admin.accounts.video.routingHint') }}</p>
-      <div v-for="(binding, index) in modelValue.bindings" :key="index" class="space-y-2 rounded-lg border border-gray-200 p-3 dark:border-dark-600">
+      <p class="input-hint">{{ t('admin.accounts.video.protocolBindingsHint') }}</p>
+      <div v-for="(row, index) in modelValue.rows" :key="index" class="space-y-2 rounded-lg border border-gray-200 p-3 dark:border-dark-600" :data-testid="`video-binding-row-${index}`">
         <div class="flex flex-wrap gap-2">
-          <input :value="binding.model" class="input min-w-0 flex-1" :data-testid="`video-binding-model-${index}`" :placeholder="t('admin.accounts.video.modelPlaceholder')" @input="updateBinding(index, { model: ($event.target as HTMLInputElement).value })" />
-          <Select :model-value="binding.endpoint" :options="endpointOptions" :data-testid="`video-binding-endpoint-${index}`" class="min-w-36 flex-1" @update:model-value="updateBinding(index, { endpoint: $event as VideoEndpoint })" />
-          <button type="button" class="btn btn-secondary text-red-600" :data-testid="`video-remove-binding-${index}`" :aria-label="t('common.delete')" @click="patch({ bindings: modelValue.bindings.filter((_, row) => row !== index) })">×</button>
+          <input :value="row.model" class="input min-w-0 flex-1" :data-testid="`video-binding-model-${index}`" :placeholder="t('admin.accounts.video.modelPlaceholder')" @input="updateRow(index, { model: ($event.target as HTMLInputElement).value })" />
+          <Select :model-value="row.protocol" :options="protocolOptions(row.protocol)" :placeholder="t('admin.accounts.video.protocolPlaceholder')" searchable :data-testid="`video-binding-protocol-${index}`" class="min-w-48 flex-[2]" @update:model-value="updateProtocol(index, String($event ?? ''))" />
+          <button type="button" class="btn btn-secondary text-red-600" :disabled="modelValue.rows.length <= 1" :data-testid="`video-remove-binding-${index}`" :aria-label="t('common.delete')" @click="removeRow(index)">×</button>
+        </div>
+        <p v-if="protocolHint(row.protocol)" class="input-hint">{{ protocolHint(row.protocol) }}</p>
+        <div v-if="videoProtocolRequiresPath(row.protocol)">
+          <label class="input-label">{{ t('admin.accounts.video.operationPath') }}</label>
+          <Select :model-value="row.path" :options="pathOptions(row.protocol)" :placeholder="t('admin.accounts.video.operationPathPlaceholder')" :data-testid="`video-binding-path-${index}`" @update:model-value="updateRow(index, { path: String($event ?? '') })" />
         </div>
         <div>
-          <label class="input-label">{{ t('admin.accounts.video.modelAdapter') }}</label>
-          <Select :model-value="binding.adapter || ''" :options="modelAdapterOptions(binding.endpoint)" :data-testid="`video-binding-adapter-${index}`" @update:model-value="updateBinding(index, { adapter: $event as VideoProtocolAdapter | '' })" />
-          <p v-if="binding.adapter" class="input-hint">{{ t(`admin.accounts.video.adapterHints.${videoAdapterTextKey(binding.endpoint, binding.adapter)}`) }}</p>
+          <label class="input-label">{{ t('admin.accounts.video.rowBaseUrl') }}</label>
+          <input class="input" type="url" :value="row.baseUrl" :data-testid="`video-binding-base-url-${index}`" :placeholder="t('admin.accounts.video.rowBaseUrlPlaceholder')" @input="updateRow(index, { baseUrl: ($event.target as HTMLInputElement).value })" />
         </div>
-        <Select v-if="binding.endpoint === 'kling' || binding.endpoint === 'vidu'" :model-value="binding.path" :options="pathOptions(binding.endpoint)" :data-testid="`video-binding-path-${index}`" @update:model-value="updateBinding(index, { path: String($event) })" />
+        <p v-if="rowError(row)" class="text-xs text-amber-600 dark:text-amber-400" :data-testid="`video-binding-error-${index}`">{{ t(`admin.accounts.video.${rowError(row)}`) }}</p>
       </div>
-      <p v-if="modelValue.endpoints.includes('kling')" class="input-hint">{{ t('admin.accounts.video.klingPathHint') }}</p>
-      <p v-if="modelValue.endpoints.includes('vidu')" class="input-hint">{{ t('admin.accounts.video.viduPathHint') }}</p>
+      <p v-if="profilesLoadFailed" class="text-xs text-amber-600 dark:text-amber-400" data-testid="video-profiles-load-failed">{{ t('admin.accounts.video.profilesLoadFailed') }}</p>
     </div>
     <div class="grid gap-3 sm:grid-cols-2">
-      <div><label class="input-label">{{ t('admin.accounts.video.maxPendingTasks') }}</label><input class="input" type="number" min="1" max="1000" step="1" :value="modelValue.maxPendingTasks" @input="patch({ maxPendingTasks: ($event.target as HTMLInputElement).value })" /></div>
-      <div><label class="input-label">{{ t('admin.accounts.video.maxDurationSeconds') }}</label><input class="input" type="number" min="0" step="any" :value="modelValue.maxDurationSeconds" @input="patch({ maxDurationSeconds: ($event.target as HTMLInputElement).value })" /></div>
+      <div><label class="input-label">{{ t('admin.accounts.video.maxPendingTasks') }}</label><input class="input" type="number" min="1" max="1000" step="1" :value="modelValue.maxPendingTasks" data-testid="video-max-pending" @input="patch({ maxPendingTasks: ($event.target as HTMLInputElement).value })" /></div>
+      <div><label class="input-label">{{ t('admin.accounts.video.maxDurationSeconds') }}</label><input class="input" type="number" min="0" step="any" :value="modelValue.maxDurationSeconds ?? ''" data-testid="video-max-duration" @input="patch({ maxDurationSeconds: ($event.target as HTMLInputElement).value })" /></div>
     </div>
     <p class="input-hint">{{ t('admin.accounts.video.budgetHint') }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
-import { VIDEO_ENDPOINTS, VIDEO_ENDPOINT_ADAPTERS, VIDEO_DEFAULT_ADAPTERS, VIDEO_MODEL_PATHS, VIDEO_VIDU_PATHS, videoEndpointAdapter, videoAdapterTextKey, type VideoAccountForm, type VideoEndpoint, type VideoModelBindingForm, type VideoProtocolAdapter } from './videoAccountConfig'
+import { adminAPI } from '@/api/admin'
+import {
+  VIDEO_BUILTIN_PROTOCOLS, VIDEO_PROFILE_PREFIX, VIDEO_PROTOCOL_WILDCARD, emptyVideoProtocolRow, parseVideoProtocol,
+  videoAdapterTextKey, videoProtocolPaths, videoProtocolRequiresPath, videoProtocolRowError,
+  type VideoAccountForm, type VideoProtocolRow
+} from './videoAccountConfig'
 
 const props = defineProps<{ modelValue: VideoAccountForm }>()
 const emit = defineEmits<{ 'update:modelValue': [value: VideoAccountForm] }>()
 const { t } = useI18n()
-// 两种 OpenAI Videos 使用路径区分，名称复用到复选框和模型选择框。
-const endpointLabel = (endpoint: VideoEndpoint) => t(`admin.accounts.video.endpoints.${endpoint}`)
-// 地址覆盖标题展示实际创建路径；Kling 按已配置模板展示，未配置时列出可选模板。
-const nativeEndpointPaths: Partial<Record<VideoEndpoint, string>> = {
-  seedance: '/api/v3/contents/generations/tasks',
-  wan: '/api/v1/services/aigc/video-generation/video-synthesis',
-  minimax: '/v2/video_generation'
-}
-function endpointUrlLabel(endpoint: VideoEndpoint) {
-  let path = nativeEndpointPaths[endpoint]
-  if (endpoint === 'kling' || endpoint === 'vidu') {
-    const allowedPaths: readonly string[] = endpoint === 'kling' ? VIDEO_MODEL_PATHS : VIDEO_VIDU_PATHS
-    const unboundPaths = endpoint === 'kling' ? props.modelValue.unboundModelPaths : props.modelValue.unboundViduModelPaths
-    const configured = [...new Set([
-      ...props.modelValue.bindings.filter(binding => binding.endpoint === endpoint).map(binding => binding.path),
-      ...Object.values(unboundPaths || {})
-    ].filter(value => allowedPaths.includes(value)))]
-    path = (configured.length ? configured : allowedPaths).join(' · ')
+// 当前启用的模板键名，选择框只提供 profile:<key>（跟随启用版本）。
+const activeProfileKeys = ref<string[]>([])
+const profilesLoadFailed = ref(false)
+
+onMounted(async () => {
+  try {
+    const profiles = await adminAPI.videoProtocolProfiles.list()
+    activeProfileKeys.value = [...new Set(profiles.filter(item => item.status === 'active').map(item => item.profile_key))].sort()
+  } catch {
+    // 模板列表读取失败不影响内置协议配置，只提示管理员。
+    profilesLoadFailed.value = true
   }
-  return path ? t('admin.accounts.video.endpointWithPath', { name: endpointLabel(endpoint), path }) : endpointLabel(endpoint)
+})
+
+// 协议展示名：内置协议为“端点 · 方案”，模板协议为“模板协议 · 键名[@版本]”。
+function protocolLabel(protocol: string): string {
+  const parsed = parseVideoProtocol(protocol)
+  if (!parsed) return protocol
+  if (parsed.kind === 'profile') {
+    return t('admin.accounts.video.profileOption', { key: parsed.version ? `${parsed.key}@${parsed.version}` : parsed.key })
+  }
+  return `${t(`admin.accounts.video.endpoints.${parsed.endpoint}`)} · ${t(`admin.accounts.video.adapters.${videoAdapterTextKey(parsed.endpoint, parsed.adapter)}`)}`
 }
-const endpointOptions = computed(() => props.modelValue.endpoints.map(value => ({ value, label: endpointLabel(value) })))
-// 所有端点统一展示原有协议名称；Vidu 缺方案时不能伪装成已选择旧协议。
-const endpointAdapterValue = (endpoint: VideoEndpoint) => endpoint === 'vidu' && !props.modelValue.endpointAdapters.vidu ? '' : videoEndpointAdapter(props.modelValue, endpoint)
-const endpointAdapterHint = (endpoint: VideoEndpoint) => {
-  const adapter = endpointAdapterValue(endpoint)
-  return adapter ? `admin.accounts.video.adapterHints.${videoAdapterTextKey(endpoint, adapter)}` : 'admin.accounts.video.adapterPlaceholder'
+// 选项包含全部内置协议与启用模板；已保存但不在列表中的值也保留，避免编辑时显示为空。
+function protocolOptions(current: string) {
+  const values = [...VIDEO_BUILTIN_PROTOCOLS, ...activeProfileKeys.value.map(key => `${VIDEO_PROFILE_PREFIX}${key}`)]
+  if (current && !values.includes(current)) values.push(current)
+  return values.map(value => ({ value, label: protocolLabel(value) }))
 }
-const adapterOptions = (endpoint: VideoEndpoint) => VIDEO_ENDPOINT_ADAPTERS[endpoint].map(value => ({ value, label: t(`admin.accounts.video.adapters.${videoAdapterTextKey(endpoint, value)}`) }))
-const modelAdapterOptions = (endpoint: VideoEndpoint) => [{ value: '', label: t('admin.accounts.video.inheritAdapter') }, ...adapterOptions(endpoint)]
-const pathOptions = (endpoint: VideoEndpoint) => [{ value: '', label: t('admin.accounts.video.nativePath') }, ...(endpoint === 'vidu' ? VIDEO_VIDU_PATHS : VIDEO_MODEL_PATHS).map(value => ({ value, label: value }))]
+function protocolHint(protocol: string): string {
+  const parsed = parseVideoProtocol(protocol)
+  if (!parsed) return ''
+  if (parsed.kind === 'profile') return t('admin.accounts.video.profileHint')
+  return t(`admin.accounts.video.adapterHints.${videoAdapterTextKey(parsed.endpoint, parsed.adapter)}`)
+}
+const pathOptions = (protocol: string) => videoProtocolPaths(protocol).map(value => ({ value, label: value }))
+// 行内只提示协议与路径问题，模型名与地址问题在提交时统一校验。
+const rowError = (row: VideoProtocolRow) => row.protocol.trim() ? videoProtocolRowError(row) : null
+
 const patch = (value: Partial<VideoAccountForm>) => emit('update:modelValue', { ...props.modelValue, ...value })
-// 绑定只能从用户已勾选的端点中初始化，空配置不能隐式补入兼容端点。
-function addBinding() {
-  const endpoint = props.modelValue.endpoints[0]
-  if (!endpoint) return
-  patch({ bindings: [...props.modelValue.bindings, { model: '', endpoint, path: '' }] })
+function updateRow(index: number, value: Partial<VideoProtocolRow>) {
+  patch({ rows: props.modelValue.rows.map((row, current) => current === index ? { ...row, ...value } : row) })
 }
-// 取消端点时同时移除其专属绑定，避免隐藏的旧绑定继续影响上游选择。
-function toggleEndpoint(endpoint: VideoEndpoint, checked: boolean) {
-  // 首次启用 Vidu 明确选择官方方案；已有可美或旧协议选择不随启停改变。
-  patch({ endpoints: checked ? [...props.modelValue.endpoints, endpoint] : props.modelValue.endpoints.filter(value => value !== endpoint),
-    bindings: checked ? props.modelValue.bindings : props.modelValue.bindings.filter(binding => binding.endpoint !== endpoint),
-    ...(checked && endpoint === 'vidu' && !props.modelValue.endpointAdapters.vidu
-      ? { endpointAdapters: { ...props.modelValue.endpointAdapters, vidu: VIDEO_DEFAULT_ADAPTERS.vidu } } : {}) })
+// 切换协议后路径必须重新选择，不能把另一协议的路径带入新协议。
+function updateProtocol(index: number, protocol: string) {
+  const row = props.modelValue.rows[index]
+  if (!row) return
+  const path = videoProtocolPaths(protocol).includes(row.path) ? row.path : ''
+  updateRow(index, { protocol, path })
 }
-function updateBinding(index: number, value: Partial<VideoModelBindingForm>) {
-  patch({ bindings: props.modelValue.bindings.map((binding, row) => {
-    if (row !== index) return binding
-    const next = { ...binding, ...value }
-    // 模型切换端点后重新继承，不能把另一协议专属适配器带入新端点。
-    if (value.endpoint && value.endpoint !== binding.endpoint) {
-      next.adapter = ''
-      next.path = ''
-    }
-    if (next.endpoint !== 'kling' && next.endpoint !== 'vidu') next.path = ''
-    // 独立路径转为显式 Kling 绑定时先回填；用户主动清空路径时不从旧值恢复。
-    else if (!next.path && ('model' in value || 'endpoint' in value)) {
-      const paths = next.endpoint === 'vidu' ? props.modelValue.unboundViduModelPaths : props.modelValue.unboundModelPaths
-      next.path = paths?.[next.model.trim()] || ''
-    }
-    return next
-  }) })
+// 没有 * 默认行时新行预填 *，否则留空等待填写精确模型名。
+function addRow() {
+  const hasDefault = props.modelValue.rows.some(row => row.model.trim() === VIDEO_PROTOCOL_WILDCARD)
+  patch({ rows: [...props.modelValue.rows, emptyVideoProtocolRow(hasDefault ? '' : VIDEO_PROTOCOL_WILDCARD)] })
+}
+function removeRow(index: number) {
+  if (props.modelValue.rows.length <= 1) return
+  patch({ rows: props.modelValue.rows.filter((_, current) => current !== index) })
 }
 </script>

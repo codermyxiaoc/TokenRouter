@@ -726,6 +726,8 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/channels', label: t('nav.channels', '渠道管理'), icon: ChannelIcon, hideInSimpleMode: true },
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
+    // 视频协议模板供视频账号按模型绑定，简易模式下隐藏。
+    { path: '/admin/video-protocol-profiles', label: t('nav.videoProtocolProfiles'), icon: CogIcon, hideInSimpleMode: true },
     { path: '/admin/intelligence-tests', label: t('intelligence.adminTitle'), icon: ChartIcon, featureFlag: flagIntelligenceAccess },
     // 掺水检测入口仅在管理员已保存开启总开关后显示。
     { path: '/admin/chanshui-tests', label: t('chanshui.title'), icon: ChartIcon, featureFlag: () => adminSettingsStore.chanshuiEnabled === true },

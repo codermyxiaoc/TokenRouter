@@ -66,7 +66,8 @@ func videoKemeiBillingTask(t *testing.T, f *videoBillingFixture, tc videoKemeiCa
 		}}
 	cfg, err := account.VideoConfiguration()
 	require.NoError(t, err)
-	adapter, explicit := cfg.ProtocolAdapter(tc.model, tc.endpoint)
+	// 旧配置只用于迁移读取：模型级覆盖优先于端点默认方案。
+	adapter, explicit := cfg.ModelAdapters[tc.model][tc.endpoint]
 	require.True(t, explicit)
 	require.Equal(t, "kemei_v1", adapter)
 	target := service.VideoUpstreamTarget{Version: 2, ProtocolAdapter: adapter, Endpoint: tc.endpoint,
@@ -246,6 +247,11 @@ type videoKemeiUnavailableAccount struct {
 	queries atomic.Int64
 }
 
+// ListByPlatform 供后台协议回填使用；隔离测试没有待迁移账号。
+func (r *videoKemeiUnavailableAccount) ListByPlatform(context.Context, string) ([]service.Account, error) {
+	return nil, nil
+}
+
 func (r *videoKemeiUnavailableAccount) GetByID(context.Context, int64) (*service.Account, error) {
 	r.queries.Add(1)
 	return nil, errors.New("隔离测试禁止访问真实视频上游")
@@ -271,7 +277,7 @@ func TestVideoKemeiUnknownTokensNeverCompleteForFree(t *testing.T) {
 				task.RawResponse, task.ResponseStatus = []byte(body), 200
 				require.NoError(t, f.tasks.Save(context.Background(), task, true))
 				accounts := &videoKemeiUnavailableAccount{}
-				s := service.ProvideVideoTaskService(f.tasks, nil, nil, f.repo, nil, accounts, nil, nil, nil, nil, nil)
+				s := service.ProvideVideoTaskService(f.tasks, nil, nil, f.repo, nil, accounts, nil, nil, nil, nil, nil, nil)
 				s.Stop()
 				key := &service.APIKey{ID: f.keyID, UserID: f.userID, User: &service.User{ID: f.userID}}
 				for range 3 {

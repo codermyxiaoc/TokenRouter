@@ -1,10 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,7 +16,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var pngBytes = []byte("\x89PNG\r\n\x1a\nfake-png-payload")
+// pngBytes 是真实可解码的 1x1 PNG；转存会校验图片头部，只有签名的伪图片会被拒绝。
+var pngBytes = func() []byte {
+	var buffer bytes.Buffer
+	if err := png.Encode(&buffer, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		panic(err)
+	}
+	return buffer.Bytes()
+}()
+
+// P2-02：只有 PNG 签名、正文损坏的结果不能转存成“可交付”的图片。
+func TestImageResultUploaderRejectsSignatureOnlyImage(t *testing.T) {
+	storage := &fakeImageStorage{}
+	uploader := NewImageResultUploader(storage, "images/", 0, nil)
+	fake := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nfake-png-payload"))
+	_, err := uploader.Rewrite(context.Background(), "imgtask_corrupt", json.RawMessage(`{"data":[{"b64_json":"`+fake+`"}]}`))
+	require.Error(t, err)
+	_, code, _ := ImageStorageFailureDetails(err)
+	require.Equal(t, imageResultInvalid, code)
+	require.Empty(t, storage.saved, "损坏图片不能上传")
+}
 
 type savedImage struct {
 	key         string
@@ -290,4 +312,14 @@ func TestImageTaskServiceCompleteOffloadFailureMarksFailed(t *testing.T) {
 	require.Equal(t, http.StatusBadGateway, got.HTTPStatus)
 	require.Contains(t, string(got.Error), "object storage")
 	require.NotContains(t, string(got.Result), "b64_json", "failed offload must not persist base64 to Redis")
+}
+
+// R3：头部合法但像素数据截断的 PNG 不能作为可交付图片上传。
+func TestImageResultUploaderRejectsTruncatedPNG(t *testing.T) {
+	storage := &fakeImageStorage{}
+	truncated := pngBytes[:33]
+	_, err := NewImageResultUploader(storage, "images/", 0, nil).Rewrite(context.Background(), "imgtask_trunc",
+		json.RawMessage(`{"data":[{"b64_json":"`+base64.StdEncoding.EncodeToString(truncated)+`"}]}`))
+	require.Error(t, err)
+	require.Empty(t, storage.saved)
 }

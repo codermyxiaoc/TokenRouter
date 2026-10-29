@@ -91,8 +91,8 @@ func (e *CreativeExecutor) recordCreativeImageFailure(ctx context.Context, run C
 	healthCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
 	if execution.Account.Platform == PlatformGemini && e.gatewayService != nil {
-		_ = e.gatewayService.RecordImageModelCooldown(healthCtx, execution.Account.ID, execution.UpstreamModel, run.Operation, DefaultImageModelCooldown)
+		_ = e.gatewayService.RecordImageModelFailure(healthCtx, execution.Account.ID, execution.UpstreamModel, run.Operation, decision)
 	} else if e.gateway != nil {
-		_ = e.gateway.RecordImageModelCooldown(healthCtx, execution.Account.ID, execution.UpstreamModel, run.Operation, DefaultImageModelCooldown)
+		_ = e.gateway.RecordImageModelFailure(healthCtx, execution.Account.ID, execution.UpstreamModel, run.Operation, decision)
 	}
 }

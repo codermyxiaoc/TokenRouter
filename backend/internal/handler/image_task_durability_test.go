@@ -1,10 +1,13 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +18,14 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+// validTestPNG 返回真实可解码的 1x1 PNG；转存会校验图片头部，只有签名的伪图片会被提前拒绝。
+func validTestPNG(t *testing.T) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	require.NoError(t, png.Encode(&buffer, image.NewRGBA(image.Rect(0, 0, 1, 1))))
+	return buffer.Bytes()
+}
 
 // 故障替身只拒绝终态写入，用于复现生成结束时 Redis 短暂不可写的边界。
 type asyncDurabilityStore struct {
@@ -85,8 +96,8 @@ func TestAsyncImageDurabilityStorageFailureReportsGeneratedButUnsaved(t *testing
 	executions := 0
 	h.execute = func(_ string, c *gin.Context) {
 		executions++
-		// 固定图片字节只供存储测试，不调用真实生图或执行实际扣费。
-		b64 := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nfake-png-payload"))
+		// 固定图片字节只供存储测试，不调用真实生图或执行实际扣费；使用真实可解码的 PNG，确保走到上传阶段。
+		b64 := base64.StdEncoding.EncodeToString(validTestPNG(t))
 		c.JSON(http.StatusOK, gin.H{"data": []gin.H{{"b64_json": b64}}, "usage": gin.H{"output_tokens": 100}})
 	}
 	observer := &asyncDurabilityObserver{}

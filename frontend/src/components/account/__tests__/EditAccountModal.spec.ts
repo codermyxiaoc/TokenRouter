@@ -461,90 +461,91 @@ describe('EditAccountModal', () => {
     wrapper.unmount()
   })
 
-  // 模拟脱敏后的已存凭据，验证回填期间不会把自定义配置覆盖为预设。
-  // 编辑保存时移除历史 Token 上限，其他凭据继续保留。
-  it('round-trips Video bindings and removes the retired Token budget', async () => {
+  // 模拟脱敏后的已存凭据：旧端点配置按服务端规则换算为模型协议行，保存时只发送新字段。
+  it('converts legacy Video endpoints for display and saves only video_model_protocols', async () => {
     const account = { ...buildAccount(), platform: 'video', credentials: {
       base_url: 'https://video.example.test', api_key: 'video-key', video_endpoints: ['kling'],
       video_model_bindings: { 'kling-v3': 'kling' }, video_model_paths: { 'kling-v3': '/text-to-video/{model}' },
+      video_endpoint_adapters: { kling: 'kling_v1' },
       video_max_output_tokens: 240000, video_max_pending_tasks: 8, video_max_duration_seconds: 15,
     } }
     const wrapper = mountModal(account)
     await flushPromises()
     const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
-    expect(fields.props('modelValue').bindings).toEqual([{ model: 'kling-v3', endpoint: 'kling', path: '/text-to-video/{model}' }])
+    expect(fields.props('modelValue').rows).toEqual([{ model: 'kling-v3', protocol: 'kling.kling_v1', path: '/text-to-video/{model}', baseUrl: '' }])
     expect(wrapper.find('[data-testid="video-max-output-tokens"]').exists()).toBe(false)
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await flushPromises()
     expect(updateAccountMock).toHaveBeenCalledOnce()
-    expect(updateAccountMock.mock.calls[0][1].credentials).toMatchObject({ video_endpoints: ['kling'], video_max_pending_tasks: 8,
-      video_max_duration_seconds: 15, video_model_paths: { 'kling-v3': '/text-to-video/{model}' }, video_endpoint_adapters: {}, video_model_adapters: {} })
+    const credentials = updateAccountMock.mock.calls[0][1].credentials
+    expect(credentials).toMatchObject({ api_key: 'video-key', base_url: 'https://video.example.test', video_max_pending_tasks: 8, video_max_duration_seconds: 15,
+      video_model_protocols: { 'kling-v3': { protocol: 'kling.kling_v1', path: '/text-to-video/{model}' } } })
+    for (const key of ['video_endpoints', 'video_model_bindings', 'video_model_paths', 'video_endpoint_adapters', 'video_max_output_tokens']) {
+      expect(credentials).not.toHaveProperty(key)
+    }
     expect(wrapper.findComponent({ name: 'UpstreamUsageConfigEditor' }).exists()).toBe(false)
     wrapper.unmount()
   })
 
-  // 新协议与模型覆盖通过真实编辑提交保留，未改动密钥时仍沿用已有凭据。
-  it('saves model protocol overrides without changing other endpoint adapters or the saved key', async () => {
+  // 已迁移账号直接回填 video_model_protocols，未改动密钥时仍沿用已有凭据。
+  it('round-trips saved model protocols without sending the masked key', async () => {
+    const protocols = {
+      'seedance-1': { protocol: 'seedance.seedance_v1', base_url: 'https://ark.example/api/v3' },
+      'vendor-x': { protocol: 'profile:vendor_x' },
+      '*': { protocol: 'openai_videos.openai_v1' },
+    }
     const account = { ...buildAccount(), platform: 'video', credentials_status: { has_api_key: true }, credentials: {
-      base_url: 'https://video.example.test', video_endpoints: ['openai_videos', 'minimax'],
-      video_endpoint_adapters: { openai_videos: 'openai_v1', minimax: 'minimax_v2' },
-      video_model_bindings: { shared: ['openai_videos', 'minimax'] },
-      video_model_adapters: { shared: { openai_videos: 'metaso_h3_v1' }, inherited: { minimax: 'legacy_v1' } },
+      base_url: 'https://video.example.test', video_model_protocols: protocols, video_max_pending_tasks: 3,
     } }
     const wrapper = mountModal(account)
     await flushPromises()
-    const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
-    const next = { ...fields.props('modelValue'), bindings: fields.props('modelValue').bindings.map((row: { endpoint: string }) => ({ ...row, ...(row.endpoint === 'minimax' ? { adapter: 'legacy_v1' } : {}) })) }
-    fields.vm.$emit('update:modelValue', next)
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await flushPromises()
     expect(updateAccountMock).toHaveBeenCalledOnce()
     const credentials = updateAccountMock.mock.calls[0][1].credentials
-    expect(credentials).toMatchObject({
-      video_endpoints: account.credentials.video_endpoints,
-      video_endpoint_adapters: account.credentials.video_endpoint_adapters,
-      video_model_bindings: account.credentials.video_model_bindings,
-      video_model_adapters: { shared: { openai_videos: 'metaso_h3_v1', minimax: 'legacy_v1' }, inherited: { minimax: 'legacy_v1' } },
-    })
+    expect(credentials.video_model_protocols).toEqual(protocols)
+    expect(credentials.video_max_pending_tasks).toBe(3)
     expect(credentials).not.toHaveProperty('api_key')
     wrapper.unmount()
   })
 
-  // 编辑时非法绑定同样不提交，既有密钥脱敏也不能绕过端点校验。
+  // 编辑时非法绑定同样不提交，既有密钥脱敏也不能绕过协议校验。
   it.each([
-    [{ model: 'shared', endpoint: 'compat', path: '' }, { model: ' shared ', endpoint: 'compat', path: '' }],
-    [{ model: 'shared', endpoint: 'wan', path: '' }],
-    [{ model: 'shared', endpoint: 'kling', path: '/unsupported' }],
-  ])('does not update Video with invalid bindings %j', async (...bindings) => {
+    [[{ model: 'a', protocol: 'compat.openai_v1', path: '', baseUrl: '' }, { model: 'a', protocol: 'wan.wan_v1', path: '', baseUrl: '' }]],
+    [[{ model: 'v', protocol: 'vidu.vidu_v2', path: '', baseUrl: '' }]],
+    [[{ model: 'k', protocol: 'kling.kling_v1', path: '/unsupported', baseUrl: '' }]],
+    [[{ model: '*', protocol: 'profile:Bad', path: '', baseUrl: '' }]],
+  ])('does not update Video with invalid bindings %j', async rows => {
     const account = { ...buildAccount(), platform: 'video', credentials_status: { has_api_key: true }, credentials: {
-      base_url: 'https://video.example.test', video_endpoints: ['compat', 'kling'],
+      base_url: 'https://video.example.test', video_model_protocols: { '*': { protocol: 'compat.openai_v1' } },
     } }
     const wrapper = mountModal(account)
     await flushPromises()
     const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
-    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), bindings })
+    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), rows })
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await flushPromises()
     expect(updateAccountMock).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
-  // 缺少端点的账号编辑时仍需管理员选择，不能借保存动作隐式补入 compat。
-  it('does not infer compatibility when an existing Video account has no endpoint selection', async () => {
+  // 没有任何协议配置的账号编辑时仍需管理员选择，不能借保存动作隐式补入默认协议。
+  it('requires an explicit protocol when an existing Video account has no configuration', async () => {
     const account = { ...buildAccount(), platform: 'video', credentials: {
       base_url: 'https://video.example.test', api_key: 'video-key',
     } }
     const wrapper = mountModal(account)
     await flushPromises()
-    expect(wrapper.getComponent({ name: 'VideoAccountFields' }).props('modelValue').endpoints).toEqual([])
+    const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
+    expect(fields.props('modelValue').rows).toEqual([{ model: '*', protocol: '', path: '', baseUrl: '' }])
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await flushPromises()
     expect(updateAccountMock).not.toHaveBeenCalled()
-    await wrapper.get('[data-testid="video-endpoint-openai_videos"]').setValue(true)
+    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), rows: [{ model: '*', protocol: 'openai_videos.openai_v1', path: '', baseUrl: '' }] })
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await flushPromises()
     expect(updateAccountMock).toHaveBeenCalledOnce()
-    expect(updateAccountMock.mock.calls[0][1].credentials.video_endpoints).toEqual(['openai_videos'])
+    expect(updateAccountMock.mock.calls[0][1].credentials.video_model_protocols).toEqual({ '*': { protocol: 'openai_videos.openai_v1' } })
     wrapper.unmount()
   })
 
@@ -560,28 +561,10 @@ describe('EditAccountModal', () => {
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await flushPromises()
     expect(updateAccountMock).toHaveBeenCalledOnce()
-    expect(updateAccountMock.mock.calls[0][1].credentials).not.toHaveProperty('video_max_output_tokens')
-    wrapper.unmount()
-  })
-
-  it('edits mixed string and array Video bindings while preserving standalone Kling paths', async () => {
-    const account = { ...buildAccount(), platform: 'video', credentials: {
-      base_url: 'https://video.example.test', api_key: 'video-key', video_endpoints: ['kling', 'compat', 'seedance'],
-      video_model_bindings: { shared: ['kling', 'compat'], legacy: 'seedance' },
-      video_model_paths: { shared: '/text-to-video/{model}', unbound: '/omni-video/{model}' },
-    } }
-    const wrapper = mountModal(account)
-    await flushPromises()
-    const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
-    expect(fields.props('modelValue').bindings).toEqual([
-      { model: 'shared', endpoint: 'kling', path: '/text-to-video/{model}' },
-      { model: 'shared', endpoint: 'compat', path: '' },
-      { model: 'legacy', endpoint: 'seedance', path: '' },
-    ])
-    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
-    await flushPromises()
-    expect(updateAccountMock).toHaveBeenCalledOnce()
-    expect(updateAccountMock.mock.calls[0][1].credentials).toMatchObject(account.credentials)
+    const credentials = updateAccountMock.mock.calls[0][1].credentials
+    expect(credentials).not.toHaveProperty('video_max_output_tokens')
+    expect(credentials).not.toHaveProperty('video_endpoints')
+    expect(credentials.video_model_protocols).toEqual({ '*': { protocol: 'profile:generic-flat' } })
     wrapper.unmount()
   })
 

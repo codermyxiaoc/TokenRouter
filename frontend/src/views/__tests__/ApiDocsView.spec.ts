@@ -4,10 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ApiDocsView from '../ApiDocsView.vue'
 import Select from '@/components/common/Select.vue'
 
-const { copyToClipboard, fetchPublicSettings, state } = vi.hoisted(() => ({
-  copyToClipboard: vi.fn(), fetchPublicSettings: vi.fn(),
+const { copyToClipboard, fetchPublicSettings, getOverrides, state } = vi.hoisted(() => ({
+  copyToClipboard: vi.fn(), fetchPublicSettings: vi.fn(), getOverrides: vi.fn(),
   state: { authenticated: false },
 }))
+vi.mock('@/api/apiDocs', () => ({ apiDocsAPI: { getOverrides } }))
 vi.mock('@/stores', () => ({
   useAppStore: () => ({ siteName: 'TokenRouter', siteLogo: '', apiBaseUrl: 'https://gateway.example.com/v1', publicSettingsLoaded: true, cachedPublicSettings: {}, fetchPublicSettings }),
   useAuthStore: () => ({ get isAuthenticated() { return state.authenticated }, isAdmin: false }),
@@ -35,7 +36,27 @@ async function render(path = '/docs') {
 }
 
 describe('API 文档页面', () => {
-  beforeEach(() => { vi.clearAllMocks(); state.authenticated = false })
+  beforeEach(() => { vi.clearAllMocks(); state.authenticated = false; getOverrides.mockResolvedValue({}) })
+
+  // 管理员改写的 Markdown 优先渲染，{{BASE_URL}} 替换为网关地址，站内链接走前端路由；读取失败回退内置文档。
+  it('渲染管理员改写的 Markdown 并保留内置回退', async () => {
+    getOverrides.mockResolvedValue({ responses: '# 自定义 Responses\n\n调用 `{{BASE_URL}}/v1/responses`\n\n## 第一节\n\n[看总览](/docs/overview)\n\n<script>alert(1)</script>' })
+    const { wrapper, router } = await render('/docs/responses')
+    const article = wrapper.get('article')
+    expect(article.find('h1').text()).toBe('自定义 Responses')
+    expect(article.text()).toContain('https://gateway.example.com/v1/responses')
+    expect(article.html()).not.toContain('<script>')
+    await article.get('a[href="/docs/overview"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/docs/overview')
+    await wrapper.findAll('button').find(button => button.text().includes('apiDocs.copyMarkdown'))!.trigger('click')
+    expect(copyToClipboard).toHaveBeenLastCalledWith(expect.stringContaining('# 接口总览'))
+    wrapper.unmount()
+    getOverrides.mockRejectedValue(new Error('offline'))
+    const fallback = await render('/docs/responses')
+    expect(fallback.wrapper.get('article').text()).toContain('/v1/responses')
+    fallback.wrapper.unmount()
+  })
 
   it('沿用现有目录与正文渲染缓存指南，并复制相同的归属和费用说明', async () => {
     const { wrapper, router } = await render('/docs/gemini-cache-create')
@@ -58,12 +79,12 @@ describe('API 文档页面', () => {
     expect(wrapper.get('article').text()).toContain('ratio 必须为 adaptive')
     expect(wrapper.get('article').text()).toContain('first_frame')
     await wrapper.findAll('button').find(button => button.text().includes('apiDocs.copyMarkdown'))!.trigger('click')
-    expect(copyToClipboard).toHaveBeenLastCalledWith(expect.stringContaining('"ratio": "adaptive"'))
+    expect(copyToClipboard).toHaveBeenLastCalledWith(expect.stringContaining('"aspect_ratio": "adaptive"'))
     expect(copyToClipboard).toHaveBeenLastCalledWith(expect.stringContaining('创建结果未知时先查原任务'))
     await router.push('/docs/kemei-seedance25-reference')
     await flushPromises()
     expect(wrapper.get('article').text()).toContain('reference_image')
-    expect(wrapper.get('article').text()).toContain('"ratio": "16:9"')
+    expect(wrapper.get('article').text()).toContain('"aspect_ratio": "16:9"')
     wrapper.unmount()
   })
 
@@ -85,17 +106,18 @@ describe('API 文档页面', () => {
     const videoCatalog = wrapper.get('nav[aria-label="视频与异步任务"]')
     // 模型指南复用已注册路径；目录按协议/模型家族分组，不能将指南数量误作新增服务端路由。
     expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual([
-      'OpenAI Videos7', 'Seedance / 火山方舟6', 'Kling / 可灵6', 'Wan / 万相2', 'MiniMax3', 'Vidu5', 'Grok / xAI5',
+      'OpenAI Videos5', 'Seedance / 火山方舟7', 'Kling / 可灵3', 'Wan / 万相1', 'MiniMax2', 'Vidu4', 'Grok / xAI5',
     ])
-    expect(videoCatalog.findAll('a')).toHaveLength(34)
+    expect(videoCatalog.findAll('a')).toHaveLength(27)
     await wrapper.get('input[placeholder="apiDocs.search"]').setValue('Vidu')
-    expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['Vidu5'])
-    expect(videoCatalog.findAll('a')).toHaveLength(5)
+    // 统一入口与迁移页的说明提到 Vidu 旧路径，同样命中。
+    expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['OpenAI Videos3', 'Vidu4'])
+    expect(videoCatalog.findAll('a')).toHaveLength(7)
     await wrapper.get('input[placeholder="apiDocs.search"]').setValue('Kling')
-    // 视频检索包含使用说明，取消指南中对 Kling 不支持取消的说明也应命中。
-    expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['OpenAI Videos1', 'Kling / 可灵6'])
-    expect(videoCatalog.find('a[href="/docs/video-compat-cancel"]').exists()).toBe(true)
-    expect(wrapper.find('article').text()).toContain('/tasks')
+    // 视频检索包含使用说明，旧入口迁移页中对 Kling 旧路径的说明也应命中。
+    expect(videoCatalog.findAll('h3').map(heading => heading.text())).toEqual(['OpenAI Videos3', 'Kling / 可灵3'])
+    expect(videoCatalog.find('a[href="/docs/video-retired-endpoints"]').exists()).toBe(true)
+    expect(wrapper.find('article').text()).toContain('Kling · 图生视频')
     wrapper.findComponent(Select).vm.$emit('update:modelValue', 'deepseek')
     await flushPromises()
     expect(wrapper.find('article').text()).toContain('apiDocs.noResults')

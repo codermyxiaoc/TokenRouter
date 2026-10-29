@@ -1,386 +1,208 @@
 import { describe, expect, it } from 'vitest'
-import { VIDEO_ENDPOINTS, VIDEO_DEFAULT_ADAPTERS, VIDEO_ENDPOINT_ADAPTERS, VIDEO_VIDU_PATHS, createVideoAccountForm, validateVideoAccountForm, videoAccountCredentials, videoEndpointAdapter, type VideoEndpoint, type VideoProtocolAdapter } from '../videoAccountConfig'
+import {
+  VIDEO_BUILTIN_PROTOCOLS, VIDEO_ENDPOINT_ADAPTERS, VIDEO_ENDPOINTS, VIDEO_LEGACY_CREDENTIAL_KEYS, VIDEO_VIDU_PATHS,
+  createVideoAccountForm, legacyVideoProtocolRows, parseVideoProtocol, stripLegacyVideoCredentials,
+  validateVideoAccountForm, videoAccountCredentials, videoProtocolPaths, videoProtocolRequiresPath,
+  type VideoAccountForm, type VideoProtocolRow
+} from '../videoAccountConfig'
 
-describe('Video account credentials', () => {
-  // 新供应商只能显式选择；导入和编辑后的端点默认、模型覆盖应完整往返。
-  it('round-trips Yezonghui endpoint and bound/unbound model overrides without changing other adapters', () => {
-    const credentials = {
-      video_endpoints: ['openai_videos', 'minimax'],
-      video_endpoint_adapters: { openai_videos: 'yezonghui_v1', minimax: 'minimax_v2' },
-      video_model_bindings: { relay: 'openai_videos', official: ['openai_videos', 'minimax'] },
-      video_model_adapters: { relay: { openai_videos: 'yezonghui_v1' }, official: { openai_videos: 'openai_v1' }, unbound: { openai_videos: 'yezonghui_v1' } },
+const BASE = 'https://video.example.test'
+const form = (rows: Partial<VideoProtocolRow>[], extra: Partial<VideoAccountForm> = {}): VideoAccountForm => ({
+  rows: rows.map(row => ({ model: '*', protocol: '', path: '', baseUrl: '', ...row })),
+  maxPendingTasks: 10, maxDurationSeconds: null, ...extra,
+})
+
+describe('parseVideoProtocol', () => {
+  // 内置协议只接受同一端点下的方案，模板协议遵循服务端键名规则。
+  it('accepts every builtin endpoint.adapter combination', () => {
+    for (const endpoint of VIDEO_ENDPOINTS) {
+      for (const adapter of VIDEO_ENDPOINT_ADAPTERS[endpoint]) {
+        expect(parseVideoProtocol(`${endpoint}.${adapter}`)).toEqual({ kind: 'builtin', endpoint, adapter })
+      }
     }
-    const form = createVideoAccountForm(credentials)
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-    expect(videoAccountCredentials(form)).toMatchObject(credentials)
-    expect(videoEndpointAdapter(createVideoAccountForm(videoAccountCredentials(form)), 'openai_videos')).toBe('yezonghui_v1')
-    expect(VIDEO_DEFAULT_ADAPTERS.openai_videos).toBe('openai_v1')
-    expect(videoEndpointAdapter(createVideoAccountForm({ base_url: 'https://new.yezonghui.org', video_endpoints: ['openai_videos'] }), 'openai_videos')).toBe('legacy_v1')
+    // 内置协议只保留官方格式，厂商格式改为预置模板。
+    expect(VIDEO_BUILTIN_PROTOCOLS).toEqual(['compat.openai_v1', 'openai_videos.openai_v1', 'seedance.seedance_v1', 'kling.kling_v1', 'wan.wan_v1', 'minimax.minimax_v2', 'vidu.vidu_v2'])
+    // 已被取代的旧方案仍可解析，用于展示和试跑尚未迁移的账号。
+    expect(parseVideoProtocol('seedance.kemei_v1')).toEqual({ kind: 'builtin', endpoint: 'seedance', adapter: 'kemei_v1' })
   })
 
-  it.each(VIDEO_ENDPOINTS.filter(endpoint => endpoint !== 'openai_videos'))('rejects Yezonghui for unsupported endpoint %s', endpoint => {
-    const form = createVideoAccountForm({ video_endpoints: [endpoint], video_endpoint_adapters: { [endpoint]: 'yezonghui_v1' } })
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('adapterInvalid')
+  it.each(['compat.yezonghui_v1', 'kling.vidu_v2', 'unknown.openai_v1', 'openai_videos', '', 'profile:', 'profile:Bad', 'profile:-x', 'profile:x@0', 'profile:x@1.5', 'profile:x@'])('rejects %j', value => {
+    expect(parseVideoProtocol(value)).toBeNull()
   })
 
-  // 新增可选合同不替换已保存的可美端点；模型覆盖及继承继续独立往返。
-  it.each<[VideoEndpoint, VideoProtocolAdapter]>([['compat', 'openai_v1'], ['vidu', 'vidu_v2'], ['vidu', 'legacy_v1']])('preserves %s adapter %s only when explicitly selected', (endpoint, adapter) => {
-    const form = createVideoAccountForm({
-      video_endpoints: [endpoint], video_endpoint_adapters: { [endpoint]: 'kemei_v1' },
-      video_model_bindings: { mapped: endpoint },
-      video_model_adapters: { mapped: { [endpoint]: adapter }, unbound: { [endpoint]: adapter } },
-    })
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-    expect(videoEndpointAdapter(form, endpoint)).toBe('kemei_v1')
-    expect(videoAccountCredentials(form)).toMatchObject({
-      video_endpoint_adapters: { [endpoint]: 'kemei_v1' },
-      video_model_adapters: { mapped: { [endpoint]: adapter }, unbound: { [endpoint]: adapter } },
-    })
-    form.bindings[0].adapter = ''
-    form.endpointAdapters[endpoint] = adapter
-    const saved = videoAccountCredentials(form)
-    expect(saved.video_model_adapters).toEqual({ unbound: { [endpoint]: adapter } })
-    expect(videoEndpointAdapter(createVideoAccountForm(saved), endpoint)).toBe(adapter)
+  it('parses template references with optional versions', () => {
+    expect(parseVideoProtocol('profile:vendor_x')).toEqual({ kind: 'profile', key: 'vendor_x' })
+    expect(parseVideoProtocol(' profile:vendor-x@3 ')).toEqual({ kind: 'profile', key: 'vendor-x', version: 3 })
   })
 
-  it('requires an explicit Vidu endpoint adapter even with a valid model override', () => {
-    const form = createVideoAccountForm({
-      video_endpoints: ['vidu'], video_model_bindings: { model: 'vidu' },
-      video_model_adapters: { model: { vidu: 'vidu_v2' } },
-    })
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('adapterInvalid')
-    expect(form.endpointAdapters).toEqual({})
-    form.endpointAdapters.vidu = 'legacy_v1'
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
+  it('limits Kling paths by adapter and requires paths only for Kling/Vidu', () => {
+    expect(videoProtocolPaths('kling.kling_v1')).toEqual(['/text-to-video/{model}', '/image-to-video/{model}'])
+    expect(videoProtocolPaths('kling.legacy_v1')).toEqual(['/text-to-video/{model}', '/image-to-video/{model}'])
+    expect(videoProtocolPaths('vidu.vidu_v2')).toEqual(VIDEO_VIDU_PATHS)
+    expect(videoProtocolPaths('seedance.seedance_v1')).toEqual([])
+    expect(videoProtocolRequiresPath('vidu.kemei_v1')).toBe(true)
+    expect(videoProtocolRequiresPath('profile:vendor_x')).toBe(false)
   })
-  // 供应商方案只能显式选择，不因域名、模型名称或编辑旧账号而自动启用。
-  it.each(['compat', 'seedance', 'minimax', 'wan', 'kling', 'vidu'] as const)('round-trips an explicit Kemei adapter and model override for %s', endpoint => {
-    const credentials = {
-      base_url: 'https://token.xinhankr.com', video_endpoints: [endpoint],
-      video_endpoint_adapters: { [endpoint]: 'kemei_v1' },
-      video_model_bindings: { shared: endpoint },
-      video_model_adapters: { shared: { [endpoint]: 'kemei_v1' } },
+})
+
+describe('validateVideoAccountForm', () => {
+  it('accepts a complete mixed configuration', () => {
+    expect(validateVideoAccountForm(form([
+      { model: 'kling-v2', protocol: 'kling.kling_v1', path: '/text-to-video/{model}' },
+      { model: 'seedance-1', protocol: 'seedance.seedance_v1', baseUrl: 'https://ark.example/api/v3' },
+      { model: 'vendor-x', protocol: 'profile:vendor_x' },
+      { model: '*', protocol: 'openai_videos.openai_v1' },
+    ]), BASE)).toBeNull()
+  })
+
+  it.each<[string, Partial<VideoProtocolRow>[], string]>([
+    ['empty model', [{ model: ' ', protocol: 'compat.openai_v1' }], 'bindingModelRequired'],
+    ['partial wildcard', [{ model: 'kling-*', protocol: 'compat.openai_v1' }], 'protocolModelWildcardInvalid'],
+    ['question wildcard', [{ model: 'm?', protocol: 'compat.openai_v1' }], 'protocolModelWildcardInvalid'],
+    ['duplicate model', [{ model: 'a', protocol: 'compat.openai_v1' }, { model: ' a ', protocol: 'wan.wan_v1' }], 'bindingDuplicate'],
+    ['missing protocol', [{ model: '*' }], 'protocolRequired'],
+    ['cross endpoint adapter', [{ protocol: 'compat.yezonghui_v1' }], 'protocolInvalid'],
+    ['kling without path', [{ model: 'k', protocol: 'kling.kling_v1' }], 'protocolPathRequired'],
+    ['vidu without path', [{ model: 'v', protocol: 'vidu.vidu_v2' }], 'protocolPathRequired'],
+    ['path on other endpoint', [{ protocol: 'seedance.seedance_v1', path: '/ent/v2/img2video' }], 'protocolPathForbidden'],
+    ['path on template', [{ protocol: 'profile:vendor_x', path: '/text-to-video/{model}' }], 'protocolPathForbidden'],
+    ['kling_v1 omni', [{ model: 'k', protocol: 'kling.kling_v1', path: '/omni-video/{model}' }], 'adapterKlingPathInvalid'],
+    ['legacy kling path without template', [{ model: 'k', protocol: 'kling.legacy_v1', path: '/v1/videos/text2video' }], 'protocolDeprecated'],
+    ['unknown kling path', [{ model: 'k', protocol: 'kling.kling_v1', path: '/x' }], 'adapterKlingPathInvalid'],
+    ['kling path on vidu', [{ model: 'v', protocol: 'vidu.vidu_v2', path: '/text-to-video/{model}' }], 'bindingPathInvalid'],
+    ['bad base url', [{ protocol: 'compat.openai_v1', baseUrl: 'https://user:pw@x.test' }], 'baseUrlInvalid'],
+  ])('rejects %s', (_, rows, error) => {
+    expect(validateVideoAccountForm(form(rows), BASE)).toBe(error)
+  })
+
+  it('requires at least one row, a base URL and valid budgets', () => {
+    expect(validateVideoAccountForm(form([]), BASE)).toBe('protocolsRequired')
+    expect(validateVideoAccountForm(form([{ protocol: 'compat.openai_v1' }]), ' ')).toBe('baseUrlRequired')
+    expect(validateVideoAccountForm(form([{ protocol: 'compat.openai_v1', baseUrl: BASE }]), '')).toBeNull()
+    expect(validateVideoAccountForm(form([{ protocol: 'compat.openai_v1' }], { maxPendingTasks: 0 }), BASE)).toBe('pendingInvalid')
+    expect(validateVideoAccountForm(form([{ protocol: 'compat.openai_v1' }], { maxDurationSeconds: -1 }), BASE)).toBe('budgetInvalid')
+  })
+})
+
+describe('video account credentials', () => {
+  it('starts new accounts with one unselected * row and round-trips saved protocols', () => {
+    expect(createVideoAccountForm().rows).toEqual([{ model: '*', protocol: '', path: '', baseUrl: '' }])
+    const saved = {
+      video_model_protocols: {
+        '*': { protocol: 'openai_videos.openai_v1' },
+        'kling-v2': { protocol: 'kling.kling_v1', path: '/text-to-video/{model}' },
+        'seedance-1': { protocol: 'seedance.seedance_v1', base_url: 'https://ark.example/api/v3' },
+        'vendor-x': { protocol: 'profile:vendor_x' },
+      },
+      video_max_pending_tasks: 8, video_max_duration_seconds: 15,
     }
-    const form = createVideoAccountForm(credentials)
-    expect(validateVideoAccountForm(form, credentials.base_url)).toBeNull()
-    expect(videoEndpointAdapter(form, endpoint)).toBe('kemei_v1')
-    expect(videoAccountCredentials(form)).toMatchObject({
-      video_endpoints: [endpoint], video_endpoint_adapters: credentials.video_endpoint_adapters,
-      video_model_adapters: credentials.video_model_adapters,
-    })
-    form.bindings[0].adapter = ''
-    expect(videoAccountCredentials(form).video_model_adapters).toEqual({})
-    expect(videoAccountCredentials(form).video_endpoint_adapters).toEqual(credentials.video_endpoint_adapters)
+    const loaded = createVideoAccountForm(saved)
+    // 通配默认行排在最后，精确模型保持原顺序。
+    expect(loaded.rows.map(row => row.model)).toEqual(['kling-v2', 'seedance-1', 'vendor-x', '*'])
+    expect(validateVideoAccountForm(loaded, BASE)).toBeNull()
+    expect(videoAccountCredentials(loaded)).toEqual(saved)
   })
 
-  it('does not add unsupported Kemei OpenAI Videos or infer the provider from an account URL', () => {
-    expect(VIDEO_ENDPOINT_ADAPTERS.openai_videos).not.toContain('kemei_v1')
-    const form = createVideoAccountForm({ base_url: 'https://token.xinhankr.com', video_endpoints: ['compat', 'minimax'] })
-    expect(form.endpointAdapters).toEqual({})
-    expect(videoEndpointAdapter(form, 'minimax')).toBe('legacy_v1')
-    expect(validateVideoAccountForm(createVideoAccountForm({ video_endpoints: ['openai_videos'], video_endpoint_adapters: { openai_videos: 'kemei_v1' } }), 'https://video.test')).toBe('adapterInvalid')
-    expect(validateVideoAccountForm(createVideoAccountForm({ video_endpoints: ['vidu'] }), 'https://video.test')).toBe('adapterInvalid')
+  it('drops paths that the protocol cannot use and never emits legacy keys', () => {
+    const credentials = videoAccountCredentials(form([{ protocol: 'compat.openai_v1', path: '/stale', baseUrl: ' ' }]))
+    expect(credentials.video_model_protocols).toEqual({ '*': { protocol: 'compat.openai_v1' } })
+    for (const key of VIDEO_LEGACY_CREDENTIAL_KEYS) expect(credentials).not.toHaveProperty(key)
+    const existing: Record<string, unknown> = { api_key: 'k', video_endpoints: ['compat'], video_model_bindings: {}, video_openai_profile: 'metaso_h3' }
+    expect(stripLegacyVideoCredentials(existing)).toEqual({ api_key: 'k' })
   })
+})
 
-  // 相同模型的 Kling、Vidu 路径必须独立保存，增删其中一个绑定不改写另一个。
-  it.each(VIDEO_VIDU_PATHS)('preserves separate Kling and Vidu paths for %s', path => {
-    const credentials = {
-      video_endpoints: ['kling', 'vidu'], video_endpoint_adapters: { kling: 'kemei_v1', vidu: 'kemei_v1' },
-      video_model_bindings: { shared: ['kling', 'vidu'] },
-      video_model_paths: { shared: '/omni-video/{model}', old: '/text-to-video/{model}' },
-      video_vidu_model_paths: { shared: path, inherited: '/ent/v2/img2video' },
-    }
-    const form = createVideoAccountForm(credentials)
-    expect(form.bindings.map(row => row.path)).toEqual(['/omni-video/{model}', path])
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-    expect(videoAccountCredentials(form)).toMatchObject(credentials)
-    form.bindings = form.bindings.filter(row => row.endpoint !== 'vidu')
-    expect(videoAccountCredentials(form)).toMatchObject({
-      video_model_paths: credentials.video_model_paths, video_vidu_model_paths: { inherited: '/ent/v2/img2video' },
-      video_model_bindings: { shared: 'kling' },
-    })
-  })
-
-  it.each(['/tasks', 'https://evil.test/ent/v2/img2video', '/text-to-video/{model}'])('rejects an invalid Vidu operation path %s', path => {
-    const form = createVideoAccountForm({ video_endpoints: ['vidu'], video_endpoint_adapters: { vidu: 'kemei_v1' }, video_model_bindings: { model: 'vidu' }, video_vidu_model_paths: { model: path } })
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('bindingPathInvalid')
-    form.bindings = []
-    form.unboundViduModelPaths = { inherited: path }
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('bindingPathInvalid')
-  })
-  // 创建与编辑必须显式区分，保存旧账号不能偷偷切换官方方案。
-  it('uses official defaults only for a new form and preserves legacy behavior for saved empty credentials', () => {
-    const created = createVideoAccountForm()
-    expect(created.endpoints).toEqual([])
-    expect(created.endpointAdapters).toEqual(VIDEO_DEFAULT_ADAPTERS)
-    expect(created.endpointAdapters.compat).toBe('legacy_v1')
-    expect(created.endpointAdapters.vidu).toBe('vidu_v2')
-    const saved = createVideoAccountForm({})
-    expect(saved.endpointAdapters).toEqual({})
-    for (const endpoint of VIDEO_ENDPOINTS) expect(videoEndpointAdapter(saved, endpoint)).toBe('legacy_v1')
-  })
-
-  it('round-trips endpoint adapters and per-model overrides independently of endpoint authorization', () => {
-    const credentials = {
-      video_endpoints: ['openai_videos', 'minimax'],
+describe('legacy conversion', () => {
+  // 与服务端换算一致：openai_videos 优先，其次 compat，再其次第一个端点。
+  it('prefers openai_videos, then compat, then the first endpoint for bound models and the * default', () => {
+    const rows = legacyVideoProtocolRows({
+      video_endpoints: ['seedance', 'compat', 'openai_videos'],
+      video_model_bindings: { both: ['compat', 'openai_videos'], compat_only: ['seedance', 'compat'], native: 'seedance' },
+      video_endpoint_adapters: { seedance: 'seedance_v1' },
+      video_base_urls: { seedance: 'https://ark.example', compat: 'https://compat.example' },
       video_openai_profile: 'metaso_h3',
-      video_endpoint_adapters: { openai_videos: 'openai_v1', minimax: 'minimax_v2', seedance: 'seedance_v1' },
-      video_model_bindings: { shared: ['openai_videos', 'minimax'] },
-      video_model_adapters: { shared: { openai_videos: 'metaso_h3_v1', minimax: 'legacy_v1' }, unbound: { openai_videos: 'legacy_v1' } },
-    }
-    const form = createVideoAccountForm(credentials)
-    expect(videoEndpointAdapter(form, 'openai_videos')).toBe('openai_v1')
-    expect(form.bindings.map(row => row.adapter)).toEqual(['metaso_h3_v1', 'legacy_v1'])
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-    expect(videoAccountCredentials(form)).toMatchObject({ ...credentials, video_openai_profile: 'passthrough' })
-    // 清除某条覆盖只恢复该端点继承，不删除同模型其他覆盖或隐式收窄未绑定模型。
-    form.bindings[0].adapter = ''
-    expect(videoAccountCredentials(form)).toMatchObject({
-      video_model_bindings: credentials.video_model_bindings,
-      video_model_adapters: { shared: { minimax: 'legacy_v1' }, unbound: { openai_videos: 'legacy_v1' } },
     })
-    expect(videoAccountCredentials(form).video_model_adapters).toEqual({ shared: { minimax: 'legacy_v1' }, unbound: { openai_videos: 'legacy_v1' } })
-    form.bindings = []
-    expect(videoAccountCredentials(form).video_model_adapters).toEqual({ unbound: { openai_videos: 'legacy_v1' } })
+    expect(rows).toEqual([
+      // 旧厂商方案按服务端规则改绑为预置模板。
+      { model: 'both', protocol: 'profile:metaso-h3', path: '', baseUrl: '' },
+      { model: 'compat_only', protocol: 'profile:generic-flat', path: '', baseUrl: 'https://compat.example' },
+      { model: 'native', protocol: 'seedance.seedance_v1', path: '', baseUrl: 'https://ark.example' },
+      { model: '*', protocol: 'profile:metaso-h3', path: '', baseUrl: '' },
+    ])
   })
 
-  it.each([
-    { video_endpoint_adapters: { minimax: 'openai_v1' } },
-    { video_endpoint_adapters: { minimax: 'vidu_v2' } },
-    { video_endpoint_adapters: { unknown: 'legacy_v1' } },
-    { video_endpoint_adapters: { openai_videos: 'future_v9' } },
-    { video_endpoint_adapters: [] },
-    { video_model_adapters: [] },
-    { video_model_adapters: { model: [] } },
-    { video_model_adapters: { model: { minimax: 'wan_v1' } } },
-  ])('rejects invalid or cross-endpoint adapter configuration %j', extra => {
-    const form = createVideoAccountForm({ video_endpoints: ['minimax'], ...extra })
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('adapterInvalid')
+  it('resolves model adapter overrides before endpoint defaults and adds exact rows for override-only models', () => {
+    const rows = legacyVideoProtocolRows({
+      video_endpoints: ['openai_videos'],
+      video_endpoint_adapters: { openai_videos: 'openai_v1' },
+      video_model_bindings: { relay: 'openai_videos' },
+      video_model_adapters: { relay: { openai_videos: 'yezonghui_v1' }, unbound: { openai_videos: 'metaso_h3_v1' } },
+    })
+    expect(rows).toEqual([
+      { model: 'relay', protocol: 'profile:yezonghui', path: '', baseUrl: '' },
+      { model: 'unbound', protocol: 'profile:metaso-h3', path: '', baseUrl: '' },
+      { model: '*', protocol: 'openai_videos.openai_v1', path: '', baseUrl: '' },
+    ])
   })
 
-  it('does not reactivate old H3 settings after explicitly choosing the original protocol', () => {
-    const form = createVideoAccountForm({ video_endpoints: ['openai_videos'], video_openai_profile: 'metaso_h3' })
-    expect(videoEndpointAdapter(form, 'openai_videos')).toBe('metaso_h3_v1')
-    form.endpointAdapters.openai_videos = 'legacy_v1'
-    const saved = videoAccountCredentials(form)
-    expect(saved.video_openai_profile).toBe('passthrough')
-    expect(videoEndpointAdapter(createVideoAccountForm(saved), 'openai_videos')).toBe('legacy_v1')
-  })
-
-  // 官方方案不能沿用中继旧路径；单模型保留旧协议时则不影响其他官方模型。
-  it.each(['/v1/videos/text2video', '/omni-video/{model}'])('rejects unverified Kling path %s for the official adapter and honors model overrides', path => {
-    const form = createVideoAccountForm({
+  it('creates exact Kling/Vidu rows from path maps instead of a * default', () => {
+    const kling = legacyVideoProtocolRows({
       video_endpoints: ['kling'], video_endpoint_adapters: { kling: 'kling_v1' },
-      video_model_bindings: { model: 'kling' }, video_model_paths: { model: path },
+      video_model_bindings: { bound: 'kling' },
+      video_model_paths: { bound: '/text-to-video/{model}', unbound: '/image-to-video/{model}', bad: '/omni-video/{model}' },
     })
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('adapterKlingPathInvalid')
-    form.bindings[0].adapter = 'legacy_v1'
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-    form.bindings[0].adapter = ''
-    form.bindings[0].path = ''
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-    form.unboundModelPaths = { inherited: '/v1/videos/omni-video' }
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('adapterKlingPathInvalid')
-    form.unboundModelAdapters = { inherited: { kling: 'legacy_v1' } }
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-  })
-
-  // 可美只接现代操作，显式模型覆盖不能借旧路径绕过发送前校验。
-  it.each(['/v1/videos/text2video', '/v1/videos/omni-video'])('rejects legacy Kling path %s for Kemei at endpoint and model scope', path => {
-    const form = createVideoAccountForm({
-      video_endpoints: ['kling'], video_endpoint_adapters: { kling: 'kemei_v1' },
-      video_model_bindings: { model: 'kling' }, video_model_paths: { model: path },
-    })
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('adapterKemeiKlingPathInvalid')
-    form.bindings[0].adapter = 'legacy_v1'
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-    form.endpointAdapters.kling = 'legacy_v1'
-    form.bindings[0].adapter = 'kemei_v1'
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('adapterKemeiKlingPathInvalid')
-    form.bindings = []
-    form.unboundModelPaths = { inherited: path }
-    form.unboundModelAdapters = { inherited: { kling: 'kemei_v1' } }
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('adapterKemeiKlingPathInvalid')
-    form.endpointAdapters.kling = 'kemei_v1'
-    form.unboundModelAdapters = { inherited: { kling: 'legacy_v1' } }
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-    form.unboundModelAdapters = {}
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('adapterKemeiKlingPathInvalid')
-  })
-
-  it.each(['/text-to-video/{model}', '/image-to-video/{model}', '/omni-video/{model}'])('accepts modern Kling path %s for Kemei without a binding requirement', path => {
-    const form = createVideoAccountForm({
-      video_endpoints: ['kling'], video_endpoint_adapters: { kling: 'kemei_v1' },
-      video_model_bindings: { model: 'kling' }, video_model_paths: { model: path, inherited: path },
-    })
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-    expect(videoAccountCredentials(form).video_model_paths).toEqual({ model: path, inherited: path })
-  })
-
-  it.each(['model-*', 'model-?'])('requires an exact model name for adapter override %s', model => {
-    const form = createVideoAccountForm({ video_endpoints: ['minimax'] })
-    form.bindings = [{ model, endpoint: 'minimax', path: '', adapter: 'minimax_v2' }]
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('adapterModelExactRequired')
-    form.bindings[0].adapter = ''
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-  })
-  // 缺少端点配置时保持空选，不能通过初始化或保存隐式开启兼容入口。
-  it.each([{}, { video_endpoints: [] }, { video_endpoints: null }])('requires explicit endpoint selection for %j', credentials => {
-    const form = createVideoAccountForm(credentials)
-    expect(form.endpoints).toEqual([])
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('endpointsRequired')
-    expect(videoAccountCredentials(form).video_endpoints).toEqual([])
-  })
-
-  // 已明确保存的兼容端点保留，不能自动增加另一种 OpenAI 视频协议。
-  it('preserves explicitly saved legacy compat accounts', () => {
-    const credentials = {
-      video_endpoints: ['compat'],
-      video_base_urls: { compat: 'https://legacy.test' },
-      video_model_bindings: { existing: 'compat' },
-    }
-    expect(videoAccountCredentials(createVideoAccountForm(credentials))).toMatchObject(credentials)
-  })
-
-  // 同时保存两种 OpenAI 端点及供应商原生端点，保留各自地址和同模型绑定。
-  it('round-trips OpenAI Videos with compat and native endpoint bindings', () => {
-    const credentials = {
-      video_endpoints: ['compat', 'openai_videos', 'seedance', 'kling'],
-      video_base_urls: { compat: 'https://legacy.test', openai_videos: 'https://openai-video.test/v1', seedance: 'https://ark.test/api/v3', kling: 'https://kling.test' },
-      video_model_bindings: { legacy: 'compat', native: 'openai_videos', shared: ['compat', 'openai_videos', 'seedance', 'kling'] },
-      video_model_paths: { shared: '/omni-video/{model}' },
-      video_max_pending_tasks: 8,
-      video_max_duration_seconds: 20,
-    }
-    const form = createVideoAccountForm(credentials)
-    expect(form.endpoints).toEqual(credentials.video_endpoints)
-    expect(form.bindings.filter(binding => binding.endpoint === 'openai_videos')).toEqual([
-      { model: 'native', endpoint: 'openai_videos', path: '' },
-      { model: 'shared', endpoint: 'openai_videos', path: '' },
+    // kling_v1 不支持 omni，无法通过新规则的旧绑定被丢弃；没有 * 默认行。
+    expect(kling).toEqual([
+      { model: 'bound', protocol: 'kling.kling_v1', path: '/text-to-video/{model}', baseUrl: '' },
+      { model: 'unbound', protocol: 'kling.kling_v1', path: '/image-to-video/{model}', baseUrl: '' },
     ])
-    expect(validateVideoAccountForm(form, '')).toBeNull()
-    expect(videoAccountCredentials(form)).toEqual({ ...credentials, video_openai_profile: 'passthrough', video_endpoint_adapters: {}, video_model_adapters: {}, video_vidu_model_paths: {} })
-  })
-
-  // 历史配置不自动转换参数；供应商适配是显式选择，暂时停用端点也不会丢失。
-  it('defaults to passthrough and round-trips an explicit H3 profile while its endpoint is disabled', () => {
-    const form = createVideoAccountForm({ video_endpoints: ['openai_videos'] })
-    expect(form.openAIProfile).toBe('passthrough')
-    const h3 = createVideoAccountForm({ video_endpoints: ['compat'], video_openai_profile: 'metaso_h3' })
-    expect(h3.openAIProfile).toBe('metaso_h3')
-    expect(validateVideoAccountForm(h3, 'https://video.test')).toBeNull()
-    expect(videoAccountCredentials(h3).video_openai_profile).toBe('metaso_h3')
-    h3.openAIProfile = 'passthrough'
-    expect(videoAccountCredentials(h3).video_openai_profile).toBe('passthrough')
-  })
-
-  // 编辑旧账号时，域名或模型名称不能触发适配；空配置保存后仍使用原保真协议。
-  it.each([undefined, null, '', ' ', 'passthrough'])('keeps a legacy H3-named account passthrough after editing profile %s', profile => {
-    const credentials = {
-      base_url: 'https://metaso.cn/api/openai',
-      video_endpoints: ['compat', 'openai_videos'],
-      video_openai_profile: profile,
-      video_model_bindings: { 'MiniMax-H3': ['compat', 'openai_videos'] },
-      video_max_pending_tasks: 12,
-      video_max_duration_seconds: 20,
-    }
-    const form = createVideoAccountForm(credentials)
-    expect(form.openAIProfile).toBe('passthrough')
-    expect(validateVideoAccountForm(form, credentials.base_url)).toBeNull()
-    const saved = videoAccountCredentials(form)
-    expect(saved).toMatchObject({
-      video_openai_profile: 'passthrough',
-      video_endpoints: credentials.video_endpoints,
-      video_model_bindings: credentials.video_model_bindings,
-      video_max_pending_tasks: 12,
-      video_max_duration_seconds: 20,
+    const vidu = legacyVideoProtocolRows({
+      video_endpoints: ['vidu'], video_endpoint_adapters: { vidu: 'vidu_v2' },
+      video_vidu_model_paths: { q2: '/ent/v2/img2video' }, video_model_bindings: { nopath: 'vidu' },
     })
-    expect(createVideoAccountForm(saved).openAIProfile).toBe('passthrough')
+    expect(vidu).toEqual([{ model: 'q2', protocol: 'vidu.vidu_v2', path: '/ent/v2/img2video', baseUrl: '' }])
   })
 
-  it('rejects an unknown persisted profile instead of silently changing it', () => {
-    const form = createVideoAccountForm({ video_endpoints: ['openai_videos'], video_openai_profile: 'future_profile' })
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('openAIProfileInvalid')
-  })
-
-  // 未绑定模型继承账号端点；只有同一模型和端点的重复行才非法。
-  it('allows inherited multi-endpoint routing and requires endpoint URLs', () => {
-    const form = createVideoAccountForm({ video_endpoints: ['seedance', 'kling'] })
-    expect(validateVideoAccountForm(form, '')).toBe('baseUrlRequired')
-    expect(validateVideoAccountForm(form, 'https://upstream.test')).toBeNull()
-    form.bindings = [{ model: 'model', endpoint: 'kling', path: '/text-to-video/{model}' }]
-    expect(validateVideoAccountForm(form, 'https://upstream.test')).toBeNull()
-    form.bindings.push({ ...form.bindings[0] })
-    expect(validateVideoAccountForm(form, 'https://upstream.test')).toBe('bindingDuplicate')
-  })
-
-  it('round-trips mixed legacy and multi-endpoint bindings without losing Kling paths', () => {
-    const credentials = {
-      video_endpoints: ['compat', 'seedance', 'kling'],
-      video_model_bindings: { legacy: 'seedance', shared: ['kling', 'compat', 'seedance'] },
-      video_model_paths: { shared: '/omni-video/{model}', inherited: '/v1/videos/omni-video' },
-    }
-    const form = createVideoAccountForm(credentials)
-    expect(form.bindings).toEqual([
-      { model: 'legacy', endpoint: 'seedance', path: '' },
-      { model: 'shared', endpoint: 'kling', path: '/omni-video/{model}' },
-      { model: 'shared', endpoint: 'compat', path: '' },
-      { model: 'shared', endpoint: 'seedance', path: '' },
-    ])
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-    expect(videoAccountCredentials(form)).toMatchObject(credentials)
-    // 移除同模型的非 Kling 行不改变其操作路径，也不会生成无绑定模型的端点限制。
-    form.bindings = form.bindings.filter(binding => binding.endpoint !== 'compat' && (binding.model !== 'shared' || binding.endpoint === 'kling'))
-    expect(videoAccountCredentials(form)).toMatchObject({
-      video_model_bindings: { legacy: 'seedance', shared: 'kling' },
-      video_model_paths: credentials.video_model_paths,
+  it('ignores Kling paths for override rows when the default endpoint is not Kling', () => {
+    const rows = legacyVideoProtocolRows({
+      video_endpoints: ['compat'], video_model_paths: { stray: '/text-to-video/{model}' },
     })
+    expect(rows).toEqual([{ model: '*', protocol: 'profile:generic-flat', path: '', baseUrl: '' }])
   })
 
-  it('preserves standalone paths while leaving models unbound', () => {
-    const credentials = { video_endpoints: ['seedance', 'kling'], video_model_paths: { inherited: '/omni-video/{model}' } }
-    const form = createVideoAccountForm(credentials)
-    expect(form.bindings).toEqual([])
-    expect(videoAccountCredentials(form)).toMatchObject({ video_model_bindings: {}, video_model_paths: credentials.video_model_paths })
+  it('uses saved video_model_protocols over legacy fields and falls back to an empty * row', () => {
+    expect(createVideoAccountForm({ video_model_protocols: { m: { protocol: 'wan.wan_v1' } }, video_endpoints: ['compat'] }).rows)
+      .toEqual([{ model: 'm', protocol: 'wan.wan_v1', path: '', baseUrl: '' }])
+    expect(createVideoAccountForm({ video_endpoints: ['compat'] }).rows)
+      .toEqual([{ model: '*', protocol: 'profile:generic-flat', path: '', baseUrl: '' }])
+    expect(createVideoAccountForm({ video_endpoints: ['kling'] }).rows)
+      .toEqual([{ model: '*', protocol: '', path: '', baseUrl: '' }])
+  })
+})
+
+describe('deprecated protocol rebinding', () => {
+  // 与服务端 videoDeprecatedProtocolReplacement 一致：厂商方案改为预置模板，原样协议在原生端点改为官方协议。
+  it.each<[string, string, string]>([
+    ['openai_videos.metaso_h3_v1', '', 'profile:metaso-h3'],
+    ['openai_videos.yezonghui_v1', '', 'profile:yezonghui'],
+    ['openai_videos.legacy_v1', '', 'profile:generic-flat-videos'],
+    ['compat.legacy_v1', '', 'profile:generic-flat'],
+    ['compat.kemei_v1', '', 'profile:kemei-compat'],
+    ['minimax.kemei_v1', '', 'profile:kemei-minimax'],
+    ['kling.kemei_v1', '/omni-video/{model}', 'profile:kemei-kling-omni'],
+    ['vidu.kemei_v1', '/ent/v2/start-end2video', 'profile:kemei-vidu-start-end2video'],
+    ['seedance.legacy_v1', '', 'seedance.seedance_v1'],
+    ['kling.legacy_v1', '/image-to-video/{model}', 'kling.kling_v1'],
+  ])('rebinds %s', (protocol, path, want) => {
+    const rows = createVideoAccountForm({ video_model_protocols: { m: { protocol, path, base_url: 'https://b.example' } } }).rows
+    expect(rows[0].protocol).toBe(want)
+    expect(rows[0].baseUrl).toBe('https://b.example')
+    expect(validateVideoAccountForm({ rows, maxPendingTasks: 10, maxDurationSeconds: null }, BASE)).toBeNull()
   })
 
-  it.each([
-    { bindings: [{ model: ' ', endpoint: 'compat' as const, path: '' }], error: 'bindingModelRequired' },
-    { bindings: [{ model: 'm', endpoint: 'compat' as const, path: '' }, { model: ' m ', endpoint: 'compat' as const, path: '' }], error: 'bindingDuplicate' },
-    { bindings: [{ model: 'm', endpoint: 'wan' as const, path: '' }], error: 'bindingEndpointDisabled' },
-    { bindings: [{ model: 'm', endpoint: 'kling' as const, path: '/unsupported' }], error: 'bindingPathInvalid' },
-  ])('reports the concrete binding error $error', ({ bindings, error }) => {
-    const form = createVideoAccountForm({ video_endpoints: ['compat', 'kling'] })
-    form.bindings = bindings
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe(error)
-  })
-
-  it.each([0, 1001, 1.5])('rejects invalid pending limit %s', value => {
-    const form = createVideoAccountForm({ video_endpoints: ['compat'] })
-    form.maxPendingTasks = value
-    expect(validateVideoAccountForm(form, 'https://upstream.test')).toBe('pendingInvalid')
-  })
-
-  // 旧 Token 预算不再回填或写出，自动时长限制仍独立校验。
-  it.each([undefined, null, '', 0, -1, 120000])('ignores removed Token limit %s without serializing it', value => {
-    const form = createVideoAccountForm({ video_endpoints: ['compat'], video_max_output_tokens: value, video_max_duration_seconds: 15 })
-    expect(form).not.toHaveProperty('maxOutputTokens')
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBeNull()
-    expect(videoAccountCredentials(form)).not.toHaveProperty('video_max_output_tokens')
-    expect(videoAccountCredentials(form)).toHaveProperty('video_max_duration_seconds', 15)
-    form.maxDurationSeconds = 0
-    expect(validateVideoAccountForm(form, 'https://video.test')).toBe('budgetInvalid')
-  })
-
-  it('preserves endpoint overrides and clears optional duration explicitly', () => {
-    const form = createVideoAccountForm({ video_endpoints: ['wan'], video_base_urls: { wan: 'https://wan.test' }, video_max_duration_seconds: 20 })
-    expect(validateVideoAccountForm(form, '')).toBeNull()
-    form.maxDurationSeconds = ''
-    const credentials = videoAccountCredentials(form)
-    expect(credentials).toMatchObject({ video_base_urls: { wan: 'https://wan.test' }, video_model_bindings: {}, video_max_duration_seconds: null })
-    expect(credentials).not.toHaveProperty('api_key')
-    expect(credentials).not.toHaveProperty('video_max_output_tokens')
-    form.maxDurationSeconds = -1
-    expect(validateVideoAccountForm(form, '')).toBe('budgetInvalid')
+  it('keeps legacy Kling paths without an equivalent template and asks for manual rebinding', () => {
+    const rows = createVideoAccountForm({ video_model_protocols: { m: { protocol: 'kling.legacy_v1', path: '/v1/videos/omni-video' } } }).rows
+    expect(rows[0].protocol).toBe('kling.legacy_v1')
+    expect(validateVideoAccountForm({ rows, maxPendingTasks: 10, maxDurationSeconds: null }, BASE)).toBe('protocolDeprecated')
   })
 })

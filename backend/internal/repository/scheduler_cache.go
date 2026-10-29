@@ -1332,8 +1332,9 @@ func filterSchedulerCredentials(credentials map[string]any) map[string]any {
 	// 精简候选也执行账号阈值校验，不能丢失账号对全局阈值的覆盖。
 	// Seedance 资格要求显式自定义地址，候选投影必须保留该字段，不能只保留能力开关。
 	keys := []string{"model_mapping", "compact_model_mapping", "model_whitelist", "openai_workload_capabilities", "base_url", "api_key", "project_id", "oauth_type", "plan_type", "account_scheduling_threshold",
-		// 视频智能选组需要完整协议和模型绑定，但不需要预算快照或额外凭据。
-		"video_endpoints", "video_model_bindings", "video_base_urls", "video_model_paths",
+		// 视频选号与预算校验需要完整协议绑定及待处理/时长预算，但不需要其它额外凭据。
+		// video_model_protocols 是迁移后唯一的协议来源，必须保留，否则新建账号在调度快照中没有任何模型绑定。
+		"video_model_protocols", "video_max_pending_tasks", "video_max_duration_seconds", "video_endpoints", "video_model_bindings", "video_base_urls", "video_model_paths",
 		// 显式缓存调度前需要认证模式及上游声明，避免选择不兼容账号。
 		"auth_mode", "provider_type", service.GeminiExplicitCacheUpstreamCredentialKey, service.GeminiExplicitCacheUpstreamMaxTTLCredentialKey}
 	filtered := make(map[string]any)

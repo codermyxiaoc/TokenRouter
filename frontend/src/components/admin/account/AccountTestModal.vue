@@ -70,20 +70,11 @@
 
       <template v-if="isVideoAccount">
         <div class="space-y-1.5">
-          <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.testEndpoint') }}</label>
-          <Select
-            v-model="videoEndpoint"
-            :options="videoEndpointOptions"
-            :disabled="loadingModels || status === 'connecting' || !selectedModelId || !videoEndpointOptions.length"
-            :placeholder="t('admin.accounts.video.testEndpointPlaceholder')"
-            data-testid="account-test-video-endpoint"
-          />
-          <p class="input-hint" data-testid="account-test-video-adapter">{{ t('admin.accounts.video.testAdapter') }}：{{ t(`admin.accounts.video.adapters.${videoAdapterTextKey(videoEndpoint, videoProtocolAdapter)}`) }}</p>
-          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.video.testEndpointHint') }}</p>
-        </div>
-        <div v-if="videoEndpoint === 'vidu'" class="space-y-1.5">
-          <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testViduOperation') }}</label>
-          <Select v-model="videoOperation" :options="videoOperationOptions" :disabled="status === 'connecting'" :placeholder="t('admin.accounts.video.testViduOperationRequired')" data-testid="account-test-video-operation" />
+          <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testProtocol') }}</label>
+          <!-- 协议由账号的模型绑定决定，这里只读展示，测试不再选择端点或操作 -->
+          <div class="input bg-gray-50 text-sm dark:bg-dark-800" data-testid="account-test-video-protocol" :data-adapter="videoProtocolAdapter">{{ videoProtocolLabel || t('admin.accounts.video.testProtocolUnknown') }}</div>
+          <p v-if="videoProtocol" class="text-xs text-gray-500 dark:text-gray-400 break-all" data-testid="account-test-video-protocol-raw">{{ videoProtocol }}</p>
+          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.video.testProtocolHint') }}</p>
         </div>
         <div class="space-y-1.5">
           <label for="account-test-video-duration" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.video.testDuration') }}</label>
@@ -112,7 +103,7 @@
           </div>
         </div>
         <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(videoResolutionHint) }}</p>
-        <p v-if="!loadingModels && (videoTestValidationMessage || videoMediaValidationMessage)" class="text-xs text-amber-600 dark:text-amber-400" role="alert">{{ videoTestValidationMessage || videoMediaValidationMessage }}</p>
+        <p v-if="!loadingModels && videoTestValidationMessage" class="text-xs text-amber-600 dark:text-amber-400" role="alert">{{ videoTestValidationMessage }}</p>
       </template>
 
       <div v-if="showEndpointSelect" class="space-y-1.5">
@@ -414,9 +405,8 @@ const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-ima
 // 图片/文字请求类型完全由管理员选择，不再从模型名称推断。
 const supportsImageTest = computed(() => testType.value === 'image')
 const {
-  isVideoAccount, isMetasoH3VideoTest, isYezonghuiVideoTest, videoProtocolAdapter, videoAdapterTextKey, videoResolutionHint, videoResolutionPlaceholder, videoRatioPlaceholder, resetVideoOptions, markVideoOptionEdited,
-  videoEndpoint, videoDuration, videoResolution, videoRatio, videoEndpointOptions, videoTestValidationMessage,
-  videoOperation, videoOperationOptions, videoTestRatio, videoTestMediaValidation,
+  isVideoAccount, isMetasoH3VideoTest, isYezonghuiVideoTest, videoProtocol, videoProtocolLabel, videoProtocolAdapter, videoResolutionHint, videoResolutionPlaceholder, videoRatioPlaceholder, resetVideoOptions, markVideoOptionEdited,
+  videoEndpoint, videoDuration, videoResolution, videoRatio, videoTestValidationMessage, videoTestRatio,
   testEndpoint, isGrokAccount, testTypeOptions, endpointOptions, showEndpointSelect,
   showModelSelect, modelOptionsForMode, supportsImageUpload, supportsAudioUpload,
   supportsPromptInput, promptInputLabel, promptInputPlaceholder, promptInputHint,
@@ -431,10 +421,9 @@ const {
 })
 const generatedAudios = ref<PreviewImage[]>([])
 const generatedVideos = ref<PreviewImage[]>([])
-const videoMediaValidationMessage = computed(() => videoTestMediaValidation(Boolean(uploadImageDataURL.value)))
 const canStartTest = computed(() => status.value !== 'connecting' && !loadingModels.value &&
   !loadingUpload.value && (!showModelSelect.value || Boolean(selectedModelId.value)) &&
-  !videoTestValidationMessage.value && !videoMediaValidationMessage.value)
+  !videoTestValidationMessage.value)
 
 
 const sortTestModels = (models: ClaudeModel[]) => {
@@ -582,14 +571,13 @@ const startTest = async () => {
       prompt: isCompactTestMode.value || !supportsPromptInput.value ? '' : testPrompt.value.trim(),
       test_type: testType.value
     }
-    if (isVideoAccount.value && videoEndpoint.value) {
+    // 视频测试只提交通用参数，协议与操作路径由账号的模型绑定决定。
+    if (isVideoAccount.value) {
       requestBody.test_type = 'video'
-      requestBody.video_endpoint = videoEndpoint.value
       requestBody.duration = Number(videoDuration.value)
       if (videoResolution.value.trim()) requestBody.resolution = videoResolution.value.trim()
       const ratio = videoTestRatio(Boolean(uploadImageDataURL.value))
       if (ratio) requestBody.ratio = ratio
-      if (videoEndpoint.value === 'vidu') requestBody.video_operation = videoOperation.value
     }
     if (isOpenAIAccount.value) requestBody.mode = testMode.value
     // 自动测试省略端点，保持历史客户端和既有账号协议的默认行为。

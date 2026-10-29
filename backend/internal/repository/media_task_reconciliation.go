@@ -92,6 +92,13 @@ func mediaSnapshotAmount(s *mediaBillingSnapshot) (float64, float64) {
 func mediaSettlementEligible(status string) bool {
 	return status == "failed" || status == "cancelled" || status == "expired"
 }
+
+// mediaManualSettlementEligible 允许管理员人工核定“异步图片已完成但预占仍待核对”的历史任务：
+// 这类任务结果已交付却缺少结算证据，自动流程既不能按完成标记猜测扣费，也不能无条件退款，
+// 只能由管理员按实际交付情况决定扣费或释放；自动过期处理仍只覆盖失败类状态。
+func mediaManualSettlementEligible(source, status string) bool {
+	return mediaSettlementEligible(status) || (source == "async_image" && status == "completed")
+}
 func mediaSnapshotPending(s *mediaBillingSnapshot) bool {
 	return s.state == "reserved" || s.state == "reconciliation"
 }
@@ -151,7 +158,7 @@ func (r *mediaTaskRepository) GetMediaTaskBillingReview(ctx context.Context, tas
 	case "reserved", "reconciliation":
 		review.Status = "pending"
 		review.HeldBalanceAmount, review.HeldSubscriptionAmount = balance, sub
-		review.CanRelease = mediaSettlementEligible(task.Status) && (snapshot.sourceStatus == "" || mediaSettlementEligible(snapshot.sourceStatus)) && (task.ActualCost == nil || *task.ActualCost == 0)
+		review.CanRelease = mediaManualSettlementEligible(task.Source, task.Status) && (snapshot.sourceStatus == "" || mediaManualSettlementEligible(task.Source, snapshot.sourceStatus)) && (task.ActualCost == nil || *task.ActualCost == 0)
 		review.CanCharge = review.CanRelease && balance+sub > 0 && !snapshot.hold.VideoDeferredBilling
 	}
 	return review, nil
@@ -199,7 +206,12 @@ func (r *mediaTaskRepository) resolveMediaTaskBillingOnce(ctx context.Context, c
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	if !mediaSettlementEligible(task.Status) {
+	// 自动过期只处理失败类状态；人工核定额外覆盖已完成但预占待核对的异步图片。
+	eligible := mediaSettlementEligible
+	if cmd.Action != "expire" {
+		eligible = func(status string) bool { return mediaManualSettlementEligible(task.Source, status) }
+	}
+	if !eligible(task.Status) {
 		return nil, service.ErrMediaTaskSettlementConflict
 	}
 	failedAt := task.UpdatedAt
@@ -214,7 +226,7 @@ func (r *mediaTaskRepository) resolveMediaTaskBillingOnce(ctx context.Context, c
 		return nil, service.ErrMediaTaskSettlementConflict
 	}
 	locked, err := readMediaBillingSnapshot(ctx, tx, task, true)
-	if err != nil || locked.hold.UserID != initial.hold.UserID || !mediaSnapshotPending(locked) || (locked.sourceStatus != "" && !mediaSettlementEligible(locked.sourceStatus)) {
+	if err != nil || locked.hold.UserID != initial.hold.UserID || !mediaSnapshotPending(locked) || (locked.sourceStatus != "" && !eligible(locked.sourceStatus)) {
 		return nil, service.ErrMediaTaskSettlementConflict
 	}
 	balance, sub := mediaSnapshotAmount(locked)

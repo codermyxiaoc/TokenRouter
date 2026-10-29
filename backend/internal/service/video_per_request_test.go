@@ -120,7 +120,7 @@ func TestVideoPerRequestLifecycleNoUsageRequiredSettlesOnce(t *testing.T) {
 		require.InDelta(t, 2.3, task.Hold.HoldAmount, 1e-12)
 		require.False(t, task.Hold.VideoDeferredBilling)
 		require.False(t, task.Hold.VideoTokenPrepay)
-		u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Body: []byte(`{"status":"completed"}`)}
+		u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Body: []byte(`{"status":"completed"}`)}
 		s.advance(context.Background(), task)
 		require.Equal(t, "settled", task.BillingStatus)
 		require.InDelta(t, 2.3, task.BillingResult.ActualAmountUSD, 1e-12)
@@ -155,7 +155,7 @@ func TestVideoPerRequestFallbackAcceptsReturnedResolution(t *testing.T) {
 	task, err := s.repo.Get(context.Background(), response.LocalTaskID)
 	require.NoError(t, err)
 	price = 100
-	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Metadata: VideoRequestMetadata{Resolution: "1080P"}, Body: []byte(`{"status":"completed"}`)}
+	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Metadata: VideoRequestMetadata{Resolution: "1080P"}, Body: []byte(`{"status":"completed"}`)}
 	s.advance(context.Background(), task)
 	require.Equal(t, "settled", task.BillingStatus)
 	require.Empty(t, task.Quote.Resolution)
@@ -207,7 +207,7 @@ func TestVideoPerRequestUsageLogRecoveryDoesNotRecharge(t *testing.T) {
 	require.NoError(t, err)
 	task, err := s.repo.Get(context.Background(), response.LocalTaskID)
 	require.NoError(t, err)
-	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed"}
+	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4"}
 	logs.err = errors.New("temporary database failure")
 	s.advance(context.Background(), task)
 	require.Equal(t, 1, b.captures)
@@ -235,7 +235,7 @@ func TestVideoPerRequestMismatchAndUnknownSubmissionRetainHold(t *testing.T) {
 	require.NoError(t, err)
 	task, err := s.repo.Get(context.Background(), response.LocalTaskID)
 	require.NoError(t, err)
-	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Metadata: VideoRequestMetadata{Resolution: "1080p"}}
+	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Metadata: VideoRequestMetadata{Resolution: "1080p"}}
 	s.advance(context.Background(), task)
 	require.Equal(t, "reconciliation", task.BillingStatus)
 	require.True(t, task.PricingMismatch)

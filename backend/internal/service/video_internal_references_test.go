@@ -163,6 +163,44 @@ func TestVideoYezonghuiInternalValidationBeforePublishing(t *testing.T) {
 	}
 }
 
+// 只收公网素材的模板：只发布 data URL，已是公网链接的参考图原样保留；不要求公网素材的模板不触发发布。
+func TestVideoProfilePublicMediaPublishesOnlyDataURLs(t *testing.T) {
+	pub := &internalVideoReferenceStub{}
+	prepare := newCreativeVideoReferencePreparer(pub, 9)
+	target := videoPresetTarget(t, "yezonghui", "yz")
+	body := []byte(`{"model":"yz","prompt":"p","duration":5,"resolution":"720p","images":[{"url":"https://img.example/a.png","role":"first_frame"},{"url":"data:image/png;base64,AAAA","role":"reference_image"}]}`)
+	out, err := prepare(context.Background(), target, body)
+	require.NoError(t, err)
+	require.Equal(t, 1, pub.calls)
+	require.Equal(t, int64(9), pub.userID)
+	require.Equal(t, []string{"data:image/png;base64,AAAA"}, pub.inputs)
+	require.Equal(t, "https://img.example/a.png", gjson.GetBytes(out, "images.0.url").String())
+	require.Equal(t, "https://canvas.example.com/api/v1/video-references/opaque", gjson.GetBytes(out, "images.1.url").String())
+	// 全是公网链接时不发布。
+	again := &internalVideoReferenceStub{}
+	_, err = newCreativeVideoReferencePreparer(again, 9)(context.Background(), target, []byte(`{"model":"yz","prompt":"p","duration":5,"resolution":"720p","images":["https://img.example/a.png"]}`))
+	require.NoError(t, err)
+	require.Zero(t, again.calls)
+	// 模板同样接受字符串写法：字符串 data URL 也要发布并原位替换，不能误报参考图无效。
+	plainString := &internalVideoReferenceStub{}
+	out, err = newCreativeVideoReferencePreparer(plainString, 9)(context.Background(), target, []byte(`{"model":"yz","prompt":"p","duration":5,"resolution":"720p","images":["https://img.example/a.png","data:image/png;base64,AAAA"]}`))
+	require.NoError(t, err)
+	require.Equal(t, 1, plainString.calls)
+	require.Equal(t, "https://img.example/a.png", gjson.GetBytes(out, "images.0").String())
+	require.Equal(t, "https://canvas.example.com/api/v1/video-references/opaque", gjson.GetBytes(out, "images.1").String())
+	// 非字符串、非对象的图片项仍按参数无效拒绝，且不消耗发布额度。
+	bad := &internalVideoReferenceStub{}
+	_, err = newCreativeVideoReferencePreparer(bad, 9)(context.Background(), target, []byte(`{"model":"yz","prompt":"p","duration":5,"resolution":"720p","images":[123]}`))
+	require.ErrorIs(t, err, ErrVideoReferenceInvalid)
+	require.Zero(t, bad.calls)
+	// 不要求公网素材的模板保持 data URL。
+	plain := &internalVideoReferenceStub{}
+	kept, err := newCreativeVideoReferencePreparer(plain, 9)(context.Background(), videoPresetTarget(t, "kemei-compat", "m"), body)
+	require.NoError(t, err)
+	require.Zero(t, plain.calls)
+	require.Equal(t, body, kept)
+}
+
 // 查询失败只重查原任务；供应商明确的失败终态必须立即结束测试，而非一直等到超时。
 func TestVideoYezonghuiAdminPollOutcome(t *testing.T) {
 	for _, test := range []struct {

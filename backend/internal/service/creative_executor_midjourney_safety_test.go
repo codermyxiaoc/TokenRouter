@@ -103,7 +103,7 @@ func TestCreativeUnconfirmedErrorClassification(t *testing.T) {
 	require.False(t, isCreativeResultUnconfirmedError(creativeHTTPStatusError(400, "rejected")))
 }
 
-// 产物无法确认时保持预占；队列重投、载荷过期及 worker 重建都不能再次生成或退款。
+// 产物无法确认即视为用户未拿到成品：一次执行后失败并释放；队列重投、载荷过期及 worker 重建都不能再次生成或重复退款。
 func TestCreativeWorkerMidjourneyUnconfirmedRetainsHoldWithoutReplay(t *testing.T) {
 	f := newCreativeWorkerFixture()
 	runID := "crun_mj_unconfirmed"
@@ -113,25 +113,20 @@ func TestCreativeWorkerMidjourneyUnconfirmedRetainsHoldWithoutReplay(t *testing.
 	f.exec.err = fmt.Errorf("wrapped: %w", creativeResultUnconfirmedError())
 	first, err := f.worker.process(context.Background(), runID)
 	require.NoError(t, err)
-	require.False(t, first.Terminal)
-	require.Equal(t, defaultCreativeUnconfirmedRequeueDelay, first.RequeueAfter)
-	require.Equal(t, CreativeProvisioningPhaseProviderInflight, run.ProvisioningPhase)
-	require.Equal(t, "PROVIDER_RESULT_UNCONFIRMED", *run.ErrorCode)
+	require.True(t, first.Terminal)
+	require.Equal(t, CreativeRunStatusFailed, run.Status)
+	require.Equal(t, CreativeResultUnavailableCode, *run.ErrorCode)
 	delete(f.store.payloads, runID)
 	f.worker = NewCreativeRunWorker(f.queue, f.repo, f.store, f.exec, f.service, f.worker.opts)
 	for range 5 {
 		next, err := f.worker.process(context.Background(), runID)
 		require.NoError(t, err)
-		require.False(t, next.Terminal)
-		require.Greater(t, next.RequeueAfter, 14*time.Minute)
+		require.True(t, next.Terminal)
 	}
 	require.Equal(t, 1, f.exec.calls)
-	require.Equal(t, CreativeRunStatusRunning, run.Status)
-	require.Equal(t, 0.02, *run.HoldAmount)
 	require.Nil(t, run.ActualCost)
-	require.Zero(t, run.AttemptCount)
 	require.Zero(t, f.billing.captureN)
-	require.Zero(t, f.billing.releaseN)
+	require.Equal(t, []string{"creative_release:" + runID}, f.billing.releaseIDs)
 }
 
 // 明确拒绝继续沿用一次释放路径，不与不确定状态混淆，也不重复退款。
@@ -152,15 +147,21 @@ func TestCreativeWorkerMidjourneyExplicitRejectionReleasesOnce(t *testing.T) {
 	require.Zero(t, f.billing.captureN)
 }
 
-// 不确定任务后来取得真实输出后，只按原任务结算一次，不调用上游补造结果。
+// 原执行者在栅栏等待期内落库真实输出时，只按原任务结算一次，不调用上游补造结果。
 func TestCreativeWorkerMidjourneyUnconfirmedRecoveredOutputSettlesOnce(t *testing.T) {
 	f := newCreativeWorkerFixture()
 	runID := "crun_mj_recovered"
 	seedCreativeRun(f, runID, true)
-	f.repo.runs[runID].Model = "MJ-v8.1"
-	f.exec.err = creativeResultUnconfirmedError()
-	_, err := f.worker.process(context.Background(), runID)
+	run := f.repo.runs[runID]
+	run.Model = "MJ-v8.1"
+	run.Status = CreativeRunStatusRunning
+	run.ProvisioningPhase = CreativeProvisioningPhaseProviderInflight
+	run.ImageAttemptAccountIDs = []int64{55}
+	deadline := time.Now().Add(time.Minute)
+	run.ImageExecutionDeadlineAt = &deadline
+	waiting, err := f.worker.process(context.Background(), runID)
 	require.NoError(t, err)
+	require.False(t, waiting.Terminal)
 	_, err = f.service.SucceedRun(context.Background(), runID, 55, []CreativeOutputResult{{Index: 0, Success: true, Bytes: []byte("image"), Mime: "image/png"}})
 	require.NoError(t, err)
 	for range 3 {
@@ -168,13 +169,13 @@ func TestCreativeWorkerMidjourneyUnconfirmedRecoveredOutputSettlesOnce(t *testin
 		require.NoError(t, err)
 		require.True(t, result.Terminal)
 	}
-	require.Equal(t, CreativeRunStatusSucceeded, f.repo.runs[runID].Status)
-	require.Equal(t, 1, f.exec.calls)
+	require.Equal(t, CreativeRunStatusSucceeded, run.Status)
+	require.Zero(t, f.exec.calls)
 	require.Equal(t, []string{"creative_capture:" + runID}, f.billing.captureIDs)
 	require.Zero(t, f.billing.releaseN)
 }
 
-// 队列完整入口对不确定任务只延迟重排，并释放任务锁，不能把任务 ACK 为已完成。
+// 队列完整入口对不确定任务失败释放后 ACK 出队，并释放任务锁。
 func TestCreativeWorkerMidjourneyUnconfirmedRequeuesWithoutAck(t *testing.T) {
 	f := newCreativeWorkerFixture()
 	runID := "crun_mj_queue_unconfirmed"
@@ -183,12 +184,12 @@ func TestCreativeWorkerMidjourneyUnconfirmedRequeuesWithoutAck(t *testing.T) {
 	f.exec.err = creativeResultUnconfirmedError()
 	f.queue.reserveBatch = []string{runID}
 	require.NoError(t, f.worker.RunOnce(context.Background()))
-	require.Empty(t, f.queue.acked)
-	require.Equal(t, []string{runID}, f.queue.requeued)
+	require.Equal(t, []string{runID}, f.queue.acked)
+	require.Empty(t, f.queue.requeued)
 	require.True(t, f.queue.lastLock.released)
 	require.Equal(t, 1, f.exec.calls)
 	require.Zero(t, f.billing.captureN)
-	require.Zero(t, f.billing.releaseN)
+	require.Equal(t, 1, f.billing.releaseN)
 }
 
 // 固定四张合同防止旧任务或映射变更只预占一张后执行四张生成。
@@ -435,7 +436,7 @@ func (q *creativeMJConcurrentQueue) Heartbeat(context.Context, string, string) (
 	return true, nil
 }
 
-// 32 个 worker 竞争同一 MJ 任务时只有一个上游调用，不确定结果不扣费、不退款、不 ACK。
+// 32 个 worker 竞争同一 MJ 任务时只有一个上游调用；不确定结果不扣费，只释放一次。
 func TestCreativeWorkerMidjourneyConcurrentDeliveryDoesNotReplay(t *testing.T) {
 	f := newCreativeWorkerFixture()
 	runID := "crun_mj_concurrent"
@@ -456,12 +457,12 @@ func TestCreativeWorkerMidjourneyConcurrentDeliveryDoesNotReplay(t *testing.T) {
 		require.NoError(t, <-errors)
 	}
 	require.Equal(t, 1, f.exec.calls)
-	require.Equal(t, int64(32), queue.requeued.Load())
-	require.Zero(t, queue.acked.Load())
+	require.Equal(t, int64(32), queue.requeued.Load()+queue.acked.Load())
 	require.Zero(t, f.billing.captureN)
-	require.Zero(t, f.billing.releaseN)
+	require.Equal(t, 1, f.billing.releaseN)
 	result, err := f.worker.process(context.Background(), runID)
 	require.NoError(t, err)
-	require.False(t, result.Terminal)
+	require.True(t, result.Terminal)
 	require.Equal(t, 1, f.exec.calls)
+	require.Equal(t, 1, f.billing.releaseN)
 }

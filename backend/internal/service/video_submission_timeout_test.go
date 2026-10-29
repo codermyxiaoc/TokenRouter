@@ -59,7 +59,7 @@ func (u *videoDeadlineUpstream) Submit(ctx context.Context, selection *VideoUpst
 	require.WithinDuration(u.t, deadline, *task.SubmissionDeadlineAt, time.Millisecond)
 	<-ctx.Done()
 	if u.succeed {
-		return &VideoUpstreamResponse{TaskID: "deadline-task", StatusCode: 200, Status: "completed",
+		return &VideoUpstreamResponse{TaskID: "deadline-task", StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4",
 			Body: []byte(`{"id":"deadline-task","status":"completed"}`), Metadata: VideoRequestMetadata{DurationSeconds: 4, Resolution: "720p"}}, nil
 	}
 	return nil, ctx.Err()
@@ -264,7 +264,7 @@ func TestVideoCompletionMetadataErrorRecoversBeforeCharge(t *testing.T) {
 	require.NoError(t, err)
 	task, err := s.repo.Get(context.Background(), result.LocalTaskID)
 	require.NoError(t, err)
-	u.poll = &VideoUpstreamResponse{StatusCode: 200, TaskID: "upstream-task", Status: "completed", MetadataError: "invalid seconds",
+	u.poll = &VideoUpstreamResponse{StatusCode: 200, TaskID: "upstream-task", Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", MetadataError: "invalid seconds",
 		Metadata: VideoRequestMetadata{DurationSeconds: 999, Resolution: "720p"}}
 	s.advance(context.Background(), task)
 	require.Equal(t, "reconciliation", task.BillingStatus)
@@ -272,7 +272,7 @@ func TestVideoCompletionMetadataErrorRecoversBeforeCharge(t *testing.T) {
 	require.Equal(t, float64(5), task.Metadata.DurationSeconds)
 	require.Zero(t, b.captures)
 	// 下一次只给终态而无可信元数据，不能用创建时五秒补成一次错误结算。
-	u.poll = &VideoUpstreamResponse{StatusCode: 200, TaskID: "upstream-task", Status: "completed"}
+	u.poll = &VideoUpstreamResponse{StatusCode: 200, TaskID: "upstream-task", Status: "completed", VideoURL: "https://cdn.example.test/video.mp4"}
 	s.advance(context.Background(), task)
 	require.True(t, task.PricingMismatch)
 	require.NotEmpty(t, task.ResponseMetadataError)
@@ -297,9 +297,9 @@ func TestVideoCompletionMetadataErrorDoesNotErasePriorPriceMismatch(t *testing.T
 	task, err := s.repo.Get(context.Background(), result.LocalTaskID)
 	require.NoError(t, err)
 	for _, response := range []*VideoUpstreamResponse{
-		{Status: "completed", Metadata: VideoRequestMetadata{Resolution: "2k", DurationSeconds: 5}},
-		{Status: "completed", MetadataError: "invalid size"},
-		{Status: "completed", Metadata: VideoRequestMetadata{DurationSeconds: 5}},
+		{Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Metadata: VideoRequestMetadata{Resolution: "2k", DurationSeconds: 5}},
+		{Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", MetadataError: "invalid size"},
+		{Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Metadata: VideoRequestMetadata{DurationSeconds: 5}},
 	} {
 		response.StatusCode = 200
 		response.TaskID = "upstream-task"

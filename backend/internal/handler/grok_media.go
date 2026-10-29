@@ -372,6 +372,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				return
 			}
 			if shortestImageCooldown > 0 && errors.Is(err, service.ErrNoAvailableAccounts) {
+				service.MarkImageAttemptGroupUnsent(requestCtx)
 				c.Header("Retry-After", strconv.Itoa(max(1, int((shortestImageCooldown+time.Second-1)/time.Second))))
 				h.errorResponse(c, http.StatusServiceUnavailable, "image_models_cooling_down", "Compatible image accounts are temporarily cooling down")
 				return
@@ -1122,6 +1123,20 @@ func recordGrokMediaUsage(
 	}
 	if imageState != nil {
 		return recordTask(c.Request.Context())
+	}
+	// 无预占的异步生图同样等图片交付后再记账，未交付不计费。
+	if len(imageBilling) > 0 && imageBilling[0] != nil {
+		if deferred := service.AsyncImageDeferredCaptureFromContext(c.Request.Context()); deferred != nil {
+			// 记账沿用原请求上下文的值（请求 ID、载荷指纹等），只替换截止时间。
+			requestCtx := context.WithoutCancel(c.Request.Context())
+			if deferred.Defer(func(context.Context) error {
+				ctx, cancel := context.WithTimeout(requestCtx, 10*time.Second)
+				defer cancel()
+				return recordTask(ctx)
+			}, nil) {
+				return nil
+			}
+		}
 	}
 	h.submitMediaUsageRecordTask(c, result, func(ctx context.Context) { _ = recordTask(ctx) })
 	return nil

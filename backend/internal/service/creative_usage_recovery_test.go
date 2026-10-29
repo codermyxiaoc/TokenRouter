@@ -16,8 +16,21 @@ import (
 // 使用同一冻结合同模拟数据库捕获去重，不读取当前套餐倍率。
 type creativeUsageBillingRepo struct {
 	UsageBillingRepository
-	calls int
-	seen  map[string]bool
+	calls    int
+	releases int
+	seen     map[string]bool
+}
+
+// ReleaseBatchImageBalance 记录释放次数；与真实账本一样按 request_id 幂等。
+func (r *creativeUsageBillingRepo) ReleaseBatchImageBalance(_ context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error) {
+	if r.seen == nil {
+		r.seen = make(map[string]bool)
+	}
+	if !r.seen[cmd.RequestID] {
+		r.releases++
+	}
+	r.seen[cmd.RequestID] = true
+	return &BatchImageBalanceHoldResult{Applied: true}, nil
 }
 
 func (r *creativeUsageBillingRepo) CaptureBatchImageBalance(_ context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error) {
@@ -71,44 +84,57 @@ func creativeUsageTestRun(id string) *CreativeRun {
 }
 
 func TestCreativeSettlementUsageFailureRetriesBeforePublishingTerminal(t *testing.T) {
-	for _, lost := range []bool{false, true} {
-		t.Run(fmt.Sprintf("result_lost_%t", lost), func(t *testing.T) {
-			svc := newCreativeTestService()
-			repo := svc.Repo.(*creativeFakeRunRepo)
-			run := creativeUsageTestRun("crun_usage_retry")
-			run.ActualCost, run.CompletedAt = nil, nil
-			repo.runs[run.RunID] = run
-			repo.outputs[run.RunID] = []*CreativeRunOutput{{RunID: run.RunID, Status: CreativeRunOutputStatusSucceeded}}
-			if !lost {
-				svc.TransientStore.(*creativeFakeTransient).outputs[fmtInputKey(run.RunID, 0)] = []byte("image")
-			}
-			billing := &creativeUsageBillingRepo{}
-			logs := &creativeUsageLogRepo{err: errors.New("usage database unavailable")}
-			svc.BillingRepo, svc.UsageLogRepo = billing, logs
-			event := CreativeRunOutbox{RunID: run.RunID, Operation: CreativeRunOutboxSettle}
-			require.Error(t, svc.reconcileCreativeOutboxEvent(context.Background(), event))
-			require.Equal(t, CreativeRunStatusSettlementPending, run.Status)
-			require.Nil(t, run.CompletedAt)
-			logs.err = nil
-			require.NoError(t, svc.reconcileCreativeOutboxEvent(context.Background(), event))
-			want := CreativeRunStatusSucceeded
-			if lost {
-				want = CreativeRunStatusResultLost
-			}
-			require.Equal(t, want, run.Status)
-			require.Equal(t, 2, billing.calls)
-			require.Len(t, billing.seen, 1)
-			require.Len(t, logs.logs, 1)
-			log := logs.logs[CreativeSettlementRequestID(run.RunID)]
-			require.InDelta(t, 0.3, log.SubscriptionAmountUSD, 1e-10)
-			require.InDelta(t, 0.1, log.BalanceAmountUSD, 1e-10)
-			require.InDelta(t, 0.4, log.ActualCost, 1e-10)
-			require.Equal(t, int64(77), *log.SubscriptionID)
-			// 持久 outbox 直接完成结算，不需要重复入队或调用上游。
-			require.Empty(t, svc.Queue.(*creativeFakeQueue).enqueued)
-			require.True(t, svc.Queue.(*creativeFakeQueue).lastLock.released)
-		})
-	}
+	svc := newCreativeTestService()
+	repo := svc.Repo.(*creativeFakeRunRepo)
+	run := creativeUsageTestRun("crun_usage_retry")
+	run.ActualCost, run.CompletedAt = nil, nil
+	repo.runs[run.RunID] = run
+	repo.outputs[run.RunID] = []*CreativeRunOutput{{RunID: run.RunID, Status: CreativeRunOutputStatusSucceeded}}
+	svc.TransientStore.(*creativeFakeTransient).outputs[fmtInputKey(run.RunID, 0)] = []byte("image")
+	billing := &creativeUsageBillingRepo{}
+	logs := &creativeUsageLogRepo{err: errors.New("usage database unavailable")}
+	svc.BillingRepo, svc.UsageLogRepo = billing, logs
+	event := CreativeRunOutbox{RunID: run.RunID, Operation: CreativeRunOutboxSettle}
+	require.Error(t, svc.reconcileCreativeOutboxEvent(context.Background(), event))
+	require.Equal(t, CreativeRunStatusSettlementPending, run.Status)
+	require.Nil(t, run.CompletedAt)
+	logs.err = nil
+	require.NoError(t, svc.reconcileCreativeOutboxEvent(context.Background(), event))
+	require.Equal(t, CreativeRunStatusSucceeded, run.Status)
+	require.Equal(t, 2, billing.calls)
+	require.Len(t, billing.seen, 1)
+	require.Len(t, logs.logs, 1)
+	log := logs.logs[CreativeSettlementRequestID(run.RunID)]
+	require.InDelta(t, 0.3, log.SubscriptionAmountUSD, 1e-10)
+	require.InDelta(t, 0.1, log.BalanceAmountUSD, 1e-10)
+	require.InDelta(t, 0.4, log.ActualCost, 1e-10)
+	require.Equal(t, int64(77), *log.SubscriptionID)
+	// 持久 outbox 直接完成结算，不需要重复入队或调用上游。
+	require.Empty(t, svc.Queue.(*creativeFakeQueue).enqueued)
+	require.True(t, svc.Queue.(*creativeFakeQueue).lastLock.released)
+}
+
+// 上游成功但成品一张都没交付时，结算改为整笔释放：不捕获、不写用量日志，以 result_lost 结束。
+func TestCreativeSettlementUndeliveredOutputReleasesWithoutCharge(t *testing.T) {
+	svc := newCreativeTestService()
+	repo := svc.Repo.(*creativeFakeRunRepo)
+	run := creativeUsageTestRun("crun_usage_lost")
+	run.ActualCost, run.CompletedAt = nil, nil
+	repo.runs[run.RunID] = run
+	repo.outputs[run.RunID] = []*CreativeRunOutput{{RunID: run.RunID, Status: CreativeRunOutputStatusSucceeded}}
+	billing := &creativeUsageBillingRepo{}
+	logs := &creativeUsageLogRepo{}
+	svc.BillingRepo, svc.UsageLogRepo = billing, logs
+	event := CreativeRunOutbox{RunID: run.RunID, Operation: CreativeRunOutboxSettle}
+	require.NoError(t, svc.reconcileCreativeOutboxEvent(context.Background(), event))
+	require.Equal(t, CreativeRunStatusResultLost, run.Status)
+	require.Zero(t, billing.calls)
+	require.Equal(t, 1, billing.releases)
+	require.Empty(t, logs.logs)
+	require.Equal(t, CreativeRunOutputStatusFailed, repo.outputs[run.RunID][0].Status)
+	// 重放同一事件只命中幂等释放，不会转成扣费。
+	require.NoError(t, svc.reconcileCreativeOutboxEvent(context.Background(), event))
+	require.Zero(t, billing.calls)
 }
 
 type creativeUsageRecoveryRepo struct {

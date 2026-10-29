@@ -72,9 +72,9 @@ Kimi、Zhipu、DeepSeek 的账号类型、模式与协议矩阵暂由本页和[A
 <a id="video_account"></a>
 ### 独立 Video 账号与管理表单
 
-`platform=video` 只接受 API Key，账号只绑定 Video 分组。`video_endpoints` 选择 `compat`、`openai_videos`、`seedance`、`kling`、`wan`、`minimax`、`vidu`；创建不默认勾选任何端点，编辑保留明确保存的选择，缺失配置不补默认能力。`base_url` 为共享端点，`video_base_urls` 可逐端点覆盖。`video_model_bindings` 的键是映射后的上游模型名，值兼容旧单端点字符串和多端点数组，未绑定模型继承账号端点。原生请求只使用同协议上游；统一 `/v1/video/generations` 必须明确启用 `compat`，`/v1/videos` 必须明确启用 `openai_videos`，并同时满足模型绑定。两个入口互不回退，也不默认兼容原生端点；Kling 的 `video_model_paths` 与 Vidu 的 `video_vidu_model_paths` 分别保存受控操作，互不覆盖，也不授予入口资格。已受理任务仍沿用冻结的协议。API Key、模型白名单/映射、Header Override、代理、本地配额、优先级和并发设置保留；不提供 OAuth、文本协议、文本连接测试、定时测试或上游用量查询配置。
+`platform=video` 只接受 API Key，账号只绑定 Video 分组。`video_model_protocols` 以映射后的上游模型名（或 `*` 默认）绑定唯一协议：内置协议写作 `端点.方案`（Kling/Vidu 附操作路径），声明式模板写作 `profile:键名[@版本]`，可逐模型覆盖 `base_url`。客户端只走 `/v1/videos`，入口不参与协议选择；旧 `video_endpoints`、`video_model_bindings`、`video_endpoint_adapters` 等字段在保存和启动时自动迁移并清理。已受理任务仍沿用冻结的协议。API Key、模型白名单/映射、Header Override、代理、本地配额、优先级和并发设置保留；不提供 OAuth、文本协议、文本连接测试、定时测试或上游用量查询配置。详见[模型协议绑定](video_upstream.md#video_accounts)。
 
-创建和编辑共用 `VideoAccountFields.vue` 与 `videoAccountConfig.ts`。每个端点通过 `video_endpoint_adapters` 独立选择协议，`video_model_adapters` 按最终上游模型和端点覆盖。每个端点提供保留原有协议和官方参数选项；新建表单默认官方方案，compat 默认原有协议且可显式选择 OpenAI 参数格式（不改变路径），旧账号缺配置仍使用原有协议；模型覆盖不增加端点权限。可美视频 `kemei_v1` 可用于 compat、Seedance、MiniMax、Wan、Kling、Vidu，不适用于 `/v1/videos`；Vidu 必须显式选择 `vidu_v2`、`legacy_v1` 或 `kemei_v1`，已有可美配置不自动改变。查询和结算使用任务冻结版本，详见[版本化协议适配](video_upstream.md#video_adapters)。`video_max_pending_tasks` 默认 10、范围 1–1000；可选 `video_max_duration_seconds` 不改变生成参数，仅供需要预扣的自动时长任务估算预算。账号不再提供 Token 预留上限，遗留字段不影响新任务并在保存时清理；已受理任务继续按自身快照结算。Token 模型预扣开关和固定秒价改由用户模型价卡设置，完成后按实际 Token 退补差。具体资金边界见[视频任务结算](../domains/video_tasks.md#video_task_billing)。
+创建和编辑共用 `VideoAccountFields.vue` 与 `videoAccountConfig.ts`，以“模型 → 协议”表格编辑绑定。协议选择框只提供各端点的官方内置协议和启用的模板；Metaso H3、Yezonghui、可美与原样协议以[预置模板](video_upstream.md#video_protocol_presets)出现。加载已保存或旧格式配置时按服务端规则把旧厂商方案改绑到模板或官方协议，没有等价替代的旧绑定保留并提示手动改绑。查询和结算使用任务冻结版本，详见[版本化协议适配](video_upstream.md#video_adapters)。`video_max_pending_tasks` 默认 10、范围 1–1000；可选 `video_max_duration_seconds` 不改变生成参数，仅供需要预扣的自动时长任务估算预算。账号不再提供 Token 预留上限，遗留字段不影响新任务并在保存时清理；已受理任务继续按自身快照结算。Token 模型预扣开关和固定秒价改由用户模型价卡设置，完成后按实际 Token 退补差。具体资金边界见[视频任务结算](../domains/video_tasks.md#video_task_billing)。
 
 Video 分组管理只展示通用权益与视频定价，不提供文本高级调度、探活、聊天协议和跨组降级设置。视频定价复用分组 `model_pricing` 与渠道 `model_pricing`，`video_prices` 每个 `resolution` 只设置一个 `price`，不区分有无参考视频。`video_token` 为美元/百万 Token，`video` 为美元/秒，`video_per_request` 为美元/成功任务；空价不提交，显式 0 保留为免费。分辨率只显示已配置及手动新增的档位，另可显式设置兜底价。旧双条件行加载时按分辨率合并，保存使用新单价格式。分组价优先于渠道，`video_rate_independent` / `video_rate_multiplier` 沿用跟随分组或独立视频倍率语义；显式按次或 Token 报价不借用旧 Grok 秒价字段。三种模式均可配置不参与倍率的参考图片附加费，Token 秒价预扣开关仅适用于 Token 模式，按次直接预留一次费用。
 
@@ -108,7 +108,7 @@ TypeSafe 与 OpenCode Zen 的结构化决策使用 `POST /v1/systemone` 或 `/sy
 
 | 协议族或入口 | 当前平台边界 | 专题路由 |
 | --- | --- | --- |
-| 独立视频：`/v1/video/generations`、`/v1/videos` 及原生视频路径 | Video API Key 与 Video 分组；原有协议参数保真，显式方案按版本转换，同模型多端点按入站协议自适应；Ark 路径兼容保留 OpenAI Seedance，`/v1/videos` 按平台与 Grok 分流 | [独立 Video 上游](video_upstream.md) |
+| 独立视频：`/v1/videos`（旧统一与原生视频路径已下线） | Video API Key 与 Video 分组；统一请求按模型绑定的内置协议或声明式模板转换；Ark 路径保留给 OpenAI 分组的 Seedance，`/v1/videos` 按平台与 Grok 分流 | [独立 Video 上游](video_upstream.md) |
 | Anthropic Messages：`/v1/messages` | 十三个平台均有平台分派；最终分组允许 Messages 时按平台转换或原生转发 | 各平台契约；共同链路见[网关请求生命周期](../architecture/gateway_request_lifecycle.md) |
 | Anthropic token count：`/v1/messages/count_tokens`、`/messages/count_tokens` | Anthropic、OpenAI、Gemini 进入各自统计路径，Grok、OpenCode 与四个 CN 平台使用本地估算；Antigravity、Qoder 明确返回 `404`，Anthropic Bedrock 账号也不支持 | 各平台契约；客户端仍应保留本地估算回退 |
 | OpenAI Responses：`/v1/responses`、`/responses` 及允许的子路径 | 十三个平台在最终分组允许 Responses 时进入平台适配；Kimi/Zhipu 不要求账号拥有上游原生 Responses，DeepSeek、MiniMax 可显式使用其 `/responses`；Qoder 不支持 Responses 子路径和 WebSocket | 各平台契约；WebSocket/Realtime 重点见 [OpenAI 上游](openai_upstream.md) |

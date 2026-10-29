@@ -100,6 +100,7 @@ func RegisterAdminRoutes(
 
 		// 错误透传规则管理
 		registerErrorPassthroughRoutes(admin, h)
+		registerVideoProtocolProfileRoutes(admin, h)
 
 		// TLS 指纹模板管理
 		registerTLSFingerprintProfileRoutes(admin, h)
@@ -407,6 +408,9 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/upstream-usage/query/batch", h.Admin.Account.QueryBatchUpstreamUsage)
 		accounts.GET("/:id/temp-unschedulable", h.Admin.Account.GetTempUnschedulable)
 		accounts.DELETE("/:id/temp-unschedulable", h.Admin.Account.ClearTempUnschedulable)
+		// 生图“账号 + 模型 + 操作”冷却的查看与手动解除
+		accounts.GET("/:id/image-model-cooldowns", h.Admin.Account.GetImageModelCooldowns)
+		accounts.DELETE("/:id/image-model-cooldowns", h.Admin.Account.ClearImageModelCooldown)
 		accounts.POST("/:id/schedulable", h.Admin.Account.SetSchedulable)
 		accounts.POST("/models/sync-upstream-preview", h.Admin.Account.SyncUpstreamModelsPreview)
 		accounts.GET("/:id/models", h.Admin.Account.GetAvailableModels)
@@ -571,6 +575,10 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		adminSettings.GET("", h.Admin.Setting.GetSettings)
 		adminSettings.PUT("", h.Admin.Setting.UpdateSettings)
+		// API 文档 Markdown 改写；读取走公开接口 /api/v1/settings/api-docs。
+		adminSettings.PUT("/api-docs", h.Admin.Setting.UpdateAPIDocOverrides)
+		// 单篇合并保存，带编辑起点做并发冲突检测，避免多名管理员互相覆盖
+		adminSettings.PATCH("/api-docs", h.Admin.Setting.PatchAPIDocOverrides)
 		adminSettings.GET("/creative-model-candidates", h.Admin.Setting.ListCreativeModelCandidates)
 		adminSettings.GET("/creative-worker-status", h.Admin.Setting.GetCreativeWorkerStatus)
 		adminSettings.GET("/pre-aggregation", h.Admin.Setting.GetPreAggregationSettings)
@@ -781,6 +789,22 @@ func registerScheduledTestRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	}
 	// Nested under accounts
 	admin.GET("/accounts/:id/scheduled-test-plans", h.Admin.ScheduledTest.ListByAccount)
+}
+
+// registerVideoProtocolProfileRoutes 注册声明式视频协议模板的管理接口。
+func registerVideoProtocolProfileRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	profiles := admin.Group("/video-protocol-profiles")
+	{
+		profiles.GET("", h.Admin.VideoProtocolProfile.List)
+		profiles.POST("", h.Admin.VideoProtocolProfile.Save)
+		profiles.POST("/preview", h.Admin.VideoProtocolProfile.Preview)
+		profiles.GET("/ai-config", h.Admin.VideoProtocolProfile.GetAIConfig)
+		profiles.PUT("/ai-config", h.Admin.VideoProtocolProfile.UpdateAIConfig)
+		profiles.POST("/ai-generate", h.Admin.VideoProtocolProfile.Generate)
+		profiles.DELETE("/:key", h.Admin.VideoProtocolProfile.DeleteProfile)
+		profiles.DELETE("/:key/versions/:version", h.Admin.VideoProtocolProfile.Delete)
+		profiles.PUT("/:key/versions/:version/status", h.Admin.VideoProtocolProfile.SetStatus)
+	}
 }
 
 func registerErrorPassthroughRoutes(admin *gin.RouterGroup, h *handler.Handlers) {

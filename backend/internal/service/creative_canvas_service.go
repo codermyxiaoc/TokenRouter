@@ -786,3 +786,40 @@ func (s *CreativeCanvasService) PersistCreativeOutput(ctx context.Context, runID
 	result := CreativeCanvasOutput{Index: index, MIMEType: mime, Size: int64(len(data)), Reader: io.NopCloser(bytes.NewReader(data))}
 	return s.archiveOutput(ctx, e, result)
 }
+
+// CreativeOutputDelivered 让结算判断画布成品是否已就绪；画布用户只能从私有素材取回成品。
+func (s *CreativeCanvasService) CreativeOutputDelivered(ctx context.Context, runID string, index int) (bool, bool, error) {
+	if s.repo == nil {
+		return false, false, nil
+	}
+	e, err := s.repo.FindExecutionByTaskID(ctx, runID)
+	if errors.Is(err, ErrCanvasNotFound) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	if e == nil || e.Kind == "" {
+		return false, false, nil
+	}
+	asset, err := s.repo.GetAsset(ctx, e.UserID, creativeCanvasAssetID(e.ID, index))
+	if errors.Is(err, ErrCanvasNotFound) {
+		return true, false, nil
+	}
+	if err != nil {
+		return true, false, err
+	}
+	// 与用户实际取回（OpenAsset）同一判定：记录就绪、未过期且文件可打开，只看状态字段不能证明可交付。
+	if asset == nil || asset.Status != "ready" || !s.now().Before(asset.ExpiresAt) {
+		return true, false, nil
+	}
+	if s.store == nil {
+		return true, false, nil
+	}
+	reader, openErr := s.store.Open(ctx, asset.ID)
+	if openErr != nil {
+		return true, false, nil
+	}
+	_ = reader.Close()
+	return true, true, nil
+}

@@ -9068,12 +9068,14 @@
         <!-- 工单配置拥有独立保存入口，避免主表单写入其它设置。 -->
         <TicketSettingsTab v-if="activeTab === 'tickets'" />
         <DailyActivitySettingsTab v-if="activeTab === 'dailyActivities'" />
+        <VideoProtocolAISettingsTab v-if="activeTab === 'videoProtocolAI'" />
+        <ApiDocsSettingsTab v-if="activeTab === 'apiDocs'" />
         <div v-show="activeTab === 'backup'">
           <BackupSettings />
         </div>
 
         <!-- Save Button -->
-        <div v-show="activeTab !== 'backup' && activeTab !== 'tickets' && activeTab !== 'dailyActivities'" class="flex justify-end">
+        <div v-show="activeTab !== 'backup' && activeTab !== 'tickets' && activeTab !== 'dailyActivities' && activeTab !== 'videoProtocolAI' && activeTab !== 'apiDocs'" class="flex justify-end">
           <button
             type="submit"
             :disabled="saving || loadFailed"
@@ -9197,6 +9199,8 @@ import OpenAIOAuthImportDefaultsSettings from "@/components/admin/account/OpenAI
 import BackupSettings from "@/views/admin/BackupView.vue";
 import TicketSettingsTab from "@/views/admin/settings/TicketSettingsTab.vue";
 import DailyActivitySettingsTab from "@/views/admin/settings/DailyActivitySettingsTab.vue";
+import VideoProtocolAISettingsTab from "@/views/admin/settings/VideoProtocolAISettingsTab.vue";
+import ApiDocsSettingsTab from "@/views/admin/settings/ApiDocsSettingsTab.vue";
 import { useBalanceDisplay } from "@/composables/useBalanceDisplay";
 import RechargeBonusTierEditor from "@/components/admin/settings/RechargeBonusTierEditor.vue";
 import {
@@ -9264,6 +9268,8 @@ type SettingsTab =
   | "email"
   | "tickets"
   | "dailyActivities"
+  | "videoProtocolAI"
+  | "apiDocs"
   | "backup";
 const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
@@ -9277,6 +9283,8 @@ const settingsTabs = [
   { key: "email" as SettingsTab, icon: "mail" as const },
   { key: "tickets" as SettingsTab, icon: "document" as const },
   { key: "dailyActivities" as SettingsTab, icon: "gift" as const },
+  { key: "videoProtocolAI" as SettingsTab, icon: "sparkles" as const },
+  { key: "apiDocs" as SettingsTab, icon: "book" as const },
   { key: "backup" as SettingsTab, icon: "database" as const },
 ];
 // 允许通过路由参数直接定位到指定标签。
@@ -10397,6 +10405,8 @@ function creativeVideoEndpointOptions(item: CreativeModelSetting) {
     seedance: 'Seedance', kling: 'Kling', wan: 'Wan', minimax: 'MiniMax', vidu: 'Vidu',
     // Grok 仅用于创作台已有 Grok 分组，不代表独立 Video 账号新增了可配置端点。
     grok: 'Grok Video',
+    // unified 表示模型绑定了声明式模板协议，画布统一提交规范请求。
+    unified: t('admin.settings.features.creative.modelSettings.videoEndpointUnified'),
   };
   return endpoints.map((value) => ({ value, label: labels[value] || value }));
 }
@@ -12016,7 +12026,7 @@ function findDuplicateDefaultSubscription(
 
 async function saveSettings() {
   // 工单页中的回车不能触发无关系统配置保存。
-  if (activeTab.value === "tickets" || activeTab.value === "dailyActivities") return;
+  if (activeTab.value === "tickets" || activeTab.value === "dailyActivities" || activeTab.value === "videoProtocolAI" || activeTab.value === "apiDocs") return;
   saving.value = true;
   try {
     // 在组装任何设置更新前拒绝非法档位；空白草稿仍由提交清洗忽略。

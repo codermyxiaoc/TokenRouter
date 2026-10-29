@@ -52,6 +52,8 @@ type smartRoutingExecution struct {
 	model, endpoint      string
 	continuationGroupID  int64
 	continuationResolved bool
+	// imagePolicyCancel 结束整个请求共享的生图执行策略；跨组共用同一发送预算与首次截止时间。
+	imagePolicyCancel context.CancelFunc
 }
 
 // runSmartRoutingAuthentication 延迟提交失败响应，成功流仍在首次业务输出时立即放行。
@@ -66,6 +68,9 @@ func runSmartRoutingAuthentication(c *gin.Context, resolver service.SmartRouting
 		if state.active {
 			c.Writer = state.parent
 		}
+		if state.imagePolicyCancel != nil {
+			state.imagePolicyCancel()
+		}
 	}()
 	authenticate(c)
 	if !state.active || state.writer == nil {
@@ -78,7 +83,10 @@ func runSmartRoutingAuthentication(c *gin.Context, resolver service.SmartRouting
 		// 下游已断开时无法写失败帧，仍须接受 service 明确记录的本轮失败终态。
 		// 单独的历史上游错误可能已经由组内重试恢复，不能因此冷却成功组。
 		_, streamFailed := service.GetOpsStreamError(current)
-		failed := (w.failedResponse() || streamFailed) && smartRoutingUpstreamRetryable(current)
+		// 生图请求在本组一次都没发送（全组模型冷却或连接未建立）时，也视为可换组的失败。
+		imageFallback := smartRoutingImageFallbackAllowed(current)
+		imageNotSent := service.ImageAttemptHasPolicy(current.Request.Context()) && service.ImageAttemptSendCount(current.Request.Context()) == 0 && imageFallback
+		failed := (w.failedResponse() || streamFailed) && (smartRoutingUpstreamRetryable(current) || imageNotSent)
 		failedAccountIDs := smartRoutingFailedAccountIDs(current)
 		if !failed {
 			// 组内换号恢复后仍隔离失败账号；最终成功的同账号不能被早先重试错误误冷却。
@@ -102,8 +110,8 @@ func runSmartRoutingAuthentication(c *gin.Context, resolver service.SmartRouting
 		}
 		// 总尝试数包含首组，随候选上限统一调整，避免后半段候选只能保存却不能执行。
 		canRetry := terminal != nil && len(guards) > 0 && attempts < service.MaxSmartRoutingGroups-1 &&
-			!w.committed && state.attempt.CanReplay() && current.Request.Context().Err() == nil &&
-			state.replayBlockReason == "" && !service.ImageAttemptHasPolicy(current.Request.Context()) && failed
+			!w.committed && state.attempt.CanReplay() && smartRoutingClientActive(state, current) &&
+			state.replayBlockReason == "" && imageFallback && failed
 		// 只冷却真实失败账号，0 只关闭跨请求冷却，不影响本次失败集合与换组。
 		if cache, ok := resolver.(smartRoutingAccountCooldownResolver); ok && cache.UsesSmartRoutingAccountCooldown() {
 			if len(failedAccountIDs) > 0 && state.cooldown > 0 {
@@ -128,7 +136,7 @@ func runSmartRoutingAuthentication(c *gin.Context, resolver service.SmartRouting
 			slog.Info("smart routing upstream attempt failed", "request_id", current.Request.Context().Value(ctxkey.RequestID),
 				"key_id", state.keyID, "group_id", state.groupID, "upstream_status", smartRoutingUpstreamStatus(current),
 				"cooldown_seconds", int(state.cooldown.Seconds()), "can_try_next_group", canRetry, "replay_block_reason", state.replayBlockReason,
-				"attempt_block_reason", state.attempt.NonReplayableReason(), "response_committed", w.committed, "request_cancelled", current.Request.Context().Err() != nil)
+				"attempt_block_reason", state.attempt.NonReplayableReason(), "response_committed", w.committed, "request_cancelled", !smartRoutingClientActive(state, current))
 		}
 		if !canRetry {
 			finishSmartRoutingAttempt(current, state.attempt, false)
@@ -216,9 +224,17 @@ func prepareSmartRoutingExecution(c *gin.Context, key *service.APIKey) *smartRou
 		state.active = true
 		state.keyID = key.ID
 		// 不可重放只禁止本次换组，不能同时关闭失败组的冷却观测。
-		state.replayBlockReason = smartRoutingReplayBlockReason(body)
+		// 显式生图端点的换组由共享生图策略按“未生成”证据把关，正文里的生图意图本就是这类请求的常态，不能据此一律阻断。
+		if !smartRoutingImageEndpoint(c) {
+			state.replayBlockReason = smartRoutingReplayBlockReason(body)
+		}
 		// 各轮重新检查资格，但同一客户端请求的全局 RPM 只能递增一次。
 		requestCtx := service.WithSmartRoutingAccountFailures(service.WithSmartRoutingRPMAdmission(state.base.Request.Context()))
+		if smartRoutingImageEndpoint(c) {
+			// 生图策略在协调器层面安装一次：处理器自身的安装变为空操作，返回时不会取消上下文
+			// （否则会被误判为客户端取消而不换组）；跨组沿用同一发送预算、账号去重和首次截止时间。
+			requestCtx, state.imagePolicyCancel = service.WithImageAttemptPolicy(requestCtx, service.DefaultPublicImageAttemptTimeout)
+		}
 		state.request = c.Request.Clone(requestCtx)
 		c.Request = c.Request.WithContext(requestCtx)
 		state.body = bytes.Clone(body)
@@ -235,6 +251,20 @@ func prepareSmartRoutingExecution(c *gin.Context, key *service.APIKey) *smartRou
 	return state
 }
 
+// smartRoutingClientActive 判断请求是否仍有效：上下文未取消，或取消仅来自处理器收尾时取消的内部生图策略
+// （finishImageAttemptRequest、晚识别入口的 defer cancel），这并不代表客户端离开，不能阻断安全换组。
+// 生图总截止到期仍视为结束；其它任何取消（含客户端断开）照旧阻断重放。
+func smartRoutingClientActive(state *smartRoutingExecution, current *gin.Context) bool {
+	ctx := current.Request.Context()
+	if ctx.Err() == nil {
+		return true
+	}
+	if state != nil && state.base != nil && state.base.Request != nil && state.base.Request.Context().Err() != nil {
+		return false
+	}
+	return service.ImageAttemptCancelledByCleanupOnly(ctx)
+}
+
 func finishSmartRoutingAttempt(c *gin.Context, state *service.SmartRoutingAttemptState, replay bool) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
 	defer cancel()
@@ -243,6 +273,25 @@ func finishSmartRoutingAttempt(c *gin.Context, state *service.SmartRoutingAttemp
 		return false
 	}
 	return true
+}
+
+// smartRoutingImageFallbackAllowed 判断本轮是否允许换组：生图端点必须挂载图片执行策略，
+// 并有“本组未发送”或“确定未生成且可换号”的正向证据；缺少策略时按结果未知处理，绝不重放。
+// 其它端点沿用原规则，仅在途中识别出图片意图并挂载策略时才受同样约束。
+func smartRoutingImageFallbackAllowed(c *gin.Context) bool {
+	ctx := c.Request.Context()
+	if smartRoutingImageEndpoint(c) && !service.ImageAttemptHasPolicy(ctx) {
+		return false
+	}
+	return service.ImageAttemptAllowsGroupFallback(ctx)
+}
+
+func smartRoutingImageEndpoint(c *gin.Context) bool {
+	path := strings.TrimSuffix(c.Request.URL.Path, "/")
+	for _, prefix := range []string{"/antigravity", "/backend-api/codex", "/v1"} {
+		path = strings.TrimPrefix(path, prefix)
+	}
+	return path == "/images/generations" || path == "/images/edits"
 }
 
 func smartRoutingReplayEndpoint(c *gin.Context) bool {
@@ -257,7 +306,9 @@ func smartRoutingReplayEndpoint(c *gin.Context) bool {
 		path = strings.TrimPrefix(path, prefix)
 	}
 	switch path {
-	case "/messages", "/messages/count_tokens", "/responses", "/responses/compact", "/responses/input_tokens", "/chat/completions", "/embeddings", "/systemone":
+	case "/messages", "/messages/count_tokens", "/responses", "/responses/compact", "/responses/input_tokens", "/chat/completions", "/embeddings", "/systemone",
+		// 生图端点只在确认未生成时换组，由 ImageAttemptAllowsGroupFallback 把关。
+		"/images/generations", "/images/edits":
 		return true
 	}
 	return false

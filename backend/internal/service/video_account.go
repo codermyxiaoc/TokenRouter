@@ -5,14 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"net/url"
 	"strings"
 
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 )
 
 // VideoAccountConfiguration 是视频协议资格和预算边界，凭据仍由账号保存。
+// ModelProtocols 是唯一的协议来源；其余字段只用于读取尚未迁移的旧账号，并在保存时清理。
 type VideoAccountConfiguration struct {
+	ModelProtocols map[string]VideoModelProtocol `json:"video_model_protocols,omitempty"`
+
 	Endpoints     []VideoEndpoint             `json:"video_endpoints"`
 	ModelBindings map[string]VideoEndpointSet `json:"video_model_bindings"`
 	BaseURLs      map[VideoEndpoint]string    `json:"video_base_urls"`
@@ -56,57 +58,6 @@ func validateVideoEndpointSet(endpoints []VideoEndpoint) error {
 	return nil
 }
 
-// SelectEndpoint 是实际转发和智能路由共用的入站适配规则，不猜模型或转换原生参数。
-func (cfg VideoAccountConfiguration) SelectEndpoint(model, inboundProtocol string, native bool) (VideoEndpoint, error) {
-	invalid := func(message string) (VideoEndpoint, error) {
-		return "", infraerrors.BadRequest("VIDEO_ACCOUNT_INVALID", message)
-	}
-	if err := validateVideoEndpointSet(cfg.Endpoints); err != nil {
-		return invalid(err.Error())
-	}
-	enabled := make(map[VideoEndpoint]bool, len(cfg.Endpoints))
-	for _, endpoint := range cfg.Endpoints {
-		enabled[endpoint] = true
-	}
-	allowed := cfg.Endpoints
-	if binding, exists := cfg.ModelBindings[model]; exists {
-		allowed = binding
-	}
-	if err := validateVideoEndpointSet(allowed); err != nil {
-		return invalid(err.Error())
-	}
-	for _, endpoint := range allowed {
-		if !enabled[endpoint] {
-			return invalid("video model binding contains a disabled endpoint")
-		}
-	}
-	if native {
-		for _, endpoint := range allowed {
-			if string(endpoint) == inboundProtocol {
-				return endpoint, nil
-			}
-		}
-		return "", infraerrors.BadRequest("VIDEO_ENDPOINT_MODEL_MISMATCH", "Model does not allow the requested native protocol")
-	}
-	// 两个 OpenAI 视频入口分别授权，不能由另一兼容端点或唯一原生端点隐式开放。
-	// 空协议只保留内部旧调用对 unified 的约定，不扩展账号或模型的端点集合。
-	var requested VideoEndpoint
-	switch inboundProtocol {
-	case "", "unified":
-		requested = VideoEndpointCompat
-	case string(VideoEndpointOpenAIVideos):
-		requested = VideoEndpointOpenAIVideos
-	default:
-		return "", infraerrors.BadRequest("VIDEO_ENDPOINT_MODEL_MISMATCH", "Model does not allow the requested video protocol")
-	}
-	for _, endpoint := range allowed {
-		if endpoint == requested {
-			return endpoint, nil
-		}
-	}
-	return "", infraerrors.BadRequest("VIDEO_ENDPOINT_MODEL_MISMATCH", "Model does not allow the requested video protocol")
-}
-
 func validVideoEndpoint(endpoint VideoEndpoint) bool {
 	switch endpoint {
 	case VideoEndpointCompat, VideoEndpointOpenAIVideos, VideoEndpointSeedance, VideoEndpointKling, VideoEndpointWan, VideoEndpointMiniMax, VideoEndpointVidu:
@@ -115,7 +66,7 @@ func validVideoEndpoint(endpoint VideoEndpoint) bool {
 	return false
 }
 
-// VideoConfiguration 读取显式协议，不把未配置账号扩展为视频账号。
+// VideoConfiguration 读取模型协议绑定；尚未迁移的旧账号按原端点与方案配置即时换算，不扩大其能力。
 func (a *Account) VideoConfiguration() (VideoAccountConfiguration, error) {
 	var out VideoAccountConfiguration
 	if a == nil || a.Platform != PlatformVideo || a.Type != AccountTypeAPIKey {
@@ -128,29 +79,35 @@ func (a *Account) VideoConfiguration() (VideoAccountConfiguration, error) {
 	if err = json.Unmarshal(body, &out); err != nil {
 		return out, err
 	}
-	out.OpenAIProfile, err = normalizeVideoOpenAIProfile(out.OpenAIProfile)
-	if err == nil {
-		err = out.validateProtocolAdapters()
+	if len(out.ModelProtocols) == 0 && len(out.Endpoints) > 0 {
+		if out.OpenAIProfile, err = normalizeVideoOpenAIProfile(out.OpenAIProfile); err != nil {
+			return out, err
+		}
+		if err = out.validateLegacyProtocolAdapters(); err != nil {
+			return out, err
+		}
+		if err = validateVideoEndpointSet(out.Endpoints); err != nil {
+			return out, err
+		}
+		enabled := map[VideoEndpoint]bool{}
+		for _, endpoint := range out.Endpoints {
+			enabled[endpoint] = true
+		}
+		for _, endpoints := range out.ModelBindings {
+			for _, endpoint := range endpoints {
+				if !enabled[endpoint] {
+					// 旧绑定指向未启用端点属于含糊配置，迁移时不能静默改选其它端点。
+					return out, fmt.Errorf("video model binding contains a disabled endpoint")
+				}
+			}
+		}
+		out.ModelProtocols = convertLegacyVideoConfiguration(out)
 	}
-	return out, err
+	return out, nil
 }
 
-// ProtocolAdapter 固定按模型覆盖、端点默认、旧配置的顺序解析，不推断厂商或扩大端点资格。
-func (cfg VideoAccountConfiguration) ProtocolAdapter(model string, endpoint VideoEndpoint) (string, bool) {
-	if id, ok := cfg.ModelAdapters[model][endpoint]; ok {
-		return id, true
-	}
-	if id, ok := cfg.EndpointAdapters[endpoint]; ok {
-		return id, true
-	}
-	if endpoint == VideoEndpointOpenAIVideos && cfg.OpenAIProfile == VideoOpenAIProfileMetasoH3 {
-		return VideoProtocolAdapterMetasoH3, false
-	}
-	return VideoProtocolAdapterLegacy, false
-}
-
-// 配置只接受内置版本，未启用端点的选择可保留但不会因此获得转发权限。
-func (cfg VideoAccountConfiguration) validateProtocolAdapters() error {
+// 旧配置只接受内置版本；仅在换算旧账号时使用。
+func (cfg VideoAccountConfiguration) validateLegacyProtocolAdapters() error {
 	validate := func(adapters map[VideoEndpoint]string) error {
 		for endpoint, id := range adapters {
 			if !ValidVideoProtocolAdapter(endpoint, id) {
@@ -163,6 +120,7 @@ func (cfg VideoAccountConfiguration) validateProtocolAdapters() error {
 		return err
 	}
 	for model, adapters := range cfg.ModelAdapters {
+		// 旧模型覆盖必须是精确上游模型；空名、空白或通配符属于含糊配置，不能在迁移时被静默丢弃或扩大。
 		if model == "" || model != strings.TrimSpace(model) || strings.ContainsAny(model, "*?") {
 			return fmt.Errorf("video_model_adapters requires an exact non-empty upstream model")
 		}
@@ -181,7 +139,8 @@ func validKlingVideoPath(path string) bool {
 	return false
 }
 
-// normalizeVideoCredentials 在创建、编辑、批量修改和导入共用的边界拒绝含糊配置。
+// normalizeVideoCredentials 在创建、编辑、批量修改和导入共用的边界拒绝含糊配置，
+// 并把旧端点配置迁移为 video_model_protocols 后清理旧字段。
 // @project-doc docs/interfaces/video_upstream.md#video_accounts
 func normalizeVideoCredentials(a *Account) error {
 	if a == nil || a.Platform != PlatformVideo {
@@ -195,63 +154,28 @@ func normalizeVideoCredentials(a *Account) error {
 	if strings.TrimSpace(a.GetCredential("api_key")) == "" {
 		return invalid("video api_key is required")
 	}
-	if len(cfg.Endpoints) == 0 {
-		return invalid("video_endpoints must contain at least one endpoint")
+	// 已由预置模板取代的厂商方案在保存时自动改绑；没有等价替代的旧绑定由下方校验拒绝，提示管理员手动改绑。
+	rebindDeprecatedVideoProtocols(cfg.ModelProtocols)
+	if err := cfg.validateModelProtocols(a.GetCredential("base_url")); err != nil {
+		return invalid(err.Error())
 	}
-	seen := map[VideoEndpoint]bool{}
-	for _, endpoint := range cfg.Endpoints {
-		if !validVideoEndpoint(endpoint) || seen[endpoint] {
-			return invalid("video_endpoints contains an unknown or duplicate endpoint")
-		}
-		seen[endpoint] = true
-		base := strings.TrimSpace(cfg.BaseURLs[endpoint])
-		if base == "" {
-			base = strings.TrimSpace(a.GetCredential("base_url"))
-		}
-		u, parseErr := url.Parse(base)
-		if parseErr != nil || u == nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return invalid("each video endpoint requires an HTTP(S) base URL without credentials, query or fragment")
-		}
+	if a.Credentials == nil {
+		a.Credentials = map[string]any{}
 	}
-	for endpoint := range cfg.BaseURLs {
-		if !seen[endpoint] {
-			return invalid("video_base_urls contains a disabled endpoint")
+	protocols := make(map[string]any, len(cfg.ModelProtocols))
+	for model, binding := range cfg.ModelProtocols {
+		entry := map[string]any{"protocol": strings.TrimSpace(binding.Protocol)}
+		if path := strings.TrimSpace(binding.Path); path != "" {
+			entry["path"] = path
 		}
+		if base := strings.TrimSpace(binding.BaseURL); base != "" {
+			entry["base_url"] = base
+		}
+		protocols[model] = entry
 	}
-	for model, endpoints := range cfg.ModelBindings {
-		if strings.TrimSpace(model) == "" || model != strings.TrimSpace(model) {
-			return invalid("video_model_bindings must bind non-empty models to enabled endpoints")
-		}
-		if err := validateVideoEndpointSet(endpoints); err != nil {
-			return invalid(err.Error())
-		}
-		for _, endpoint := range endpoints {
-			if !seen[endpoint] {
-				return invalid("video_model_bindings contains a disabled endpoint")
-			}
-		}
-	}
-	for model, path := range cfg.ModelPaths {
-		if strings.TrimSpace(model) == "" || !validKlingVideoPath(path) {
-			return invalid("video_model_paths contains an invalid Kling path template")
-		}
-		if adapter, _ := cfg.ProtocolAdapter(model, VideoEndpointKling); adapter == VideoProtocolAdapterKling && path != "/text-to-video/{model}" && path != "/image-to-video/{model}" {
-			return invalid("kling_v1 requires /text-to-video/{model} or /image-to-video/{model}; use legacy_v1 for other operations")
-		}
-		if adapter, _ := cfg.ProtocolAdapter(model, VideoEndpointKling); adapter == VideoProtocolAdapterKemei && path != "/text-to-video/{model}" && path != "/image-to-video/{model}" && path != "/omni-video/{model}" {
-			return invalid("kemei_v1 requires a native Kling model operation path")
-		}
-	}
-	for model, path := range cfg.ViduModelPaths {
-		if strings.TrimSpace(model) == "" || model != strings.TrimSpace(model) || strings.ContainsAny(model, "*?") || !validViduVideoPath(path) {
-			return invalid("video_vidu_model_paths requires exact models and supported Vidu operation paths")
-		}
-	}
-	if seen[VideoEndpointVidu] {
-		// 新增端点仍须显式选择方案；不把缺失配置推断成官方或原样协议。
-		if id, explicit := cfg.ProtocolAdapter("", VideoEndpointVidu); !explicit || !ValidVideoProtocolAdapter(VideoEndpointVidu, id) {
-			return invalid("Vidu requires an explicit endpoint protocol adapter")
-		}
+	a.Credentials["video_model_protocols"] = protocols
+	for _, key := range videoLegacyCredentialKeys {
+		delete(a.Credentials, key)
 	}
 	// 旧 Token 预算配置在账号保存时清理；已受理任务的持久预算不受影响。
 	delete(a.Credentials, "video_max_output_tokens")

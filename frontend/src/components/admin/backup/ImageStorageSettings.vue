@@ -8,18 +8,29 @@
     <form @submit.prevent="save">
       <fieldset :disabled="loading || !loaded || saving || testing" class="space-y-4 disabled:opacity-60">
         <label class="flex items-center gap-2 text-sm"><input v-model="form.enabled" type="checkbox" data-testid="image-storage-enabled" /><span>{{ t('imageStorage.enabled') }}</span></label>
-        <label class="flex items-center gap-2 text-sm"><input v-model="form.reuse_backup_s3" type="checkbox" data-testid="image-storage-reuse" /><span>{{ t('imageStorage.reuseBackupS3') }}</span></label>
+        <div class="max-w-md">
+          <label class="input-label">{{ t('imageStorage.backend') }}</label>
+          <Select v-model="backend" :options="backendOptions" data-testid="image-storage-backend" />
+          <p class="mt-1 text-xs text-gray-500">{{ isLocal ? t('imageStorage.backendLocalHint') : t('imageStorage.backendS3Hint') }}</p>
+        </div>
+        <div v-if="isLocal" class="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div><label class="input-label" for="image-storage-local-dir">{{ t('imageStorage.localDir') }}</label><input id="image-storage-local-dir" v-model="form.local_dir" class="input w-full" placeholder="data/image-storage" :required="form.enabled" /><p class="mt-1 text-xs text-gray-500">{{ t('imageStorage.localDirHint') }}</p></div>
+          <div><label class="input-label" for="image-storage-local-max">{{ t('imageStorage.localMaxTotalBytes') }}</label><input id="image-storage-local-max" v-model.number="form.local_max_total_bytes" type="number" min="0" step="1" class="input w-full" /><p class="mt-1 text-xs text-gray-500">{{ t('imageStorage.localMaxTotalBytesHint') }}</p></div>
+        </div>
+        <label v-if="!isLocal" class="flex items-center gap-2 text-sm"><input v-model="form.reuse_backup_s3" type="checkbox" data-testid="image-storage-reuse" /><span>{{ t('imageStorage.reuseBackupS3') }}</span></label>
         <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <template v-if="!isLocal">
           <div><label class="input-label" for="image-storage-bucket">{{ t('admin.backup.s3.bucket') }}</label><input id="image-storage-bucket" v-model="form.bucket" class="input w-full" :required="form.enabled && !form.reuse_backup_s3" :placeholder="form.reuse_backup_s3 ? t('imageStorage.bucketInherited') : ''" /></div>
+          </template>
           <div><label class="input-label" for="image-storage-prefix">{{ t('admin.backup.s3.prefix') }}</label><input id="image-storage-prefix" v-model="form.prefix" class="input w-full" placeholder="images/" /></div>
-          <template v-if="!form.reuse_backup_s3">
+          <template v-if="!isLocal && !form.reuse_backup_s3">
             <div><label class="input-label" for="image-storage-endpoint">{{ t('admin.backup.s3.endpoint') }}</label><input id="image-storage-endpoint" v-model="form.endpoint" class="input w-full" placeholder="https://s3.example.com" /></div>
             <div><label class="input-label" for="image-storage-region">{{ t('admin.backup.s3.region') }}</label><input id="image-storage-region" v-model="form.region" class="input w-full" placeholder="auto" /></div>
             <div><label class="input-label" for="image-storage-access-key">{{ t('admin.backup.s3.accessKeyId') }}</label><input id="image-storage-access-key" v-model="form.access_key_id" class="input w-full" autocomplete="off" :required="form.enabled" /></div>
             <div><label class="input-label" for="image-storage-secret">{{ t('admin.backup.s3.secretAccessKey') }}</label><input id="image-storage-secret" v-model="form.secret_access_key" type="password" class="input w-full" autocomplete="new-password" :required="form.enabled && !secretConfigured" :placeholder="secretConfigured ? t('admin.backup.s3.secretConfigured') : ''" /></div>
             <label class="flex items-center gap-2 text-sm md:col-span-2"><input v-model="form.force_path_style" type="checkbox" /><span>{{ t('admin.backup.s3.forcePathStyle') }}</span></label>
           </template>
-          <div><label class="input-label" for="image-storage-public-url">{{ t('imageStorage.publicBaseUrl') }}</label><input id="image-storage-public-url" v-model="form.public_base_url" class="input w-full" placeholder="https://images.example.com" /><p class="mt-1 text-xs text-gray-500">{{ t('imageStorage.publicBaseUrlHint') }}</p></div>
+          <div><label class="input-label" for="image-storage-public-url">{{ t('imageStorage.publicBaseUrl') }}</label><input id="image-storage-public-url" v-model="form.public_base_url" class="input w-full" :placeholder="isLocal ? 'https://your-site.example.com' : 'https://images.example.com'" /><p class="mt-1 text-xs text-gray-500">{{ isLocal ? t('imageStorage.publicBaseUrlLocalHint') : t('imageStorage.publicBaseUrlHint') }}</p></div>
           <div><label class="input-label" for="image-storage-expiry">{{ t('imageStorage.presignExpiryHours') }}</label><input id="image-storage-expiry" v-model.number="form.presign_expiry_hours" type="number" min="1" max="168" step="1" required class="input w-full" /><p class="mt-1 text-xs text-gray-500">{{ t('imageStorage.presignExpiryHint') }}</p></div>
           <div><label class="input-label" for="image-storage-retention">{{ t('imageStorage.retentionHours') }}</label><input id="image-storage-retention" v-model.number="form.retention_hours" type="number" min="1" max="8760" step="1" required class="input w-full" /><p class="mt-1 text-xs text-gray-500">{{ t('imageStorage.retentionHint') }}</p></div>
           <div><label class="input-label" for="image-storage-max-bytes">{{ t('imageStorage.maxDownloadBytes') }}</label><input id="image-storage-max-bytes" v-model.number="form.max_download_bytes" type="number" min="1" step="1" required class="input w-full" /></div>
@@ -36,22 +47,37 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api'
 import { useAppStore } from '@/stores'
 import type { ImageStorageConfig } from '@/api/admin/backup'
 import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
+import Select from '@/components/common/Select.vue'
 import { extractApiErrorMessage } from '@/utils/apiError'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 const stepUp = useStepUp()
 const form = ref<ImageStorageConfig>({
-  enabled: false, reuse_backup_s3: true, bucket: '', prefix: 'images/', public_base_url: '',
+  enabled: false, backend: 's3', reuse_backup_s3: true, bucket: '', prefix: 'images/', public_base_url: '',
   presign_expiry_hours: 24, retention_hours: 24, max_download_bytes: 33554432,
   endpoint: '', region: 'auto', access_key_id: '', secret_access_key: '', force_path_style: false,
+  local_dir: 'data/image-storage', local_max_total_bytes: 0,
+})
+// 存储后端选择：旧配置没有 backend 字段时按 S3 处理
+const backendOptions = computed(() => [
+  { value: 's3', label: t('imageStorage.backendS3') },
+  { value: 'local', label: t('imageStorage.backendLocal') },
+])
+const isLocal = computed(() => form.value.backend === 'local')
+const backend = computed({
+  get: () => (form.value.backend === 'local' ? 'local' : 's3'),
+  set: (value: string | number | boolean | null) => {
+    form.value.backend = value === 'local' ? 'local' : 's3'
+    if (form.value.backend === 'local' && !form.value.local_dir) form.value.local_dir = 'data/image-storage'
+  },
 })
 const secretConfigured = ref(false)
 const loading = ref(false)
@@ -69,6 +95,9 @@ async function load() {
     // 旧配置的非正数在服务端代表默认 24 小时，表单也显示实际采用的值。
     form.value = {
       ...result.config,
+      backend: result.config.backend === 'local' ? 'local' : 's3',
+      local_dir: result.config.local_dir || 'data/image-storage',
+      local_max_total_bytes: result.config.local_max_total_bytes || 0,
       presign_expiry_hours: result.config.presign_expiry_hours <= 0 ? 24 : result.config.presign_expiry_hours,
       retention_hours: result.config.retention_hours === undefined || result.config.retention_hours === 0 ? 24 : result.config.retention_hours,
       secret_access_key: '',

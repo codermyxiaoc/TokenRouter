@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"net/http"
 	"testing"
 
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
@@ -10,96 +9,66 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// 旧单字符串、显式多端点和未绑定继承都必须在转发与智能路由中采用同一个决定。
-func TestVideoAdaptiveEndpointSelectionAndSmartEligibility(t *testing.T) {
+// 统一入口只按模型绑定选择协议：精确模型优先，其次 * 默认；未绑定的模型在转发与智能路由中同时拒绝。
+func TestVideoModelProtocolBindingSelectionAndSmartEligibility(t *testing.T) {
+	account := videoFixtureAccount(VideoEndpointCompat)
+	account.Credentials = map[string]any{"api_key": "fixture-secret", "base_url": "https://relay.example/prefix",
+		"model_mapping": map[string]any{"alias": "actual", "other-alias": "other"},
+		"video_model_protocols": map[string]any{
+			"actual": map[string]any{"protocol": "seedance.seedance_v1", "base_url": "https://ark.example/api/v3"},
+			"*":      map[string]any{"protocol": "openai_videos.openai_v1"},
+		}}
+	require.NoError(t, normalizeVideoCredentials(account))
+	svc := NewVideoUpstreamService(&OpenAIGatewayService{})
+	target, err := svc.resolveTarget(context.Background(), account, "actual")
+	require.NoError(t, err)
+	require.Equal(t, VideoEndpointSeedance, target.Endpoint)
+	require.Equal(t, "https://ark.example/api/v3", target.BaseURL)
+	require.Equal(t, 2, target.Version)
+	fallback, err := svc.resolveTarget(context.Background(), account, "other")
+	require.NoError(t, err)
+	require.Equal(t, VideoEndpointOpenAIVideos, fallback.Endpoint)
+	require.True(t, smartRoutingAccountEndpointEligible(context.Background(), account, "alias", "/v1/videos"))
+	// 旧原生与旧统一入口已下线，即使模型已绑定也不能被智能路由选中。
+	for _, retired := range []string{"/v1/video/generations", "/api/v3/contents/generations/tasks"} {
+		require.False(t, smartRoutingAccountEndpointEligible(context.Background(), account, "alias", retired))
+	}
+	delete(account.Credentials["video_model_protocols"].(map[string]any), "*")
+	_, err = svc.resolveTarget(context.Background(), account, "other")
+	require.Equal(t, "VIDEO_ENDPOINT_MODEL_MISMATCH", infraerrors.Reason(err))
+	require.False(t, smartRoutingAccountEndpointEligible(context.Background(), account, "other-alias", "/v1/videos"))
+}
+
+// 旧端点配置迁移为模型协议：多端点按 openai_videos、compat、首个原生端点的顺序选择，并清理旧字段。
+func TestVideoLegacyEndpointConfigurationMigratesToModelProtocols(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		enabled []string
 		binding any
-		path    string
-		want    VideoEndpoint
-		reason  string
+		want    string
 	}{
-		{"legacy native binding rejects compat", []string{"compat", "seedance"}, "seedance", "/v1/video/generations", "", "VIDEO_ENDPOINT_MODEL_MISMATCH"},
-		{"legacy native binding keeps native", []string{"compat", "seedance"}, "seedance", "/api/v3/contents/generations/tasks", VideoEndpointSeedance, ""},
-		{"legacy string rejects other native", []string{"compat", "seedance"}, "compat", "/api/v3/contents/generations/tasks", "", "VIDEO_ENDPOINT_MODEL_MISMATCH"},
-		{"array chooses compat regardless of order", []string{"seedance", "compat"}, []string{"seedance", "compat"}, "/v1/video/generations", VideoEndpointCompat, ""},
-		{"array chooses requested native", []string{"seedance", "compat"}, []string{"seedance", "compat"}, "/api/v3/contents/generations/tasks", VideoEndpointSeedance, ""},
-		{"unbound inherits compat", []string{"seedance", "compat"}, nil, "/v1/video/generations", VideoEndpointCompat, ""},
-		{"unbound inherits native", []string{"seedance", "compat"}, nil, "/api/v3/contents/generations/tasks", VideoEndpointSeedance, ""},
-		{"single native cannot enable compat", []string{"wan"}, nil, "/v1/video/generations", "", "VIDEO_ENDPOINT_MODEL_MISMATCH"},
-		{"single native cannot enable plural", []string{"wan"}, nil, "/v1/videos", "", "VIDEO_ENDPOINT_MODEL_MISMATCH"},
-		{"unbound multiple natives reject compat", []string{"seedance", "wan"}, nil, "/v1/video/generations", "", "VIDEO_ENDPOINT_MODEL_MISMATCH"},
-		{"bound multiple natives reject compat", []string{"compat", "seedance", "wan"}, []string{"seedance", "wan"}, "/v1/video/generations", "", "VIDEO_ENDPOINT_MODEL_MISMATCH"},
-		{"compat does not enable plural", []string{"compat"}, nil, "/v1/videos", "", "VIDEO_ENDPOINT_MODEL_MISMATCH"},
-		{"plural does not enable compat", []string{"openai_videos"}, nil, "/v1/video/generations", "", "VIDEO_ENDPOINT_MODEL_MISMATCH"},
-		{"plural explicitly enabled", []string{"openai_videos"}, nil, "/v1/videos", VideoEndpointOpenAIVideos, ""},
-		{"both OpenAI endpoints select compat", []string{"openai_videos", "compat"}, nil, "/v1/video/generations", VideoEndpointCompat, ""},
-		{"both OpenAI endpoints select plural", []string{"compat", "openai_videos"}, nil, "/v1/videos", VideoEndpointOpenAIVideos, ""},
-		{"compat binding excludes plural", []string{"compat", "openai_videos"}, "compat", "/v1/videos", "", "VIDEO_ENDPOINT_MODEL_MISMATCH"},
-		{"plural binding excludes compat", []string{"compat", "openai_videos"}, "openai_videos", "/v1/video/generations", "", "VIDEO_ENDPOINT_MODEL_MISMATCH"},
-		{"native binding excludes enabled plural", []string{"openai_videos", "seedance"}, "seedance", "/v1/videos", "", "VIDEO_ENDPOINT_MODEL_MISMATCH"},
-		{"native chooses among multiple natives", []string{"seedance", "wan"}, []string{"seedance", "wan"}, "/api/v1/services/aigc/video-generation/video-synthesis", VideoEndpointWan, ""},
-		{"model binding narrows enabled", []string{"compat", "seedance", "wan"}, []string{"compat", "wan"}, "/api/v3/contents/generations/tasks", "", "VIDEO_ENDPOINT_MODEL_MISMATCH"},
+		// 原样协议在原生端点换为官方协议，在 compat 与 openai_videos 换为通用扁平格式模板。
+		{"native binding keeps native", []string{"compat", "seedance"}, "seedance", "seedance"},
+		{"array prefers compat", []string{"seedance", "compat"}, []string{"seedance", "compat"}, "profile:generic-flat"},
+		{"unbound prefers plural", []string{"compat", "openai_videos"}, nil, "profile:generic-flat-videos"},
+		{"unbound single native", []string{"wan"}, nil, "wan"},
+		{"unbound first native", []string{"seedance", "wan"}, nil, "seedance"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			account := videoFixtureAccount(VideoEndpointCompat)
 			account.Credentials["video_endpoints"] = test.enabled
-			account.Credentials["model_mapping"] = map[string]any{"alias": "actual"}
 			if test.binding != nil {
 				account.Credentials["video_model_bindings"] = map[string]any{"actual": test.binding}
 			}
 			require.NoError(t, normalizeVideoCredentials(account))
+			for _, key := range videoLegacyCredentialKeys {
+				require.NotContains(t, account.Credentials, key)
+			}
 			cfg, err := account.VideoConfiguration()
 			require.NoError(t, err)
-			route, ok := MatchVideoGatewayRoute(http.MethodPost, test.path)
+			binding, ok := cfg.Protocol("actual")
 			require.True(t, ok)
-			endpoint, err := cfg.SelectEndpoint("actual", route.Protocol, route.Native)
-			if test.reason != "" {
-				require.Equal(t, test.reason, infraerrors.Reason(err))
-				require.False(t, smartRoutingAccountEndpointEligible(context.Background(), account, "alias", test.path))
-				// 真实目标解析与智能路由必须同时拒绝，不能只隐藏展示或调度入口。
-				_, targetErr := NewVideoUpstreamService(&OpenAIGatewayService{}).resolveTarget(account, "actual", VideoTaskSubmitRequest{InboundProtocol: route.Protocol, Native: route.Native, NativePath: route.PathTemplate})
-				require.Equal(t, test.reason, infraerrors.Reason(targetErr))
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, test.want, endpoint)
-			require.True(t, smartRoutingAccountEndpointEligible(context.Background(), account, "alias", test.path))
-			target, err := NewVideoUpstreamService(&OpenAIGatewayService{}).resolveTarget(account, "actual", VideoTaskSubmitRequest{InboundProtocol: route.Protocol, Native: route.Native, NativePath: route.PathTemplate})
-			require.NoError(t, err)
-			require.Equal(t, endpoint, target.Endpoint)
-		})
-	}
-}
-
-// 内部调用省略协议时仅等同旧统一入口，不能恢复唯一原生或另一个 OpenAI 端点的隐式兼容。
-func TestVideoAdaptiveEmptyProtocolRequiresExplicitCompat(t *testing.T) {
-	for _, fixture := range []struct {
-		name      string
-		endpoints []VideoEndpoint
-		binding   VideoEndpointSet
-		allowed   bool
-	}{
-		{"explicit compat", []VideoEndpoint{VideoEndpointCompat}, nil, true},
-		{"only plural", []VideoEndpoint{VideoEndpointOpenAIVideos}, nil, false},
-		{"only native", []VideoEndpoint{VideoEndpointSeedance}, nil, false},
-		{"binding keeps compat", []VideoEndpoint{VideoEndpointCompat, VideoEndpointOpenAIVideos}, VideoEndpointSet{VideoEndpointCompat}, true},
-		{"binding excludes compat", []VideoEndpoint{VideoEndpointCompat, VideoEndpointSeedance}, VideoEndpointSet{VideoEndpointSeedance}, false},
-	} {
-		t.Run(fixture.name, func(t *testing.T) {
-			cfg := VideoAccountConfiguration{Endpoints: fixture.endpoints}
-			if fixture.binding != nil {
-				cfg.ModelBindings = map[string]VideoEndpointSet{"m": fixture.binding}
-			}
-			got, err := cfg.SelectEndpoint("m", "", false)
-			if !fixture.allowed {
-				require.Equal(t, "VIDEO_ENDPOINT_MODEL_MISMATCH", infraerrors.Reason(err))
-				require.Empty(t, got)
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, VideoEndpointCompat, got)
+			require.Equal(t, test.want, videoProtocolLabel(binding))
 		})
 	}
 }
@@ -111,74 +80,84 @@ func TestVideoAdaptiveBindingsRejectMalformedSets(t *testing.T) {
 		account.Credentials["video_model_bindings"] = map[string]any{"m": binding}
 		require.Error(t, normalizeVideoCredentials(account), "binding=%#v", binding)
 	}
+	for _, protocols := range []map[string]any{
+		{"m": map[string]any{"protocol": "compat"}},
+		{"m": map[string]any{"protocol": "seedance.kling_v1"}},
+		{"m": map[string]any{"protocol": "kling.kling_v1"}},
+		{"m": map[string]any{"protocol": "compat.legacy_v1", "path": "/text-to-video/{model}"}},
+		{"m*": map[string]any{"protocol": "compat.legacy_v1"}},
+		{"m": map[string]any{"protocol": "profile:Bad Key"}},
+		{"m": map[string]any{"protocol": "compat.legacy_v1", "base_url": "https://user:pass@example.com"}},
+		{},
+	} {
+		account := videoFixtureAccount(VideoEndpointCompat)
+		account.Credentials = map[string]any{"api_key": "k", "base_url": "https://relay.example", "video_model_protocols": protocols}
+		require.Error(t, normalizeVideoCredentials(account), "protocols=%#v", protocols)
+	}
 	account := videoFixtureAccount(VideoEndpointCompat)
 	account.Credentials["video_endpoints"] = []string{"compat", "seedance"}
 	account.Credentials["video_model_bindings"] = map[string]any{"old": "seedance", "new": []string{"seedance", "compat"}}
 	require.NoError(t, normalizeVideoCredentials(account))
 	cfg, err := account.VideoConfiguration()
 	require.NoError(t, err)
-	require.Equal(t, VideoEndpointSet{VideoEndpointSeedance}, cfg.ModelBindings["old"])
-	require.Equal(t, "seedance", account.Credentials["video_model_bindings"].(map[string]any)["old"], "读取不能把旧单字符串扩张成账号全部端点")
+	old, _ := cfg.Protocol("old")
+	require.Equal(t, VideoEndpointSeedance, old.Endpoint, "旧单字符串绑定迁移后不能扩张成其它端点")
+	newer, _ := cfg.Protocol("new")
+	require.Equal(t, "profile:generic-flat", videoProtocolLabel(newer))
 }
 
-// 同一最终模型根据入站路径选择不同上游URL，正文不转换，创建后冻结的端点不随账号编辑改变。
+// 创建后冻结的协议、地址和路径不随账号编辑改变；统一请求按冻结协议转换后才发送。
 func TestVideoAdaptiveSameModelUsesInboundEndpointAndFrozenTarget(t *testing.T) {
-	for _, native := range []bool{false, true} {
-		account := videoFixtureAccount(VideoEndpointCompat)
-		account.Credentials["video_endpoints"] = []string{"compat", "seedance"}
-		account.Credentials["video_model_bindings"] = map[string]any{"m": []string{"compat", "seedance"}}
-		account.Credentials["video_base_urls"] = map[string]string{"compat": "https://compat.example/v1", "seedance": "https://ark.example/api/v3"}
-		fixture := &videoHTTPFixture{status: 202, response: `{"id":"owned","status":"queued"}`}
-		repo := &videoSelectionFixture{accounts: []Account{*account}}
-		svc := NewVideoUpstreamService(&OpenAIGatewayService{accountRepo: repo, concurrencyService: NewConcurrencyService(nil), httpUpstream: fixture})
-		groupID := int64(5)
-		key := &APIKey{GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformVideo, Status: StatusActive}}
-		body := []byte(`{"model":"m","content":[{"type":"text","text":"waves"}],"resolution":"720p","duration":5,"future":false}`)
-		req := VideoTaskSubmitRequest{Body: body, InboundProtocol: "unified"}
-		wantURL := "https://compat.example/v1/video/generations"
-		if native {
-			req.Native = true
-			req.InboundProtocol = "seedance"
-			wantURL = "https://ark.example/api/v3/contents/generations/tasks"
-		}
-		selected, err := svc.SelectAccount(context.Background(), key, req)
-		require.NoError(t, err)
-		defer selected.Release()
-		selected.Account.Credentials["video_endpoints"] = []string{"wan"}
-		selected.Account.Credentials["video_base_urls"] = map[string]string{"wan": "https://changed.example"}
-		_, err = svc.Submit(context.Background(), selected)
-		require.NoError(t, err)
-		require.Equal(t, wantURL, fixture.request.URL.String())
-		require.JSONEq(t, string(body), string(fixture.requestBody))
-		require.Equal(t, 1, fixture.calls)
-	}
-}
-
-func TestVideoAdaptiveSelectedProtocolControlsMetadata(t *testing.T) {
-	account := videoFixtureAccount(VideoEndpointWan)
-	account.Credentials["video_endpoints"] = []string{"seedance", "wan"}
-	account.Credentials["video_model_bindings"] = map[string]any{"m": []string{"seedance", "wan"}}
+	account := videoFixtureAccount(VideoEndpointCompat)
+	account.Credentials = map[string]any{"api_key": "fixture-secret", "base_url": "https://relay.example/prefix",
+		"video_model_protocols": map[string]any{"m": map[string]any{"protocol": "seedance.legacy_v1", "base_url": "https://ark.example/api/v3"}}}
+	fixture := &videoHTTPFixture{status: 202, response: `{"id":"owned","status":"queued"}`}
 	repo := &videoSelectionFixture{accounts: []Account{*account}}
-	svc := NewVideoUpstreamService(&OpenAIGatewayService{accountRepo: repo, concurrencyService: NewConcurrencyService(nil)})
+	svc := NewVideoUpstreamService(&OpenAIGatewayService{accountRepo: repo, concurrencyService: NewConcurrencyService(nil), httpUpstream: fixture})
 	groupID := int64(5)
 	key := &APIKey{GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformVideo, Status: StatusActive}}
-	body := []byte(`{"model":"m","resolution":"480p","duration":5,"content":[{"type":"image_url","image_url":{"url":"image"}}],"parameters":{"resolution":"1080p","duration":10},"input":{"media":[{"type":"video","url":"video"}]}}`)
-	for _, endpoint := range []VideoEndpoint{VideoEndpointWan, VideoEndpointSeedance} {
-		selected, err := svc.SelectAccount(context.Background(), key, VideoTaskSubmitRequest{Body: body, Native: true, InboundProtocol: string(endpoint)})
+	body := []byte(`{"model":"m","prompt":"waves","resolution":"720p","duration":5}`)
+	canonical, err := ParseVideoCanonicalRequest(body)
+	require.NoError(t, err)
+	selected, err := svc.SelectAccount(context.Background(), key, VideoTaskSubmitRequest{Body: body, Canonical: canonical, InboundProtocol: "openai_videos"})
+	require.NoError(t, err)
+	defer selected.Release()
+	selected.Account.Credentials["video_model_protocols"] = map[string]any{"m": map[string]any{"protocol": "wan.wan_v1", "base_url": "https://changed.example"}}
+	_, err = svc.Submit(context.Background(), selected)
+	require.NoError(t, err)
+	require.Equal(t, "https://ark.example/api/v3/contents/generations/tasks", fixture.request.URL.String())
+	require.Equal(t, "waves", gjson.GetBytes(fixture.requestBody, "content.0.text").String())
+	require.Equal(t, 1, fixture.calls)
+}
+
+// 同一份统一请求在不同协议账号上转换为各自端点格式，计价维度取自真正发送的请求体。
+func TestVideoAdaptiveSelectedProtocolControlsMetadata(t *testing.T) {
+	body := []byte(`{"model":"m","prompt":"x","resolution":"1080p","duration":10,"images":[{"url":"https://asset.example/image.png"}]}`)
+	canonical, err := ParseVideoCanonicalRequest(body)
+	require.NoError(t, err)
+	for _, protocol := range []string{"wan.wan_v1", "seedance.seedance_v1"} {
+		account := videoFixtureAccount(VideoEndpointWan)
+		account.Credentials = map[string]any{"api_key": "fixture-secret", "base_url": "https://relay.example/prefix",
+			"video_model_protocols": map[string]any{"m": map[string]any{"protocol": protocol}}}
+		repo := &videoSelectionFixture{accounts: []Account{*account}}
+		svc := NewVideoUpstreamService(&OpenAIGatewayService{accountRepo: repo, concurrencyService: NewConcurrencyService(nil)})
+		groupID := int64(5)
+		key := &APIKey{GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformVideo, Status: StatusActive}}
+		selected, err := svc.SelectAccount(context.Background(), key, VideoTaskSubmitRequest{Body: body, Canonical: canonical, InboundProtocol: "openai_videos"})
 		require.NoError(t, err)
-		defer selected.Release()
-		require.Equal(t, endpoint, selected.Target.Endpoint)
-		if endpoint == VideoEndpointWan {
-			require.Equal(t, "1080p", selected.Metadata.Resolution)
-			require.Equal(t, float64(10), selected.Metadata.DurationSeconds)
-			require.True(t, selected.Metadata.HasReferenceVideo)
+		// Wan 原生请求体使用大写分辨率（1080P），计费按大小写无关识别，这里只断言档位一致。
+		resolution, ok := LookupVideoBillingResolution(selected.Metadata.Resolution)
+		require.True(t, ok)
+		require.Equal(t, VideoBillingResolution1080P, resolution)
+		require.Equal(t, float64(10), selected.Metadata.DurationSeconds)
+		require.NotNil(t, selected.Metadata.ReferenceImageCount)
+		require.Equal(t, 1, *selected.Metadata.ReferenceImageCount)
+		if protocol == "wan.wan_v1" {
+			require.Equal(t, "https://asset.example/image.png", gjson.GetBytes(selected.Body, "input.img_url").String())
 		} else {
-			require.Equal(t, "480p", selected.Metadata.Resolution)
-			require.Equal(t, float64(5), selected.Metadata.DurationSeconds)
-			require.False(t, selected.Metadata.HasReferenceVideo)
+			require.Equal(t, "image_url", gjson.GetBytes(selected.Body, "content.1.type").String())
 		}
-		require.Equal(t, "480p", gjson.GetBytes(selected.Body, "resolution").String())
-		require.Equal(t, "1080p", gjson.GetBytes(selected.Body, "parameters.resolution").String())
+		selected.Release()
 	}
 }
 
@@ -222,4 +201,12 @@ func TestVideoOptionalNullDurationBudgetStillBlocksAutomaticDuration(t *testing.
 	require.ErrorIs(t, err, ErrVideoTaskBudget)
 	require.Zero(t, billing.reserves)
 	require.Zero(t, upstream.submitted)
+}
+
+// videoProtocolLabel 把解析后的绑定显示为端点名或 profile:键名，便于断言迁移结果。
+func videoProtocolLabel(p videoResolvedProtocol) string {
+	if p.IsProfile() {
+		return videoProfileProtocolPrefix + p.ProfileKey
+	}
+	return string(p.Endpoint)
 }

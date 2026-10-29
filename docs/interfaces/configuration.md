@@ -33,6 +33,8 @@ Compose 的 `.env` 还包含只供部署工具插值的变量：`SUB2API_IMAGE` 
 
 `gateway.video_create_timeout_seconds`（环境变量 `GATEWAY_VIDEO_CREATE_TIMEOUT_SECONDS`）控制独立 Video 创建及全部安全换号尝试共用的执行预算，默认 180 秒，0 沿用 180 秒，负数或大于 600 拒绝启动；修改需要重启。创建租约自动保留至少三分钟及预算另加 30 秒的收尾空间，保存或换号不会缩短已有长租约。它不改变旧 Grok/Seedance/图片任务的超时及后台 Video 单次 90 秒查询预算；无持久响应证据的创建超时另按固定 15 分钟核对策略处理，详见[视频任务生命周期](../domains/video_tasks.md#video_task_lifecycle)。
 
+`gateway.video_max_processing_minutes`（环境变量 `GATEWAY_VIDEO_MAX_PROCESSING_MINUTES`）是独立 Video 任务从创建起的最长排队与生成时间，默认 180 分钟，0 沿用默认，负数或大于 10080 拒绝启动；声明式模板的 `poll.max_processing_minutes` 优先。超时仍未交付成品的任务失败并释放预扣，详见[未交付即释放](../domains/video_tasks.md#video_task_delivery_release)。
+
 `gateway.min_output_tokens`（环境变量 `GATEWAY_MIN_OUTPUT_TOKENS`）默认 128，最小允许 16，低于 16 拒绝启动；修改后需要重启。它只约束协议兼容转换中的显式正数输出预算，省略预算继续由上游决定。原生透传和无需转换的请求不强行改写；不改变费用计算、模型上下文上限或账户授权。
 
 `config.load` 使用 Viper，最终优先级为：
@@ -63,7 +65,7 @@ Compose 的 `.env` 还包含只供部署工具插值的变量：`SUB2API_IMAGE` 
 
 OpenAI WS 的 `oauth_max_conns_factor` 与 `apikey_max_conns_factor` 缺省为 5.0，属于启动时进程配置；已有 YAML 的显式 1.0 或环境变量继续优先，不因升级被回写。动态连接容量受每账号 `max_conns_per_account` 硬上限约束，扩大容量不扩大用户/账号请求并发。实际连接按需求与预热策略建立，配置变化需要重启；长期会话增多时应同时评估进程内存、文件描述符和代理容量。详见 [WS 连接池生命周期](openai_upstream.md#openai_ws_pool_lifecycle)。
 
-创作台（Creative Studio）属于启动时进程配置 `creative`：功能与队列开关、临时数据 TTL（`transient_ttl_seconds`，默认 1800 秒）、上传与 prompt 限制（`max_asset_bytes` 默认 32 MiB、`max_total_input_bytes` 默认 64 MiB 且不得小于单文件上限、`max_prompt_chars` 默认 8000）、上游执行参数（`execute_timeout_seconds`、`max_execute_attempts`）和 `creative:queue:*` 队列键/TTL 都在启动校验，修改后需要重启。创作台每次任务固定生成一张图片，预占价格按所选尺寸单价计算。与 `batch_image` 不同，`enabled` 与 `queue_enabled` 默认开启，但临时存储与队列依赖 Redis，Redis 不可用时任务创建 fail-close。完整键清单见 `deploy/config.example.yaml` 和[创作台](../domains/creative_studio.md)。
+创作台（Creative Studio）属于启动时进程配置 `creative`：功能与队列开关、临时数据 TTL（`transient_ttl_seconds`，默认 1800 秒）、上传与 prompt 限制（`max_asset_bytes` 默认 32 MiB、`max_total_input_bytes` 默认 64 MiB 且不得小于单文件上限、`max_prompt_chars` 默认 8000）、上游执行参数（`execute_timeout_seconds`、`max_execute_attempts`）、停机排空时长 `shutdown_drain_seconds`（默认 120 秒，须小于部署终止宽限期）、数据库兜底扫描静止时长 `orphan_recovery_after_seconds`（默认 1200 秒）和 `creative:queue:*` 队列键/TTL 都在启动校验，修改后需要重启。创作台每次任务固定生成一张图片，预占价格按所选尺寸单价计算。与 `batch_image` 不同，`enabled` 与 `queue_enabled` 默认开启，但临时存储与队列依赖 Redis，Redis 不可用时任务创建 fail-close。完整键清单见 `deploy/config.example.yaml` 和[创作台](../domains/creative_studio.md)。
 
 创作台的 worker 数量不属于进程配置，而是数据库运行时设置 `creative_worker_count`：默认 128，仅允许大于 0 的整数，不设置硬上限；缺失或历史脏值按 128 处理。管理员在系统设置的独立“创作台”标签页维护开关、worker 数量和模型配置；保存后，本实例立即扩缩 worker 池，缩容采用优雅排空，不中断正在执行的上游请求；该设置无需迁移，也不通过公开设置接口暴露。
 

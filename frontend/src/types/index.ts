@@ -1194,12 +1194,8 @@ export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
 
 // Claude Model type (returned by /v1/models and account models API)
 export interface ClaudeModel {
-  // 管理员账号模型接口返回的有效视频端点，已应用账号模型规则。
-  video_endpoints?: string[]
-  // 服务端已按最终上游模型解析的生效适配器，前端不重复解释账号模型映射。
-  video_protocol_adapters?: Record<string, string>
-  // Vidu 管理员测试的默认操作来自最终模型配置，不推测图生或文生路径。
-  video_vidu_operation?: string
+  // 管理员账号模型接口返回该模型绑定的唯一视频协议（endpoint.adapter 或 profile:key[@version]）。
+  video_protocol?: string
   id: string
   type: string
   display_name: string

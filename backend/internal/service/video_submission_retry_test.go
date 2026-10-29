@@ -173,7 +173,7 @@ func TestVideoTaskRejectedFailoverKeepsOneHoldAndOneSettlement(t *testing.T) {
 	require.Equal(t, "final-mapped-model", task.Target.Model)
 	require.Equal(t, task.Target.Model, task.Metadata.Model)
 	require.Equal(t, finalRate, task.AccountRateMultiplier)
-	u.poll = retryVideoResponse(200, `{"id":"accepted-3","status":"completed","duration":8}`)
+	u.poll = retryVideoResponse(200, `{"id":"accepted-3","status":"completed","video":{"url":"https://cdn.example.test/video.mp4"},"duration":8}`)
 	s.advance(context.Background(), task)
 	s.advance(context.Background(), task)
 	require.Equal(t, 1, b.captures)

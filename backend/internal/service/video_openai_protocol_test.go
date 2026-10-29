@@ -11,7 +11,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// 两个统一入口必须分别启用对应端点，任务查询继续使用创建时冻结的路径。
+// 多端点旧配置迁移后优先使用 openai_videos，任务查询继续使用创建时冻结的路径。
 func TestVideoOpenAIEndpointSelectionAndFrozenPaths(t *testing.T) {
 	account := videoFixtureAccount(VideoEndpointOpenAIVideos)
 	account.Credentials["video_endpoints"] = []string{"compat", "seedance", "openai_videos"}
@@ -19,37 +19,35 @@ func TestVideoOpenAIEndpointSelectionAndFrozenPaths(t *testing.T) {
 	account.Credentials["video_base_urls"] = map[string]string{"openai_videos": "https://openai-video.example/proxy/v1"}
 	require.NoError(t, normalizeVideoCredentials(account))
 	svc := NewVideoUpstreamService(&OpenAIGatewayService{})
-	target, err := svc.resolveTarget(account, "m", VideoTaskSubmitRequest{InboundProtocol: "openai_videos"})
+	target, err := svc.resolveTarget(context.Background(), account, "m")
 	require.NoError(t, err)
-	require.Equal(t, VideoEndpointOpenAIVideos, target.Endpoint)
+	// openai_videos 的原样协议保存时改绑为通用扁平格式模板，路径由模板快照决定。
+	require.Equal(t, "profile:generic-flat-videos@1", target.ProtocolAdapter)
 	require.Equal(t, "/v1/videos", target.CreatePath)
 	require.Equal(t, "https://openai-video.example/proxy/v1/videos", videoEndpointURL(target.BaseURL, target.CreatePath))
-	path, err := videoTaskPath(target, "upstream-id")
+	path, err := VideoProtocolTaskPath(target, "upstream-id")
 	require.NoError(t, err)
 	require.Equal(t, "/v1/videos/upstream-id", path)
-	_, err = videoTaskPath(target, "../other")
+	_, err = VideoProtocolTaskPath(target, "../other")
 	require.Error(t, err)
-	legacy, err := svc.resolveTarget(account, "m", VideoTaskSubmitRequest{InboundProtocol: "unified"})
-	require.NoError(t, err)
-	require.Equal(t, VideoEndpointCompat, legacy.Endpoint)
-	for _, tc := range []struct {
-		endpoints []VideoEndpoint
+	legacyConfig := []struct {
+		endpoints []string
 		want      VideoEndpoint
-		fail      bool
 	}{
-		{[]VideoEndpoint{VideoEndpointOpenAIVideos}, VideoEndpointOpenAIVideos, false},
-		{[]VideoEndpoint{VideoEndpointCompat, VideoEndpointSeedance}, "", true},
-		{[]VideoEndpoint{VideoEndpointSeedance}, "", true},
-		{[]VideoEndpoint{VideoEndpointSeedance, VideoEndpointMiniMax}, "", true},
-	} {
-		cfg := VideoAccountConfiguration{Endpoints: tc.endpoints}
-		got, err := cfg.SelectEndpoint("m", "openai_videos", false)
-		if tc.fail {
-			require.Error(t, err)
-		} else {
-			require.NoError(t, err)
-			require.Equal(t, tc.want, got)
-		}
+		{[]string{"openai_videos"}, VideoEndpointOpenAIVideos},
+		{[]string{"compat", "seedance"}, VideoEndpointCompat},
+		{[]string{"seedance"}, VideoEndpointSeedance},
+		{[]string{"seedance", "minimax"}, VideoEndpointSeedance},
+	}
+	// 旧端点集合迁移后每个模型只有一个协议，统一入口不再依据客户端路径挑选端点。
+	for _, tc := range legacyConfig {
+		legacyAccount := videoFixtureAccount(VideoEndpointOpenAIVideos)
+		legacyAccount.Credentials["video_endpoints"] = tc.endpoints
+		cfg, err := legacyAccount.VideoConfiguration()
+		require.NoError(t, err)
+		binding, ok := cfg.Protocol("m")
+		require.True(t, ok)
+		require.Equal(t, tc.want, binding.Endpoint)
 	}
 }
 
@@ -58,7 +56,7 @@ func TestVideoOpenAIUpstreamPreservesJSONAndStatuses(t *testing.T) {
 	account := videoFixtureAccount(VideoEndpointOpenAIVideos)
 	fixture := &videoHTTPFixture{status: http.StatusAccepted, response: `{"id":"upstream-id","object":"video","status":"queued"}`}
 	svc := NewVideoUpstreamService(&OpenAIGatewayService{httpUpstream: fixture})
-	target, err := svc.resolveTarget(account, "m", VideoTaskSubmitRequest{InboundProtocol: "openai_videos"})
+	target, err := svc.resolveTarget(context.Background(), account, "m")
 	require.NoError(t, err)
 	body := []byte(`{"model":"m","prompt":"test","duration":8,"resolution":"720p","ratio":"16:9","images":["https://image.example/a"],"future":{"flag":false}}`)
 	metadata, err := ParseVideoEndpointRequestMetadata(body, "", target.Endpoint)
@@ -133,6 +131,7 @@ func TestVideoOpenAIMissingUsageRemainsUnsettled(t *testing.T) {
 	svc, key, upstream, billing, _ := newVideoLifecycleFixture(BillingModeVideoToken)
 	upstream.submit = ExtractVideoUpstreamResponse(VideoEndpointOpenAIVideos, []byte(`{"id":"upstream-id","status":"completed"}`), "")
 	upstream.submit.StatusCode = http.StatusOK
+	upstream.submit.VideoURL = "https://cdn.example.test/video.mp4"
 	result, err := svc.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(`{"model":"video-model"}`), InboundProtocol: "openai_videos"})
 	require.NoError(t, err)
 	require.Equal(t, "reconciliation", gjson.GetBytes(result.Body, "billing_status").String())

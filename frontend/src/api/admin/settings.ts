@@ -62,6 +62,7 @@ export interface CreativeModelCandidate {
   model: string;
   operations: CreativeOperation[];
   media_type?: 'image' | 'text' | 'video' | 'audio';
+  /** 内置端点、grok，或 unified（模型绑定了声明式模板协议）。 */
   video_endpoint?: string;
   video_endpoints?: string[];
   video_capabilities?: CreativeVideoCapabilities;

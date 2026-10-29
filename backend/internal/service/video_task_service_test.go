@@ -329,7 +329,7 @@ func TestVideoTaskLifecycleMissingUsageThenRecovery(t *testing.T) {
 	response, err := s.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(`{}`)})
 	require.NoError(t, err)
 	task, _ := s.repo.Get(context.Background(), response.LocalTaskID)
-	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Body: []byte(`{"status":"completed"}`)}
+	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Body: []byte(`{"status":"completed"}`)}
 	s.advance(context.Background(), task)
 	require.Equal(t, "reconciliation", task.BillingStatus)
 	require.Zero(t, b.captures)
@@ -352,7 +352,7 @@ func TestVideoTaskLifecycleIgnoresPlaceholderUsage(t *testing.T) {
 	require.NoError(t, err)
 	task, _ := s.repo.Get(context.Background(), response.LocalTaskID)
 	require.Nil(t, task.Metadata.Tokens)
-	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Body: []byte(`{"status":"completed"}`)}
+	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Body: []byte(`{"status":"completed"}`)}
 	s.advance(context.Background(), task)
 	require.Equal(t, "reconciliation", task.BillingStatus)
 	require.Zero(t, b.captures)
@@ -418,7 +418,7 @@ func TestVideoTaskLifecycleUsageLogFailureRetriesWithoutCharging(t *testing.T) {
 	response, err := s.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(`{}`)})
 	require.NoError(t, err)
 	task, _ := s.repo.Get(context.Background(), response.LocalTaskID)
-	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Body: []byte(`{"status":"completed"}`)}
+	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Body: []byte(`{"status":"completed"}`)}
 	logs.err = errors.New("temporary database issue")
 	s.advance(context.Background(), task)
 	require.Equal(t, 1, b.captures)
@@ -467,7 +467,7 @@ func TestVideoTaskLifecycleLongRecoveryOmitsOverflowingLatency(t *testing.T) {
 	task, err := s.repo.Get(context.Background(), response.LocalTaskID)
 	require.NoError(t, err)
 	task.CreatedAt = time.Now().Add(-60 * 24 * time.Hour)
-	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Body: []byte(`{"status":"completed"}`)}
+	u.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Body: []byte(`{"status":"completed"}`)}
 	s.advance(context.Background(), task)
 	require.Equal(t, 1, b.captures)
 	require.True(t, task.EffectsDone)
@@ -626,7 +626,7 @@ func TestVideoTaskImageFeeSplitsCostsAndFreezesPriceThroughRestart(t *testing.T)
 			*upstream.selection.Metadata.ReferenceImageCount = 99
 			*upstream.selection.Account.RateMultiplier = 99
 			tokens, outputImages := int64(200_000), 777
-			upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Body: []byte(`{"status":"completed"}`), Metadata: VideoRequestMetadata{Tokens: &tokens, DurationSeconds: 5, ReferenceImageCount: &outputImages}}
+			upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Body: []byte(`{"status":"completed"}`), Metadata: VideoRequestMetadata{Tokens: &tokens, DurationSeconds: 5, ReferenceImageCount: &outputImages}}
 			restarted := *s
 			restarted.advance(context.Background(), task)
 			fresh, err := s.repo.Get(context.Background(), task.ID)
@@ -670,7 +670,7 @@ func TestVideoTaskImageFeeDeferredSettlementRequiresUsageAndCapturesTogether(t *
 	require.Zero(t, task.Hold.BaseAmountUSD)
 	require.Zero(t, task.Hold.HoldAmount)
 	require.Equal(t, .5, task.Hold.VideoFixedAmountUSD)
-	upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Body: []byte(`{"status":"completed"}`)}
+	upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Body: []byte(`{"status":"completed"}`)}
 	s.advance(context.Background(), task)
 	require.Equal(t, "reconciliation", task.BillingStatus)
 	require.Empty(t, billing.captureCommands, "视频用量未知时不能先单独收取图片费")
@@ -707,7 +707,7 @@ func TestVideoTaskImageFeeZeroVideoPriceDefersImageChargeWithoutUsage(t *testing
 		require.Zero(t, task.Hold.BaseAmountUSD)
 		require.Equal(t, .5, task.Hold.VideoFixedAmountUSD)
 		require.Zero(t, task.Hold.HoldAmount, "预扣关闭时零视频价也不能提前冻结图片费")
-		upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Body: []byte(`{"status":"completed"}`)}
+		upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Body: []byte(`{"status":"completed"}`)}
 		s.advance(context.Background(), task)
 		require.Equal(t, "settled", task.BillingStatus)
 		require.Equal(t, .5, task.BillingResult.ActualAmountUSD)
@@ -769,7 +769,7 @@ func TestVideoTaskImageFeePreservesLegacyVideoBudgetLimit(t *testing.T) {
 		task, err := s.repo.Get(context.Background(), response.LocalTaskID)
 		require.NoError(t, err)
 		restoreLegacyVideoLifecycleHold(s, task)
-		upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Metadata: VideoRequestMetadata{Tokens: &tokens}, Body: []byte(`{}`)}
+		upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Metadata: VideoRequestMetadata{Tokens: &tokens}, Body: []byte(`{}`)}
 		s.advance(context.Background(), task)
 		if tokens == 0 {
 			require.Equal(t, "settled", task.BillingStatus)

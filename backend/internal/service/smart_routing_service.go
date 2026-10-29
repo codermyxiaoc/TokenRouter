@@ -333,7 +333,8 @@ func smartRoutingGroupEndpointEligible(platform, endpoint string) bool {
 			// 共享 OpenAI 视频入口仍允许既有 Grok 分组参与智能选号。
 			return platform == PlatformVideo || platform == PlatformGrok
 		}
-		return platform == PlatformVideo || (route.Protocol == "seedance" && platform == PlatformOpenAI)
+		// 独立视频平台的旧原生入口已下线，只保留 OpenAI 账号的 Seedance 能力。
+		return route.Protocol == "seedance" && platform == PlatformOpenAI
 	}
 	// 独立视频分组只能承接已注册的视频创建入口，不能因同名模型截获文本或图片请求。
 	if platform == PlatformVideo {
@@ -396,12 +397,16 @@ func smartRoutingAccountEndpointEligible(ctx context.Context, account *Account, 
 	}
 
 	if route, ok := MatchVideoGatewayRoute("POST", endpoint); ok && account.Platform == PlatformVideo {
-		cfg, err := account.VideoConfiguration()
-		if err != nil || len(cfg.Endpoints) == 0 {
+		// 独立视频平台只开放统一入口；模型必须在账号上绑定了协议。
+		if route.Protocol != string(VideoEndpointOpenAIVideos) {
 			return false
 		}
-		_, err = cfg.SelectEndpoint(account.GetMappedModel(model), route.Protocol, route.Native)
-		return err == nil
+		cfg, err := account.VideoConfiguration()
+		if err != nil {
+			return false
+		}
+		_, bound := cfg.Protocol(account.GetMappedModel(model))
+		return bound
 	}
 	// Seedance 能力必须由 OpenAI API Key 账号显式声明，不能被默认文本能力替代。
 	if strings.HasSuffix(strings.TrimSuffix(endpoint, "/"), "/contents/generations/tasks") {

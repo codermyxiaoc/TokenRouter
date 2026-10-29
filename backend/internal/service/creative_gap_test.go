@@ -214,7 +214,7 @@ func TestCreativeSucceedRunIdempotentSettlement(t *testing.T) {
 	require.Equal(t, CreativeRunOutputStatusSucceeded, outputs[0].Status)
 }
 
-// TestCreativeSucceedRunRequiresTransientOutput 校验任务成功前必须先持久化输出。
+// TestCreativeSucceedRunRequiresTransientOutput 校验成品必须可取回才计费；无处可取回时整笔释放。
 func TestCreativeSucceedRunRequiresTransientOutput(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -275,17 +275,20 @@ func TestCreativeSucceedRunRequiresTransientOutput(t *testing.T) {
 				Index: 0, Success: true, Bytes: outputBytes, Mime: "image/png",
 			}})
 
-			require.ErrorIs(t, err, ErrCreativeTransientFailed)
+			billing := svc.BillingRepo.(*creativeFakeBillingRepo)
 			if test.name == "empty output" {
 				// 未返回有效图片无法确认真实成功数量，不能形成计费证据。
+				require.ErrorIs(t, err, ErrCreativeTransientFailed)
 				require.Equal(t, CreativeRunStatusRunning, repo.runs[runID].Status)
 				require.Equal(t, CreativeRunOutputStatusPending, repo.outputs[runID][0].Status)
 			} else {
-				// 图片缓存故障不擦除上游已确认成功的证据，但当前请求绝不返回 succeeded。
-				require.Equal(t, CreativeRunStatusProviderSucceeded, repo.runs[runID].Status)
-				require.Equal(t, CreativeRunOutputStatusSucceeded, repo.outputs[runID][0].Status)
+				// 成功事实已落库但成品无处可取回：用户没拿到成品，结算整笔释放而不是扣费。
+				require.NoError(t, err)
+				require.Equal(t, CreativeRunStatusResultLost, repo.runs[runID].Status)
+				require.Equal(t, CreativeRunOutputStatusFailed, repo.outputs[runID][0].Status)
+				require.Equal(t, 1, billing.releaseN)
 			}
-			require.Equal(t, 0, svc.BillingRepo.(*creativeFakeBillingRepo).captureN)
+			require.Equal(t, 0, billing.captureN)
 		})
 	}
 }

@@ -30,6 +30,8 @@ type VideoTaskService struct {
 	authCache    APIKeyAuthCacheInvalidator
 	billingCache *BillingCacheService
 	media        *MediaTaskService
+	// references 为只收公网素材的协议发布参考图短期链接；为空时 data URL 按原样交给协议校验。
+	references   videoReferencePublisher
 	cfg          *config.Config
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
@@ -37,16 +39,37 @@ type VideoTaskService struct {
 	contentOnce  sync.Once
 	contentHTTP  *http.Client
 	contentSlots chan struct{}
+	// deliveryProbe 在扣费前确认成品可取回；生产装配为真实探测，为空时沿用仅校验地址格式的旧行为。
+	deliveryProbe func(context.Context, *VideoTaskRecord) error
 }
 
 func ProvideVideoTaskService(repo VideoTaskRepository, upstream *VideoUpstreamService, pricing *ModelPricingResolver,
 	billing UsageBillingRepository, logs UsageLogRepository, accounts AccountRepository, rates UserGroupRateRepository,
-	keys *APIKeyService, cache *BillingCacheService, media *MediaTaskService, cfg *config.Config) *VideoTaskService {
+	keys *APIKeyService, cache *BillingCacheService, media *MediaTaskService, cfg *config.Config, references *VideoReferenceService) *VideoTaskService {
 	s := &VideoTaskService{repo: repo, upstream: upstream, pricing: pricing, billing: billing, logs: logs, accounts: accounts, rates: rates, authCache: keys, billingCache: cache, media: media, cfg: cfg}
+	// 避免把空的具体指针装进非空接口。
+	if references != nil {
+		s.references = references
+	}
+	// 扣费前实际取回首字节，产物 404 或不可读时不扣费。
+	s.deliveryProbe = s.probeVideoContent
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.wg.Add(1)
 	go s.run(ctx)
+	// 启动时先补齐预置模板，再把旧端点配置与被取代的厂商方案迁移为模型协议绑定；失败只记录日志，运行时仍可即时换算。
+	go func() {
+		backfillCtx, done := context.WithTimeout(ctx, 2*time.Minute)
+		defer done()
+		if upstream != nil {
+			if _, err := EnsureVideoProtocolPresets(backfillCtx, upstream.profiles); err != nil {
+				slog.Warn("video protocol preset seeding failed", "error", err)
+			}
+		}
+		if _, err := BackfillVideoAccountProtocols(backfillCtx, accounts); err != nil {
+			slog.Warn("video account protocol migration failed", "error", err)
+		}
+	}()
 	return s
 }
 
@@ -121,6 +144,11 @@ func (s *VideoTaskService) Submit(ctx context.Context, key *APIKey, req VideoTas
 		return nil, ErrVideoTaskConflict
 	}
 	hash := videoPayloadHash(req)
+	// 统一入口直接提交 Base64 参考图时，若选中的协议只收公网素材，按画布同样的方式把调用者自己上传的图片
+	// 发布为短期访问链接；只处理 data URL，公网 URL 原样转发。链接不参与幂等摘要。
+	if req.Canonical != nil && req.canvasPrepareReferences == nil && s.references != nil {
+		req.canvasPrepareReferences = newCreativeVideoReferencePreparer(s.references, usageActorUserID(key, key.User))
+	}
 	if req.IdempotencyKey != "" {
 		old, err := s.repo.FindIdempotent(ctx, key.ID, req.IdempotencyKey)
 		if err == nil {
@@ -443,6 +471,10 @@ func (s *VideoTaskService) applySubmissionResponse(t *VideoTaskRecord, response 
 	if response.TaskID != "" {
 		// 错误响应也可能携带已经受理的任务，必须保留其归属供原账号继续查询。
 		t.UpstreamTaskID = response.TaskID
+		if t.Target.Version == videoTargetVersionProfile && len(t.Target.TaskRefs) == 0 && len(response.TaskRefs) > 0 {
+			// 模板声明的查询上下文只在首次受理时写入，之后不随重放或查询改变。
+			t.Target.TaskRefs = response.TaskRefs
+		}
 	}
 	if t.Target.Endpoint == VideoEndpointMiniMax && t.UpstreamTaskID == "" && videoMiniMaxHasUnusableTaskID(response.Body) {
 		// 存在异常类型的受理字段时，错误状态也不能证明未生成；保留预算核对且不自动重提。
@@ -557,7 +589,8 @@ func videoTaskResponse(t *VideoTaskRecord, native bool) *VideoTaskResponse {
 		status = "unknown"
 	}
 	data := []map[string]string{}
-	if t.Status == "completed" && safeMediaPreviewURL(t.VideoURL) {
+	// 成品地址只在结算后返回；待核对或已释放的任务不能让用户绕过计费取得视频。
+	if t.Status == "completed" && t.BillingStatus == "settled" && safeMediaPreviewURL(t.VideoURL) {
 		data = append(data, map[string]string{"url": t.VideoURL})
 	}
 	value := map[string]any{"id": t.ID, "task_id": t.ID, "object": "video.generation", "model": t.RequestedModel, "status": status, "billing_status": t.BillingStatus, "data": data, "created": t.CreatedAt.Unix()}
@@ -661,6 +694,15 @@ func (s *VideoTaskService) Cancel(ctx context.Context, key *APIKey, id, protocol
 
 // Yezonghui 文档建议分钟级查询；只调整该冻结方案，不改变现有模型和错误退避上限。
 func videoTaskPollDelay(target VideoUpstreamTarget, fallback time.Duration) time.Duration {
+	if target.Version == videoTargetVersionProfile {
+		// 模板声明的查询间隔只作为下限，错误退避仍可更长。
+		if spec, err := videoProfileSpecFromTarget(target); err == nil && spec.Poll.IntervalSeconds > 0 {
+			if interval := time.Duration(spec.Poll.IntervalSeconds) * time.Second; fallback < interval {
+				return interval
+			}
+		}
+		return fallback
+	}
 	adapter, err := VideoTargetProtocolAdapter(target)
 	if err == nil && adapter == VideoProtocolAdapterYezonghui && fallback < time.Minute {
 		return time.Minute
@@ -703,10 +745,8 @@ func (s *VideoTaskService) advance(ctx context.Context, t *VideoTaskRecord) {
 		return
 	}
 	if t.Status == "expired" {
-		t.BillingStatus = "reconciliation"
-		t.ErrorMessage = "上游任务已过期，费用需要核对"
-		t.NextPollAt = time.Now().Add(time.Hour)
-		_ = s.observe(ctx, t)
+		// 上游过期即用户拿不到成品，不再转人工核对，直接失败释放预扣。
+		s.releaseUndeliveredVideo(ctx, t, "上游任务已过期，未交付成品，预扣已释放")
 		return
 	}
 	if s.recoverSubmissionResponse(ctx, t) {
@@ -716,25 +756,56 @@ func (s *VideoTaskService) advance(ctx context.Context, t *VideoTaskRecord) {
 		return
 	}
 	if t.UpstreamTaskID == "" {
-		t.Status = "submission_unknown"
-		t.BillingStatus = "reconciliation"
-		t.ErrorMessage = "受理结果未知，需要核对上游任务"
-		t.NextPollAt = time.Now().Add(time.Hour)
-		_ = s.observe(ctx, t)
+		deadline := s.videoUnknownSubmissionDeadline(t)
+		if time.Now().Before(deadline) {
+			t.Status = "submission_unknown"
+			t.BillingStatus = "reconciliation"
+			if t.ErrorMessage == "" {
+				t.ErrorMessage = "受理结果未知，等待核对期限后释放预留，请勿重新提交"
+			}
+			t.NextPollAt = deadline
+			_ = s.observe(ctx, t)
+			return
+		}
+		// 期限内始终没有可查询的任务 ID，用户不可能拿到成品；平台承担可能的上游成本。
+		s.releaseUndeliveredVideo(ctx, t, "受理结果始终无法确认且未取得任务 ID，未交付成品，预扣已释放")
 		return
 	}
-	if t.Status == "completed" && !t.PricingMismatch && (t.Metadata.Tokens != nil || t.Quote.Mode == BillingModeVideo || t.Quote.Mode == BillingModeVideoPerRequest || t.Quote.UnitPrice == 0) {
+	// 上次取回探测失败时不能走免查询快速结算，需重新查询以取得可能更新的成品地址。
+	if t.Status == "completed" && videoTaskDeliverable(t) && t.ErrorMessage != videoContentProbePendingMessage && !t.PricingMismatch && (t.Metadata.Tokens != nil || t.Quote.Mode == BillingModeVideo || t.Quote.Mode == BillingModeVideoPerRequest || t.Quote.UnitPrice == 0) {
 		s.finish(ctx, t)
 		return
 	}
 	account, err := s.accounts.GetByID(ctx, t.AccountID)
 	if err != nil {
+		// 原账号被删除或长期不可读时同样不能绕过持久期限：未完成任务到期释放，已完成任务交给结算裁决。
+		if t.Status != "completed" && !time.Now().Before(s.videoProcessingDeadline(t)) {
+			s.releaseUndeliveredVideo(ctx, t, "任务账号长期不可用，未交付成品，预扣已释放")
+			return
+		}
+		if t.Status == "completed" && !time.Now().Before(s.videoDeliveryDeadline(t)) {
+			s.finish(ctx, t)
+			return
+		}
 		t.ErrorMessage = "任务账号暂不可读取"
+		t.NextPollAt = time.Now().Add(videoTaskPollDelay(t.Target, time.Duration(min(300, 15+t.PollAttempts*5))*time.Second))
+		_ = s.observe(ctx, t)
 		return
 	}
 	response, err := s.upstream.Poll(ctx, account, t.Target, t.UpstreamTaskID)
 	t.PollAttempts++
 	if err != nil || !videoProtocolUpstreamResponseMatchesTask(t.Target, response, t.UpstreamTaskID) || response.StatusCode < 200 || response.StatusCode >= 300 {
+		if !time.Now().Before(s.videoProcessingDeadline(t)) && t.Status != "completed" {
+			// 查询长期不可用且已超过最长处理时间，用户拿不到成品，失败释放而非无限等待。
+			s.releaseUndeliveredVideo(ctx, t, "上游任务长时间无法查询或未完成，未交付成品，预扣已释放")
+			return
+		}
+		if t.Status == "completed" && !time.Now().Before(s.videoDeliveryDeadline(t)) {
+			// 已完成但缺产物或可靠用量、且查询持续失败：不能无限轮询冻结。交给结算统一裁决——
+			// 成品可取回且用量可靠则结算，否则按未交付释放预扣。
+			s.finish(ctx, t)
+			return
+		}
 		// HTTP查询失败不代表视频生成失败，更不能触发退款或重新生成。
 		t.ErrorMessage = "上游任务状态查询暂不可用"
 		t.NextPollAt = time.Now().Add(videoTaskPollDelay(t.Target, time.Duration(min(300, 15+t.PollAttempts*5))*time.Second))
@@ -742,6 +813,15 @@ func (s *VideoTaskService) advance(ctx context.Context, t *VideoTaskRecord) {
 		return
 	}
 	s.applyObservation(t, response)
+	if (t.Status == "queued" || t.Status == "processing" || t.Status == "submitting") && !time.Now().Before(s.videoProcessingDeadline(t)) {
+		// 未识别的状态或上游长期不推进都不能让预扣永久冻结；之后迟到的完成也不会补扣。
+		s.releaseUndeliveredVideo(ctx, t, "上游任务超过最长处理时间仍未完成，未交付成品，预扣已释放")
+		return
+	}
+	if t.Status == "expired" {
+		s.releaseUndeliveredVideo(ctx, t, "上游任务已过期，未交付成品，预扣已释放")
+		return
+	}
 	if err = s.repo.Save(ctx, t, false); err != nil {
 		return
 	}
@@ -851,7 +931,40 @@ func (s *VideoTaskService) finish(ctx context.Context, t *VideoTaskRecord) {
 		var err error
 		switch t.Status {
 		case "completed":
+			if !videoTaskDeliverable(t) {
+				// 完成但没有可取回的成品：最长处理时间内继续等待产物补齐，到期失败释放，绝不为拿不到的视频扣费。
+				if !time.Now().Before(s.videoProcessingDeadline(t)) {
+					s.releaseUndeliveredVideo(ctx, t, "上游已完成但未提供可取回的成品，预扣已释放")
+					return
+				}
+				t.ErrorMessage = "视频已完成，等待上游提供成品地址"
+				_ = s.observe(ctx, t)
+				return
+			}
+			if s.deliveryProbe != nil {
+				if probeErr := s.deliveryProbe(ctx, t); probeErr != nil {
+					// 地址格式正确不代表可取回：实际读取失败时不扣费，期限内重新查询以取得新地址，到期失败释放。
+					if !time.Now().Before(s.videoDeliveryDeadline(t)) {
+						s.releaseUndeliveredVideo(ctx, t, "上游已完成但成品始终无法取回，预扣已释放")
+						return
+					}
+					slog.Warn("video content probe failed before settlement", "task_id", t.ID, "error", probeErr)
+					t.ErrorMessage = videoContentProbePendingMessage
+					t.NextPollAt = time.Now().Add(videoTaskPollDelay(t.Target, time.Duration(min(300, 15+t.PollAttempts*5))*time.Second))
+					_ = s.observe(ctx, t)
+					return
+				}
+				// 探测可能耗去大部分结算预算：扣费与后续落库另起完整的 10 秒预算，避免慢探测让扣费上下文过期而长期冻结。
+				settleCtx, settleDone := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+				defer settleDone()
+				ctx = settleCtx
+			}
 			cost, e := videoTaskCost(t)
+			if e != nil && !time.Now().Before(s.videoProcessingDeadline(t)) {
+				// 计费用量或维度到最长处理时间仍无法确认：成品在结算前不会交给用户，按未交付释放预扣，不能长期冻结。
+				s.releaseUndeliveredVideo(ctx, t, "上游已完成但计费用量始终无法确认，成品未交付，预扣已释放")
+				return
+			}
 			if e != nil {
 				t.BillingStatus = "reconciliation"
 				t.ErrorMessage = "视频已完成，等待可靠用量结算"
@@ -930,7 +1043,8 @@ func (s *VideoTaskService) observe(ctx context.Context, t *VideoTaskRecord) erro
 	if err := s.media.ObserveMediaTask(ctx, o); err != nil {
 		return err
 	}
-	if t.VideoURL != "" {
+	if t.VideoURL != "" && t.BillingStatus == "settled" {
+		// 预览只在结算后登记，避免待核对任务的成品先被取走。
 		if t.CompletedAt != nil {
 			expires := t.CompletedAt.Add(24 * time.Hour)
 			o.ExpiresAt = &expires

@@ -1110,7 +1110,7 @@ func (a *Account) GetConfiguredRequestModels() []string {
 			}
 		}
 		if cfg, err := a.VideoConfiguration(); err == nil {
-			for model := range cfg.ModelBindings {
+			for _, model := range cfg.DeclaredModels() {
 				if a.IsModelSupported(model) {
 					models[model] = model
 				}

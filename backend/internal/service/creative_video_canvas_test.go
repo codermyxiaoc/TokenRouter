@@ -330,7 +330,7 @@ func TestCreativeVideoReferencesAndProtocolMetadata(t *testing.T) {
 					e.Params.References = []CreativeCanvasReference{{AssetID: "asset-one"}}
 					assets = []CreativeCanvasInputAsset{{Asset: &CreativeCanvasAsset{ID: "asset-one", UserID: e.UserID, CanvasID: e.CanvasID, MediaType: "image", MIMEType: "image/png"}, Content: makeTestPNG(t, 16, 16)}}
 				}
-				body, _, err := creativeVideoCanvasRequest(e, model, assets, 8000)
+				_, canonical, _, err := creativeVideoCanvasRequest(e, model, assets, 8000)
 				require.NoError(t, err)
 				target := VideoUpstreamTarget{Version: 2, Endpoint: endpoint, Model: e.Params.Model, BaseURL: "https://unused.example"}
 				switch endpoint {
@@ -362,6 +362,9 @@ func TestCreativeVideoReferencesAndProtocolMetadata(t *testing.T) {
 						target.CreatePath = "/ent/v2/img2video"
 					}
 				}
+				// 画布只提交规范请求，按冻结协议转换后再走原协议校验与计价维度提取。
+				body, err := videoCanonicalBodyForTarget(canonical, target)
+				require.NoError(t, err)
 				_, metadata, err := PrepareVideoProtocolRequest(body, "", target)
 				require.NoError(t, err)
 				require.Equal(t, e.Params.Duration, metadata.DurationSeconds)
@@ -404,7 +407,7 @@ func TestCreativeVideoRejectsForeignOrCorruptReference(t *testing.T) {
 			case "duplicate":
 				e.Params.References = append(e.Params.References, e.Params.References[0])
 			}
-			_, _, err := creativeVideoCanvasRequest(e, model, []CreativeCanvasInputAsset{asset}, 8000)
+			_, _, _, err := creativeVideoCanvasRequest(e, model, []CreativeCanvasInputAsset{asset}, 8000)
 			if name == "foreign_canvas_allowed" {
 				require.NoError(t, err)
 			} else {
@@ -414,17 +417,19 @@ func TestCreativeVideoRejectsForeignOrCorruptReference(t *testing.T) {
 	}
 }
 
+// Kling 的操作路径来自账号对该模型的协议绑定，统一入口不能再由客户端路径改写。
 func TestCreativeVideoKlingConfiguredPathAndExplicitHTTPPath(t *testing.T) {
 	account := videoFixtureAccount(VideoEndpointKling)
-	account.Credentials["video_model_paths"] = map[string]string{"model-a": "/text-to-video/{model}"}
 	s := NewVideoUpstreamService(&OpenAIGatewayService{})
-	for _, test := range []struct{ path, want string }{{"", "/text-to-video/model-a"}, {"/image-to-video/{model}", "/image-to-video/model-a"}} {
-		target, err := s.resolveTarget(account, "model-a", VideoTaskSubmitRequest{Native: true, InboundProtocol: "kling", NativePath: test.path})
+	for _, path := range []string{"/text-to-video/{model}", "/image-to-video/{model}"} {
+		account.Credentials = map[string]any{"api_key": "fixture-secret", "base_url": "https://relay.example/prefix",
+			"video_model_protocols": map[string]any{"model-a": map[string]any{"protocol": "kling.kling_v1", "path": path}}}
+		target, err := s.resolveTarget(context.Background(), account, "model-a")
 		require.NoError(t, err)
-		require.Equal(t, test.want, target.CreatePath)
+		require.Equal(t, strings.ReplaceAll(path, "{model}", "model-a"), target.CreatePath)
 	}
-	delete(account.Credentials, "video_model_paths")
-	_, err := s.resolveTarget(account, "model-a", VideoTaskSubmitRequest{Native: true, InboundProtocol: "kling"})
+	account.Credentials["video_model_protocols"] = map[string]any{"model-a": map[string]any{"protocol": "kling.kling_v1"}}
+	_, err := s.resolveTarget(context.Background(), account, "model-a")
 	require.Error(t, err)
 }
 

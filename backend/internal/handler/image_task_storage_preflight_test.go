@@ -124,7 +124,7 @@ func TestAsyncImageStorageFailureDoesNotReenterGeneration(t *testing.T) {
 			var executions atomic.Int32
 			h.execute = func(_ string, c *gin.Context) {
 				executions.Add(1)
-				c.JSON(http.StatusOK, gin.H{"data": []gin.H{{"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j8e0AAAAASUVORK5CYII="}}})
+				c.JSON(http.StatusOK, gin.H{"data": []gin.H{{"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAAD0lEQVR4nAACAP3/AgADAAAGAAMh/KwGAAAAAElFTkSuQmCC"}}})
 			}
 			router := asyncCapacityRouter(h)
 			router.GET("/v1/images/tasks/:task_id", h.Get)

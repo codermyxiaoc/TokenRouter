@@ -29,7 +29,7 @@ func TestVideoTaskTokenPrepayFixedDepositAndActualSettlement(t *testing.T) {
 			// 后续修改配置或上游实际时长不能改变原预扣事实。
 			*key.Group.ModelPricing[0].VideoTokenPrepay.PricePerSecond = 99
 			key.Group.VideoRateMultiplier = 99
-			upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Body: []byte(`{"status":"completed"}`), Metadata: VideoRequestMetadata{Tokens: &tokenCount, DurationSeconds: 10}}
+			upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Body: []byte(`{"status":"completed"}`), Metadata: VideoRequestMetadata{Tokens: &tokenCount, DurationSeconds: 10}}
 			restarted := *s
 			restarted.advance(context.Background(), task)
 			require.Equal(t, "settled", task.BillingStatus)

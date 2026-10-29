@@ -34,6 +34,11 @@ func (s *asyncImageBillingState) prepare(ctx context.Context, key *service.APIKe
 		return err
 	}
 	s.reservation = reservation
+	if reservation != nil {
+		// 预占按请求 ID 冻结且报价含分组：换组会与已冻结合同冲突、无法按新分组重新定价，
+		// 因此一旦冻结资金，本请求不再跨组重放（组内安全换号仍复用原预占）。
+		service.MarkSmartRoutingAttemptNonReplayable(ctx, "image_billing_reserved")
+	}
 	return nil
 }
 
@@ -138,6 +143,29 @@ func (s *asyncImageBillingState) record(c *gin.Context, input *service.OpenAIRec
 	input.ImageReservation = s.reservation.Reservation
 	input.ImageQuote = s.reservation.Quote
 	service.MarkSmartRoutingAttemptNonReplayable(c.Request.Context(), "image_billing_capture")
+	// 异步任务先交付后扣费：登记捕获，待图片转存成功后由任务执行器结算；
+	// uncertain 保持为真，请求收尾只把预占标记为待核对，资金冻结到交付结果确定。
+	if deferred := service.AsyncImageDeferredCaptureFromContext(c.Request.Context()); deferred != nil {
+		gateway, reservation := s.gateway, s.reservation
+		// 扣费在交付前同步重试，失败即按未交付释放；不写后台恢复证据，避免未交付任务被补扣。
+		input.SkipImageSettlementEvidence = true
+		// 结算必须沿用原请求上下文的值（请求 ID、载荷指纹等），否则与预占身份不一致而被账本拒绝。
+		requestCtx := context.WithoutCancel(c.Request.Context())
+		if deferred.Defer(
+			func(context.Context) error {
+				ctx, cancel := context.WithTimeout(requestCtx, 10*time.Second)
+				defer cancel()
+				return gateway.RecordUsage(ctx, input)
+			},
+			func(context.Context) error {
+				ctx, cancel := context.WithTimeout(requestCtx, 10*time.Second)
+				defer cancel()
+				return gateway.ReleaseAsyncImageBilling(ctx, reservation)
+			},
+		) {
+			return nil
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 10*time.Second)
 	defer cancel()
 	if err := s.gateway.RecordUsage(ctx, input); err != nil {

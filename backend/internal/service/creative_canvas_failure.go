@@ -119,6 +119,10 @@ func creativeProviderFailureMessage(code string) string {
 		return "上游生成端点不存在，请联系管理员检查服务地址和端点配置"
 	case "PROVIDER_UNAVAILABLE":
 		return "上游生成服务暂不可用，请稍后再试"
+	case CreativeResultUnavailableCode:
+		return "上游未返回可用结果，本次未扣费，预扣已释放"
+	case creativeOutputUndeliveredCode:
+		return "成品未能保存交付，本次未扣费，预扣已释放"
 	case "PROVIDER_FAILED":
 		return "生成服务执行失败，请联系管理员凭任务编号查看失败原因"
 	}

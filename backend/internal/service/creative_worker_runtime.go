@@ -39,6 +39,8 @@ type CreativeWorkerRuntime struct {
 	workers            map[uint64]*creativeWorkerHandle
 	nextWorkerID       uint64
 	desiredWorkerCount int
+	// draining 表示正在停机排空，期间不能再补齐 worker。
+	draining bool
 }
 
 // NewCreativeWorkerRuntime 创建创作台 worker runtime（不自动启动）。
@@ -197,7 +199,7 @@ func (r *CreativeWorkerRuntime) Status() CreativeWorkerStatus {
 
 // reconcileWorkersLocked 使 worker 数量向 desiredWorkerCount 收敛；调用方必须持有 mu。
 func (r *CreativeWorkerRuntime) reconcileWorkersLocked() {
-	if r == nil || r.cancel == nil || r.ctx == nil || r.ctx.Err() != nil || r.wg == nil {
+	if r == nil || r.draining || r.cancel == nil || r.ctx == nil || r.ctx.Err() != nil || r.wg == nil {
 		return
 	}
 	desired := r.desiredWorkerCount
@@ -252,6 +254,8 @@ func (r *CreativeWorkerRuntime) runWorkerHandle(ctx context.Context, handle *cre
 }
 
 // Stop 停止 runtime；重复调用幂等。
+// 先让所有 worker 停止领取新任务并等待在途任务自然完成，超过排空时限才取消执行，
+// 避免每次发版都把正在生成的任务打断成“结果未知”。
 func (r *CreativeWorkerRuntime) Stop() {
 	if r == nil {
 		return
@@ -259,7 +263,24 @@ func (r *CreativeWorkerRuntime) Stop() {
 	r.mu.Lock()
 	cancel := r.cancel
 	done := r.done
+	r.draining = true
+	for _, handle := range r.workers {
+		if handle != nil && handle.stopping.CompareAndSwap(false, true) {
+			close(handle.stop)
+		}
+	}
 	r.mu.Unlock()
+
+	deadline := time.Now().Add(r.shutdownDrainTimeout())
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		remaining := len(r.workers)
+		r.mu.Unlock()
+		if remaining == 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	if cancel != nil {
 		cancel()
@@ -276,8 +297,20 @@ func (r *CreativeWorkerRuntime) Stop() {
 		r.wg = nil
 		r.workers = nil
 	}
+	r.draining = false
 	r.mu.Unlock()
 }
+
+// shutdownDrainTimeout 返回停机时等待在途任务的最长时间。
+func (r *CreativeWorkerRuntime) shutdownDrainTimeout() time.Duration {
+	if r.cfg != nil && r.cfg.Creative.ShutdownDrainSeconds > 0 {
+		return time.Duration(r.cfg.Creative.ShutdownDrainSeconds) * time.Second
+	}
+	return defaultCreativeShutdownDrain
+}
+
+// defaultCreativeShutdownDrain 需小于部署层的终止宽限期，留出关闭数据库等收尾时间。
+const defaultCreativeShutdownDrain = 120 * time.Second
 
 // Running 报告 runtime 是否正在运行。
 func (r *CreativeWorkerRuntime) Running() bool {

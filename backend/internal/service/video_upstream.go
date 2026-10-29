@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -21,10 +22,19 @@ import (
 
 // VideoUpstreamService 只负责账号资格和原生HTTP协议；任务持久化、重试与结算由生命周期拥有。
 // @project-doc docs/interfaces/video_upstream.md#video_protocols
-type VideoUpstreamService struct{ gateway *OpenAIGatewayService }
+type VideoUpstreamService struct {
+	gateway *OpenAIGatewayService
+	// profiles 解析账号绑定的声明式模板；未注入时模板绑定不可用。
+	profiles *VideoProtocolProfileService
+}
 
 func NewVideoUpstreamService(gateway *OpenAIGatewayService) *VideoUpstreamService {
 	return &VideoUpstreamService{gateway: gateway}
+}
+
+// ProvideVideoUpstreamService 为依赖注入同时装配模板解析能力。
+func ProvideVideoUpstreamService(gateway *OpenAIGatewayService, profiles *VideoProtocolProfileService) *VideoUpstreamService {
+	return &VideoUpstreamService{gateway: gateway, profiles: profiles}
 }
 
 // ParseVideoRequestModel 在选择供应商前只读取模型，计费参数必须等协议确定后解析。
@@ -147,7 +157,7 @@ func (s *VideoUpstreamService) SelectAccount(ctx context.Context, key *APIKey, r
 		if s.gateway.needsUpstreamChannelRestrictionCheck(ctx, key.GroupID) && s.gateway.IsModelRestricted(ctx, *key.GroupID, model) {
 			continue
 		}
-		target, targetErr := s.resolveTarget(a, model, request)
+		target, targetErr := s.resolveTarget(ctx, a, model)
 		if targetErr != nil {
 			configErr = targetErr
 			continue
@@ -158,6 +168,17 @@ func (s *VideoUpstreamService) SelectAccount(ctx context.Context, key *APIKey, r
 			continue
 		}
 		body := append([]byte(nil), request.Body...)
+		if request.Canonical != nil {
+			// 统一请求按该账号冻结的协议转换，不同候选可以生成不同的上游请求体。
+			canonical := *request.Canonical
+			canonical.Model = model
+			converted, convertErr := videoCanonicalBodyForTarget(&canonical, target)
+			if convertErr != nil {
+				configErr = convertErr
+				continue
+			}
+			body = converted
+		}
 		body, err = prepareCreativeVideoAdaptiveRatio(body, target, request.canvasAdaptiveRatio)
 		if err == nil && request.canvasPrepareReferences != nil {
 			body, err = request.canvasPrepareReferences(ctx, target, body)
@@ -202,71 +223,69 @@ func (s *VideoUpstreamService) SelectAccount(ctx context.Context, key *APIKey, r
 	return nil, infraerrors.ServiceUnavailable("VIDEO_NO_ELIGIBLE_ACCOUNT", "No eligible video account or concurrency slot is available")
 }
 
-func (s *VideoUpstreamService) resolveTarget(a *Account, model string, request VideoTaskSubmitRequest) (VideoUpstreamTarget, error) {
+// resolveTarget 只按账号为该上游模型绑定的协议冻结路由快照；客户端入口不参与端点选择。
+// 内置协议冻结为版本二，声明式模板冻结为版本三并携带整份规格快照。
+func (s *VideoUpstreamService) resolveTarget(ctx context.Context, a *Account, model string) (VideoUpstreamTarget, error) {
 	var target VideoUpstreamTarget
 	cfg, err := a.VideoConfiguration()
 	if err != nil {
-		return target, err
+		return target, infraerrors.BadRequest("VIDEO_ACCOUNT_INVALID", err.Error())
 	}
-	endpoint, err := cfg.SelectEndpoint(model, request.InboundProtocol, request.Native)
-	if err != nil {
-		return target, err
+	binding, ok := cfg.Protocol(model)
+	if !ok {
+		return target, infraerrors.BadRequest("VIDEO_ENDPOINT_MODEL_MISMATCH", "Model is not bound to a video protocol on this account")
 	}
-	base := cfg.BaseURLs[endpoint]
-	if strings.TrimSpace(base) == "" {
+	base := binding.BaseURL
+	if base == "" {
 		base = a.GetCredential("base_url")
 	}
 	base, err = s.gateway.validateUpstreamBaseURL(base)
 	if err != nil {
 		return target, infraerrors.BadRequest("VIDEO_BASE_URL_INVALID", "Video endpoint base URL is invalid")
 	}
-	path := ""
-	switch endpoint {
-	case VideoEndpointCompat:
-		path = "/v1/video/generations"
-	case VideoEndpointOpenAIVideos:
-		path = "/v1/videos"
-	case VideoEndpointSeedance:
-		path = "/api/v3/contents/generations/tasks"
-	case VideoEndpointWan:
-		path = "/api/v1/services/aigc/video-generation/video-synthesis"
-	case VideoEndpointMiniMax:
-		path = "/v2/video_generation"
-	case VideoEndpointVidu:
-		path = cfg.ViduModelPaths[model]
-		if request.NativePath != "" {
-			path = request.NativePath
+	target = VideoUpstreamTarget{BaseURL: base, Model: model, AccountID: a.ID}
+	if binding.IsProfile() {
+		profile, profileErr := s.profiles.Resolve(ctx, binding.ProfileKey, binding.ProfileVersion)
+		if profileErr != nil {
+			return target, infraerrors.BadRequest("VIDEO_PROFILE_UNAVAILABLE", "The bound video protocol profile is missing or disabled")
 		}
-		if !validViduVideoPath(path) {
-			return target, infraerrors.BadRequest("VIDEO_VIDU_PATH_REQUIRED", "Vidu requires an explicit supported operation path")
+		snapshot, marshalErr := json.Marshal(profile.Spec)
+		if marshalErr != nil {
+			return target, marshalErr
 		}
-		// 可美特定模型限制只属于该方案，不能套用到官方或保留原请求的账号。
-		if adapter, _ := cfg.ProtocolAdapter(model, endpoint); adapter == VideoProtocolAdapterKemei {
-			if err := validateVideoViduOperationModel(model, path); err != nil {
-				return target, err
+		target.Version = videoTargetVersionProfile
+		target.ProtocolAdapter = VideoProfileProtocolID(profile.ProfileKey, profile.Version)
+		target.ProfileSnapshot, target.ProfileHash = snapshot, profile.SpecHash
+		if target.CreatePath, err = renderVideoProfilePath(profile.Spec.Create.Path, target, "", false); err != nil {
+			return target, infraerrors.BadRequest("VIDEO_PROTOCOL_ADAPTER_INVALID", err.Error())
+		}
+	} else {
+		target.Version, target.Endpoint, target.ProtocolAdapter = 2, binding.Endpoint, binding.Adapter
+		switch binding.Endpoint {
+		case VideoEndpointCompat:
+			target.CreatePath = "/v1/video/generations"
+		case VideoEndpointOpenAIVideos:
+			target.CreatePath = "/v1/videos"
+		case VideoEndpointSeedance:
+			target.CreatePath = "/api/v3/contents/generations/tasks"
+		case VideoEndpointWan:
+			target.CreatePath = "/api/v1/services/aigc/video-generation/video-synthesis"
+		case VideoEndpointMiniMax:
+			target.CreatePath = "/v2/video_generation"
+		case VideoEndpointVidu:
+			target.CreatePath = binding.Path
+			// 可美特定模型限制只属于该方案，不能套用到官方或保留原请求的账号。
+			if binding.Adapter == VideoProtocolAdapterKemei {
+				if err := validateVideoViduOperationModel(model, target.CreatePath); err != nil {
+					return target, err
+				}
 			}
+		case VideoEndpointKling:
+			if err := validateUpstreamPathSegment("video model", model); err != nil {
+				return target, infraerrors.BadRequest("VIDEO_MODEL_INVALID", "Video path model is invalid")
+			}
+			target.CreatePath = strings.ReplaceAll(binding.Path, "{model}", url.PathEscape(model))
 		}
-	case VideoEndpointKling:
-		path = cfg.ModelPaths[model]
-		if request.Native && request.NativePath != "" {
-			path = request.NativePath
-		}
-		if !validKlingVideoPath(path) {
-			return target, infraerrors.BadRequest("VIDEO_KLING_PATH_REQUIRED", "Kling requires an explicit video_model_paths template")
-		}
-		if err := validateUpstreamPathSegment("video model", model); err != nil {
-			return target, infraerrors.BadRequest("VIDEO_MODEL_INVALID", "Video path model is invalid")
-		}
-		path = strings.ReplaceAll(path, "{model}", url.PathEscape(model))
-	}
-	target = VideoUpstreamTarget{Version: 1, Endpoint: endpoint, BaseURL: base, CreatePath: path, Model: model, AccountID: a.ID}
-	if endpoint == VideoEndpointOpenAIVideos {
-		target.OpenAIProfile = cfg.OpenAIProfile
-	}
-	if adapter, explicit := cfg.ProtocolAdapter(model, endpoint); explicit {
-		target.Version, target.ProtocolAdapter = 2, adapter
-		// 新字段是唯一协议来源，清除可能冲突的历史字段，避免恢复时产生两套解释。
-		target.OpenAIProfile = ""
 	}
 	if err := ValidateVideoProtocolTarget(target); err != nil {
 		return target, infraerrors.BadRequest("VIDEO_PROTOCOL_ADAPTER_INVALID", err.Error())
@@ -365,6 +384,19 @@ func (s *VideoUpstreamService) forward(ctx context.Context, account *Account, ta
 	// Vidu 官方使用 Token 鉴权；查询按冻结方案选择，不随账号后来改为可美而切换。
 	if target.Endpoint == VideoEndpointVidu && target.ProtocolAdapter == VideoProtocolAdapterVidu {
 		req.Header.Set("Authorization", "Token "+token)
+	}
+	if target.Version == videoTargetVersionProfile {
+		// 模板只决定鉴权方式与静态请求头，凭据始终来自原账号。
+		spec, specErr := videoProfileSpecFromTarget(target)
+		if specErr != nil {
+			return nil, specErr
+		}
+		videoProfileAuthHeader(spec, req.Header, token)
+		if method == http.MethodPost {
+			for name, value := range spec.Create.Headers {
+				req.Header.Set(name, value)
+			}
+		}
 	}
 	req.Header.Set("Accept", "application/json")
 	if method == http.MethodPost {

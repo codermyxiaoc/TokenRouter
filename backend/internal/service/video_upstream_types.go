@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 )
 
@@ -35,6 +36,8 @@ type VideoTaskSubmitRequest struct {
 	canvasMaxReferenceImageBytes int64
 	// 仅内部画布提供，实际协议选定后才发布已鉴权参考图；不接受 JSON，也不参与原始请求幂等摘要。
 	canvasPrepareReferences func(context.Context, VideoUpstreamTarget, []byte) ([]byte, error)
+	// Canonical 是统一入口解析后的规范请求；存在时按每个候选账号的协议分别转换请求体，Body 仍用于幂等摘要。
+	Canonical *VideoCanonicalRequest `json:"-"`
 	// ExcludedAccountIDs 用于容量拒绝及明确未受理后的重选，不接收客户端 JSON 或参与幂等摘要。
 	ExcludedAccountIDs map[int64]struct{} `json:"-"`
 }
@@ -59,6 +62,11 @@ type VideoUpstreamTarget struct {
 	OpenAIProfile string `json:"openai_profile,omitempty"`
 	// 版本二冻结内置协议及其版本号；旧版本一继续使用原端点和旧适配字段。
 	ProtocolAdapter string `json:"protocol_adapter,omitempty"`
+	// 版本三冻结整份声明式模板及其哈希；模板后续编辑或停用不影响在途任务。
+	ProfileSnapshot json.RawMessage `json:"profile_snapshot,omitempty"`
+	ProfileHash     string          `json:"profile_hash,omitempty"`
+	// TaskRefs 保存创建响应中模板声明的查询上下文，只在受理时写入一次。
+	TaskRefs map[string]string `json:"task_refs,omitempty"`
 }
 
 // VideoRequestMetadata 只供定价与观测，显式协议适配时必须与真正发送的载荷一致。
@@ -120,6 +128,8 @@ type VideoUpstreamResponse struct {
 	UpstreamStatus string
 	Metadata       VideoRequestMetadata
 	VideoURL       string
+	// TaskRefs 是模板协议在创建响应中声明的额外查询上下文。
+	TaskRefs map[string]string
 	// 元数据存在歧义时保留任务归属与状态，但终态不得沿用请求预估值扣费。
 	MetadataError string
 }

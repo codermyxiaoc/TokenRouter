@@ -255,7 +255,7 @@ describe('CreateAccountModal OpenAI account options', () => {
     wrapper.unmount()
   })
 
-  it('creates an independent Video API key with its explicit endpoint budget', async () => {
+  it('creates an independent Video API key with model protocol bindings and budgets', async () => {
     const wrapper = mountModal()
     await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
     expect(wrapper.text()).toContain('admin.accounts.video.apiKeyOnly')
@@ -264,114 +264,68 @@ describe('CreateAccountModal OpenAI account options', () => {
     await wrapper.get('form#create-account-form input[type="text"]').setValue('Video account')
     await wrapper.get('form#create-account-form input[type="password"]').setValue('video-secret')
     await wrapper.get('[data-testid="create-account-base-url"]').setValue('https://video.example.test')
-    await wrapper.get('[data-testid="video-endpoint-compat"]').setValue(true)
     const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
-    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), maxDurationSeconds: 15 })
+    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), maxDurationSeconds: 15, rows: [
+      { model: 'kling-v2', protocol: 'kling.kling_v1', path: '/text-to-video/{model}', baseUrl: '' },
+      { model: '*', protocol: 'compat.openai_v1', path: '', baseUrl: '' },
+    ] })
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await flushPromises()
     expect(createAccountMock).toHaveBeenCalledOnce()
     const payload = createAccountMock.mock.calls[0][0]
     expect(payload).toMatchObject({ platform: 'video', type: 'apikey', credentials: {
-      api_key: 'video-secret', base_url: 'https://video.example.test', video_endpoints: ['compat'],
+      api_key: 'video-secret', base_url: 'https://video.example.test',
+      video_model_protocols: {
+        'kling-v2': { protocol: 'kling.kling_v1', path: '/text-to-video/{model}' },
+        '*': { protocol: 'compat.openai_v1' },
+      },
       video_max_pending_tasks: 10, video_max_duration_seconds: 15,
-      video_endpoint_adapters: { compat: 'legacy_v1', openai_videos: 'openai_v1', seedance: 'seedance_v1', kling: 'kling_v1', wan: 'wan_v1', minimax: 'minimax_v2' },
-      video_model_adapters: {},
     } })
-    expect(payload.credentials).not.toHaveProperty('video_max_output_tokens')
-    expect(payload.credentials).not.toHaveProperty('api_protocol')
+    for (const key of ['video_endpoints', 'video_model_bindings', 'video_endpoint_adapters', 'video_model_adapters', 'video_base_urls', 'video_model_paths', 'video_vidu_model_paths', 'video_openai_profile', 'video_max_output_tokens', 'api_protocol']) {
+      expect(payload.credentials).not.toHaveProperty(key)
+    }
     expect(wrapper.findComponent({ name: 'UpstreamUsageConfigEditor' }).exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  // 新建 Video 完全不提交已移除的 Token 上限。
-  it('creates Video without a Token budget field', async () => {
-    const wrapper = mountModal()
-    await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
-    await wrapper.get('form#create-account-form input[type="text"]').setValue('Unlimited Video')
-    await wrapper.get('form#create-account-form input[type="password"]').setValue('video-secret')
-    await wrapper.get('[data-testid="create-account-base-url"]').setValue('https://video.example.test')
-    await wrapper.get('[data-testid="video-endpoint-seedance"]').setValue(true)
-    expect(wrapper.find('[data-testid="video-max-output-tokens"]').exists()).toBe(false)
-    await wrapper.get('form#create-account-form').trigger('submit.prevent')
-    await flushPromises()
-    expect(createAccountMock).toHaveBeenCalledOnce()
-    expect(createAccountMock.mock.calls[0][0].credentials).toMatchObject({
-      video_endpoints: ['seedance'],
-      video_max_duration_seconds: null, video_max_pending_tasks: 10,
-    })
-    expect(createAccountMock.mock.calls[0][0].credentials).not.toHaveProperty('video_max_output_tokens')
-    wrapper.unmount()
-  })
-
-  it.each([true, false])('submits Video multi-endpoint routing with explicit bindings=%s', async bound => {
-    const wrapper = mountModal()
-    await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
-    await wrapper.get('form#create-account-form input[type="text"]').setValue('Adaptive Video')
-    await wrapper.get('form#create-account-form input[type="password"]').setValue('video-secret')
-    await wrapper.get('[data-testid="create-account-base-url"]').setValue('https://video.example.test')
-    const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
-    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), endpoints: ['compat', 'seedance'], bindings: bound ? [
-      { model: 'shared', endpoint: 'compat', path: '' },
-      { model: 'shared', endpoint: 'seedance', path: '' },
-    ] : [] })
-    await wrapper.get('form#create-account-form').trigger('submit.prevent')
-    await flushPromises()
-    expect(createAccountMock).toHaveBeenCalledOnce()
-    expect(createAccountMock.mock.calls[0][0].credentials).toMatchObject({
-      video_endpoints: ['compat', 'seedance'],
-      video_model_bindings: bound ? { shared: ['compat', 'seedance'] } : {},
-      video_model_paths: {},
-    })
     wrapper.unmount()
   })
 
   // 非法绑定必须在真实提交入口拦截，不能只依赖配置工具函数校验。
   it.each([
-    [{ model: 'shared', endpoint: 'compat', path: '' }, { model: ' shared ', endpoint: 'compat', path: '' }],
-    [{ model: 'shared', endpoint: 'wan', path: '' }],
-    [{ model: 'shared', endpoint: 'kling', path: '/unsupported' }],
-  ])('does not create Video with invalid bindings %j', async (...bindings) => {
+    [[{ model: '*', protocol: '', path: '', baseUrl: '' }]],
+    [[{ model: 'a', protocol: 'compat.openai_v1', path: '', baseUrl: '' }, { model: ' a ', protocol: 'wan.wan_v1', path: '', baseUrl: '' }]],
+    [[{ model: 'k*', protocol: 'compat.openai_v1', path: '', baseUrl: '' }]],
+    [[{ model: 'k', protocol: 'kling.kling_v1', path: '', baseUrl: '' }]],
+    [[{ model: 'k', protocol: 'kling.kling_v1', path: '/omni-video/{model}', baseUrl: '' }]],
+    [[{ model: 's', protocol: 'seedance.seedance_v1', path: '/ent/v2/img2video', baseUrl: '' }]],
+  ])('does not create Video with invalid bindings %j', async rows => {
     const wrapper = mountModal()
     await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
     await wrapper.get('form#create-account-form input[type="text"]').setValue('Invalid Video')
     await wrapper.get('form#create-account-form input[type="password"]').setValue('video-secret')
     await wrapper.get('[data-testid="create-account-base-url"]').setValue('https://video.example.test')
     const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
-    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), endpoints: ['compat', 'kling'], bindings })
+    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), rows })
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await flushPromises()
     expect(createAccountMock).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
-  it('does not create Video with a missing endpoint address', async () => {
+  it('does not create Video without any address, and resets the protocol table when reopened', async () => {
     const wrapper = mountModal()
     await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
     await wrapper.get('form#create-account-form input[type="text"]').setValue('Video account')
     await wrapper.get('form#create-account-form input[type="password"]').setValue('video-secret')
-    await wrapper.get('[data-testid="video-endpoint-compat"]').setValue(true)
+    // 新建表单只有一行未选择协议的 * 默认行，不预设供应商。
+    expect(wrapper.getComponent({ name: 'VideoAccountFields' }).props('modelValue').rows).toEqual([{ model: '*', protocol: '', path: '', baseUrl: '' }])
+    const fields = wrapper.getComponent({ name: 'VideoAccountFields' })
+    fields.vm.$emit('update:modelValue', { ...fields.props('modelValue'), rows: [{ model: '*', protocol: 'compat.openai_v1', path: '', baseUrl: '' }] })
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await flushPromises()
     expect(createAccountMock).not.toHaveBeenCalled()
-    wrapper.unmount()
-  })
-
-  // Base URL 和密钥不能代替显式选择，创建和重开弹窗都保持兼容入口关闭。
-  it('does not create Video until an endpoint is explicitly selected', async () => {
-    const wrapper = mountModal()
-    await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
-    await wrapper.get('form#create-account-form input[type="text"]').setValue('Video account')
-    await wrapper.get('form#create-account-form input[type="password"]').setValue('video-secret')
-    await wrapper.get('[data-testid="create-account-base-url"]').setValue('https://video.example.test')
-    expect(wrapper.getComponent({ name: 'VideoAccountFields' }).props('modelValue').endpoints).toEqual([])
-    await wrapper.get('form#create-account-form').trigger('submit.prevent')
-    await flushPromises()
-    expect(createAccountMock).not.toHaveBeenCalled()
-    await wrapper.get('[data-testid="video-endpoint-openai_videos"]').setValue(true)
     await wrapper.setProps({ show: false })
     await wrapper.setProps({ show: true })
     await wrapper.get('[data-testid="select-video-platform"]').trigger('click')
-    expect(wrapper.getComponent({ name: 'VideoAccountFields' }).props('modelValue').endpoints).toEqual([])
+    expect(wrapper.getComponent({ name: 'VideoAccountFields' }).props('modelValue').rows).toEqual([{ model: '*', protocol: '', path: '', baseUrl: '' }])
     wrapper.unmount()
   })
 

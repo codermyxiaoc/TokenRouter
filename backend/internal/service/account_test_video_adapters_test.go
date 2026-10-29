@@ -19,7 +19,7 @@ func TestVideoAccountOfficialAdapterUsesMappedOverride(t *testing.T) {
 		account.Credentials["model_whitelist"] = []string{"sora-2"}
 		account.Credentials["video_endpoint_adapters"] = map[string]string{"openai_videos": "legacy_v1"}
 		account.Credentials["video_model_adapters"] = map[string]any{"sora-2": map[string]string{"openai_videos": "openai_v1"}}
-		require.Equal(t, "openai_v1", VideoAccountTestAdapters(account, "public")[VideoEndpointOpenAIVideos])
+		require.Equal(t, "openai_videos.openai_v1", VideoAccountTestProtocol(account, "public"))
 		image := ""
 		if withImage {
 			image = grokModesImageDataURL(t, 8)

@@ -75,7 +75,7 @@ func newImageRoutePolicyHandler(t *testing.T, upstream *imageRoutePolicyUpstream
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	t.Cleanup(billing.Stop)
-	gw := service.NewOpenAIGatewayService(openAIImagesFailoverAccountRepo{accounts: accounts}, &openAIWSUsageHandlerUsageLogRepoStub{}, nil, nil, nil, nil, cache, cfg, nil, nil, service.NewBillingService(cfg, nil), nil, billing, upstream, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	gw := service.NewOpenAIGatewayService(openAIImagesFailoverAccountRepo{accounts: accounts}, &openAIWSUsageHandlerUsageLogRepoStub{}, nil, nil, nil, nil, cache, cfg, nil, nil, service.NewBillingService(cfg, nil), nil, billing, upstream, nil, &service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil)
 	return NewOpenAIGatewayHandler(gw, service.NewConcurrencyService(&fakeConcurrencyCache{}), billing, service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg)
 }
 

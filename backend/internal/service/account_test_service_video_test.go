@@ -288,10 +288,16 @@ func TestVideoAccountTestRejectsConfigurationBeforeAnyRequest(t *testing.T) {
 		change                                func(*Account)
 	}{
 		{name: "missing-model", testType: "video", options: AccountTestOptions{VideoEndpoint: "compat"}},
-		{name: "missing-endpoint", model: "allowed", testType: "video"},
-		{name: "disabled-endpoint", model: "allowed", testType: "video", options: AccountTestOptions{VideoEndpoint: "seedance"}},
-		{name: "wrong-model-binding", model: "allowed", testType: "video", options: AccountTestOptions{VideoEndpoint: "compat"}, change: func(a *Account) {
-			a.Credentials["video_endpoints"] = []string{"compat", "seedance"}
+		// 管理员不再选择端点：模型未绑定协议、绑定协议无效或旧绑定指向未启用端点时，均在任何上游请求前拒绝。
+		{name: "unbound-model", model: "allowed", testType: "video", change: func(a *Account) {
+			delete(a.Credentials, "video_endpoints")
+			a.Credentials["video_model_protocols"] = map[string]any{"other": map[string]any{"protocol": "compat.legacy_v1"}}
+		}},
+		{name: "invalid-protocol-binding", model: "allowed", testType: "video", change: func(a *Account) {
+			delete(a.Credentials, "video_endpoints")
+			a.Credentials["video_model_protocols"] = map[string]any{"allowed": map[string]any{"protocol": "seedance.unknown_v9"}}
+		}},
+		{name: "legacy-binding-to-disabled-endpoint", model: "allowed", testType: "video", change: func(a *Account) {
 			a.Credentials["video_model_bindings"] = map[string]any{"allowed": "seedance"}
 		}},
 		{name: "whitelist", model: "forbidden", testType: "video", options: AccountTestOptions{VideoEndpoint: "compat"}},
@@ -478,8 +484,11 @@ func TestVideoAccountTestKlingRespectsConfiguredOperations(t *testing.T) {
 		name, configured, wantPath, imageField string
 		image, rejected                        bool
 	}{
-		{name: "default-text", wantPath: "/v1/videos/text2video"},
-		{name: "default-reference", wantPath: "/v1/videos/omni-video", imageField: "image_list.0.image_url", image: true},
+		// 操作路径只来自模型绑定的 path；未配置路径的模型没有绑定，测试在请求前拒绝，不再按是否带图推断默认操作。
+		{name: "unbound-text", rejected: true},
+		{name: "unbound-reference", image: true, rejected: true},
+		{name: "configured-official-text", configured: "/v1/videos/text2video", wantPath: "/v1/videos/text2video"},
+		{name: "configured-official-reference", configured: "/v1/videos/omni-video", wantPath: "/v1/videos/omni-video", imageField: "image_list.0.image_url", image: true},
 		{name: "configured-reference", configured: "/image-to-video/{model}", wantPath: "/image-to-video/m", imageField: "image", image: true},
 		{name: "configured-text", configured: "/text-to-video/{model}", wantPath: "/text-to-video/m"},
 		{name: "image-required", configured: "/image-to-video/{model}", rejected: true},
@@ -516,14 +525,14 @@ func TestVideoAccountTestKlingRespectsConfiguredOperations(t *testing.T) {
 	}
 }
 
-// 可美管理员试跑与正式请求使用相同的原生 contents，覆盖默认与显式操作路径。
+// 可美管理员试跑与正式请求使用相同的原生 contents；操作路径只来自模型绑定，未配置路径时请求前拒绝。
 func TestVideoAccountTestKemeiKlingOperations(t *testing.T) {
 	for _, test := range []struct {
 		name, configured, wantPath string
 		image, rejected            bool
 	}{
-		{name: "default-text", wantPath: "/text-to-video/m"},
-		{name: "default-image", wantPath: "/image-to-video/m", image: true},
+		{name: "unbound-text", rejected: true},
+		{name: "unbound-image", image: true, rejected: true},
 		{name: "configured-text", configured: "/text-to-video/{model}", wantPath: "/text-to-video/m"},
 		{name: "text-rejects-image", configured: "/text-to-video/{model}", image: true, rejected: true},
 		{name: "configured-image", configured: "/image-to-video/{model}", wantPath: "/image-to-video/m", image: true},

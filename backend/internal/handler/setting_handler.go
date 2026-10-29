@@ -30,6 +30,17 @@ func NewSettingHandler(settingService *service.SettingService, version string) *
 	}
 }
 
+// GetAPIDocOverrides 返回管理员改写的 API 文档 Markdown，供公开文档页渲染。
+// GET /api/v1/settings/api-docs
+func (h *SettingHandler) GetAPIDocOverrides(c *gin.Context) {
+	overrides, err := h.settingService.GetAPIDocOverrides(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"overrides": overrides})
+}
+
 // SetNotificationEmailService 注入公开退订入口需要的通知邮件服务，并保持既有构造函数签名不变。
 func (h *SettingHandler) SetNotificationEmailService(notificationEmailService *service.NotificationEmailService) {
 	h.notificationEmailService = notificationEmailService

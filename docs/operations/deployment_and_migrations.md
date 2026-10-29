@@ -11,6 +11,9 @@
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
 - [平台额度事务化升级](#transactional_platform_quotas)：切换额度统计权威来源、旧实例及缓存处理时读取。
+- [v3.33 发布与升级总览](#v3_33_upgrade)：部署视频统一协议、创作台交付结算、图片存储与调度等本版变更时读取。
+- [v3.33 Video 统一入口与协议模板](#video_unified_upgrade)：部署迁移 322、迁移旧视频账号配置、通知客户端改用 /v1/videos 或回退时读取。
+- [v3.33 创作台交付与结算](#creative_delivery_billing_upgrade)：部署迁移 321、批量释放遗留未确认任务、配置停机排空宽限期时读取。
 - [v3.32 创作台 URL 图片结果兼容](#v3_32_upgrade)：升级创作台图片 URL 解析、安全下载和结果校验时读取。
 - [v3.31 异步图片查询观测与轮询文档](#v3_31_upgrade)：升级任务查询端点归类和客户端终止轮询说明时读取。
 - [v3.30 模型目录与使用说明](#v3_30_upgrade)：升级账号映射目录修复、创作台说明及模型调用指南时读取。
@@ -78,7 +81,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.32`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.33`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -93,11 +96,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.32`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.33`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.32 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.33 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -195,7 +198,57 @@ Gemini 缓存费用复用本站持久资金合同，使用 `gemini_cache` 报价
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.32`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移仍为 `320_creative_image_attempt_budget.sql`。从 v3.31 升级没有新增 SQL 迁移；本版补齐创作台 OpenAI API Key 与 Grok 图片 URL 结果解析、安全下载和完整性校验。更早版本仍须遵循各自迁移与恢复边界。
+当前发布版本为 `v0.1.278-ct-v3.33`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `322_video_protocol_profiles.sql`。从 v3.32 升级新增迁移 321、322，同时变更独立 Video 入口、账号协议配置及媒体交付和资金收尾规则。更早版本仍须遵循各自迁移与恢复边界。
+
+<a id="v3_33_upgrade"></a>
+### v3.33 发布与升级总览
+
+本版合并独立 Video 统一端点与声明式协议模板、创作台和画布媒体交付结算、异步图片存储、图片调度与管理员文档配置。它不是仅替换前端资源的兼容补丁：Video 分组旧创建/查询路径返回 410，旧视频账号配置会被迁移，符合新规则的遗留未确认资金也可能在维护循环中释放。
+
+新增迁移 `321_creative_run_queue_recovery_index_notx.sql` 为创作台非终态任务建立并发部分索引；`322_video_protocol_profiles.sql` 建立视频协议模板及版本、状态约束。不要修改或重跑已执行迁移。升级前备份并验证 PostgreSQL、账号协议配置、稳定 JWT/TOTP 密钥及素材存储配置，排空在途生成，停止旧应用和恢复工作进程，先启动一个新实例完成迁移，再统一切换所有实例与嵌入前端。默认 worker 排空 120 秒，Compose 停机宽限为 150 秒；自定义部署须保留足够收尾时间。
+
+主要行为与验收边界：
+
+- **视频与模板**：管理员账号测试、创作台和画布共用统一请求、参考素材、任务查询和下载；协议按最终上游模型绑定，模板保存为新版本、任务冻结规格。模板可离线预览、编辑、启停和删除，AI 只生成待管理员检查的草稿，不自动启用。端点和回退约束见[视频升级](#video_unified_upgrade)。
+- **媒体资金与结果**：创作台结果丢失、归档失败及超期未确认任务按新交付规则释放原预占；视频在结算前检查成品可读性，慢探测和账务使用独立预算。已释放和已捕获状态继续由幂等账本保护，不因重复查询或迟到结果重扣。历史已结算费用不批量重算或自动退款。
+- **异步图片**：转存和账务采用有界重试；已捕获资金后仍写不下完成结果时，继续重试结果入库并记录 `image_task.delivered_result_persist_failed_after_capture`。数据库/Redis 持续不可写或进程中断仍可能需要按任务 ID、桶对象与账务人工核对，不能把有限重试视为保证恢复。旧 `completed` 且缺少结算证据的待处理预留可由管理员核定，自动流程不按完成标记猜测扣费或无条件退款。
+- **图片存储**：后台可选择 S3/R2 或本地目录，沿用配置保存期和清理队列；本地签名链接要求稳定密钥、正确公共地址和共享挂载。容量按实际占用与覆盖增量检查，进程间锁带持有者令牌和心跳；输出图片执行尺寸与完整解码校验。改用本地目录时，所有实例必须访问同一目录，切换存储后也须保留旧对象到期清理所需路径。
+- **图片安全调度**：公开 Images、可确认图片意图的入口及创作台使用账号模型冷却和安全换号；明确未生成才允许重试，未知受理不重发。全请求最多两个账号、共享首次截止；已有预占的跨分组重报价仍被禁止，不能将其理解为任意故障都会自动换组成功。
+- **管理员与跨域**：API 文档支持逐篇 Markdown 改写、预览及并发冲突检查；协议模板并发启用与预置删除标记使用数据库协调。网关默认允许无凭据跨域，管理和用户接口仍执行来源白名单；严格部署可关闭 `cors.gateway_allow_all_origins`。
+
+上线后核对迁移 321/322、账号协议迁移日志、模板绑定、参考图/视频内容接口、任务终态与账本收敛，并抽查部分交付、重复查询和失败释放。真实模型调用会产生上游费用，应由部署方按模型配置安排验证。发布包和镜像上传不代表生产服务器已更新，也不代表所有供应商或故障场景都已验收。
+
+回退前停止新任务并核对在途、待结算和待释放记录。旧程序不认识 `video_model_protocols` 与模板任务版本，须恢复原账号配置或重新配置，并先处理模板在途任务；保留新表、字段、索引、原任务与账务回执。程序回退不会撤销已经发生的生成、扣费或释放，不能用旧数据库覆盖升级后的资金事实。
+
+<a id="video_unified_upgrade"></a>
+### v3.33 Video 统一入口与协议模板升级
+
+本版重构独立 Video 平台，细节见[统一入口 /v1/videos](../interfaces/video_upstream.md#video_unified_api)、[模型协议绑定](../interfaces/video_upstream.md#video_accounts)、[声明式协议模板](../interfaces/video_upstream.md#video_protocol_profiles)与[未交付即释放](../domains/video_tasks.md#video_task_delivery_release)：
+
+- **对外接口收敛**：Video 分组只保留 `POST /v1/videos`、`GET /v1/videos/{task_id}`、`GET /v1/videos/{task_id}/content`；旧 `/v1/video/generations*`、`/v1/tasks/{id}` 与 Seedance、Kling、Wan、MiniMax、Vidu 原生入口对 Video 分组返回 `410 VIDEO_ENDPOINT_RETIRED`，取消接口一并下线。**这会中断仍调用旧路径的客户端**，发布前通知其改用统一请求格式。OpenAI 分组的 Seedance 能力与 Grok 分组的 `/v1/videos*` 不变。
+- **账号配置自动迁移**：启动时 `BackfillVideoAccountProtocols` 把旧端点配置换算为 `video_model_protocols` 并删除旧字段，换算规则见模型协议绑定；无法换算的账号保留原样并在日志 `video account protocol migration skipped` 中列出，运行时仍即时换算。原先依赖“不同入口选不同端点”的模型迁移后只保留一个协议，需按日志与账号复核。
+- **新增迁移** `322_video_protocol_profiles.sql`：建立声明式协议模板表与“每个键名一个启用版本”的部分唯一索引；任务只冻结模板快照，不引用该表。
+- **厂商格式改为预置模板**：内置协议只保留官方格式；Metaso H3、Yezonghui、可美（按端点与操作共 11 个）和通用扁平格式（原 `legacy_v1`）改为[预置模板](../interfaces/video_upstream.md#video_protocol_presets)。启动时 `EnsureVideoProtocolPresets` 为缺失的键名创建并启用第 1 版（日志 `video protocol presets created`），已存在的键名不覆盖；随后启动迁移把 `*.kemei_v1`、`openai_videos.metaso_h3_v1`、`openai_videos.yezonghui_v1`、`*.legacy_v1` 绑定改绑到对应模板或官方协议。原样协议的旧版 Kling 路径（`/omni-video/{model}`、`/v1/videos/*`）没有等价模板，保持原样仍可运行，但会出现在 `video account protocol migration skipped` 日志中，需管理员手动改绑。已受理的版本一/二任务继续按旧方案查询与结算。升级后核对预置模板及已迁移绑定；已有模板的版本、停用状态和持久删除标记应保留，仅启用业务确需的模板，并抽查对应账号的管理员测试。
+- **模板编辑与 AI 生成**：模板页面新增“编辑”（保存为同键名新版本）与“AI 生成模板”；系统设置新增“视频协议 AI”标签保存模型配置（设置键 `video_profile_ai_config`，无需迁移）。管理员账号测试对声明内容路径的模板（如 `metaso-h3`）在缺直链时改用内容端点下载预览。
+- **资金规则补充**：完成但计价维度不可信的任务到最长处理时间仍未恢复时失败释放；成品地址在结算前不再出现在查询响应与媒体任务预览中。
+- **网关跨域**：新增 `cors.gateway_allow_all_origins`（默认 `true`），`/v1`、`/v1beta` 等网关接口对任意来源放行跨域且不携带凭据；需要维持旧行为时在配置中设为 `false`。管理与用户接口仍只按 `cors.allowed_origins` 放行。
+- **API 文档与协议模板**：文档页改为 Markdown 渲染，可在“系统设置 → API 文档”逐篇改写（设置键 `api_doc_overrides`）；协议模板支持删除（设置键 `video_protocol_presets_deleted` 记录已删除的预置模板），菜单更名为“协议模板”。均无需迁移。
+- **资金规则**：上游过期、超过 `gateway.video_max_processing_minutes`（默认 180 分钟）仍未完成、完成却没有可取回成品、或受理不明超过核对期仍无任务 ID 的任务失败并释放预扣，不再停留待对账。升级前遗留的这类待核对任务会在首次巡检时批量释放，属预期行为。
+- 画布视频改为提交统一请求，画布模型设置中的 `video_endpoint` 只用于目录归类，绑定模板协议的模型归入 `unified`。
+
+升级前备份数据库。回退旧程序时：旧程序不认识 `video_model_protocols`，已迁移的账号会因缺少 `video_endpoints` 不可用，需要从备份恢复账号凭据或手动重配；版本三（模板协议）在途任务旧程序无法查询，应先让其结束或停用对应模板；已按新规则释放的账本不会被回退。
+
+<a id="creative_delivery_billing_upgrade"></a>
+### v3.33 创作台交付与结算升级
+
+本版改变创作台图片与画布语音的资金契约，规则见[结果未知即释放](../domains/creative_studio.md#creative_unconfirmed_release)和[只为已交付的成品扣费](../domains/creative_studio.md#creative_delivery_billing)：
+
+- 结果未知、上游无图、下载失败等不可用结果立即失败释放；执行栅栏只在原执行时限加 2 分钟宽限期内等待原执行者落库。升级前遗留的 `PROVIDER_RESULT_UNCONFIRMED` 任务早已超过时限，**新版首次巡检即失败并释放预占**，属于预期的批量解冻。
+- 上游成功但成品一张都未交付（Redis 与画布素材都没有副本、画布归档永久失败）不再扣费，整笔释放并以 `result_lost` 结束；执行期间进入 `cancelled` 的任务同样只释放。已结算的历史任务不重算、不退款。
+- 停机先排空在途任务，最长 `creative.shutdown_drain_seconds`（默认 120 秒）。仓库 compose 为应用容器设置 `stop_grace_period: 150s`；自定义编排须把终止宽限期设为大于该值，否则在途生成会被强制中断并按结果未知释放。
+- 新增 `321_creative_run_queue_recovery_index_notx.sql`，以 `CONCURRENTLY` 建立非终态任务部分索引，供数据库兜底扫描使用；不改表结构、历史资金或任务数据。
+
+升级前备份数据库。上线后可按错误码 `CREATIVE_RESULT_UNAVAILABLE`、`OUTPUT_UNDELIVERED` 统计释放量，并核对日志 `creative.worker_orphan_runs_requeued` 确认是否存在曾脱离 Redis 队列的任务。回退旧程序会恢复“结果未知保持冻结”的旧行为，但已释放或已结算的账本不会被回退；索引可保留。
 
 <a id="v3_32_upgrade"></a>
 ### v3.32 创作台 URL 图片结果兼容升级

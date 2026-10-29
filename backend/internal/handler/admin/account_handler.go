@@ -71,6 +71,20 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	ollamaCloudUsage        *service.OllamaCloudUsageService
 	advancedSchedulerScores *service.AdvancedSchedulerScoreDiagnosticService
+	imageModelCooldowns     imageModelCooldownManager
+}
+
+// imageModelCooldownManager 是管理端查看/解除生图模型冷却所需的最小能力。
+type imageModelCooldownManager interface {
+	ListImageModelCooldowns(ctx context.Context, accountID int64) ([]service.ImageModelCooldownEntry, error)
+	ClearImageModelCooldown(ctx context.Context, accountID int64, model, operation string) error
+}
+
+// SetImageModelCooldownManager 注入生图模型冷却管理能力。
+func (h *AccountHandler) SetImageModelCooldownManager(manager imageModelCooldownManager) {
+	if h != nil {
+		h.imageModelCooldowns = manager
+	}
 }
 
 // SetOllamaCloudUsageService 注入 Ollama Cloud 用量服务。
@@ -2608,6 +2622,53 @@ func (h *AccountHandler) ClearTempUnschedulable(c *gin.Context) {
 	response.Success(c, gin.H{"message": "Temp unschedulable cleared successfully"})
 }
 
+// GetImageModelCooldowns 列出账号下正在生效的生图模型冷却
+// GET /api/v1/admin/accounts/:id/image-model-cooldowns
+func (h *AccountHandler) GetImageModelCooldowns(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if h.imageModelCooldowns == nil {
+		response.ErrorFrom(c, service.ErrImageModelCooldownAdminUnavailable)
+		return
+	}
+	entries, err := h.imageModelCooldowns.ListImageModelCooldowns(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"items": entries})
+}
+
+// ClearImageModelCooldown 手动解除某个生图模型冷却并清零连续失败计数
+// DELETE /api/v1/admin/accounts/:id/image-model-cooldowns
+func (h *AccountHandler) ClearImageModelCooldown(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	var req struct {
+		Model     string `json:"model" binding:"required"`
+		Operation string `json:"operation" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if h.imageModelCooldowns == nil {
+		response.ErrorFrom(c, service.ErrImageModelCooldownAdminUnavailable)
+		return
+	}
+	if err := h.imageModelCooldowns.ClearImageModelCooldown(c.Request.Context(), accountID, req.Model, req.Operation); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"message": "Image model cooldown cleared"})
+}
+
 // GetTodayStats handles getting account today statistics
 // GET /api/v1/admin/accounts/:id/today-stats
 func (h *AccountHandler) GetTodayStats(c *gin.Context) {
@@ -2935,26 +2996,25 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
-	// 视频目录仅来自账号配置；空配置不能回落到聊天默认模型或默认开放兼容端点。
+	// 视频目录仅来自账号配置；每个模型只展示其绑定的协议，测试与正式网关使用同一转换。
 	if account.Platform == service.PlatformVideo {
 		type videoTestModel struct {
-			ID                    string                           `json:"id"`
-			Object                string                           `json:"object"`
-			Type                  string                           `json:"type"`
-			DisplayName           string                           `json:"display_name"`
-			VideoEndpoints        []service.VideoEndpoint          `json:"video_endpoints"`
-			VideoProtocolAdapters map[service.VideoEndpoint]string `json:"video_protocol_adapters"`
-			VideoViduOperation    string                           `json:"video_vidu_operation,omitempty"`
+			ID            string `json:"id"`
+			Object        string `json:"object"`
+			Type          string `json:"type"`
+			DisplayName   string `json:"display_name"`
+			VideoProtocol string `json:"video_protocol"`
 		}
 		models := make([]videoTestModel, 0)
 		for _, model := range account.GetConfiguredRequestModels() {
 			if strings.ContainsAny(model, "*?") {
 				continue
 			}
-			models = append(models, videoTestModel{ID: model, Object: "model", Type: "model", DisplayName: model,
-				VideoEndpoints:        service.VideoAccountTestEndpoints(account, model),
-				VideoProtocolAdapters: service.VideoAccountTestAdapters(account, model),
-				VideoViduOperation:    service.VideoAccountTestViduOperation(account, model)})
+			protocol := service.VideoAccountTestProtocol(account, model)
+			if protocol == "" {
+				continue
+			}
+			models = append(models, videoTestModel{ID: model, Object: "model", Type: "model", DisplayName: model, VideoProtocol: protocol})
 		}
 		response.Success(c, models)
 		return

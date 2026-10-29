@@ -6,7 +6,12 @@
 
 前端 `/docs` 提供公开的 AI 网关文档，`/docs/:documentId` 是可分享、可恢复的稳定正文地址；后台模式仍沿用现有公开页面守卫，不绕过站点访问策略。登录用户使用 AppLayout，访客使用同主题的公开页面；首页、模型广场和用户/管理员个人导航均有入口，原有外部 `doc_url` 配置继续保留。
 
-结构化目录位于 `frontend/src/content/api-docs/`，按文本/模型、图片/语音、视频划分协议内容，共用 `types.ts` 和页面渲染组件。目录检索覆盖路径、别名、参数和平台，并按十二个具体上游平台筛选；同一 URL 可以有不同能力的使用指南，平台标签不替代账号能力和分组协议门禁。代码示例使用站内公开 API Base URL 或当前源站地址与占位环境变量，不读取用户 Key，也不在浏览器执行示例请求。JSON 和响应均以文本插值渲染，复制 MD 与界面读取同一份结构化内容。
+结构化目录位于 `frontend/src/content/api-docs/`，按文本/模型、图片/语音、视频划分协议内容，共用 `types.ts` 和页面渲染组件。目录检索覆盖路径、别名、参数和平台，并按十二个具体上游平台筛选；同一 URL 可以有不同能力的使用指南，平台标签不替代账号能力和分组协议门禁。代码示例使用站内公开 API Base URL 或当前源站地址与占位环境变量，不读取用户 Key，也不在浏览器执行示例请求。复制 MD 与页面渲染读取同一份 Markdown。
+
+<a id="api_docs_markdown"></a>
+### Markdown 正文与后台改写
+
+每篇文档（快速开始、认证、接口总览、错误处理与各接口）都以 Markdown 渲染（`ApiDocMarkdown.vue`，marked 解析后经 DOMPurify 净化，站内 `/…` 链接走前端路由，二级标题生成右侧大纲）。默认正文由 `content/api-docs/markdown.ts` 从结构化目录生成，内置内容更新后自动生效。管理员在“系统设置 → API 文档”逐篇改写并实时预览：改写保存在设置键 `api_doc_overrides`（文档 ID → Markdown，单篇 20 万字、合计 2 MB、最多 500 篇），由公开接口 `GET /api/v1/settings/api-docs` 读取。编辑页通过 `PATCH /api/v1/admin/settings/api-docs` 只提交当前文档（`documents: {id: {markdown, base}}`），服务端在设置事务锁内与已保存集合合并：不同管理员改不同文档互不覆盖；同一文档若与编辑起点 `base` 不符返回 409 `API_DOC_CONFLICT`，编辑页保留草稿并刷新最新版本，确认后再次保存才覆盖。保存期间继续输入的内容不会被响应后的重新载入覆盖。`PUT` 整体替换仍保留供兼容；正文为空或与内置版本一致视为未改写，“恢复默认”删除改写。改写正文中的 `{{BASE_URL}}` 替换为当前网关地址。接口总览未改写时随目录搜索与平台筛选生成表格。读取改写失败时页面回退到内置文档。
 
 维护路由或协议时同时核对这里的工程参考与对应前端内容，包括 HTTP 方法、任务归属、别名、请求头、参数、响应与错误条件。不能把已注册的通配路径当作任意上游能力，也不能把厂商文档中的未注册接口加入可用清单；原生视频按各协议保真，统一入口不代表自动转换所有厂商参数。
 
@@ -93,10 +98,8 @@ Gemini 错误遵循 Google 格式：
 | `GET` | `/v1/images/tasks/{task_id}` 及无前缀别名 | 使用原 Key 查询异步图片结果 |
 | `POST/GET/DELETE` | `/v1/images/batches...` | Gemini / Vertex 批量图片任务 |
 | `POST/GET` | `/v1/videos...` 及无前缀别名 | Grok 视频创建、编辑、扩展、查询和内容下载 |
-| `POST/GET` | `/v1/videos`、`/v1/videos/{video_id}`、`/v1/videos/{video_id}/content` 及无前缀别名 | Video 分组创建 JSON 异步任务、查询和下载；与 Grok 同名端点按平台分流，见[OpenAI 视频入口](video_upstream.md#video_openai_content) |
-| `POST/GET/DELETE` | `/v1/video/generations`、`/video/generations` 及任务 ID 子路径；`GET/DELETE /v1/tasks/{task_id}` | 独立 Video 统一 URL，请求体使用已绑定上游的原生格式，见[协议与原生路径](video_upstream.md#video_protocols) |
-| `POST/GET` | Kling 模型路径及 `/tasks`、Wan `/api/v1/services/aigc/video-generation/video-synthesis` 与 `/api/v1/tasks/{id}`、MiniMax `/v2/video_generation` 与查询路径 | 独立 Video 原生协议；Kling 明确的 `/v1/videos/text2video`、`/v1/videos/omni-video` 不进入 Grok |
-| `POST` / `GET` | `POST /ent/v2/img2video`、`/ent/v2/reference2video`、`/ent/v2/text2video`、`/ent/v2/start-end2video`；`GET /ent/v2/tasks/{task_id}/creations` | Vidu 原生操作与产物查询，不提供取消；具体图片数量、任务身份和可美适配边界见[独立 Video 上游](video_upstream.md#video_adapters) |
+| `POST/GET` | `/v1/videos`、`/v1/videos/{video_id}`、`/v1/videos/{video_id}/content` 及无前缀别名 | Video 分组唯一视频入口：统一请求格式创建、查询和下载，见 [Video 平台统一视频任务](#video-平台统一视频任务) |
+| — | `/v1/video/generations`、`/video/generations`、`/v1/tasks/{task_id}` 及各家原生视频路径 | Video 分组已下线，返回 `410 VIDEO_ENDPOINT_RETIRED`；请改用 [Video 平台统一视频任务](#video-平台统一视频任务) |
 | `POST/GET/PATCH/DELETE` | `/v1/tts`、`/v1/stt`、`/v1/custom-voices...` | Grok Voice |
 | `POST` | `/v1/systemone`、无前缀 `/systemone` | OpenCode Zen Jev System One |
 | `POST` | `/v1/alpha/search`、无前缀 `/alpha/search`、`/backend-api/codex/alpha/search` | OpenAI/Codex 搜索兼容入口 |
@@ -397,18 +400,19 @@ HTTP 200 只表示查到了任务，不能据此认定生成成功。客户端�
 
 该方式让长耗时生成在后台执行，客户端通过短请求取结果；客户端需要实现提交、轮询与保存返回链接。详细权限、结果存储和计费边界见[异步图片与任务记录](../domains/media_tasks.md)。
 
-### Video 平台 OpenAI 兼容视频任务
+### Video 平台统一视频任务
 
-使用绑定 Video 分组的站内 API Key。账号勾选 **OpenAI Videos (/v1/videos)** 时请求上游同路径；**OpenAI Videos (/v1/video/generations)** 对应原有兼容路径。请求参数遵循实际上游，下面为标准 OpenAI Videos JSON 字段，模型及精确尺寸价档或兜底价需要预先配置。
+使用绑定 Video 分组的站内 API Key。无论上游是 Seedance、Kling、Wan、MiniMax、Vidu 还是中转服务，客户端都只用一种请求格式；站内按账号为该模型绑定的协议转换请求、查询任务并取回成品。模型及分辨率价档或兜底价需要预先配置。
 
 ```bash
 curl https://api.example.com/v1/videos \
   -H "Authorization: Bearer $TOKENROUTER_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"video-model","prompt":"A city at sunset","seconds":8,"size":"1280x720"}'
+  -H "Idempotency-Key: my-request-001" \
+  -d '{"model":"video-model","prompt":"A city at sunset","duration":5,"resolution":"720p","aspect_ratio":"16:9","images":[{"url":"https://media.example.com/first-frame.jpg","role":"first_frame"}]}'
 ```
 
-单张参考图使用 `input_reference: {"image_url":"https://media.example.com/first-frame.jpg"}`；上游支持时也可填写图片 Data URL。管理员显式选择账号的“秘塔 H3”适配后，才会把旧 `duration/resolution/ratio/images` 转为规范字段，并把 `1280x720`/`720x1280` 映射到 `768p` 价档、`1792x1024`/`1024x1792` 映射到 `2k`；默认透传不根据域名或模型名推断。冲突参数及 H3 多图请求在预扣前拒绝。旧 `/v1/video/generations` 和其他原生协议继续使用自身的参数约定。
+字段：`model`（必填）、`prompt`、`negative_prompt`、`duration`（秒）、`resolution`、`aspect_ratio`、`images`（URL 或 `{url, role}`，角色 `first_frame`/`last_frame`/`reference_image`）、`videos`（`{url, role: "reference_video"}`）、`generate_audio`、`watermark`、`seed`，以及放置厂商特有参数的 `extra` 对象。兼容 OpenAI 写法 `seconds`、`size`、`input_reference: {"image_url": ...}`，以及比例别名 `ratio`。未知顶层字段、冲突的别名、所绑定协议无法表达的参数（例如对不支持的模型提交参考视频或尾帧）都会在预扣前返回 400，不会被静默丢弃。旧 `/v1/video/generations` 与各家原生路径已下线，返回 `410`。
 
 任务返回本站 `vid_` 开头的 ID，成功受理响应包含 `object: "video"`、`model`、`created_at`、`status` 和 `billing_status`。已知时输出 `seconds/size` 并保留 `duration/resolution` 兼容字段；按秒结算读取可信终态秒数。用原 Key 查询或下载：
 
@@ -421,23 +425,25 @@ Authorization: Bearer <tokenrouter_api_key>
 Range: bytes=0-1048575
 ```
 
-`Range` 可省略。状态为 `queued`、`in_progress`、`completed`、`failed`；失败附带 `error`。`completed` 只表示上游生成完成，`billing_status: "settled"` 才表示结算成功。受理不明或过期等待核对时额外返回 `task_status`，不要自动重新提交。内容接口仅允许已完成且已结算任务，其他状态返回 `409`；不存在或不属于当前用户/Key 返回 `404`。查询与下载复用原任务，不再次生成。此新入口不提供 `DELETE`、集合列表或 multipart。
+`Range` 可省略。状态为 `queued`、`in_progress`、`completed`、`failed`；失败附带 `error`。`completed` 只表示上游生成完成，`billing_status: "settled"` 才表示结算成功。受理不明等待核对时额外返回 `task_status`，不要自动重新提交；上游过期、长时间未完成或没有可取回成品的任务会失败并释放预扣，不会扣费。内容接口仅允许已完成且已结算任务，其他状态返回 `409`；不存在或不属于当前用户/Key 返回 `404`。查询与下载复用原任务，不再次生成。统一入口不提供 `DELETE`（取消）、集合列表或 multipart。
 
 ### 视频模型与接入方案调用细节
 
-选择模型前先确认账号允许的端点、协议方案与当前 Key 的模型目录。示例中的上游型号可以经站内模型映射提供给用户，但限制由映射后的实际型号决定；API 的 `model` 应填写当前 Key 可见的名称。创作台 1–60 秒及自定义分辨率是界面可编辑范围，不能据此承诺所有供应商型号支持这些参数。模型的使用说明也不替代接口参数与价格校验。
+所有 Video 分组模型都通过 `POST /v1/videos` 提交统一请求，站内按账号对该模型绑定的协议转换。选择模型前先确认当前 Key 的模型目录；示例中的上游型号可以经站内模型映射提供给用户，但限制由映射后的实际型号与其绑定协议决定。创作台 1–60 秒及自定义分辨率是界面可编辑范围，不能据此承诺所有供应商型号支持这些参数。模型的使用说明也不替代接口参数与价格校验。
 
-| 模型或方案 | 实际创建入口与字段 | 参考图和参数注意事项 |
+| 绑定协议 | 统一请求如何转换 | 参考图和参数注意事项 |
 | --- | --- | --- |
-| 可美 Seedance 2.5，含 `doubao-seedance-2-5-260628` | `/v1/video/generations`；扁平 `prompt`、`images`、`duration`、`resolution`、`ratio` | 文生与普通参考图可指定比例；首帧/首尾帧必须 `adaptive`。2.5 为 480p/720p/1080p、4–30 整数秒或 -1；仅说明可美合同，不推广到其他适配 |
-| Seedance 官方原生 | `/api/v3/contents/generations/tasks`；`content` | 首帧和参考图角色显式区分。官方 2.5 首尾帧比例只能省略或 adaptive；不能混用顶层 prompt/images 与 content |
-| MiniMax H3 V2 / 可美原生 | `/v2/video_generation`；`content`、`duration`、`resolution` | MiniMax V2 必填 resolution；可美文生要明确 ratio，图生不强加默认 16:9。型号变体的时长/档位仍由实际模型决定 |
-| 秘塔 H3 | `/v1/videos`；`seconds`、像素 `size`、单张 `input_reference.image_url` | 1280x720/720x1280 对应 768p；1792x1024/1024x1792 对应 2k。不能按图片短边或数学比例猜测档位 |
-| Yezonghui | `/v1/videos`；`seconds`、`resolution`、比例 `size`、`image_urls` | size 是 16:9 等比例，自动时省略；参考媒体只用 HTTP(S) 公共链接，不接受 Data URL；不能照搬 OpenAI 像素 size |
-| Kling 现代模型路径 | `/text-to-video/{model}`、`/image-to-video/{model}`、`/omni-video/{model}`；`settings` 和操作所需的 `contents` | 图生为 first_frame/last_frame；可美 Omni 为 refer_image、feature_video、base_video。可美 audio 是 off/native/original；参考视频和编辑模式有独立约束，旧 `/v1/videos/*` 仅按旧合同调用 |
-| Wan | `/api/v1/services/aigc/video-generation/video-synthesis`；`input`、`parameters` | 单图用模型支持的 input.img_url；可美多参考用 input.media。不能混用多套素材字段；分辨率和时长位于 parameters，request_id 不是任务 ID |
-| Vidu | `/ent/v2/{img2video,reference2video,text2video,start-end2video}`；`images` | 单图、参考、无图、首尾帧对应不同操作；可美默认 5 秒/540p/16:9 及 Q4 限制不套用到官方或旧透传方案 |
-| Grok / xAI | `/v1/videos/generations`；`duration`、`resolution`、`aspect_ratio`、`image.url` | 不使用 Seedance role/content 格式；本站创作台采用 1–15 秒和 480p/720p/1080p，API 扩展参数仍依实际模型和可准确计价范围 |
+| 可美预置模板（`profile:kemei-*`），含 Seedance 2.5 `doubao-seedance-2-5-260628` | `prompt`、`images`（保留 `role`）、`duration`、`resolution`、`aspect_ratio`→`ratio` 按可美各端点模板转换 | 文生与普通参考图可指定比例；首帧/首尾帧必须 `adaptive`。2.5 为 480p/720p/1080p、4–30 整数秒或 -1；仅说明可美合同，不推广到其他适配 |
+| Seedance 官方（`seedance.seedance_v1`） | `prompt` 与 `images`/`videos` 转为 `content`，角色保留 | 首帧和参考图角色显式区分。官方 2.5 首尾帧比例只能省略或 adaptive |
+| MiniMax H3 V2（`minimax.minimax_v2`） | 同上转为 `content`；`duration`、`resolution` 保留 | MiniMax V2 必填 resolution；不支持参考视频 |
+| 秘塔 H3（`profile:metaso-h3`） | `duration`→`seconds`，`resolution`+`aspect_ratio`→像素 `size`，单图→`input_reference.image_url` | 1280x720/720x1280 对应 768p；1792x1024/1024x1792 对应 2k。不能按图片短边或数学比例猜测档位 |
+| Yezonghui（`profile:yezonghui`） | `duration`→`seconds`，`aspect_ratio`→比例 `size`，图片→`image_urls` | 参考媒体只用 HTTP(S) 公共链接，不接受 Data URL；不能照搬 OpenAI 像素 size |
+| Kling（`kling.kling_v1`、`profile:kemei-kling-*`） | 操作路径来自绑定：文生/图生/Omni；官方方案的 `images` 与比例写入 `settings` | 文生路径不接受参考图、图生路径要求参考图；Omni 只有可美模板，参考图与参考视频改名为原生角色，至多一个参考视频 |
+| Wan（`wan.*`） | `prompt`/`negative_prompt`/首帧→`input`，时长、分辨率、比例→`parameters` | 只接受一张首帧图；不支持参考视频 |
+| Vidu（`vidu.*`） | 操作路径来自绑定（img2video、reference2video、text2video、start-end2video） | 单图、参考、无图、首尾帧对应不同绑定路径；可美模板默认 5 秒/540p/16:9 及 Q4 限制不套用到官方方案 |
+| 声明式模板（`profile:*`） | 按管理员配置的映射规则生成请求体 | 模板未映射的字段一律拒绝；参数范围以模板声明的能力为准 |
+
+Grok 分组的视频不属于 Video 平台，继续使用 `/v1/videos/generations` 的 xAI 合同（`duration`、`resolution`、`aspect_ratio`、`image.url`），见 [Grok / xAI 上游](grok_upstream.md)。
 
 可美当前[统一视频文档](https://token.xinhankr.com/docs/openai/doc0019)区分图片角色。单个字符串图片通常推断为首帧，两张推断为首尾帧；需要普通参考语义时应显式提供 `reference_image`，不能靠提示词中的“参考图”代替角色。首尾帧示例：
 
@@ -455,7 +461,7 @@ Range: bytes=0-1048575
 }
 ```
 
-只有首帧时移除 last_frame 项，仍保留 adaptive。需要 16:9 输出时先把首帧裁剪为 16:9；普通参考生则使用 `images: [{"url":"https://media.example.com/character.png","role":"reference_image"}]`、模型支持的固定比例及 `omni_reference_task_type: "auto"`。视频编辑 edit 与延长 extend 不是首帧模式：可美 2.5 两者都要求 adaptive，edit 还要求 duration=-1。媒体 URL、素材数量及内容限制依具体模型和本站安全门禁；不要混入另一套原生 content。
+只有首帧时移除 last_frame 项，仍保留 adaptive。需要 16:9 输出时先把首帧裁剪为 16:9；普通参考生则使用 `images: [{"url":"https://media.example.com/character.png","role":"reference_image"}]`、模型支持的固定比例及 `extra: {"omni_reference_task_type": "auto"}`。视频编辑 edit 与延长 extend 不是首帧模式：可美 2.5 两者都要求 adaptive，edit 还要求 duration=-1。媒体 URL、素材数量及内容限制依具体模型和本站安全门禁；不要混入另一套原生 content。
 
 `/docs/kemei-seedance25-text`、`/docs/kemei-seedance25-frames`、`/docs/kemei-seedance25-reference` 分别提供可复制的完整请求；`/docs/video-metaso-h3`、`/docs/video-yezonghui-create` 分开说明同一 `/v1/videos` 路径下的尺寸与参考图合同。既有 Kling、Wan、MiniMax、Vidu、Grok 文档补充各自结构和查询边界。新增说明描述调用者应遵守的合同，不改变网关参数适配或生成行为。
 

@@ -60,6 +60,16 @@ func ValidVideoProtocolAdapter(endpoint VideoEndpoint, id string) bool {
 
 // VideoTargetProtocolAdapter 只解释创建时的快照；版本一任务始终沿用原协议。
 func VideoTargetProtocolAdapter(target VideoUpstreamTarget) (string, error) {
+	if target.Version == videoTargetVersionProfile {
+		// 模板协议以快照哈希为准，端点枚举不参与；快照缺失或被篡改时整体拒绝。
+		if _, err := videoProfileSpecFromTarget(target); err != nil {
+			return "", err
+		}
+		if _, _, ok := ParseVideoProfileReference(target.ProtocolAdapter); !ok {
+			return "", videoProtocolError("Unknown frozen video profile")
+		}
+		return target.ProtocolAdapter, nil
+	}
 	if !validVideoEndpoint(target.Endpoint) {
 		return "", videoProtocolError("Unknown video endpoint")
 	}
@@ -85,6 +95,20 @@ func VideoTargetProtocolAdapter(target VideoUpstreamTarget) (string, error) {
 
 // ValidateVideoProtocolTarget 新版本只接受内置路径，旧版本不新增路径限制。
 func ValidateVideoProtocolTarget(target VideoUpstreamTarget) error {
+	if target.Version == videoTargetVersionProfile {
+		spec, specErr := videoProfileSpecFromTarget(target)
+		if specErr != nil {
+			return specErr
+		}
+		if target.Model == "" || strings.TrimSpace(target.Model) != target.Model {
+			return videoProtocolError("Invalid frozen video model")
+		}
+		createPath, pathErr := renderVideoProfilePath(spec.Create.Path, target, "", false)
+		if pathErr != nil || createPath != target.CreatePath {
+			return videoProtocolError("Invalid frozen video creation path")
+		}
+		return nil
+	}
 	id, err := VideoTargetProtocolAdapter(target)
 	if err != nil || target.Version == 1 {
 		return err
@@ -128,6 +152,9 @@ func ValidateVideoProtocolTarget(target VideoUpstreamTarget) error {
 
 // VideoProtocolTaskPath 将查询路径绑定到冻结版本，不读取后来修改的账号配置。
 func VideoProtocolTaskPath(target VideoUpstreamTarget, taskID string) (string, error) {
+	if target.Version == videoTargetVersionProfile {
+		return videoProfileTaskPath(target, taskID)
+	}
 	if err := ValidateVideoProtocolTarget(target); err != nil {
 		return "", err
 	}
@@ -142,6 +169,19 @@ func videoProtocolError(message string) error {
 // @project-doc docs/interfaces/video_upstream.md#video_adapters
 func PrepareVideoProtocolRequest(body []byte, modelPath string, target VideoUpstreamTarget) ([]byte, VideoRequestMetadata, error) {
 	var metadata VideoRequestMetadata
+	if target.Version == videoTargetVersionProfile {
+		// 模板协议的发送前正文就是规范请求，由引擎按快照生成上游请求体并提取计价维度。
+		spec, specErr := videoProfileSpecFromTarget(target)
+		if specErr != nil {
+			return nil, metadata, specErr
+		}
+		canonical, parseErr := ParseVideoCanonicalRequest(body)
+		if parseErr != nil {
+			return nil, metadata, parseErr
+		}
+		canonical.Model = target.Model
+		return buildVideoProfileCreateBody(spec, canonical, false)
+	}
 	if err := ValidateVideoProtocolTarget(target); err != nil {
 		return nil, metadata, err
 	}

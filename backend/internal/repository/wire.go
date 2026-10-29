@@ -95,6 +95,7 @@ var ProviderSet = wire.NewSet(
 	NewUsageBillingRepository,
 	NewMediaTaskRepository,
 	NewVideoTaskRepository,
+	NewVideoProtocolProfileRepository,
 	NewLegacyVideoTaskRepository,
 	NewMediaTaskPreviewCache,
 	NewVideoReferenceCache,
@@ -243,9 +244,17 @@ func ProvideRedis(cfg *config.Config) *redis.Client {
 	return InitRedis(cfg)
 }
 
-// ProvideImageStorageFactory 按管理员配置创建图片对象存储客户端。
-func ProvideImageStorageFactory() service.ImageStorageFactory {
+// ProvideImageStorageFactory 按管理员配置创建图片存储客户端：S3 兼容对象存储或本机目录。
+// 本地存储用部署的 jwt.secret 派生下载链接签名密钥，未配置 public_base_url 时用 server.frontend_url 生成链接。
+func ProvideImageStorageFactory(appConfig *config.Config) service.ImageStorageFactory {
+	var signingSeed, fallbackBaseURL string
+	if appConfig != nil {
+		signingSeed, fallbackBaseURL = appConfig.JWT.Secret, appConfig.Server.FrontendURL
+	}
 	return func(ctx context.Context, cfg *config.ImageStorageConfig) (service.ImageStorage, error) {
+		if cfg.IsLocal() {
+			return NewLocalImageStorage(cfg, signingSeed, fallbackBaseURL)
+		}
 		return NewS3ImageStorage(ctx, cfg)
 	}
 }

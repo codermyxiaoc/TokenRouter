@@ -23,6 +23,11 @@ func RegisterUserRoutes(
 		v1.GET("/video-references/:ticket", panelRateLimiter.PublicIP(), h.VideoReference.Content)
 		v1.HEAD("/video-references/:ticket", panelRateLimiter.PublicIP(), h.VideoReference.Content)
 	}
+	// 本地存储的异步生图结果只能凭签名链接下载，签名包含对象键和到期时间。
+	if h.AsyncImage != nil {
+		v1.GET("/image-files/*key", panelRateLimiter.PublicIP(), h.AsyncImage.File)
+		v1.HEAD("/image-files/*key", panelRateLimiter.PublicIP(), h.AsyncImage.File)
+	}
 	// 原生 iframe 使用短期单作品票据；内容服务自行复核权限和隔离策略。
 	if h.IntelligenceTests != nil {
 		v1.GET("/intelligence-tests/preview-content/:ticket", panelRateLimiter.PublicIP(), h.IntelligenceTests.PreviewContent)

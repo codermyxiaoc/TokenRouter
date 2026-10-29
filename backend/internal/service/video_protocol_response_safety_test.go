@@ -116,7 +116,8 @@ func TestVideoOfficialKlingOutputRecoveryPreservesPricingGuard(t *testing.T) {
 			} else {
 				poll(`{"data":{"id":"upstream-task","status":"completed","outputs":[]}}`)
 			}
-			require.Equal(t, "reconciliation", task.BillingStatus)
+			// 产物暂缺时不可交付：既不能结算，也不能按缺失维度扣费，只能等待补齐或核对。
+			require.Contains(t, []string{"reconciliation", "reserved"}, task.BillingStatus)
 			require.Zero(t, billing.captures)
 			poll(`{"data":{"id":"upstream-task","status":"completed","outputs":[{"type":"video","duration":"4.5","url":"https://cdn.example/video.mp4"}]}}`)
 			if conflict != "none" {

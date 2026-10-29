@@ -41,14 +41,14 @@ func creativeCanvasImageExecutionTimeout(public *CreativePublicService) time.Dur
 	return defaultCreativeExecuteTimeout
 }
 
-// 栅栏后的同步响应无法查询远端任务；明确提示人工核对，不能伪装成仍在自动生成。
+// 栅栏后的同步响应无法查询远端任务；明确提示等待时限与自动释放，不能伪装成仍在自动生成。
 // 任务编号来自已验证归属的记录，仅展示安全身份，不回显供应商响应或素材地址。
 func creativeImageUnconfirmedMessage(run *CreativeRun, now time.Time, timeout time.Duration) string {
 	reason := "图片请求已中断或返回结果无法确认"
 	if run.ImageExecutionDeadlineAt != nil && !now.Before(*run.ImageExecutionDeadlineAt) || run.ImageExecutionDeadlineAt == nil && run.StartedAt != nil && timeout > 0 && !now.Before(run.StartedAt.Add(timeout)) {
 		reason = "图片请求等待已超时，上游结果尚未确认"
 	}
-	return fmt.Sprintf("%s，请联系管理员核对任务 %s；已停止自动重发，预扣尚未结算", reason, run.RunID)
+	return fmt.Sprintf("%s，已停止自动重发（任务 %s）；超过等待时限仍无结果将自动失败并释放预扣，不会扣费", reason, run.RunID)
 }
 
 func (x *creativeCanvasImageExecutor) Recover(ctx context.Context, e *CreativeCanvasExecution) (string, error) {
@@ -124,7 +124,7 @@ func (x *creativeCanvasImageExecutor) Poll(ctx context.Context, e *CreativeCanva
 		}
 	}
 	if run.Operation == CreativeOperationTTS && run.ProvisioningPhase == CreativeProvisioningPhaseProviderInflight && run.ErrorCode != nil && *run.ErrorCode == "PROVIDER_RESULT_UNCONFIRMED" {
-		out.ErrorCode, out.ErrorMessage = "CREATIVE_AUDIO_SUBMISSION_UNCONFIRMED", "语音请求结果正在核对，请勿重复生成；费用以最终结算为准"
+		out.ErrorCode, out.ErrorMessage = "CREATIVE_AUDIO_SUBMISSION_UNCONFIRMED", "语音请求结果正在核对，请勿重复生成；超时仍无结果将自动失败并释放预扣，不会扣费"
 	}
 	if run.Operation != CreativeOperationTTS {
 		// 已确认成品或进入释放阶段后，不再沿用上游受理未知的提示；各阶段仍由原账本推进。
@@ -151,7 +151,7 @@ func (x *creativeCanvasImageExecutor) Poll(ctx context.Context, e *CreativeCanva
 		return out, nil
 	case CreativeRunStatusResultLost:
 		out.Status = "result_lost"
-		out.ErrorMessage = "成品临时缓存已丢失"
+		out.ErrorMessage = "成品未能保存交付，本次未扣费，预扣已释放"
 		return out, nil
 	case CreativeRunStatusSucceeded:
 	default:

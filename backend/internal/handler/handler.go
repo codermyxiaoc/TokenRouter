@@ -41,6 +41,8 @@ type AdminHandlers struct {
 	CodexInviteReset      *admin.CodexInviteResetHandler
 	AuditLog              *admin.AuditLogHandler
 	Team                  *admin.TeamHandler
+	// VideoProtocolProfile 管理声明式视频协议模板。
+	VideoProtocolProfile *admin.VideoProtocolProfileHandler
 }
 
 // Handlers contains all HTTP handlers

@@ -45,6 +45,7 @@ func ProvideAdminHandlers(
 	codexInviteResetHandler *admin.CodexInviteResetHandler,
 	auditLogHandler *admin.AuditLogHandler,
 	teamHandler *admin.TeamHandler,
+	videoProtocolProfileHandler *admin.VideoProtocolProfileHandler,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	claudeResetCredits *service.ClaudeResetCreditService,
 ) *AdminHandlers {
@@ -86,6 +87,7 @@ func ProvideAdminHandlers(
 		CodexInviteReset:      codexInviteResetHandler,
 		AuditLog:              auditLogHandler,
 		Team:                  teamHandler,
+		VideoProtocolProfile:  videoProtocolProfileHandler,
 	}
 }
 
@@ -293,6 +295,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewCodexInviteResetHandler,
 	admin.NewAuditLogHandler,
 	admin.NewTeamHandler,
+	admin.NewVideoProtocolProfileHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

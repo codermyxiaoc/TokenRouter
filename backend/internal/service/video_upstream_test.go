@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
+	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -97,6 +98,7 @@ func (r *videoSelectionFixture) ListSchedulableByGroupIDAndPlatform(context.Cont
 	return r.accounts, nil
 }
 
+// 选号按映射后的最终模型查绑定决定上游协议；统一入口不再由入站路径选择端点，未绑定的模型拒绝选号。
 func TestVideoSelectionUsesMappedModelAndRejectsDisabledEndpoint(t *testing.T) {
 	account := videoFixtureAccount(VideoEndpointSeedance)
 	account.Credentials["video_endpoints"] = []string{"seedance", "minimax"}
@@ -105,7 +107,7 @@ func TestVideoSelectionUsesMappedModelAndRejectsDisabledEndpoint(t *testing.T) {
 	repo := &videoSelectionFixture{accounts: []Account{*account}}
 	svc := NewVideoUpstreamService(&OpenAIGatewayService{accountRepo: repo, concurrencyService: NewConcurrencyService(nil)})
 	key := &APIKey{GroupID: &account.GroupIDs[0], Group: &Group{ID: 5, Platform: PlatformVideo, Status: StatusActive}}
-	req := VideoTaskSubmitRequest{Body: []byte(`{"model":"alias","content":[{"type":"text","text":"alias"}],"extension":false}`), InboundProtocol: "minimax", Native: true}
+	req := VideoTaskSubmitRequest{Body: []byte(`{"model":"alias","content":[{"type":"text","text":"alias"}],"extension":false}`), InboundProtocol: "openai_videos"}
 	ctx := context.WithValue(context.Background(), ctxkey.ClientModel, "group/client-alias")
 	got, err := svc.SelectAccount(ctx, key, req)
 	require.NoError(t, err)
@@ -115,10 +117,17 @@ func TestVideoSelectionUsesMappedModelAndRejectsDisabledEndpoint(t *testing.T) {
 	require.Equal(t, "alias", got.InternalModel)
 	require.Equal(t, "real", gjson.GetBytes(got.Body, "model").String())
 	require.Equal(t, "alias", gjson.GetBytes(got.Body, "content.0.text").String())
-	// 模型改为只允许 Seedance 后，MiniMax 入站不能越过模型绑定。
+	// 模型改绑 Seedance 后，同一 /v1/videos 请求随绑定转发到 Seedance。
 	repo.accounts[0].Credentials["video_model_bindings"] = map[string]string{"real": "seedance"}
+	rebound, err := svc.SelectAccount(context.Background(), key, req)
+	require.NoError(t, err)
+	require.Equal(t, VideoEndpointSeedance, rebound.Target.Endpoint)
+	rebound.Release()
+	// 只绑定其它模型时，最终模型没有协议，必须拒绝而不是回退到任何端点。
+	repo.accounts[0].Credentials["video_model_protocols"] = map[string]any{"other": map[string]any{"protocol": "minimax.minimax_v2"}}
 	_, err = svc.SelectAccount(context.Background(), key, req)
 	require.Error(t, err)
+	require.Equal(t, "VIDEO_ENDPOINT_MODEL_MISMATCH", infraerrors.Reason(err))
 	_, err = svc.SelectAccount(context.Background(), &APIKey{GroupID: key.GroupID, Group: &Group{ID: 5, Platform: PlatformOpenAI, Status: StatusActive}}, req)
 	require.Error(t, err)
 }
@@ -187,7 +196,9 @@ func TestVideoNativeStatusAndURLContracts(t *testing.T) {
 	route, ok := MatchVideoGatewayRoute(http.MethodPost, "/v1/videos/text2video")
 	require.True(t, ok)
 	require.Equal(t, "kling", route.Protocol)
-	require.True(t, smartRoutingGroupEndpointEligible(PlatformVideo, "/v1/videos/text2video"))
+	// 原生入口已退役，视频平台智能选组只接受统一入口。
+	require.False(t, smartRoutingGroupEndpointEligible(PlatformVideo, "/v1/videos/text2video"))
+	require.True(t, smartRoutingGroupEndpointEligible(PlatformVideo, "/v1/videos"))
 	require.False(t, smartRoutingGroupEndpointEligible(PlatformGrok, "/v1/videos/text2video"))
 	require.True(t, smartRoutingGroupEndpointEligible(PlatformGrok, "/v1/videos/generations"))
 }

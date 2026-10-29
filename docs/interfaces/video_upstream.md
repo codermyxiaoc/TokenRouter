@@ -1,19 +1,66 @@
 # 独立 Video 上游
 
-本文拥有 `platform=video` 的账号配置、原生协议和 HTTP 兼容边界。任务持久化、预算预留与结算由[媒体任务](../domains/media_tasks.md)和[路由与计费](../domains/routing_and_billing.md)拥有。旧 [Grok 视频](grok_upstream.md)与 [OpenAI 账号的 Seedance 能力](seedance_upstream.md)继续使用原链路；新增 Video 不改变其计价或准入。
+本文拥有 `platform=video` 的统一入口、账号协议绑定、声明式协议模板、内置原生协议和 HTTP 兼容边界。任务持久化、预算预留与结算由[独立视频平台任务](../domains/video_tasks.md)、[媒体任务](../domains/media_tasks.md)和[路由与计费](../domains/routing_and_billing.md)拥有。旧 [Grok 视频](grok_upstream.md)与 [OpenAI 账号的 Seedance 能力](seedance_upstream.md)继续使用原链路；Video 平台的重构不改变其计价或准入。
 
 ## 章节导航
 
-- [账号与模型端点](#video_accounts)：配置独立平台、多个端点、模型绑定与预算上限。
-- [版本化协议适配](#video_adapters)：端点默认、模型覆盖、官方参数和旧任务兼容。
-- [Yezonghui 视频兼容](#video_yezonghui)：复用 `/v1/videos` 的分辨率、参考图交付和异步下载。
-- [入站和上游协议](#video_protocols)：核对原生路径、参数保真、任务 ID 与取消语义。
-- [OpenAI 视频入口与内容](#video_openai_content)：核对 `/v1/videos`、共享 Grok 分派及凭据隔离的流式下载。
-- [管理员账号测试](#video_account_tests)：选择模型及其已配置端点，提交一次测试视频并轮询预览。
+- [统一入口 /v1/videos](#video_unified_api)：客户端唯一的创建、查询与内容接口，以及统一请求格式。
+- [模型协议绑定](#video_accounts)：账号按“上游模型 → 协议”绑定内置协议或模板，旧端点配置的迁移规则与预算上限。
+- [声明式协议模板](#video_protocol_profiles)：用配置描述创建端点、请求体映射、任务 ID、查询路径、状态与产物，以及版本、快照和调试器。
+- [AI 生成模板](#video_protocol_ai)：在系统设置配置模型后，由上游文档生成模板草稿并自动校验修正。
+- [预置模板](#video_protocol_presets)：Metaso H3、Yezonghui、可美与通用扁平格式的模板化版本、旧方案自动改绑与等价验证。
+- [版本化协议适配](#video_adapters)：内置协议只保留各家官方格式，以及旧方案在途任务的兼容。
+- [Yezonghui 视频兼容](#video_yezonghui)：Yezonghui 预置模板的分辨率、参考图交付和异步下载合同。
+- [上游协议与已下线入口](#video_protocols)：内置协议的上游路径、参数保真、任务 ID 规则，以及旧入口的 410 行为。
+- [视频内容](#video_openai_content)：凭据隔离的流式下载与面板预览。
+- [管理员账号测试](#video_account_tests)：按模型绑定的协议提交一次测试视频并轮询预览。
 - [验证边界](#验证边界)：理解本地协议测试的保证范围。
 
+<a id="video_unified_api"></a>
+## 统一入口 /v1/videos
+
+Video 平台对客户端只保留三项接口，均使用站内 Bearer Key：
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `POST /v1/videos` | 创建任务，请求体为统一格式，只接受 `application/json` |
+| `GET /v1/videos/{task_id}` | 按本地 `vid_…` ID 查询任务；只读本地记录，上游轮询由后台恢复器完成 |
+| `GET /v1/videos/{task_id}/content` | 读取已完成且已结算任务的成品，见[视频内容](#video_openai_content) |
+
+不对外开放取消；不带 `/v1` 的别名继续可用。同一路径在 Grok 分组下仍由原 Grok 链路处理，分派依据分组平台而非请求内容。
+
+统一请求由 `ParseVideoCanonicalRequest` 严格解析，未知顶层字段、类型错误和别名冲突在选号与预扣前返回 400：
+
+```json
+{
+  "model": "kling-v2",
+  "prompt": "海边日落，镜头缓慢推进",
+  "negative_prompt": "模糊",
+  "duration": 5,
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "images": [{"url": "https://... 或 data:image/png;base64,...", "role": "first_frame"}],
+  "videos": [{"url": "https://...", "role": "reference_video"}],
+  "generate_audio": false,
+  "watermark": false,
+  "seed": 42,
+  "extra": {"camera_control": {"type": "zoom_in"}}
+}
+```
+
+- `model` 必填，经分组/渠道映射与账号模型映射后得到最终上游模型。
+- 时长使用 `duration`（数字秒），兼容 OpenAI 的 `seconds`（字符串或数字）；比例使用 `aspect_ratio`，兼容旧客户端的 `ratio`。别名与规范字段同时出现时必须一致。
+- 参考图使用 `images`，元素可为 URL 字符串或 `{url, role}`，角色取 `first_frame`、`last_frame`、`reference_image`；兼容 OpenAI 的 `input_reference: {image_url}`，但不能与 `images` 同时出现。参考视频使用 `videos`，角色仅 `reference_video`。参考素材合计最多 16 项。
+- `size` 仅作为 OpenAI 像素尺寸别名，只有 compat / openai_videos 内置协议或模板显式映射时才接受；其它协议应使用 `resolution` 与 `aspect_ratio`。
+- 厂商特有参数放入 `extra`；内置协议把它合并到请求体顶层且不能覆盖规范字段，模板协议只接受映射规则显式引用的 `extra.<key>`。
+- 可选请求头 `Idempotency-Key` 沿用原规则：最多 128 字符，同一 Key 内按原始请求字节比较。
+
+选号时对每个候选账号按其对该模型绑定的协议转换请求：内置协议由 `videoBuiltinRequestBody` 转为端点格式，再交给原有协议适配器校验并从**实际发送的请求体**提取时长、分辨率和参考图数量；模板协议由引擎生成请求体并提取同样的维度。某个候选的协议不接受参数时可以尝试其它合格账号，全部失败才返回错误，此阶段尚未报价或预扣。端点无法表达的字段直接拒绝，不能静默丢弃参考素材或改变语义。
+
+创建与查询响应为 OpenAI Video 对象：本站 `vid_…` ID、`object=video`、`queued / in_progress / completed / failed` 四态，另附 `billing_status`、已知时长（`duration` 与 `seconds`）、分辨率、像素尺寸和 Token 用量；受理不明或过期时附加 `task_status`。`X-Video-Task-ID` 响应头同样返回本地 ID。任何版本创建的本地任务都可以通过 `GET /v1/videos/{task_id}` 查询。
+
 <a id="video_accounts"></a>
-## 账号与模型端点
+## 模型协议绑定
 
 Video 仅接受 API Key 账号，且 Video 账号与 Video 分组双向隔离。创建、编辑、批量更新和导入共用校验；跳过混合渠道提示不能绕过隔离。分组使用 `basic` 调度，显式提交 `advanced` 返回客户端错误，隐藏的文本调度配置不参与视频请求。
 
@@ -23,50 +70,148 @@ Video 仅接受 API Key 账号，且 Video 账号与 Video 分组双向隔离。
 {
   "api_key": "供应商密钥",
   "base_url": "https://relay.example",
-  "video_endpoints": ["compat", "seedance", "kling", "vidu"],
-  "video_model_bindings": {"ark-model": ["compat", "seedance"], "kling-model": "kling", "vidu-model": "vidu"},
-  "video_base_urls": {"seedance": "https://ark.example/api/v3"},
-  "video_model_paths": {"kling-model": "/omni-video/{model}"},
-  "video_vidu_model_paths": {"vidu-model": "/ent/v2/img2video"},
-  "video_endpoint_adapters": {"seedance": "seedance_v1", "kling": "legacy_v1", "vidu": "kemei_v1"},
-  "video_model_adapters": {"ark-model": {"seedance": "legacy_v1"}},
+  "video_model_protocols": {
+    "kling-v2":   {"protocol": "kling.kling_v1", "path": "/text-to-video/{model}"},
+    "seedance-1": {"protocol": "seedance.seedance_v1", "base_url": "https://ark.example/api/v3"},
+    "vendor-x":   {"protocol": "profile:vendor_x"},
+    "*":          {"protocol": "openai_videos.openai_v1"}
+  },
   "video_max_pending_tasks": 10,
   "video_max_duration_seconds": 15
 }
 ```
 
-`video_endpoints` 至少包含一项，可选 `compat`、`openai_videos`、`seedance`、`kling`、`wan`、`minimax`、`vidu`。创建表单不默认勾选端点，管理员必须明确选择；编辑保留已保存的选择，缺失配置不自动补为 `compat`。`compat` 保持上游 `/v1/video/generations`，`openai_videos` 使用上游 `/v1/videos`，旧账号不自动增加或迁移端点。`video_base_urls` 按端点覆盖共享 `base_url`；地址必须是没有内嵌凭据、查询参数或 fragment 的 HTTP(S) URL，出站继续经过现有上游 URL 安全校验、代理和 TLS 传输边界。受保护的 Header Override 可用于 Video API Key。
+`video_model_protocols` 是唯一的协议来源，键为**最终上游模型**的精确名称或 `*`（账号其余模型的默认协议，唯一允许的通配符），至少一项。查找顺序为精确模型、再 `*`；没有绑定的模型在转发、智能路由、模型广场和画布目录中一致不可用，返回 `VIDEO_ENDPOINT_MODEL_MISMATCH`。客户端从哪个入口进来不参与协议选择，不按模型名称、列表顺序或请求字段猜测供应商。
 
-模型先经过客户端别名、分组/渠道映射和账号模型映射，再用**最终上游模型名**查询 `video_model_bindings`。该字段同时接受旧字符串单端点和新字符串数组，例如 `"ark-model": ["compat", "seedance"]`。数组必须非空、无重复，且全部属于账号已勾选端点；模型未配置绑定时继承账号端点。创建和编辑表单允许同一模型填写多行不同端点，保存时按模型聚合；只填写一条仍保存旧字符串格式。模型目录继续使用配置的绑定、白名单和映射，不补聊天模型默认值。
+`protocol` 取值：
 
-自适应选择在实际转发、调度资格判断和模型广场中共用同一规则：原生入口只选择该请求对应的已启用协议；统一 `/v1/video/generations` 必须明确启用 `compat`，`/v1/videos` 必须明确启用 `openai_videos`，且均须属于最终模型的允许端点集合。两个 OpenAI 入口互不授权，也不回退到唯一原生端点。没有合格账号时在建任务、预扣和上游 POST 之前拒绝请求，端点不匹配返回 `VIDEO_ENDPOINT_MODEL_MISMATCH`。不会按模型名称、列表顺序或请求字段猜测供应商，错误恢复也不能改走未授权端点；只有下述明确未受理条件允许同端点换号。
+- 内置协议 `端点.方案`：只保留各家官方格式（`compat.openai_v1`、`openai_videos.openai_v1`、`seedance.seedance_v1`、`kling.kling_v1`、`wan.wan_v1`、`minimax.minimax_v2`、`vidu.vidu_v2`），见[版本化协议适配](#video_adapters)，非法组合在保存时拒绝。Kling 必须提供 `/text-to-video/{model}` 或 `/image-to-video/{model}`，Vidu 必须提供四种 `/ent/v2/*` 操作之一，其它内置协议不得提供 `path`。
+- 厂商与中转格式（Metaso H3、Yezonghui、可美、原样协议）由[预置模板](#video_protocol_presets)提供。保存账号时旧方案绑定 `*.legacy_v1`、`*.kemei_v1`、`openai_videos.metaso_h3_v1`、`openai_videos.yezonghui_v1` 自动改绑到对应模板或官方协议；没有等价替代的旧绑定（原样协议的旧版 Kling 路径）保存时拒绝，需管理员手动改绑。
+- 模板协议 `profile:<键名>` 使用该键名当前启用的版本，`profile:<键名>@<版本>` 锁定版本；模板不存在、未启用或内容哈希不符时，该候选在创建前被拒绝。模板定义自身路径，不得提供 `path`。
 
-未显式配置新适配器的两个 OpenAI 入口继续只替换实际模型，未知扩展字段保持原行为。可选账号凭据 `video_openai_profile` 接受空值、`passthrough`（默认保真）或 `metaso_h3`；只有实际选中 `openai_videos` 时才生效，不通过主机或模型名称猜测适配。取消该端点时可以保留合法配置供下次启用，其它端点不读取该配置。创建任务把配置冻结到上游路由快照；后续查询与恢复不能按账号的新配置重新解释旧任务。内部未提供协议的旧调用只视为 `unified`，仍须明确启用 `compat`；它不是账号默认能力。
+`base_url` 覆盖账号共享 `base_url`，必须是没有内嵌凭据、查询参数或 fragment 的 HTTP(S) URL；出站继续经过现有上游 URL 安全校验、代理和 TLS 传输边界。受保护的 Header Override 可用于 Video API Key。
 
-例如同一个模型配置 `["compat", "seedance"]` 后，客户端的 `/v1/video/generations` 转发到上游同路径，`/api/v3/contents/generations/tasks` 转发到上游 Seedance 原生路径，`/v1/videos` 不可用。历史 `"model": "seedance"` 只允许 Seedance 原生入口；需要开放兼容入口时，必须同时在账号端点和该模型绑定中增加相应协议。已受理任务仍使用冻结协议查询、取消和结算，不受后来取消端点勾选影响。
+创建与编辑表单不为 Video 账号预填任何 Base URL 或 API Key 示例：账号 Base URL 与 API Key 都必须由管理员填写（编辑时 API Key 留空表示保留原值）。账号调度快照的精简凭据必须保留 `api_key`、`base_url`、`video_model_protocols`、`video_max_pending_tasks` 与 `video_max_duration_seconds`，否则新建账号在选号时没有任何模型绑定、待处理上限按零计算，直到再次编辑才恢复（见[账号调度与缓存](../architecture/account_scheduling_and_cache.md)）。
 
-Kling 原生入口直接提供 `/text-to-video/{model}`、`/image-to-video/{model}`、`/omni-video/{model}`、`/v1/videos/text2video` 或 `/v1/videos/omni-video` 操作路径，无需从请求体猜测文生或图生模式。遗留 `video_model_paths` 继续受受控模板校验，但不能借此开放任何未勾选的 OpenAI 入口。
+**旧配置迁移。** 旧字段 `video_endpoints`、`video_model_bindings`、`video_base_urls`、`video_model_paths`、`video_vidu_model_paths`、`video_openai_profile`、`video_endpoint_adapters`、`video_model_adapters` 由 `convertLegacyVideoConfiguration` 换算：
 
-Vidu 使用独立的 `video_vidu_model_paths`，以最终上游模型精确名称保存 `/ent/v2/img2video`、`/ent/v2/reference2video`、`/ent/v2/text2video` 或 `/ent/v2/start-end2video`。该映射用于管理员测试默认操作；正式原生请求由入站路径明确操作。它不复用 Kling 的 `video_model_paths`，同一模型绑定两个端点时路径不会相互覆盖；路径配置也不授予端点权限。可美方案中的 Vidu Q4 不接受 `text2video` 和 `start-end2video`，不会自动改成另一种操作；供应商特定限制不套用到保留原有协议的账号。
+- `video_model_bindings` 中的每个模型生成精确绑定；多个端点按 `openai_videos`、`compat`、配置顺序中首个原生端点的优先级取一个。
+- 账号端点集合按同一优先级生成 `*` 默认绑定；默认端点为 Kling 或 Vidu 时无法表达按模型保存的路径，只为配置过路径的模型生成精确绑定。
+- 仅有模型级方案覆盖或操作路径、没有显式绑定的模型同样生成精确绑定，方案按“模型覆盖 → 端点默认 → 旧 `metaso_h3` profile → `legacy_v1`”解析，再按[预置模板](#video_protocol_presets)的改绑规则换为模板或官方协议。
+- 旧绑定指向未启用端点、非法方案等含糊配置拒绝迁移，不静默改选。
+
+账号保存时写入 `video_model_protocols` 并删除全部旧字段；服务启动时先由 `EnsureVideoProtocolPresets` 补齐预置模板，再由 `BackfillVideoAccountProtocols` 一次性迁移仍保存旧字段或仍绑定旧厂商方案的账号，无法换算的账号保留原样并记录日志，运行时读取仍会即时换算，不影响服务。原先按入站入口在多个端点间选择的账号迁移后每个模型只保留一个协议，需要不同协议时应拆分模型或账号。
 
 `video_max_pending_tasks` 默认 10、范围 1–1000。可选的正数 `video_max_duration_seconds` 支持省略或用 `null` 显式清空；按秒计费或已开启 Token 秒价预扣的自动时长任务必须配置它，显式零和非法值仍拒绝。账号不再提供 Token 预留上限；遗留 `video_max_output_tokens` 对新任务无效，保存时清理，已受理任务仍按自身快照结算。Token 预扣由模型价卡的 `video_token_prepay` 决定，固定秒价不乘倍率，完成后按实际 Token 退补差；关闭则完成后原子检查资金和额度并扣费。预算不改写供应商参数或裁剪用量，缺少可信用量不能作零费用结算。详见[任务结算](../domains/video_tasks.md#video_task_billing)。
+
+<a id="video_protocol_profiles"></a>
+## 声明式协议模板
+
+模板让管理员不改代码接入新上游，例如“创建走 `/v1/video/generations`、查询走 `/v1/tasks/{task_id}`、任务 ID 位于 `data.task_id`”。模板保存在 `video_protocol_profiles`（迁移 `322_video_protocol_profiles.sql`），每次保存生成同键名的新版本，同一键名最多一个启用版本；规格以 sha256 哈希保护。管理接口：
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `GET /api/v1/admin/video-protocol-profiles` | 列出全部版本 |
+| `POST /api/v1/admin/video-protocol-profiles` | 校验并保存新版本，可同时启用 |
+| `PUT /api/v1/admin/video-protocol-profiles/:key/versions/:version/status` | 启用、停用或改回草稿；启用时该键名原启用版本降为草稿，锁定该版本的绑定仍可使用；停用版本不能用于新任务 |
+| `POST /api/v1/admin/video-protocol-profiles/preview` | 用请求与响应样例离线调试，不访问任何上游 |
+
+规格示例：
+
+```json
+{
+  "auth": {"scheme": "bearer"},
+  "capabilities": {"durations": [5, 10], "resolutions": ["720p", "1080p"], "max_images": 1, "image_roles": ["first_frame"]},
+  "create": {
+    "path": "/v1/video/generations",
+    "defaults": {"duration": 5},
+    "body": [
+      {"from": "model", "to": "model"},
+      {"from": "prompt", "to": "input.prompt", "required": true},
+      {"from": "duration", "to": "parameters.duration", "type": "int"},
+      {"from": "resolution", "to": "parameters.resolution", "map": {"720p": "720P", "1080p": "1080P"}},
+      {"from": "images[role=first_frame]", "to": "input.img_url"},
+      {"const": true, "to": "parameters.prompt_extend"}
+    ],
+    "response": {"task_id": ["data.task_id"], "rejected_when": [{"path": "code", "not_in": [0]}]}
+  },
+  "poll": {
+    "path": "/v1/tasks/{task_id}",
+    "interval_seconds": 15,
+    "max_processing_minutes": 120,
+    "response": {
+      "root": "data", "task_id": ["task_id"], "status": "task_status",
+      "status_map": {"SUCCEEDED": "completed", "FAILED": "failed", "RUNNING": "processing", "PENDING": "queued"},
+      "video_url": ["output.video_url"], "seconds": ["usage.duration"], "tokens": ["usage.completion_tokens"]
+    }
+  },
+  "content": {"mode": "url"}
+}
+```
+
+- **鉴权**：`bearer`（`Authorization: Bearer`）、`token`（`Authorization: Token`）或 `header`（自定义请求头原样携带账号密钥）。凭据只来自账号，模板不能携带密钥；静态请求头禁止 Authorization、Host、Cookie、Content-Length 等。
+- **请求体规则**：`from` 可读 `model`、`prompt`、`negative_prompt`、`duration`、`resolution`、`aspect_ratio`、`size`、`generate_audio`、`watermark`、`seed`、`images`/`videos`、`images[0]`、`images[role=x]`（多项同角色视为冲突）、`extra.<key>`；`const` 写入常量。媒体列表用 `each` 生成对象数组（`$url`/`$role` 取素材值，空值字段省略）或用 `item: "$url"` 生成字符串数组，`roles` 改写角色名（设置后未列出的角色拒绝），`append` 追加到已有数组。标量规则也可用 `each` 包装成对象（`$value` 取值），例如把提示词追加为 `contents` 的文本项。`from_all` 联合多个标量查表，`map` 键为各值用 `|` 连接，字段须全部给出或全部缺省（如 `768p|16:9` → `1280x720`）。`type` 支持 `string`、`int`、`number`、`bool`、`string_number`、`string_int`（整数字符串）、`resolution`/`resolution_upper`（校验可报价后统一小写或大写）、`resolution_tier`（只接受档位，拒绝像素尺寸）和 `ratio`（正整数 `W:H`），只做无损转换；`map` 的键对布尔与数字取 `true`/`false` 与最短十进制，未命中时拒绝而不原样透传；`required` 缺失时拒绝；`default` 在来源缺省时写入 JSON 值。两条规则向同一路径写入不同值时拒绝（`VIDEO_PARAMETER_CONFLICT`），`default` 可被显式值覆盖。`defaults` 只为时长、分辨率、比例补默认值，补出的值同样写入请求并参与计价；`image_role_default` 为未写角色的参考图补角色：`frames`（一张首帧、两张首尾帧、三张以上参考图）、`single_first` 或 `reference`。
+- **字段使用核对**：统一请求中非空但没有被任何规则读取的字段（包括每一张参考图、参考视频和 `extra` 键）直接返回 `VIDEO_PARAMETER_UNSUPPORTED`，防止静默丢参与少计费。计价维度只取被读取的规范值；像素尺寸经 `capabilities.size_resolutions` 换算为计价档位并保留尺寸。`capabilities` 声明时同时校验时长（`durations`、`min_duration`/`max_duration`、`integer_duration`）、分辨率、比例、参考图数量（`min_images`/`max_images`）与角色、参考视频数量、`exclusive_frames`（首尾帧不能与参考素材混用、尾帧需首帧）、`require_ratio_without_media`（文生视频必须给出非 adaptive 比例）、`deny_models`（精确或以 `*` 结尾的前缀）以及 `public_media`（素材必须是公网 HTTP(S) 链接）。`max_reference_bytes` 与 `adaptive_ratio`（`orientation` 按首图方向换算 16:9/9:16，`omit` 不发送比例）只作用于云画布。
+- **路径**：只允许以 `/` 开头的相对路径，禁止 `//`、`..`、查询串和片段；占位符只有 `{model}`（创建与查询）、`{task_id}` 和 `{ref.<名称>}`（查询与内容），统一转义。查询参数用 `poll.query` 声明，任务 ID 位于查询参数时（如 `/tasks?task_ids={task_id}`）路径本身可以不含占位符。`create.response.refs` 把创建响应中的额外字段保存为查询上下文，只在首次受理时写入。
+- **身份**：`create.response.task_id` 的多个路径取值不一致时判为冲突，进入受理不明；查询响应的 `task_id` 必须与冻结 ID 一致，`list` 模式下数组只能包含本任务（`match` 可列多个 ID 路径），否则整包拒绝；`list.optional` 时数组缺失或各项都没有任务 ID（例如产物数组）则使用当前节点。`root` 可列多个候选，取第一个存在的对象（如 MiniMax 中继的 `task` 封装）。数字 ID 按原文保存。
+- **状态**：`status` 可列多个路径，取第一个非空值；`status_map` 键不区分大小写，必须至少映射一个 `completed` 和一个 `failed`；未识别的状态不推进终态。`max_processing_minutes` 覆盖平台默认的最长处理时间，超时按[未交付即释放](../domains/video_tasks.md#video_task_delivery_release)处理。`rejected_when` 只在没有任何任务 ID 时用于确认未受理并释放；条件中 JSON `null` 视为字段不存在。
+- **可信观测**：响应含重复键或声明路径上仅大小写不同的同名字段时标记元数据错误；秒数接受正数或数字字符串，Token 必须为非负整数且零值视为未知，分辨率可为字符串或正整数（如万相 `SR: 720` 记为 `720p`），非法取值一律标记元数据错误。`strict` 要求秒数、Token、分辨率的多个路径取值一致；否则取第一个有效值。`outputs` 声明产物数组与上限（超过即不可计价），可用 `filter` 只统计指定类型（如 `type=video`），并用项内 `url`/`seconds` 路径取唯一产物的直链与实际秒数，此时完成态缺少任一项都标记元数据错误。`completed_invalid_when` 在上游声称完成时校验（如同时带错误包或非零错误码）；`public_url` 要求直链是公网地址。元数据错误不交付、不按请求估算扣费，未交付的任务按[未交付即释放](../domains/video_tasks.md#video_task_delivery_release)处理。
+- **内容**：`url` 模式要求声明 `video_url` 路径；`path` 模式用原账号凭据请求声明的内容路径，禁止跟随重定向，同时声明的 `video_url` 取到直链时优先直链。
+
+保存时校验 schema、路径与占位符、请求头、状态映射，并用一份样例请求空跑映射规则。创建任务时解析启用版本并把整份规格、哈希与 `profile:<键名>@<版本>` 冻结为版本三路由快照；之后编辑、停用或新增版本都不影响在途任务的查询、内容与结算，快照哈希不符时拒绝使用。启用版本解析在进程内缓存 10 秒。调试接口返回生成的请求路径与请求体、计价维度、解析出的任务 ID、refs、状态、产物地址、用量、查询与内容路径以及请求错误，供启用前核对。编辑器打开、AI 回填或点击“按模板生成样例”时，调试样例请求按模板读取的字段与 `capabilities`（图片角色与数量、时长范围、分辨率、比例、`map` 允许的取值）生成，避免固定样例因能力不匹配而在映射前报错。
+
+管理页面（菜单“协议模板”）的“编辑”在弹窗中锁定键名并以该版本内容打开编辑器，保存始终生成同键名的新版本（源版本启用时可直接“保存修改并启用”），历史版本保留可回退；“基于此版本新建”可改键名复制。`create.headers` 声明只随创建请求发送的静态请求头（如万相 `X-DashScope-Async: enable`），校验规则与 `headers` 相同。
+
+删除：`DELETE /api/v1/admin/video-protocol-profiles/:key/versions/:version` 删除单个版本，`DELETE /api/v1/admin/video-protocol-profiles/:key` 删除整个模板。启用中的版本须先停用或启用其它版本；仍被视频账号绑定的模板（删除整个模板或最后一个版本时检查全部绑定，删除单个版本时检查锁定该版本的绑定）返回 409 并列出账号。已受理任务冻结了模板快照，删除不影响其查询与结算。删除预置模板的全部版本后记入设置键 `video_protocol_presets_deleted`，启动补齐与内置回退都不再恢复该模板。
+
+<a id="video_protocol_ai"></a>
+### AI 生成模板
+
+系统设置“视频协议 AI”保存一个 OpenAI 兼容的对话模型（设置键 `video_profile_ai_config`：Base URL、模型、API Key、单轮超时 10–600 秒）；API Key 只写不读，接口只返回是否已配置，留空保存保留原值。模板页面的“AI 生成模板”把管理员粘贴的上游文档（最多 12 万字）、补充说明和可选的当前编辑器内容发送给该模型（`POST /api/v1/admin/video-protocol-profiles/ai-generate`）。系统提示描述统一请求字段与模板规格，并附带若干预置模板作为范例；模型输出的 `spec` 按保存规则（含未知字段与样例空跑）校验，失败时把错误反馈给模型修正，最多 3 轮。结果只回填编辑器并显示模型说明与校验状态，不会自动保存或启用；未通过校验时返回最后一版草稿与错误供手动修正。上游模型错误摘要会遮罩密钥。配置接口为 `GET`/`PUT /api/v1/admin/video-protocol-profiles/ai-config`。设置页的“使用本站模型”可一键填入本站 API 地址（系统设置的 API Base URL，否则当前域名，补齐 `/v1`）并从当前管理员自己的启用 API Key 中选择一个填入，按该 Key 的分组与倍率计费，仍需点击保存。
+
+<a id="video_protocol_presets"></a>
+## 预置模板
+
+内置协议只保留各家官方格式；厂商与中转格式以系统预置模板提供（`video_protocol_presets.go`），管理员可在模板页面查看、复制为新键名后修改，或为同键名保存新版本。服务启动时 `EnsureVideoProtocolPresets` 为数据库中尚不存在的键名创建第 1 版并启用；最高版本仍由系统创建（`created_by` 为空）且处于启用状态、内容与当前内置定义不同时，按新定义升为新版本并启用。管理员保存过、停用或改为草稿的键名一律不覆盖。数据库中完全没有某个预置键名时（例如补齐失败），`Resolve` 使用内置定义作为第 1 版，避免已改绑账号中断；该键名一旦入库，停用与草稿状态照常生效。
+
+| 键名 | 对应旧方案 | 要点 |
+| --- | --- | --- |
+| `metaso-h3` | `openai_videos.metaso_h3_v1` | 整数秒 `seconds`；`resolution`+`aspect_ratio` 联合查表为四种像素 `size`（768p/2k × 16:9/9:16），尺寸按档位计价；单张参考图写入 `input_reference.image_url`；画布参考图上限 2 MiB，自动比例按首图方向换算 |
+| `yezonghui` | `openai_videos.yezonghui_v1` | 必填提示词、1–3600 整数秒字符串与分辨率档位；比例写入 `size`；素材只收公网链接（画布先发布短期链接）；查询间隔 60 秒；完成包带错误或旧格式封装时不可交付 |
+| `generic-flat` / `generic-flat-videos` | `compat.legacy_v1` / `openai_videos.legacy_v1` | 通用扁平格式：顶层 `duration`、`resolution`、`ratio`、`size`，图片为 URL 数组，通用状态词表与产物路径；后者走 `/v1/videos` 并可回退内容路径 |
+| `kemei-compat` | `compat.kemei_v1` | 扁平字段，素材保留 `url` 与 `role` |
+| `kemei-seedance` / `kemei-minimax` | `seedance.kemei_v1` / `minimax.kemei_v1` | 提示词与素材写入 `content`，未写角色按 `frames` 补角色；MiniMax 另有大写分辨率、`aigc_watermark`、4–15 秒、图 ≤9 / 视频 ≤3、首尾帧互斥、文生须比例与 `task` 封装 |
+| `kemei-wan` | `wan.kemei_v1` | `input.media` 按角色写入，参数进 `parameters`（大写分辨率）；查询读取 `output.*` 与 `usage.SR` |
+| `kemei-kling-text` / `-image` / `-omni` | `kling.kemei_v1` + 对应路径 | 模型在路径中；`settings` 默认 5 秒、720p、16:9、`audio=off`；图生只收首尾帧，全能视频把参考图改名 `refer_image`、参考视频为 `feature_video`；查询 `/tasks?task_ids=`，只认唯一 `type=video` 产物及其秒数 |
+| `kemei-vidu-img2video` / `-reference2video` / `-text2video` / `-start-end2video` | `vidu.kemei_v1` + 对应路径 | 默认 5 秒、540p、16:9；图片数按操作限制；Vidu Q4 不能用文生与首尾帧；成功但错误码非零或多个作品时不可交付 |
+
+**自动改绑。** 账号保存与启动迁移按 `videoDeprecatedProtocolReplacement` 改绑：上表的旧厂商方案换为对应模板（保留 `base_url`，清除 `path`）；原样协议在原生端点换为官方协议（`seedance`、`minimax`、`wan`、`vidu` 与 Kling 文生/图生路径）。原样协议的旧版 Kling 路径（`/omni-video/{model}`、`/v1/videos/*`）没有等价替代，运行时仍可使用，但再次保存账号时必须手动改绑。旧方案代码只保留给在途版本一/二任务的查询、内容与结算，不能用于新绑定。
+
+**创作台兼容。** 改绑后模型在画布目录中归入 `unified`；该模型没有 `unified` 设置时沿用原端点（如 `openai_videos`、`seedance`）下已保存的创作台模型设置，已有画布节点按原端点继续匹配，不会从创作台消失。参考图大小提示读取模板 `max_reference_bytes`（全部候选都声明时取最小值），提交时仍按实际选中的模板校验；`unified` 设置允许多张参考图，数量由模板能力在预扣前校验。`video_protocol_followup_test.go` 用各预置模板验证画布请求可生成上游请求且计价维度与画布参数一致。
+
+**等价验证。** `video_protocol_presets_test.go` 对每个模板与对应旧方案使用相同的规范请求和上游响应对照：请求体逐字段一致，时长、计价档位、尺寸、参考图数量与参考视频标记一致；响应的任务 ID、状态、直链、秒数、档位与 Token 一致，旧方案判为不可信的响应模板同样不可信。已知差异：
+
+- 旧方案对原生透传结构（`contents`、`input.media`、`content` 等）的兼容不再提供，统一入口只接受规范字段，厂商扩展需在模板中以 `extra.<key>` 显式映射。
+- 旧可美 Vidu 方案在统一入口下无法消费带角色的图片对象，带图请求会被拒绝；模板按 URL 数组发送，修复了该问题。对照以旧客户端的原生扁平请求为基准。
+- Kling 原生响应完成却没有 `outputs` 时，旧方案标记元数据错误，模板视为尚无可交付产物；两者都不扣费，后者在截止后按未交付释放。
+- 计价档位大小写（如 MiniMax 的 `768P`）与旧方案相同，报价前统一归一。
 
 <a id="video_adapters"></a>
 ## 版本化协议适配
 
-`video_endpoint_adapters` 为每个端点选择独立协议；`video_model_adapters` 以最终上游模型的精确名称按端点覆盖。生效顺序是模型覆盖、端点默认、旧 `video_openai_profile` 或原有协议。覆盖不能增加端点权限，不支持模型通配符、域名推断、任意脚本或动态 HTTP 模板。协议配置与模型绑定分离；API 导入的无绑定模型覆盖在编辑保存时保留，不自动添加限制模型端点的绑定。
+内置协议在[模型协议绑定](#video_accounts)中写作 `端点.方案`，每个绑定只选一个方案，不支持模型通配符以外的通配、域名推断、任意脚本或动态 HTTP 模板；厂商格式使用[预置模板](#video_protocol_presets)，其它上游使用[声明式协议模板](#video_protocol_profiles)。可选的内置协议只保留官方格式：
 
-| 端点 | 新建表单默认方案 | 其他可选方案 |
-| --- | --- | --- |
-| compat | `legacy_v1`：保留原有协议 | `openai_v1`：OpenAI 官方参数格式，保持兼容路径；`kemei_v1`：可美视频 |
-| openai_videos | `openai_v1`：OpenAI JSON 协议 | `legacy_v1`；`metaso_h3_v1` 保留已有秘塔 H3 适配；`yezonghui_v1`：Yezonghui 视频兼容 |
-| seedance | `seedance_v1`：Seedance 原生协议 | `legacy_v1`、`kemei_v1` |
-| minimax | `minimax_v2`：MiniMax H3 V2 协议 | `legacy_v1`、`kemei_v1` |
-| wan | `wan_v1`：万相异步视频协议 | `legacy_v1`、`kemei_v1` |
-| kling | `kling_v1`：Kling 官方文生/图生协议 | `legacy_v1`、`kemei_v1` |
-| vidu | `vidu_v2`：Vidu 官方参数 | `legacy_v1`：保留原有协议；`kemei_v1`：可美视频 |
+| 端点 | 内置协议 |
+| --- | --- |
+| compat | `openai_v1`：OpenAI 官方参数格式，保持兼容路径 |
+| openai_videos | `openai_v1`：OpenAI JSON 协议 |
+| seedance | `seedance_v1`：Seedance 原生协议 |
+| minimax | `minimax_v2`：MiniMax H3 V2 协议 |
+| wan | `wan_v1`：万相异步视频协议 |
+| kling | `kling_v1`：Kling 官方文生/图生协议 |
+| vidu | `vidu_v2`：Vidu 官方参数 |
 
-每个端点至少提供“保留原有协议”和对应官方参数方案，也可继续选择已有供应商适配。新建表单只预选协议方案，不自动勾选端点。原有六类端点的已有账号缺失新字段时始终保留旧行为，API 创建或导入缺字段也按旧合同处理；不会凭创建时间推断适配器。Vidu 必须在 `video_endpoint_adapters.vidu` 显式选择受支持的方案，不能仅靠模型覆盖代替端点配置；原有 `kemei_v1` 账号继续保留该值，新增加的显式 `legacy_v1` 也保存版本二快照，版本一 Vidu 仍拒绝。编辑未改适配选项不会自动升级。旧 `metaso_h3` 仍有效，新映射在对应端点显式存在时优先；“继承端点设置”会删除模型覆盖。未知方案或跨端点选择在账号保存时拒绝，不能静默降级。
+已由模板取代的 `legacy_v1`、`kemei_v1`、`metaso_h3_v1`、`yezonghui_v1` 不再出现在选择框中，也不能用于新绑定；它们的实现只用于升级前已受理任务按自身快照查询与结算，保存账号时按[预置模板](#video_protocol_presets)的规则自动改绑。新建的内置协议绑定一律冻结为版本二快照并携带显式方案；升级前按旧配置创建的版本一任务仍按自身快照查询与结算，版本一 Vidu 仍拒绝。
 
 `/v1/video/generations` 本身不是 OpenAI 官方视频路径，其 `openai_v1` 仅复用 OpenAI JSON 参数及响应的 `seconds`、`size`、`input_reference` 合同。创建和查询仍使用冻结的 `/v1/video/generations` 路径，不改为 `/v1/videos`，也不因此授予另一端点的权限。保留原有协议时继续原样发送已有字段，不自动转换为官方参数。
 
@@ -94,7 +239,7 @@ Kling 官方响应从本任务的唯一视频产物读取实际时长；空产�
 
 ### 可美视频协议
 
-`kemei_v1` 为 token.xinhankr.com 的明确合同，适用于 `compat`、`seedance`、`minimax`、`wan`、`kling` 和新增 `vidu`。`openai_videos` 没有该选项，不声明供应商支持 `/v1/videos`。管理员按端点选择，也可按最终模型覆盖；系统不根据域名、模型名或参考图存在与否替用户更换协议。可美选项不改变上述原有默认方案。
+可美（token.xinhankr.com）合同现由 `kemei-*` [预置模板](#video_protocol_presets)提供，旧 `kemei_v1` 方案只用于在途任务。本节描述该合同的语义，模板按同样语义转换规范请求；`openai_videos` 没有可美模板，不声明供应商支持 `/v1/videos`。系统不根据域名、模型名或参考图存在与否替用户更换协议。
 
 | 端点 | 适配后的请求结构 | 边界 |
 | --- | --- | --- |
@@ -110,43 +255,44 @@ Vidu 的 `img2video` 恰好一张图，`reference2video` 至少一张，`start-e
 
 可美的零 Token 占位不证明免费用量；Vidu 不凭空生成 Token 用量。选用 Token 价格但没有可信用量的任务仍待核对，不能借适配改按秒结算。协议只提供归属、状态、产物和计费事实，继续使用已有预算、捕获、释放及统计幂等事务。
 
-供应商合同来源：[统一兼容接口](https://token.xinhankr.com/docs/openai/doc0019)、[MiniMax H3](https://token.xinhankr.com/docs/examples/doc0015)、[Seedance](https://token.xinhankr.com/docs/examples/doc0010)、[Kling](https://token.xinhankr.com/docs/examples/doc0012)、[Wan](https://token.xinhankr.com/docs/examples/doc0014)、[Vidu](https://token.xinhankr.com/docs/examples/doc0041)。供应商方案的实现入口为 `video_protocol_kemei*.go`，Vidu 操作与响应在 `video_protocol_kemei_vidu.go`；添加新的供应商合同应使用新方案 ID，不改变已有方案语义。
+供应商合同来源：[统一兼容接口](https://token.xinhankr.com/docs/openai/doc0019)、[MiniMax H3](https://token.xinhankr.com/docs/examples/doc0015)、[Seedance](https://token.xinhankr.com/docs/examples/doc0010)、[Kling](https://token.xinhankr.com/docs/examples/doc0012)、[Wan](https://token.xinhankr.com/docs/examples/doc0014)、[Vidu](https://token.xinhankr.com/docs/examples/doc0041)。预置模板定义在 `video_protocol_presets.go`，旧方案实现（`video_protocol_kemei*.go`）只服务在途任务；新的供应商合同应新增模板，不修改已发布模板版本的语义。
 
 <a id="video_yezonghui"></a>
 ## Yezonghui 视频兼容
 
-在 Video API Key 账号启用 `openai_videos`，显式选择 `yezonghui_v1`，Base URL 按供应商配置（当前文档为 `https://new.yezonghui.org`）。最终上游模型可以单独覆盖该方案；不凭域名或模型名称自动切换，不新增平台或视频端点。新任务冻结版本二及方案 ID，已有任务继续使用原快照。供应商合同来源：[对接文档](https://new.yezonghui.org/docs)及其[原始文档接口](https://new.yezonghui.org/api/docs)，本版只接入其中视频协议。
+在 Video API Key 账号把模型绑定到预置模板 `profile:yezonghui`，Base URL 按供应商配置（当前文档为 `https://new.yezonghui.org`）；旧 `openai_videos.yezonghui_v1` 绑定保存时自动改绑。不凭域名或模型名称自动切换，不新增平台或视频端点。新任务冻结模板快照，已有任务继续使用原快照。供应商合同来源：[对接文档](https://new.yezonghui.org/docs)及其[原始文档接口](https://new.yezonghui.org/api/docs)，本版只接入其中视频协议。
 
 创建与查询分别复用 `POST /v1/videos`、`GET /v1/videos/{id}`。要求非空 `prompt`、1–3600 的整数时长和明确的可报价分辨率档位，出站 `seconds` 为整数字符串；`duration` 是数值别名。`resolution` 与 `size` 分离：前者是 `720p`、`1080p`、`2k`、`4k` 等本站可报价档位，后者是可省略的正整数比例，如 `16:9`，不是像素尺寸。`ratio`/`aspect_ratio` 合并为 `size`；同义字段同时存在必须等值。`metadata.resolution` 可提供档位，但与顶层冲突时拒绝，不能绕过报价。供应商实际支持档位和时长由具体模型决定，适配器不降档、不改价、不承诺所有档位可生成。
 
 `images` 转为 `image_urls`，`generate_audio` 转为 `audio`；`image_urls`、`video_urls`、`audio_urls` 只接受 HTTP(S) 公共链接，不接受 Base64、Data URL、内网字面量或登录态素材。`audio_urls` 是否可用由上游模型决定，不扩大模型能力声明。`negative_prompt`、`seed`、`fps`、`camera_fixed` 和 `audio` 按文档类型校验，厂商扩展放入 `metadata` 并保留数字精度；不支持的顶层参数（包括 `watermark`）明确拒绝。当前一个任务只交付一个视频，`n` 只允许 1，不把多个作品合并成单次收费。
 
-创作台和画布沿用已有视频模型目录、1–60 秒编辑范围、参考图上限和站内价格。已经鉴权的私有图片在实际选中本方案后转换为[短期访问链接](cloud_canvas.md#video_reference_delivery)，原素材不改写、不公开桶；缺少可用公网站点地址或参考图交付失败时在创建和预扣前拒绝。幂等摘要使用原始画布请求，同次选号重用已签发的链接，恢复已有任务不再发布或生成。画布的“自动”比例只在本方案下省略 `size`，不强制变为横屏；旧模型继续原来的自动比例逻辑。正式 API 调用者自行提供公共素材 URL，不获得将任意私有文件公开的能力。
+创作台和画布沿用已有视频模型目录、1–60 秒编辑范围、参考图上限和站内价格。已经鉴权的私有图片在实际选中本方案后转换为[短期访问链接](cloud_canvas.md#video_reference_delivery)，原素材不改写、不公开桶；缺少可用公网站点地址或参考图交付失败时在创建和预扣前拒绝。幂等摘要使用原始画布请求，同次选号重用已签发的链接，恢复已有任务不再发布或生成。画布的“自动”比例只在本方案下省略 `size`，不强制变为横屏；旧模型继续原来的自动比例逻辑。统一入口 `/v1/videos` 的调用者（包括外部画布脚本）直接提交 Base64 图片（`data:image/png|jpeg|webp`）时，若实际选中的协议只收公网素材（本方案或声明 `capabilities.public_media` 的模板），同样只把这些 data URL 发布为短期访问链接，已是公网 URL 的图片原样转发；发布的只是调用者自己上传的字节，不能借此公开站内其它文件。参考视频不做转换，仍需公网链接。发布需要系统设置中可用的公网站点地址，否则在创建和预扣前拒绝。
 
 响应仅按顶层 `id`/`task_id` 识别任务，二者冲突或查询 ID 不匹配时保留核对，不任选 ID 或释放预算。`queued`、`in_progress`、`completed`、`failed` 分别映射排队、处理中、完成和失败；`unknown` 与未识别状态保持非终态。创建没有可靠受理结果时沿用原状态机，不盲目重建任务。后台为该冻结方案使用至少 60 秒查询间隔，查询失败继续原 ID 退避，既有模型间隔不变。完成响应可无 `url`，由原账号凭据请求 `/v1/videos/{id}/content`，不让上游凭据进入浏览器。当前供应商文档没有取消合同，不新增取消能力。
 
 站内仍使用原有按秒、按次或 Token 价卡及图片固定附加费，分辨率按实际发送的 `resolution` 报价，不把比例当分辨率。预扣、成功捕获、失败释放、并发幂等和内容下载复用原账本；上游价率 Header 不覆盖站内价格。文档未保证 Token 用量，选用 Token 价却缺少可信正数用量时保持待核对，零占位不能推断免费。仅返回完成而没有尺寸/时长时可沿用创建时冻结维度；显式异常、冲突或不同价档继续待核对，不自动改费。图片异步端点和其存储、保留策略不在本适配范围内。
 
 <a id="video_protocols"></a>
-## 入站和上游协议
+## 上游协议与已下线入口
 
-统一创建为 `POST /v1/video/generations`，裸别名为 `/video/generations`。**请求体遵循实际选中协议的 JSON 参数约定**；原有协议不互转 `content`、`input`、`parameters`、`images`，显式适配器按上述固定版本处理已声明的别名。上游端点由入站协议、账号能力和最终模型的允许端点集合共同决定。创建必须能从规范的唯一 `model` 字段或受支持的模型路径解析模型；路径与正文同时提供时必须一致。
+客户端只通过[统一入口](#video_unified_api)提交规范请求；下表是内置协议实际访问的**上游**路径，由模型绑定的协议决定，冻结在任务快照中。内置协议的请求体由规范请求转换而来，官方适配器按上述固定版本处理已声明的别名；原样协议已由通用扁平格式模板取代。模板协议的路径见[声明式协议模板](#video_protocol_profiles)。
 
-| 上游端点 | 创建 | 原生查询 | 原生取消 |
-| --- | --- | --- | --- |
-| compat | `/v1/video/generations` | `/v1/video/generations/:id` | 同路径 `DELETE` |
-| openai_videos | `/v1/videos` | `/v1/videos/:id`；内容为 `/:id/content` | 不支持 |
-| seedance | `/api/v3/contents/generations/tasks` | 同根路径 `/:id` | 同路径 `DELETE` |
-| kling | 配置的受控模型路径，或两个 `/v1/videos/*` 操作 | `/tasks?task_ids=:id` | 不支持 |
-| wan | `/api/v1/services/aigc/video-generation/video-synthesis` | `/api/v1/tasks/:id` | 不支持 |
-| minimax | `/v2/video_generation` | `/v2/query/video_generation/:id` | 不支持 |
-| vidu | `/ent/v2/img2video`、`/ent/v2/reference2video`、`/ent/v2/text2video`、`/ent/v2/start-end2video` | `/ent/v2/tasks/:id/creations` | 不支持 |
+| 上游端点 | 创建 | 上游查询 |
+| --- | --- | --- |
+| compat | `/v1/video/generations` | `/v1/video/generations/:id` |
+| openai_videos | `/v1/videos` | `/v1/videos/:id`；内容为 `/:id/content` |
+| seedance | `/api/v3/contents/generations/tasks` | 同根路径 `/:id` |
+| kling | 绑定的受控模型路径，或两个 `/v1/videos/*` 操作 | `/tasks?task_ids=:id` |
+| wan | `/api/v1/services/aigc/video-generation/video-synthesis` | `/api/v1/tasks/:id` |
+| minimax | `/v2/video_generation` | `/v2/query/video_generation/:id` |
+| vidu | 绑定的 `/ent/v2/img2video`、`/ent/v2/reference2video`、`/ent/v2/text2video` 或 `/ent/v2/start-end2video` | `/ent/v2/tasks/:id/creations` |
 
-Ark 同时保留 `/v3`、`/v1` 和裸路径别名。Video 分组进入新任务服务；OpenAI 分组进入旧 Seedance 处理器。共享 `/v1/videos` 创建入口按分组平台分派，Grok 继续原处理器；其 `/v1/videos/generations` 等复数操作路径保持原行为，Kling 的两个明确操作路径优先精确分类。
+<a id="video_retired_entries"></a>
+**已下线入口。** Video 分组的 Key 访问旧统一入口 `/v1/video/generations*`、`/video/generations*`、`/v1/tasks/:id`，以及 Seedance（`/api/v3`、`/v3`、`/v1` 与裸路径的 `/contents/generations/tasks`）、Kling、Wan、MiniMax、Vidu 原生创建与查询入口时，一律返回 `410 VIDEO_ENDPOINT_RETIRED` 并提示改用 `/v1/videos`；不再提供任何取消入口。旧入口创建的本地任务继续由后台按冻结协议查询与结算，客户端用其 `vid_…` ID 通过 `GET /v1/videos/{task_id}` 取回，原生供应商 ID 查询随入口一并取消。OpenAI 分组的 Seedance 能力与 Grok 分组的 `/v1/videos*` 不受影响；智能路由与模型广场对 Video 平台只展示和选择 `/v1/videos`。
 
-统一入口使用本地任务 ID；统一查询为 `GET /v1/video/generations/:id` 或 `GET /v1/tasks/:id`，两条路径都支持 `DELETE` 取消。原生创建和原生查询保留供应商任务 ID 与原始响应体，另用 `X-Video-Task-ID` 返回本地 ID。Kling 查询只接受一个 `task_ids`，不允许批量查询越过逐任务归属判断。查询/取消校验原用户、原 Key 和原端点归属；已经创建的任务不再要求当前映射仍包含原分组，当前 Key 仍须通过身份、状态和 IP 等鉴权。任务使用冻结的版本化 URL/操作路径及原账号，不重新调度。原生 ID 歧义不能以其它账号试探解决。普通 Key 改到 OpenAI 分组后，Ark 原生路径继续按旧规则分流，可使用本地任务 ID 从统一路径取回新 Video 任务。
+任务使用冻结的版本化 URL/操作路径及原账号查询，不重新调度；查询校验原用户与原 Key，已经创建的任务不再要求当前映射仍包含原分组，当前 Key 仍须通过身份、状态和 IP 等鉴权。普通 Key 改到其它分组后仍可使用本地任务 ID 取回 Video 任务。
 
-原有协议转发只替换认证及实际模型字段/模型路径；其它 JSON 参数和未知扩展字段保持原样。旧 `metaso_h3` / 新 `metaso_h3_v1` 适配的参数转换见下文，不扩展账号允许的端点。重复 JSON 键、大小写歧义和超过 64 层的嵌套会被拒绝，避免网关与上游解析值不同。通过任务归属校验的响应保留上游 HTTP 状态、原始 JSON/错误正文及允许透传的响应头，不执行客户端模型别名还原或套面板 envelope；任务响应强制 `Cache-Control: no-store`。创建请求禁止自动重定向，3xx 的 `Location` 不下发客户端，其他共享上游请求的重定向策略不受影响。Wan 的 `request_id` 是追踪号，任务 ID 从 `output.task_id` 读取。
+内置协议转发只替换认证及实际模型字段/模型路径；Metaso H3 等厂商格式的参数转换见[预置模板](#video_protocol_presets)，不扩展账号允许的端点。重复 JSON 键、大小写歧义和超过 64 层的嵌套会被拒绝，避免网关与上游解析值不同。通过任务归属校验的响应保留上游 HTTP 状态、原始 JSON/错误正文及允许透传的响应头，不执行客户端模型别名还原或套面板 envelope；任务响应强制 `Cache-Control: no-store`。创建请求禁止自动重定向，3xx 的 `Location` 不下发客户端，其他共享上游请求的重定向策略不受影响。Wan 的 `request_id` 是追踪号，任务 ID 从 `output.task_id` 读取。
 
 已有任务的查询和取消统一核对协议规范 ID 字段；明确不匹配、冲突 ID 或包含其他任务的任务列表不得作为本任务观测。重复的规范 ID 键或其父容器同样视为归属歧义，避免不同 JSON 解析器分别读取首值、末值；此消歧不扩展到普通厂商扩展或非 JSON 错误正文。整包拒绝意味着状态、用量、媒体和原始响应均不落入当前任务，也不触发捕获或释放；后台按查询失败退避，取消及已知污染的历史原包读取返回安全错误，不暴露外来正文。合法无 ID 查询响应仍可接受，供应商追踪号及未知扩展字段不被猜测为任务 ID。
 
@@ -172,45 +318,39 @@ OpenAI Videos 响应按任务冻结配置读取 `seconds`（含规范数字字�
 
 创建沿用鉴权、内容策略、用户和账号并发、渠道模型限制及消费资格检查；不以旧“允许图片生成”开关限制 Video。选号失败可以尝试尚未提交的其他合格账号。完整明确拒绝且没有任务 ID 时可在同组、同端点下有界换号，沿用同一个持久任务、价卡和预扣；账号容量与有效执行租约在迁移事务中复核。网络中断、通用网关错误、已有 ID 或受理未知不自动重提，参数和内容审核错误不按故障换号。完整分类、预算和恢复约束见[任务生命周期](../domains/video_tasks.md#video_task_lifecycle)。
 
-独立 Video 的退款策略区分创建与查询：安全换号耗尽或不满足重提条件时，完整收到创建 HTTP 4xx/5xx 且没有任务 ID，返回原错误并将本地任务记为失败、幂等释放预扣；平台承担上游可能已经受理的成本。退款规则不能用于推断允许再次生成。带任务 ID 的错误保留归属供原账号查询，明确失败/取消终态按任务规则释放。明确的创建超时或本版提交进程中断，只有没有持久响应证据且具备起算时点时，才适用[15 分钟核对后释放规则](../domains/video_tasks.md#video_task_lifecycle)。其它网络中断、响应读取失败或缺乏故障分类的旧任务继续待核对，查询 HTTP 错误不会触发退款；恢复不使用后续查询包推断创建失败。
+独立 Video 的退款策略区分创建与查询：安全换号耗尽或不满足重提条件时，完整收到创建 HTTP 4xx/5xx 且没有任务 ID，返回原错误并将本地任务记为失败、幂等释放预扣；平台承担上游可能已经受理的成本。退款规则不能用于推断允许再次生成。带任务 ID 的错误保留归属供原账号查询，明确失败/取消终态按任务规则释放。明确的创建超时或本版提交进程中断，只有没有持久响应证据且具备起算时点时，才适用[15 分钟核对后释放规则](../domains/video_tasks.md#video_task_lifecycle)。其它网络中断、响应读取失败、缺乏故障分类的旧任务或任务 ID 冲突的创建包在核对期内保留预扣，期限后仍取不到可查询的任务 ID 即按[未交付即释放](../domains/video_tasks.md#video_task_delivery_release)失败释放；查询 HTTP 错误本身不会触发退款，恢复不使用后续查询包推断创建失败。
 
-取消必须得到供应商确认。显式 `cancelled`/`canceled`/`deleted` 才是取消观测；空响应的 Ark 成功删除和 compat `204` 可确认取消。HTTP 200 中的业务错误、处理中或已经成功状态不能直接退款。`expired` 没有足够契约证明未产生费用，保留该观测并等待对账。
+取消不对外开放；后台查询仍识别显式 `cancelled`/`canceled`/`deleted` 观测。上游 `expired`、超过最长处理时间仍未完成、或完成却没有可取回成品的任务，用户拿不到视频，按[未交付即释放](../domains/video_tasks.md#video_task_delivery_release)失败并释放预扣，不再停留在待对账。
 
 <a id="video_openai_content"></a>
-## OpenAI 视频入口与内容
+## 视频内容
 
-Video 分组使用 `POST /v1/videos` 创建、`GET /v1/videos/:id` 查询、`GET /v1/videos/:id/content` 播放或下载，兼容不带 `/v1` 的别名。创建要求账号与模型明确允许 `openai_videos`，只接受 JSON，使用站内 Bearer Key；参数以实际选中上游与显式适配配置为准，支持识别 `seconds`、`size`、`input_reference.image_url` 及原有 `duration`、`resolution`、`ratio`、`images`，不隐式互相转换。已创建任务的查询和内容读取继续遵循原任务归属与冻结协议，不依赖当前账号勾选。这是所提供异步 JSON 合同的接入，不自动开放集合枚举、multipart、remix 或未声明的取消 API。
-
-该入口返回本站 `vid_…` ID、`object=video` 和 `queued / in_progress / completed / failed` 状态，另保留 `billing_status`、实际已知的时长、分辨率及 Token 用量；已知时长同时提供兼容旧客户端的 `duration` 和规范 `seconds` 字符串，已知像素尺寸提供 `size`。失败提供安全错误摘要。受理不明仍保留预算待对账，不因显示四态而退款或重新提交。旧统一和供应商原生响应格式保持不变。查询沿用持久后台轮询、预扣与幂等结算，同一任务重复查询或下载不产生新的生成请求。
+统一入口的请求格式与响应形状见[统一入口 /v1/videos](#video_unified_api)。创建只接受 JSON，不开放集合枚举、multipart、remix 或取消 API；查询沿用持久后台轮询、预扣与幂等结算，同一任务重复查询或下载不产生新的生成请求。受理不明在核对期内保留预算，不因显示四态而退款或重新提交。
 
 共享路径仅创建 Video 分组任务，Grok 分组继续原链路；管理请求通过本地 `vid_` ID 精确查找新任务，后续允许原有效 Key 切换到其它有效分组后取回。复合/智能 Key 查询不要求重新选组，但仍核对原行为用户和原 Key。普通 Key 仅当前 Video 分组的本地任务查询可免消费准入，切换到其它平台后继续其原消费门禁，不能让碰巧以 `vid_` 开头的旧 Grok ID 绕过原检查；原有分组、状态、IP 与身份门禁保持不变。智能路由仍允许 Grok 与 Video 各自符合条件的候选，模型字段处理按本次所选平台区分，不能让新路径改变旧 Grok 的别名恢复。
 
-`content` 是只读流，必须任务生成完成且账务已结算；未完成或待对账返回冲突，不触发上游状态查询或补扣。优先读取持久化的安全公共视频地址；若上游是 `openai_videos` 且未返回直接地址，则使用冻结端点、原账号和原供应商任务 ID 请求固定 `/v1/videos/:id/content`。带凭据请求禁止自动重定向；重定向目标单独经过公共地址与 DNS 拨号校验，以无凭据请求访问，不转发调用方 Key、上游 Authorization 或 Cookie。
+`content` 是只读流，必须任务生成完成且账务已结算；未完成或待对账返回冲突，不触发上游状态查询或补扣。优先读取持久化的安全公共视频地址；没有直接地址时，只有冻结协议声明了凭据内容路径（内置 `openai_videos` 的固定 `/v1/videos/:id/content`，或模板 `content.mode=path` 声明的路径）才使用原账号和原供应商任务 ID 读取。带凭据请求禁止自动重定向；重定向目标单独经过公共地址与 DNS 拨号校验，以无凭据请求访问，不转发调用方 Key、上游 Authorization 或 Cookie。
 
-面板预览通过自身的对象权限签发任务专属票据，与站内 Key 的 `content` 入口分开鉴权。独立 Video 的签票和每次播放都读取持久任务，核对任务 ID、原用户、原 Key、`completed`、`settled` 及完成后 24 小时期限；Redis 媒体快照不替代持久状态检查。无直接地址且冻结端点为 `openai_videos` 的任务同样可签发最长十分钟的票据，票据期限不超过结果期限。预览元数据及签票不访问上游；实际播放才复用上述只读内容传输，服务端凭据仅发往冻结的供应商内容路径，不进入浏览器、票据或公共 CDN 请求。图片、Grok 和 Seedance 预览的原有公共地址边界不变，详见[任务结果预览](../domains/media_tasks.md#media_task_preview)。
+面板预览通过自身的对象权限签发任务专属票据，与站内 Key 的 `content` 入口分开鉴权。独立 Video 的签票和每次播放都读取持久任务，核对任务 ID、原用户、原 Key、`completed`、`settled` 及完成后 24 小时期限；Redis 媒体快照不替代持久状态检查。无直接地址但冻结协议声明了凭据内容路径的任务同样可签发最长十分钟的票据，票据期限不超过结果期限。预览元数据及签票不访问上游；实际播放才复用上述只读内容传输，服务端凭据仅发往冻结的供应商内容路径，不进入浏览器、票据或公共 CDN 请求。图片、Grok 和 Seedance 预览的原有公共地址边界不变，详见[任务结果预览](../domains/media_tasks.md#media_task_preview)。
 
 流式下载支持单段 `Range`，最多 512 MiB、两分钟，API 下载与面板播放共享本机最多 16 条下载流；只输出允许的视频类型和必要的内容头，供应商错误、跳转、Cookie 等不透传。响应禁止缓存并带 `nosniff` 和 `no-referrer`，内容传输不调用生成、任务状态查询、恢复或结算。新端点未声明删除语义，因此不为 `/v1/videos/:id` 注册 DELETE，账号旧统一取消入口也不能把未支持的操作伪装为退款成功。视频价卡、参考图固定收费、倍率和失败释放规则继续由已有任务账本负责。
 
 <a id="video_account_tests"></a>
 ## 管理员账号测试
 
-Video API Key 账号在账号管理中使用与 Grok 相同的测试弹窗、进度和媒体预览组件，只提供视频测试。先选择模型，再选择该模型允许的端点；`GET /api/v1/admin/accounts/:id/models` 的 Video 模型条目携带 `video_endpoints` 和 `video_protocol_adapters`，后者为最终映射模型的生效方案；可选 `video_vidu_operation` 返回该模型已配置的 Vidu 默认操作。目录来自账号模型映射、最终白名单和视频模型绑定，不补聊天默认模型，也不默认开放任何兼容端点。端点集合根据映射后的上游模型解析，前端选择不能替代服务端的最终校验。
+Video API Key 账号在账号管理中使用与 Grok 相同的测试弹窗、进度和媒体预览组件，只提供视频测试。管理员只选择模型；`GET /api/v1/admin/accounts/:id/models` 的 Video 模型条目携带 `video_protocol`，即最终映射模型绑定的协议标识，未绑定协议的模型不列出。测试与正式网关一样调用 `resolveTarget` 确定协议，把测试参数构造成统一请求，再经同一转换与协议校验后提交；端点、Kling/Vidu 操作路径和 Base URL 全部来自绑定，前端不再选择端点或操作，旧的 `video_endpoint`、`video_operation` 参数被忽略。
 
-测试复用 [管理员账号连接测试](http_api.md#account_connection_tests)，请求显式发送 `test_type=video` 与 `video_endpoint=compat|openai_videos|seedance|kling|wan|minimax|vidu`。可提供 `prompt`、`image_data_url`、`duration`、`resolution` 和 `ratio`。历史协议时长省略默认 5 秒，OpenAI 官方协议默认 4 秒，显式值必须是 1–60 的整数且满足所选协议约束，这是主动试跑的限制，不改写账号预算上限或正常网关参数。历史协议分辨率不设置默认值；新 MiniMax 官方测试界面预填 `768P`，OpenAI 官方使用像素尺寸提示且比例默认留空。Seedance、Vidu 官方测试比例也默认留空。默认值仅在字段未被手动修改时随方案调整；其余方案比例预填 `16:9`，可清空。参考图沿用 Grok 测试的真实图片格式和 4 MiB 限制，不接受任意素材 URL 下载。
-
-可美测试时长默认 5 秒，MiniMax 分辨率默认 `768P`，Wan 为 `720P`，Seedance/Kling 为 `720p`，Vidu 为 `540p`，compat 不预填分辨率。MiniMax 上传图片时省略未被用户编辑过的默认比例，保留上游图生自适应行为；用户明确修改的比例仍按输入提交。Vidu 用 `video_operation` 显式选择四种受控操作之一，优先回填模型的 `video_vidu_operation`，没有配置时要求选择；临时选择不写回账号。当前测试弹窗只上传一张图，`img2video`/`reference2video` 要求图片，`text2video` 禁止图片，`start-end2video` 提示使用 API 提交两张图，不把单图伪装为首尾帧。服务端再次校验操作、模型限制和图片数量。
-
-兼容端点显式选择 `openai_v1` 时，测试默认值与 `/v1/videos` 的同方案一致，保持 4 秒、像素尺寸提示和空比例；端点仍是 `/v1/video/generations`。Vidu 官方 `vidu_v2` 的主动测试时长预填 5 秒并允许按模型修改，分辨率与比例留空，由管理员按该模型要求填写；该主动测试值不是所有 Vidu 模型的官方默认值，不改变正式 API 的缺省行为。
+测试复用 [管理员账号连接测试](http_api.md#account_connection_tests)，请求发送 `test_type=video`，可提供 `prompt`、`image_data_url`、`duration`、`resolution` 和 `ratio`。时长省略默认 5 秒，OpenAI 官方协议默认 4 秒，显式值必须是 1–60 的整数且满足绑定协议约束，这是主动试跑的限制，不改写账号预算上限或正常网关参数。参考图沿用 Grok 测试的真实图片格式和 4 MiB 限制，不接受任意素材 URL 下载。Kling 文生路径不接受参考图、图生路径要求参考图；Vidu `start-end2video` 需要两张图，测试弹窗只上传一张图，因此提示改用 API 测试。
 
 Seedance 官方账号测试的分辨率保持空值，输入示例为 `720p`，不再沿用通用 `768p` 示例；未编辑的比例也默认留空，上传参考图时不自动填入 `16:9`，由官方选择当前模型的默认比例。两套测试弹窗共用官方档位提示和输入校验，用户手填或明确清空的值不会被切换模型或方案覆盖；模型级限制由后端在模型映射和协议覆盖之后统一检查，非法输入不会触发付费创建。
 
 Yezonghui 主动测试默认 5 秒、比例留空，要求填写明确分辨率档位，不套用 OpenAI 的像素尺寸限制。参考图沿用单张 4 MiB 校验，签发身份取已登录管理员，不能由 JSON 指定；临时访问失败不会发送上游创建。测试只等待一个上游任务，第一轮立即查询，后续至少 60 秒查询一次，最多等待 30 分钟；等待间隔每 15 秒写 SSE 注释保活，不增加模型或查询请求。临时查询失败继续原任务，明确失败终态立即结束；停止或超时不会重新生成或假定上游取消。
 
-测试载荷按所选协议构造，模型映射、端点 Base URL 覆盖、受控 Kling/Vidu 路径、代理、TLS 与受保护 Header Override 均沿用原有账号配置。上游创建最多一次，后续只用该账号、端点和任务 ID 轮询；不因错误或等待超时重新提交。除上述 Yezonghui 方案外最多等待 10 分钟。成功必须取得明确完成状态，以及安全媒体链接或已下载的视频内容；OpenAI 内容端点下载最多 64 MiB，带凭据请求禁止自动跟随跳转，公共跳转另走无凭据安全下载。失败、未知状态、冲突任务 ID 或内容下载错误不能伪装成成功。
+测试载荷按模型绑定的协议构造，模型映射、端点 Base URL 覆盖、受控 Kling/Vidu 路径、代理、TLS 与受保护 Header Override 均沿用原有账号配置。上游创建最多一次，后续只用该账号、端点和任务 ID 轮询；不因错误或等待超时重新提交。除 Yezonghui 方案及查询间隔不少于 60 秒的模板（最多等待 30 分钟并容忍临时查询失败）外最多等待 10 分钟。成功必须取得明确完成状态，以及安全媒体链接或已下载的视频内容；OpenAI 内容端点下载最多 64 MiB，带凭据请求禁止自动跟随跳转，公共跳转另走无凭据安全下载。失败、未知状态、冲突任务 ID 或内容下载错误不能伪装成成功。
 
 上游生成完成与浏览器预览可用性分别展示。公共产物链接由浏览器直接读取，仍可能受到本机网络、链接有效期或编码支持限制；播放器加载失败会显示独立提示，可仅重新加载预览或在新页打开安全作品链接。等待视频元数据超过 30 秒仅提示媒体连接缓慢，仍可继续等待，加载成功后自动恢复；换源、重载和卸载时清理等待计时器。预览重载不会再次提交生成、查询上游任务或产生新的测试费用。生产默认 CSP 明确允许受支持的 HTTPS、同源、Data URL 和 Blob 媒体来源，管理员自定义 CSP 仍按其配置生效。
 
-账号显式选择 `video_openai_profile=metaso_h3` 且使用 `openai_videos` 时，测试复用正式网关适配器：时长转为 `seconds`，768p/2k 结合 `16:9` 或 `9:16` 转为供应商 `size`，单张参考图转为 `input_reference.image_url`。不支持的分辨率、比例和冲突参数在发送前拒绝；完成响应的计费元数据异常也不能显示测试成功。原有协议配置沿用旧行为，不根据模型名或 Base URL 推断 H3。每个启用端点显示独立的协议选择框，模型绑定行可以继承或覆盖。
+绑定预置模板 `profile:metaso-h3`（或尚未迁移的 `openai_videos.metaso_h3_v1`）的模型测试时复用正式网关转换：时长转为 `seconds`，768p/2k 结合 `16:9` 或 `9:16` 转为供应商 `size`，单张参考图转为 `input_reference.image_url`。不支持的分辨率、比例和冲突参数在发送前拒绝；完成响应的计费元数据异常也不能显示测试成功。不根据模型名或 Base URL 推断 H3。
 
 主动测试不经过站内用户计费，不新增用户使用记录或持久化媒体任务；真实生成仍可能消耗上游额度。浏览器关闭、切换账号或停止测试会取消本地等待，上游已经受理的任务可能继续生成。测试选项不写入账号，不改变普通网关请求或原有计划测试流程。
 

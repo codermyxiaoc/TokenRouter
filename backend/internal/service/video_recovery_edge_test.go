@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 释放生成容量与释放资金是独立动作，过期任务只能待核对，不能重新生成或猜测退款。
+// 释放生成容量与释放资金都会发生：上游过期即用户拿不到成品，失败并只释放一次，不重新生成也不扣费。
 func TestVideoRecoveryExpiredRetainsLedgerWithoutRepostingOrRefund(t *testing.T) {
 	svc, key, upstream, billing, logs := newVideoLifecycleFixture(BillingModeVideoToken)
 	response, err := svc.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(`{}`)})
@@ -23,13 +23,12 @@ func TestVideoRecoveryExpiredRetainsLedgerWithoutRepostingOrRefund(t *testing.T)
 	}
 	stored, err := svc.repo.Get(context.Background(), task.ID)
 	require.NoError(t, err)
-	require.Equal(t, "expired", stored.Status)
-	require.Equal(t, "reconciliation", stored.BillingStatus)
-	require.False(t, stored.EffectsDone)
+	require.Equal(t, "failed", stored.Status)
+	require.Equal(t, "released", stored.BillingStatus)
 	require.Equal(t, 1, upstream.submitted)
 	require.Zero(t, upstream.polls)
 	require.Zero(t, billing.captures)
-	require.Zero(t, billing.releases)
+	require.Equal(t, 1, billing.releases)
 	require.Empty(t, logs.logs)
 }
 
@@ -39,7 +38,7 @@ func TestVideoRecoveryUsageFailureRejectsLateAndForeignCancellation(t *testing.T
 	response, err := svc.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(`{}`)})
 	require.NoError(t, err)
 	tokens := int64(200_000)
-	upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", Metadata: VideoRequestMetadata{Tokens: &tokens}, Body: []byte(`{"status":"completed"}`)}
+	upstream.poll = &VideoUpstreamResponse{StatusCode: 200, Status: "completed", VideoURL: "https://cdn.example.test/video.mp4", Metadata: VideoRequestMetadata{Tokens: &tokens}, Body: []byte(`{"status":"completed"}`)}
 	logs.err = errors.New("usage unavailable")
 	task, err := svc.repo.Get(context.Background(), response.LocalTaskID)
 	require.NoError(t, err)

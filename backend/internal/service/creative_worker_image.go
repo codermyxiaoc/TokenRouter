@@ -28,11 +28,12 @@ func (w *CreativeRunWorker) failCreativeImageRun(ctx context.Context, runID stri
 	return CreativeProcessResult{Terminal: true}, nil
 }
 
-// 只有明确未执行/拒绝的结果能打开栅栏；任何未知、任务身份、用量或产物都停止自动重生。
+// 只有明确未执行/拒绝的结果能换号重试；未知、已受理但无图等情况都不重发生成，
+// 并按“用户未拿到成品不扣费”直接失败释放。
 func (w *CreativeRunWorker) handleCreativeImageFailure(ctx context.Context, run *CreativeRun, accountID int64, execErr error) (CreativeProcessResult, error) {
 	decision, classified := ImageAttemptDecisionForError(execErr)
 	if !classified || decision.Outcome != ImageAttemptNotSent && decision.Outcome != ImageAttemptRejected {
-		return w.deferUnconfirmedExecution(ctx, run)
+		return w.releaseUnavailableExecution(ctx, run.RunID)
 	}
 	attempts, ok := w.repo.(CreativeImageAttemptRepository)
 	if !ok {

@@ -9,15 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 同一模型经不同入站协议选中上游后，取消端点勾选不能影响已受理任务的恢复与结算。
+// 统一入口按提交时的模型绑定选中上游；之后改绑协议、端点或地址都不能影响已受理任务的恢复与结算。
 func TestVideoTaskAdaptiveEndpointsFreezeSelectionThroughSettlement(t *testing.T) {
 	s, key, _, billing, logs := newVideoLifecycleFixture(BillingModeVideoToken)
 	key.Group.Status = StatusActive
 	account := videoFixtureAccount(VideoEndpointCompat)
 	account.GroupIDs = []int64{key.Group.ID}
-	account.Credentials["video_endpoints"] = []string{"compat", "seedance", "openai_videos"}
-	account.Credentials["video_model_bindings"] = map[string]any{"video-model": []string{"compat", "seedance", "openai_videos"}}
-	account.Credentials["video_base_urls"] = map[string]string{"compat": "https://compat.example", "seedance": "https://ark.example", "openai_videos": "https://videos.example"}
+	delete(account.Credentials, "video_endpoints")
 	account.Credentials["video_max_output_tokens"] = 1_000_000
 	accounts := &videoSelectionFixture{accounts: []Account{*account}}
 	transport := &videoHTTPFixture{status: http.StatusAccepted}
@@ -30,14 +28,17 @@ func TestVideoTaskAdaptiveEndpointsFreezeSelectionThroughSettlement(t *testing.T
 	var created []taskExpectation
 	requests := []struct {
 		req               VideoTaskSubmitRequest
+		protocol, base    string
 		endpoint          VideoEndpoint
 		host, path, rawID string
 	}{
-		{VideoTaskSubmitRequest{Body: []byte(`{"model":"video-model","prompt":"compat prompt","resolution":"720p","duration":8}`), InboundProtocol: "unified", NativePath: "/v1/video/generations"}, VideoEndpointCompat, "compat.example", "/v1/video/generations", "compat-task"},
-		{VideoTaskSubmitRequest{Body: []byte(`{"model":"video-model","prompt":"videos prompt","resolution":"720p","duration":8}`), InboundProtocol: "openai_videos", NativePath: "/v1/videos"}, VideoEndpointOpenAIVideos, "videos.example", "/v1/videos", "videos-task"},
-		{VideoTaskSubmitRequest{Body: []byte(`{"model":"video-model","content":[{"type":"text","text":"native prompt"}],"resolution":"720p","duration":8}`), InboundProtocol: "seedance", NativePath: "/api/v3/contents/generations/tasks", Native: true}, VideoEndpointSeedance, "ark.example", "/api/v3/contents/generations/tasks", "ark-task"},
+		{VideoTaskSubmitRequest{Body: []byte(`{"model":"video-model","prompt":"compat prompt","resolution":"720p","duration":8}`), InboundProtocol: "openai_videos"}, "compat.legacy_v1", "https://compat.example", VideoEndpointCompat, "compat.example", "/v1/video/generations", "compat-task"},
+		{VideoTaskSubmitRequest{Body: []byte(`{"model":"video-model","prompt":"videos prompt","resolution":"720p","duration":8}`), InboundProtocol: "openai_videos"}, "openai_videos.legacy_v1", "https://videos.example", VideoEndpointOpenAIVideos, "videos.example", "/v1/videos", "videos-task"},
+		{VideoTaskSubmitRequest{Body: []byte(`{"model":"video-model","content":[{"type":"text","text":"native prompt"}],"resolution":"720p","duration":8}`), InboundProtocol: "openai_videos"}, "seedance.legacy_v1", "https://ark.example", VideoEndpointSeedance, "ark.example", "/api/v3/contents/generations/tasks", "ark-task"},
 	}
 	for _, tc := range requests {
+		// 每次提交前改绑模型协议；入站入口始终是 /v1/videos，上游由绑定决定。
+		account.Credentials["video_model_protocols"] = map[string]any{"video-model": map[string]any{"protocol": tc.protocol, "base_url": tc.base}}
 		transport.response = `{"id":"` + tc.rawID + `","status":"queued"}`
 		response, err := s.Submit(context.Background(), key, tc.req)
 		require.NoError(t, err)
@@ -51,9 +52,8 @@ func TestVideoTaskAdaptiveEndpointsFreezeSelectionThroughSettlement(t *testing.T
 	}
 	require.Equal(t, len(requests), billing.reserves)
 	// 管理员改了支持端点和地址，不得改变已受理任务的轮询地址或重新发送生成请求。
-	account.Credentials["video_endpoints"] = []string{"minimax"}
+	account.Credentials["video_model_protocols"] = map[string]any{"*": map[string]any{"protocol": "minimax.minimax_v2", "base_url": "https://changed.example"}}
 	account.Credentials["base_url"] = "https://changed.example"
-	account.Credentials["video_base_urls"] = map[string]string{"minimax": "https://changed.example"}
 	transport.status = http.StatusOK
 	transport.response = `{"status":"completed","duration":8,"resolution":"720p","usage":{"completion_tokens":100},"data":[{"url":"https://cdn.example/video.mp4"}]}`
 	for _, expected := range created {
@@ -74,33 +74,34 @@ func TestVideoTaskAdaptiveEndpointsFreezeSelectionThroughSettlement(t *testing.T
 	require.Len(t, logs.logs, len(requests))
 }
 
-// 未明确允许的统一入口必须在建任务和预扣之前拒绝，不能产生付费 POST 或冻结余额。
+// 模型在账号上没有可用协议绑定时，统一入口必须在建任务和预扣之前拒绝，不能产生付费 POST 或冻结余额。
 func TestVideoTaskDisabledUnifiedEndpointHasNoBillingEffects(t *testing.T) {
 	for _, tc := range []struct {
-		name, protocol string
-		endpoints      []string
-		bindings       map[string]any
+		name      string
+		endpoints []string
+		protocols map[string]any
 	}{
-		{"native_only_compat", "unified", []string{"seedance"}, nil},
-		{"native_only_videos", "openai_videos", []string{"seedance"}, nil},
-		{"compat_does_not_grant_videos", "openai_videos", []string{"compat"}, nil},
-		{"videos_does_not_grant_compat", "unified", []string{"openai_videos"}, nil},
-		{"binding_excludes_compat", "unified", []string{"compat", "seedance"}, map[string]any{"video-model": "seedance"}},
-		{"binding_excludes_videos", "openai_videos", []string{"openai_videos", "seedance"}, map[string]any{"video-model": "seedance"}},
+		{"legacy_kling_without_model_path", []string{"kling"}, nil},
+		{"legacy_vidu_without_model_path", []string{"vidu"}, nil},
+		{"binding_for_other_model", nil, map[string]any{"other-model": map[string]any{"protocol": "seedance.seedance_v1"}}},
+		{"invalid_binding", nil, map[string]any{"video-model": map[string]any{"protocol": "seedance.openai_v1"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, key, _, billing, logs := newVideoLifecycleFixture(BillingModeVideo)
 			key.Group.Status = StatusActive
 			account := videoFixtureAccount(VideoEndpointSeedance)
 			account.GroupIDs = []int64{key.Group.ID}
-			account.Credentials["video_endpoints"] = tc.endpoints
-			if tc.bindings != nil {
-				account.Credentials["video_model_bindings"] = tc.bindings
+			delete(account.Credentials, "video_endpoints")
+			if tc.endpoints != nil {
+				account.Credentials["video_endpoints"] = tc.endpoints
+			}
+			if tc.protocols != nil {
+				account.Credentials["video_model_protocols"] = tc.protocols
 			}
 			accounts := &videoSelectionFixture{accounts: []Account{*account}}
 			transport := &videoHTTPFixture{status: http.StatusAccepted, response: `{"id":"must-not-submit","status":"queued"}`}
 			s.upstream = NewVideoUpstreamService(&OpenAIGatewayService{accountRepo: accounts, concurrencyService: NewConcurrencyService(nil), httpUpstream: transport})
-			_, err := s.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(`{"model":"video-model","duration":8,"resolution":"720p"}`), InboundProtocol: tc.protocol})
+			_, err := s.Submit(context.Background(), key, VideoTaskSubmitRequest{Body: []byte(`{"model":"video-model","duration":8,"resolution":"720p"}`), InboundProtocol: "openai_videos"})
 			require.Error(t, err)
 			require.Equal(t, "VIDEO_ENDPOINT_MODEL_MISMATCH", infraerrors.Reason(err))
 			require.Empty(t, s.repo.(*videoLifecycleRepo).tasks)

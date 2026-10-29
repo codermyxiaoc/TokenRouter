@@ -124,7 +124,79 @@ func TestImageModelCooldownNormalizesScopeAndIgnoresCallerCancellation(t *testin
 	require.Len(t, server.Keys(), 1, "仓储零时长不得创建冷却窗口")
 }
 
+// 调度快速查询缓存“无冷却”一秒以减少 Redis 往返，本实例写入冷却时立即生效。
+func TestImageModelCoolingForScheduleKnownClearCache(t *testing.T) {
+	server := miniredis.RunT(t)
+	cache, other := imageCooldownTestCache(t, server.Addr()), imageCooldownTestCache(t, server.Addr())
+	ctx := context.Background()
+	require.False(t, cache.ImageModelCoolingForSchedule(ctx, 9, "img", "generate"))
+	// 其它实例刚写入的冷却在本地缓存窗口内不可见，属于设计内的最多一秒延迟；
+	// 入口选号后仍用直接查询复核，因此不会真正发送到冷却模型。
+	require.NoError(t, other.CooldownImageModel(ctx, 9, "img", "generate", time.Minute))
+	require.False(t, cache.ImageModelCoolingForSchedule(ctx, 9, "img", "generate"))
+	remaining, err := cache.GetImageModelCooldown(ctx, 9, "img", "generate")
+	require.NoError(t, err)
+	require.Positive(t, remaining, "直接查询不受快速缓存影响")
+
+	cache2 := imageCooldownTestCache(t, server.Addr())
+	require.False(t, cache2.ImageModelCoolingForSchedule(ctx, 10, "img", "generate"))
+	require.NoError(t, cache2.CooldownImageModel(ctx, 10, "img", "generate", time.Minute))
+	require.True(t, cache2.ImageModelCoolingForSchedule(ctx, 10, "img", "generate"), "本实例写入冷却后不能被旧缓存掩盖")
+	require.False(t, cache2.ImageModelCoolingForSchedule(ctx, 10, "img", "edit"), "操作维度独立")
+}
+
 type imageCooldownReadDelayHook struct{ delay time.Duration }
+
+// 连续失败计数在窗口内累加、窗口后重置；管理端可列出并手动解除冷却。
+func TestImageModelStrikesAndAdminClear(t *testing.T) {
+	server := miniredis.RunT(t)
+	cache := imageCooldownTestCache(t, server.Addr())
+	ctx := context.Background()
+	for want := 1; want <= 3; want++ {
+		count, err := cache.IncrImageModelFailures(ctx, 5, "img:v2", "generate", time.Minute)
+		require.NoError(t, err)
+		require.Equal(t, want, count)
+	}
+	server.FastForward(2 * time.Minute)
+	count, err := cache.IncrImageModelFailures(ctx, 5, "img:v2", "generate", time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, 1, count, "计数窗口过期后重新开始")
+	require.NoError(t, cache.ResetImageModelFailures(ctx, 5, "img:v2", "generate"))
+	count, err = cache.IncrImageModelFailures(ctx, 5, "img:v2", "generate", time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	require.NoError(t, cache.CooldownImageModel(ctx, 5, "img:v2", "generate", time.Minute))
+	require.NoError(t, cache.CooldownImageModel(ctx, 55, "img:v2", "generate", time.Minute))
+	entries, err := cache.ListImageModelCooldowns(ctx, 5)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "账号前缀不能匹配到其它账号")
+	require.Equal(t, "img:v2", entries[0].Model)
+	require.Equal(t, "generate", entries[0].Operation)
+	require.Equal(t, 1, entries[0].Failures)
+	require.Positive(t, entries[0].RemainingSeconds)
+
+	require.NoError(t, cache.ClearImageModelCooldown(ctx, 5, "img:v2", "generate"))
+	remaining, err := cache.GetImageModelCooldown(ctx, 5, "img:v2", "generate")
+	require.NoError(t, err)
+	require.Zero(t, remaining)
+	entries, err = cache.ListImageModelCooldowns(ctx, 5)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
+// Redis 不可用时计数退回本地，仍能逐级累加。
+func TestImageModelStrikesLocalFallback(t *testing.T) {
+	cache := &gatewayCache{}
+	ctx := context.Background()
+	for want := 1; want <= 2; want++ {
+		count, err := cache.IncrImageModelFailures(ctx, 1, "img", "edit", time.Minute)
+		require.NoError(t, err)
+		require.Equal(t, want, count)
+	}
+	require.NoError(t, cache.ResetImageModelFailures(ctx, 1, "img", "edit"))
+	require.Zero(t, cache.imageModelStrikes.get(imageModelStrikeKey(1, "img", "edit"), time.Now()))
+}
 
 func (h imageCooldownReadDelayHook) DialHook(next redis.DialHook) redis.DialHook { return next }
 func (h imageCooldownReadDelayHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {

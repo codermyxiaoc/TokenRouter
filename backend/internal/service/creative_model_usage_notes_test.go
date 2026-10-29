@@ -143,10 +143,10 @@ func TestCreativeModelUsageNotesDoNotChangeVideoRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, models.Data, 1)
 	model := models.Data[0]
-	before, _, err := creativeVideoCanvasRequest(execution, &model, nil, 8000)
+	before, _, _, err := creativeVideoCanvasRequest(execution, &model, nil, 8000)
 	require.NoError(t, err)
 	model.UsageNotes = "首帧比例由参考图决定；这段说明不能进入提示词。"
-	after, _, err := creativeVideoCanvasRequest(execution, &model, nil, 8000)
+	after, _, _, err := creativeVideoCanvasRequest(execution, &model, nil, 8000)
 	require.NoError(t, err)
 	require.Equal(t, before, after)
 	require.NotContains(t, string(after), "usage_notes")

@@ -700,6 +700,19 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresAdmin: true, requiresTickets: true, title: 'Ticket', titleKey: 'tickets.conversation', hidePageHeading: true }
   },
   {
+    // 声明式视频协议模板：版本管理与离线调试
+    path: '/admin/video-protocol-profiles',
+    name: 'AdminVideoProtocolProfiles',
+    component: () => import('@/views/admin/VideoProtocolProfilesView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Protocol Templates',
+      titleKey: 'admin.videoProtocolProfiles.title',
+      descriptionKey: 'admin.videoProtocolProfiles.description'
+    }
+  },
+  {
     path: '/admin/plugins',
     name: 'AdminPlugins',
     component: () => import('@/views/admin/PluginsView.vue'),

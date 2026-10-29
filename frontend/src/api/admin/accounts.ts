@@ -680,6 +680,42 @@ export async function resetTempUnschedulable(id: number): Promise<{ message: str
   return data
 }
 
+/** 生图“账号 + 实际模型 + 操作”冷却条目 */
+export interface ImageModelCooldownEntry {
+  account_id: number
+  model: string
+  operation: string
+  remaining_seconds: number
+  failures: number
+}
+
+/**
+ * 获取账号下正在生效的生图模型冷却
+ * @param id - Account ID
+ */
+export async function getImageModelCooldowns(id: number): Promise<ImageModelCooldownEntry[]> {
+  const { data } = await apiClient.get<{ items: ImageModelCooldownEntry[] }>(
+    `/admin/accounts/${id}/image-model-cooldowns`
+  )
+  return data.items || []
+}
+
+/**
+ * 手动解除某个生图模型冷却并清零连续失败计数
+ * @param id - Account ID
+ */
+export async function clearImageModelCooldown(
+  id: number,
+  model: string,
+  operation: string
+): Promise<{ message: string }> {
+  const { data } = await apiClient.delete<{ message: string }>(
+    `/admin/accounts/${id}/image-model-cooldowns`,
+    { data: { model, operation } }
+  )
+  return data
+}
+
 /**
  * Generate OAuth authorization URL
  * @param endpoint - API endpoint path
@@ -1293,6 +1329,8 @@ export const accountsAPI = {
   resetAccountQuota,
   getTempUnschedulableStatus,
   resetTempUnschedulable,
+  getImageModelCooldowns,
+  clearImageModelCooldown,
   setSchedulable,
   getAvailableModels,
   syncUpstreamModels,

@@ -11,7 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 管理端真实创建和编辑均要保留独立 Video 身份、端点绑定及共享凭据，且删除废弃预留上限。
+// 管理端真实创建和编辑均要保留独立 Video 身份及共享凭据，删除废弃预留上限；
+// 旧端点配置在保存时迁移为 video_model_protocols 并清理旧字段，迁移规则与运行时换算一致。
 func TestVideoAdminReadinessAccountCreateAndUpdate(t *testing.T) {
 	ctx := context.Background()
 	repo := &accountServiceAdminTestRepo{accountServiceTestRepo: &accountServiceTestRepo{}}
@@ -28,23 +29,49 @@ func TestVideoAdminReadinessAccountCreateAndUpdate(t *testing.T) {
 	require.Equal(t, PlatformVideo, account.Platform)
 	require.Equal(t, AccountTypeAPIKey, account.Type)
 	require.NotContains(t, account.Credentials, "video_max_output_tokens")
+	for _, key := range videoLegacyCredentialKeys {
+		require.NotContains(t, account.Credentials, key)
+	}
 	cfg, err := account.VideoConfiguration()
 	require.NoError(t, err)
-	require.Equal(t, []VideoEndpoint{VideoEndpointCompat, VideoEndpointSeedance}, cfg.Endpoints)
-	require.Equal(t, VideoEndpointSet{VideoEndpointCompat, VideoEndpointSeedance}, cfg.ModelBindings["upstream-video"])
-	// 通用编辑接口提交完整凭据对象，与当前账号表单的保存契约保持一致。
+	// 多端点模型按旧 /v1/videos 优先级迁移：compat 优先于原生端点。
+	binding, bound := cfg.Protocol("upstream-video")
+	require.True(t, bound)
+	// compat 的原样协议保存时改绑为通用扁平格式模板。
+	require.Equal(t, "profile:generic-flat", videoProtocolLabel(binding))
+	// 通用编辑接口提交完整凭据对象；只提交旧字段时同样迁移，未勾选的兼容入口不会被保留为隐式绑定。
 	editedCredentials := mergeMap(nil, account.Credentials)
+	delete(editedCredentials, "video_model_protocols")
 	editedCredentials["video_endpoints"] = []string{"seedance"}
 	editedCredentials["video_model_bindings"] = map[string]any{"upstream-video": "seedance"}
+	editedCredentials["video_base_urls"] = map[string]string{"seedance": "https://ark.example"}
 	updated, err := svc.UpdateAccount(ctx, account.ID, &UpdateAccountInput{Credentials: editedCredentials})
 	require.NoError(t, err)
 	require.Equal(t, "fixture-secret", updated.GetCredential("api_key"))
 	require.Equal(t, "upstream-video", updated.GetMappedModel("client-video"))
 	cfg, err = updated.VideoConfiguration()
 	require.NoError(t, err)
-	require.Equal(t, []VideoEndpoint{VideoEndpointSeedance}, cfg.Endpoints)
-	_, err = cfg.SelectEndpoint("upstream-video", "unified", false)
-	require.Error(t, err, "编辑不能保留未勾选的隐式兼容入口")
+	for model := range cfg.ModelProtocols {
+		binding, bound := cfg.Protocol(model)
+		require.True(t, bound)
+		require.Equal(t, VideoEndpointSeedance, binding.Endpoint)
+		require.Equal(t, "https://ark.example", binding.BaseURL)
+	}
+	for _, key := range videoLegacyCredentialKeys {
+		require.NotContains(t, updated.Credentials, key)
+	}
+	// 新格式编辑直接保存绑定；模板协议与内置协议同样按模型精确匹配。
+	editedCredentials = mergeMap(nil, updated.Credentials)
+	editedCredentials["video_model_protocols"] = map[string]any{"upstream-video": map[string]any{"protocol": "wan.wan_v1"}}
+	updated, err = svc.UpdateAccount(ctx, account.ID, &UpdateAccountInput{Credentials: editedCredentials})
+	require.NoError(t, err)
+	cfg, err = updated.VideoConfiguration()
+	require.NoError(t, err)
+	binding, bound = cfg.Protocol("upstream-video")
+	require.True(t, bound)
+	require.Equal(t, VideoEndpointWan, binding.Endpoint)
+	_, bound = cfg.Protocol("other-video")
+	require.False(t, bound)
 	stored, err := repo.GetByID(ctx, account.ID)
 	require.NoError(t, err)
 	require.Equal(t, updated.Credentials, stored.Credentials)

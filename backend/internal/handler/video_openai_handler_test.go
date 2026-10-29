@@ -56,17 +56,21 @@ func TestOpenAIVideoContentStreamsSafeHeadersWithoutBilling(t *testing.T) {
 	}
 }
 
+// 统一入口按规范字段解析请求，原始 JSON 原样传给任务服务，入口不再携带原生路径。
 func TestOpenAIVideoCreatePreservesJSONAndSelectsUnifiedProtocol(t *testing.T) {
-	body := `{"model":"seedance-2.5","duration":10,"resolution":"720p","ratio":"16:9","images":["https://example.com/input.png"],"future":false}`
+	body := `{"model":"seedance-2.5","duration":10,"resolution":"720p","aspect_ratio":"16:9","images":["https://example.com/input.png"],"extra":{"future":false}}`
 	f := &videoLifecycleFixture{response: &service.VideoTaskResponse{StatusCode: 200, Body: []byte(`{"id":"vid_owned","status":"queued"}`)}}
 	c, w := videoHandlerContext(http.MethodPost, "/v1/videos", body, service.PlatformVideo)
 	NewVideoHandler(f).Handle(c)
 	require.Equal(t, 200, w.Code)
 	require.Equal(t, 1, f.creates)
 	require.Equal(t, "openai_videos", f.request.InboundProtocol)
-	require.Equal(t, "/v1/videos", f.request.NativePath)
+	require.Empty(t, f.request.NativePath)
 	require.False(t, f.request.Native)
 	require.Equal(t, body, string(f.request.Body))
+	require.NotNil(t, f.request.Canonical)
+	require.Equal(t, "16:9", f.request.Canonical.AspectRatio)
+	require.Equal(t, "https://example.com/input.png", f.request.Canonical.Images[0].URL)
 }
 
 func TestOpenAIVideoMissingServiceDoesNotFallBackFromVideoGroup(t *testing.T) {

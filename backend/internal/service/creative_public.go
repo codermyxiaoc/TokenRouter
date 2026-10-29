@@ -42,9 +42,11 @@ var ErrCreativeContentBlocked = infraerrors.New(403, "CREATIVE_CONTENT_BLOCKED",
 
 // CreativePublicService 是创作台的用户侧服务：模型列表、任务创建、查询与输出获取。
 type CreativePublicService struct {
-	Repo              CreativeRunRepository
-	ApiKeyRepo        CreativeManagedKeyRepository
-	UserRepo          CreativeUserRepository
+	Repo       CreativeRunRepository
+	ApiKeyRepo CreativeManagedKeyRepository
+	UserRepo   CreativeUserRepository
+	// videoProfiles 解析视频协议模板，用于画布目录的参考图大小提示；为空时只识别内置预置模板。
+	videoProfiles     *VideoProtocolProfileService
 	AccountRepo       CreativeAccountRepository
 	GroupRepo         CreativeGroupRepository
 	UserGroupRateRepo CreativeUserGroupRateRepository
@@ -2125,40 +2127,22 @@ func (s *CreativePublicService) SucceedRun(ctx context.Context, runID string, ac
 	if err := s.Repo.RecordCreativeRunProviderResult(ctx, runID, accountID, metadata, now); err != nil {
 		return nil, err
 	}
+	// 成功事实已落库：后续只做存储尽力交付，任何存储失败都不阻断结算；
+	// 结算阶段按实际可取回的成品张数扣费，一张都未交付时整笔释放。
 	for i := range results {
 		result := &results[i]
-		if result.Success {
-			if run.Operation == CreativeOperationTTS {
-				// 音频先暂存字节，再归档云端；云盘短时失败时可只重试存储而不重新生成。
-				if s.TransientStore == nil {
-					return nil, ErrCreativeTransientFailed
-				}
-				if err := s.TransientStore.SaveOutput(ctx, runID, result.Index, result.Bytes, transientTTL); err != nil {
-					return nil, ErrCreativeTransientFailed.WithCause(err)
-				}
-				if s.CloudOutputSink != nil {
-					if err := s.CloudOutputSink.PersistCreativeOutput(ctx, runID, result.Index, result.Bytes, result.Mime); err != nil {
-						return nil, ErrCreativeTransientFailed.WithCause(err)
-					}
-				}
-				continue
-			}
-			if s.CloudOutputSink != nil {
-				if err := s.CloudOutputSink.PersistCreativeOutput(ctx, runID, result.Index, result.Bytes, result.Mime); err != nil {
-					// provider 成功事实已经落库；保留结算等待，后续重试云资产写入，绝不重发生成。
-					return nil, fmt.Errorf("%w: cloud output %d: %v", ErrCreativeTransientFailed, result.Index, err)
-				}
-			}
-			if s.TransientStore == nil {
-				return nil, fmt.Errorf("%w: transient store is not configured", ErrCreativeTransientFailed)
-			}
-			if err := s.TransientStore.SaveOutput(ctx, runID, result.Index, result.Bytes, transientTTL); err != nil {
-				logger.L().Warn("creative.save_output_failed",
+		if !result.Success {
+			continue
+		}
+		s.saveCreativeTransientOutput(ctx, runID, result.Index, result.Bytes, transientTTL)
+		if s.CloudOutputSink != nil {
+			if err := s.CloudOutputSink.PersistCreativeOutput(ctx, runID, result.Index, result.Bytes, result.Mime); err != nil {
+				// 结算阶段会从 Redis 副本重试归档；永久失败按未交付处理，不扣这张的费用。
+				logger.L().Warn("creative.cloud_output_persist_failed",
 					zap.String("run_id", runID),
 					zap.Int("output_index", result.Index),
 					zap.Error(err),
 				)
-				return nil, fmt.Errorf("%w: save output %d: %v", ErrCreativeTransientFailed, result.Index, err)
 			}
 		}
 	}
@@ -2211,32 +2195,36 @@ func (s *CreativePublicService) SettleRun(ctx context.Context, runID string) err
 	if len(outputs) != run.RequestedOutputCount || len(outputs) == 0 {
 		return errors.New("creative provider output count is incomplete; settlement requires reconciliation")
 	}
-	successCount := 0
-	resultLost := false
+	// 只为已交付到用户可取回位置的成品扣费：画布以云端素材就绪为准，普通任务以 Redis 副本可读为准。
+	deliveredCount := 0
 	for _, output := range outputs {
 		if output == nil || output.Status == CreativeRunOutputStatusPending {
 			return errors.New("creative provider result metadata is incomplete; settlement requires reconciliation")
 		}
-		if output != nil && (output.Status == CreativeRunOutputStatusSucceeded || output.Status == CreativeRunOutputStatusAcked) {
-			successCount++
-			if output.Status == CreativeRunOutputStatusAcked {
-				continue
-			}
-			if s.TransientStore == nil {
-				resultLost = true
-				continue
-			}
-			data, loadErr := s.TransientStore.LoadOutput(ctx, runID, output.OutputIndex)
-			if errors.Is(loadErr, ErrCreativeTransientUnavailable) {
-				// Redis 短时不可用不能被当作图片已经丢失，保留结算重试。
-				return loadErr
-			}
-			if loadErr != nil || len(data) == 0 {
-				resultLost = true
-			}
+		if output.Status != CreativeRunOutputStatusSucceeded && output.Status != CreativeRunOutputStatusAcked {
+			continue
+		}
+		delivered, err := s.creativeOutputDelivered(ctx, run, output)
+		if err != nil {
+			// 存储暂时不可用不能当作成品丢失，保留结算重试；Redis 副本过期后自然转为未交付。
+			return err
+		}
+		if delivered {
+			deliveredCount++
+			continue
+		}
+		if err := s.Repo.UpdateCreativeRunOutput(ctx, runID, output.OutputIndex, CreativeRunOutputStatusFailed, "", 0, nil, creativeOutputUndeliveredCode, "成品未能交付，未扣费"); err != nil {
+			return err
 		}
 	}
-	billingResult, err := captureCreativeBalanceHold(ctx, s.BillingRepo, run, successCount)
+	if run.Status == CreativeRunStatusCancelled {
+		// 已取消任务在界面上显示失败，用户拿不到成品，因此只释放不扣费。
+		return s.releaseCancelledProviderResult(ctx, run)
+	}
+	if deliveredCount == 0 {
+		return s.releaseUndeliveredRun(ctx, run)
+	}
+	billingResult, err := captureCreativeBalanceHold(ctx, s.BillingRepo, run, deliveredCount)
 	if err != nil {
 		return err
 	}
@@ -2254,10 +2242,10 @@ func (s *CreativePublicService) SettleRun(ctx context.Context, runID string) err
 	now := time.Now()
 	// 资金捕获已经幂等提交，但展示日志也必须可靠落库后才能发布终态。
 	// 写入失败时保留结算等待，由持久 outbox 重试，不释放资金或重新生成。
-	if err := s.recordCreativeUsageLog(ctx, run, actualCost, successCount, billingResult, now); err != nil {
+	if err := s.recordCreativeUsageLog(ctx, run, actualCost, deliveredCount, billingResult, now); err != nil {
 		return err
 	}
-	if marker, ok := s.Repo.(CreativeUsageRecoveryRepository); ok && successCount > 0 {
+	if marker, ok := s.Repo.(CreativeUsageRecoveryRepository); ok {
 		recorded, err := marker.MarkCreativeUsageRecorded(ctx, runID)
 		if err != nil {
 			return err
@@ -2266,18 +2254,133 @@ func (s *CreativePublicService) SettleRun(ctx context.Context, runID string) err
 			return errors.New("creative usage was not persisted")
 		}
 	}
-	var terminalErr error
-	if resultLost {
-		terminalErr = s.Repo.MarkCreativeRunResultLostAfterSettlement(ctx, runID, actualCost, now)
-	} else {
-		terminalErr = s.Repo.MarkCreativeRunSucceeded(ctx, runID, actualCost, now)
-	}
-	if err := terminalErr; err != nil {
+	if err := s.Repo.MarkCreativeRunSucceeded(ctx, runID, actualCost, now); err != nil {
 		if !errors.Is(err, ErrCreativeInvalidTransition) {
 			return err
 		}
 	}
 	return nil
+}
+
+// creativeOutputUndeliveredCode 标记上游已生成但未交付给用户的单张输出，该张不计费。
+const creativeOutputUndeliveredCode = "OUTPUT_UNDELIVERED"
+
+// CreativeCloudOutputDelivery 由画布实现，判断输出是否已归档为用户可见的私有素材。
+type CreativeCloudOutputDelivery interface {
+	// CreativeOutputDelivered 的 managed=false 表示不是画布任务；managed=true 时 delivered 表示素材已就绪。
+	CreativeOutputDelivered(ctx context.Context, runID string, index int) (managed bool, delivered bool, err error)
+}
+
+// creativeOutputDelivered 判断单张输出是否已交付；画布素材未就绪时用 Redis 副本补做一次归档。
+// @project-doc docs/domains/creative_studio.md#creative_delivery_billing
+func (s *CreativePublicService) creativeOutputDelivered(ctx context.Context, run *CreativeRun, output *CreativeRunOutput) (bool, error) {
+	if output.Status == CreativeRunOutputStatusAcked {
+		return true, nil
+	}
+	managed := false
+	if checker, ok := s.CloudOutputSink.(CreativeCloudOutputDelivery); ok && s.CloudOutputSink != nil {
+		isCanvas, delivered, err := checker.CreativeOutputDelivered(ctx, run.RunID, output.OutputIndex)
+		if err != nil {
+			return false, err
+		}
+		if delivered {
+			return true, nil
+		}
+		managed = isCanvas
+	}
+	if s.TransientStore == nil {
+		return false, nil
+	}
+	data, err := s.TransientStore.LoadOutput(ctx, run.RunID, output.OutputIndex)
+	if errors.Is(err, ErrCreativeTransientUnavailable) {
+		return false, err
+	}
+	if err != nil || len(data) == 0 {
+		return false, nil
+	}
+	if !managed {
+		return true, nil
+	}
+	mime := ""
+	if output.MimeType != nil {
+		mime = *output.MimeType
+	}
+	if err := s.CloudOutputSink.PersistCreativeOutput(ctx, run.RunID, output.OutputIndex, data, mime); err != nil {
+		if creativeCloudArchivePermanent(err) {
+			logger.L().Warn("creative.cloud_output_rejected",
+				zap.String("run_id", run.RunID),
+				zap.Int("output_index", output.OutputIndex),
+				zap.Error(err),
+			)
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// creativeCloudArchivePermanent 识别重试也无法成功的归档错误：格式、大小/配额、画布已删除或素材冲突。
+func creativeCloudArchivePermanent(err error) bool {
+	return errors.Is(err, ErrCanvasInvalid) || errors.Is(err, ErrCanvasQuota) || errors.Is(err, ErrCanvasNotFound) ||
+		errors.Is(err, ErrCanvasConflict) || errors.Is(err, ErrCanvasExpired)
+}
+
+// releaseUndeliveredRun 上游虽成功但一张成品都没交付时，整笔释放并以 result_lost 结束。
+func (s *CreativePublicService) releaseUndeliveredRun(ctx context.Context, run *CreativeRun) error {
+	code := creativeOutputUndeliveredCode
+	message := "成品未能交付，未扣费，冻结已释放"
+	if err := s.Repo.TransitionCreativeRunStatus(ctx, run.RunID, CreativeRunStatusReleasePending, CreativeRunTransitionOptions{
+		ErrorCode:           &code,
+		ErrorMessage:        &message,
+		ReleaseTargetStatus: CreativeRunStatusResultLost,
+	}); err != nil && !errors.Is(err, ErrCreativeInvalidTransition) {
+		return err
+	}
+	if err := s.ensureCreativeOutbox(ctx, run.RunID, CreativeRunOutboxRelease); err != nil {
+		return err
+	}
+	return s.ReleaseRun(ctx, run.RunID)
+}
+
+// releaseCancelledProviderResult 释放历史 cancelled 任务的预占；释放按 request_id 幂等，可重复调用。
+func (s *CreativePublicService) releaseCancelledProviderResult(ctx context.Context, run *CreativeRun) error {
+	if err := releaseCreativeBalanceHold(ctx, s.BillingRepo, run); err != nil {
+		return err
+	}
+	if marker, ok := s.Repo.(CreativeRunAllowanceMarker); ok && run.AllowanceReserved {
+		if err := marker.SetCreativeRunAllowanceReserved(ctx, run.RunID, false); err != nil {
+			return err
+		}
+	}
+	s.invalidateCreativeAuthCache(ctx, run.UserID)
+	return nil
+}
+
+// saveCreativeTransientOutput 短暂重试 Redis 写入；仍失败时只记录日志，由结算按未交付处理。
+func (s *CreativePublicService) saveCreativeTransientOutput(ctx context.Context, runID string, index int, data []byte, ttl time.Duration) {
+	if s.TransientStore == nil {
+		return
+	}
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err = s.TransientStore.SaveOutput(ctx, runID, index, data, ttl); err == nil {
+			return
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+	logger.L().Warn("creative.save_output_failed",
+		zap.String("run_id", runID),
+		zap.Int("output_index", index),
+		zap.Error(err),
+	)
 }
 
 // ReleaseRun 释放未消耗 hold，成功后把 release_pending 推进到目标终态。
@@ -2330,6 +2433,10 @@ func (s *CreativePublicService) FailRun(ctx context.Context, runID, errorCode, e
 	}
 	if run.Status == CreativeRunStatusReleasePending {
 		return s.ReleaseRun(ctx, runID)
+	}
+	if run.ProviderResultRecordedAt != nil {
+		// 上游成功结果已落库：是否扣费只能由结算按实际交付张数决定，不能被迟到的失败路径整笔释放。
+		return s.SettleRun(ctx, runID)
 	}
 	code := strings.TrimSpace(errorCode)
 	if code == "" {

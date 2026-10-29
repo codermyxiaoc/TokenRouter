@@ -63,7 +63,10 @@ func TestCreativeVideoCanvasCustomParametersKeepProtocolDimensions(t *testing.T)
 			model := &CreativeModelPublic{VideoEndpoint: endpoint, VideoCapabilities: creativeVideoCanvasCapabilities(original)}
 			e := creativeVideoTestExecution()
 			e.Params.Duration, e.Params.Resolution, e.Params.AspectRatio = 60, "768P", "4:3"
-			body, _, err := creativeVideoCanvasRequest(e, model, nil, 8000)
+			_, canonical, _, err := creativeVideoCanvasRequest(e, model, nil, 8000)
+			require.NoError(t, err)
+			// 画布提交规范请求，内置协议转换后字段位置与原端点合同一致。
+			body, err := videoBuiltinRequestBody(canonical, VideoUpstreamTarget{Version: 2, Endpoint: endpoint, ProtocolAdapter: VideoProtocolAdapterLegacy})
 			require.NoError(t, err)
 			resolutionKey, durationKey, ratioKey := "resolution", "duration", "ratio"
 			if endpoint == VideoEndpointWan {
@@ -158,7 +161,8 @@ func TestCreativeVideoCanvasCustomPricingAndLifecycle(t *testing.T) {
 			}
 			id, err := s.Submit(context.Background(), e, nil)
 			require.Equal(t, "768p", gjson.GetBytes(selector.body, "resolution").String())
-			require.Equal(t, "4:3", gjson.GetBytes(selector.body, "ratio").String())
+			// 画布提交统一规范请求，比例字段为 aspect_ratio，具体协议字段由账号绑定转换。
+			require.Equal(t, "4:3", gjson.GetBytes(selector.body, "aspect_ratio").String())
 			if terminal == "missing_price" {
 				require.Error(t, err)
 				require.Empty(t, id)

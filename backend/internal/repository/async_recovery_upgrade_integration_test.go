@@ -73,9 +73,11 @@ func TestAsyncRecoveryUpgradePreservesPendingAndSettledFinancialState(t *testing
 
 	// 比较完整旧行，包含 NULL、状态、金额精度、资金来源和时间，避免只检查总余额遗漏账本变化。
 	excluded := map[string]string{
-		"users": "{}", "api_keys": "{}", "groups": "{}", "media_tasks": "{}", "usage_billing_dedup": "{}",
+		"users": "{}", "api_keys": "{}", "media_tasks": "{billing_review_retry_at}",
+		"groups": "{image_subscription_rate_priority,video_subscription_rate_priority}", "usage_billing_dedup": "{}",
 		"image_billing_reservations": "{settlement_evidence,settlement_retry_at,settlement_attempts,settlement_completed_at}",
-		"creative_runs":              "{usage_recorded_at,quota_platform}",
+		// 后续迁移新增的可空列不属于旧记录内容，单独断言保持 NULL，而不是让整行比较误报。
+		"creative_runs": "{usage_recorded_at,quota_platform,image_attempt_account_ids,image_execution_deadline_at}",
 	}
 	queries, before := map[string]string{}, map[string]string{}
 	for table, columns := range excluded {
@@ -103,6 +105,9 @@ func TestAsyncRecoveryUpgradePreservesPendingAndSettledFinancialState(t *testing
 	require.Zero(t, count, "尚未验证日志投递的历史任务不能标记为已投递")
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM creative_runs WHERE quota_platform<>''`).Scan(&count))
 	require.Zero(t, count, "历史任务平台未冻结时应保留兼容回退，不能由迁移猜测归属")
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM creative_runs
+		WHERE image_execution_deadline_at IS NOT NULL OR jsonb_array_length(image_attempt_account_ids)<>0`).Scan(&count))
+	require.Zero(t, count, "迁移不能为历史任务伪造图片发送记录或执行截止时间")
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE filename>='306_' AND filename<'310_'`).Scan(&count))
 	require.Equal(t, 4, count)
 }

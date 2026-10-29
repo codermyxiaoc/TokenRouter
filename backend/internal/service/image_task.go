@@ -102,6 +102,8 @@ type ImageTaskService struct {
 	objectRetention *ImageObjectRetention
 	// billingRecovery 仅重试已有安全证据的账务动作，不能调用生成。
 	billingRecovery func(context.Context) error
+	// deliveryRetryDelays 是转存临时失败的重试档位，生产装配时设置。
+	deliveryRetryDelays []time.Duration
 }
 
 // SetBillingRecovery 在启动维护循环前装配已确认图片的结算补偿。
@@ -197,15 +199,16 @@ func (s *ImageTaskService) CreateObserved(ctx context.Context, owner ImageTaskOw
 	}
 	now := time.Now().UTC()
 	task := &ImageTaskRecord{
-		ID:                "imgtask_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
-		UserID:            owner.UserID,
-		APIKeyID:          owner.APIKeyID,
-		Status:            ImageTaskStatusProcessing,
-		CreatedAt:         now.Unix(),
-		ExpiresAt:         now.Add(s.ttl).Unix(),
-		ExecutionID:       s.runtime.executionID,
-		LeaseExpiresAt:    now.Add(imageTaskLeaseDuration).Unix(),
-		ExecutionDeadline: now.Add(s.executionTimeout + 3*time.Minute).Unix(),
+		ID:             "imgtask_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+		UserID:         owner.UserID,
+		APIKeyID:       owner.APIKeyID,
+		Status:         ImageTaskStatusProcessing,
+		CreatedAt:      now.Unix(),
+		ExpiresAt:      now.Add(s.ttl).Unix(),
+		ExecutionID:    s.runtime.executionID,
+		LeaseExpiresAt: now.Add(imageTaskLeaseDuration).Unix(),
+		// 截止时间额外包含转存重试窗口，避免维护循环在“已生成、等待保存”期间误判中断。
+		ExecutionDeadline: now.Add(s.executionTimeout + 3*time.Minute + s.deliveryRetryWindow()).Unix(),
 	}
 	if observation != nil {
 		copy := *observation
@@ -248,8 +251,51 @@ func (s *ImageTaskService) Complete(ctx context.Context, id string, statusCode i
 
 // CompleteWithUploader 使用提交时的对象存储快照，设置变更只影响新任务。
 func (s *ImageTaskService) CompleteWithUploader(ctx context.Context, id string, statusCode int, result json.RawMessage, uploader *ImageResultUploader) error {
+	_, err := s.CompleteDelivered(ctx, id, statusCode, result, uploader, nil)
+	return err
+}
+
+// ErrImageTaskBillingUnavailable 表示图片已转存但扣费无法完成；任务按未交付失败处理，不向用户返回结果。
+var ErrImageTaskBillingUnavailable = errors.New("image task billing could not be settled")
+
+// DefaultImageDeliveryRetryDelays 是转存临时失败后的等待档位；同一对象键幂等覆盖，不会重新生成。
+var DefaultImageDeliveryRetryDelays = []time.Duration{15 * time.Second, time.Minute, 3 * time.Minute}
+
+// SetDeliveryRetryDelays 配置转存临时失败的重试档位；为空时立即判定失败（单元测试默认）。
+func (s *ImageTaskService) SetDeliveryRetryDelays(delays []time.Duration) {
+	if s != nil {
+		s.deliveryRetryDelays = append([]time.Duration(nil), delays...)
+	}
+}
+
+// DeliveryBudget 返回转存与重试所需的总预算，供调用方设置独立于生成的存储截止时间。
+func (s *ImageTaskService) DeliveryBudget() time.Duration {
+	return 2*time.Minute + s.deliveryRetryWindow()
+}
+
+// deliveryRetryWindow 是重试档位带来的额外时间，每档等待后再给一次完整上传预算。
+func (s *ImageTaskService) deliveryRetryWindow() time.Duration {
+	var window time.Duration
+	if s != nil {
+		for _, delay := range s.deliveryRetryDelays {
+			window += delay + 2*time.Minute
+		}
+		if len(s.deliveryRetryDelays) > 0 {
+			// 生产装配还包含交付前扣费与扣费后结果落库的重试预算。
+			window += 5*time.Minute + 11*time.Minute
+		}
+	}
+	return window
+}
+
+// CompleteDelivered 与 CompleteWithUploader 相同，额外返回图片是否已真正交付（转存成功、扣费成功且终态已落库）。
+// settle 在转存成功之后、标记完成之前执行（通常是捕获预占），保证“任务完成 ⇔ 已扣费”：
+// settle 失败时任务按未交付失败处理，不返回结果链接，由调用方释放预占。
+// 转存临时失败会在 ctx 预算内按档位重试，仍失败才判定未交付。
+// @project-doc docs/domains/media_tasks.md#async_image_billing
+func (s *ImageTaskService) CompleteDelivered(ctx context.Context, id string, statusCode int, result json.RawMessage, uploader *ImageResultUploader, settle func(context.Context) error) (bool, error) {
 	if !json.Valid(result) {
-		return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "upstream returned a non-JSON image response"))
+		return false, s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "upstream returned a non-JSON image response"))
 	}
 	var response struct {
 		Data []struct {
@@ -258,15 +304,15 @@ func (s *ImageTaskService) CompleteWithUploader(ctx context.Context, id string, 
 		} `json:"data"`
 	}
 	if json.Unmarshal(result, &response) != nil || len(response.Data) == 0 {
-		return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "upstream returned no generated images"))
+		return false, s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "upstream returned no generated images"))
 	}
 	for _, item := range response.Data {
 		if strings.TrimSpace(item.URL) == "" && strings.TrimSpace(item.B64) == "" {
-			return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "upstream returned an invalid image item"))
+			return false, s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "upstream returned an invalid image item"))
 		}
 	}
 	if uploader != nil {
-		rewritten, err := uploader.Rewrite(ctx, id, result)
+		rewritten, err := s.rewriteWithRetry(ctx, id, result, uploader)
 		if err != nil {
 			// 转存失败不回退存 base64，避免大 blob 撑爆 Redis：直接把任务标记为失败。
 			stage, code, message := ImageStorageFailureDetails(err)
@@ -275,18 +321,99 @@ func (s *ImageTaskService) CompleteWithUploader(ctx context.Context, id string, 
 			failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			defer cancel()
 			taskErr, _ := json.Marshal(map[string]string{"type": "api_error", "code": code, "message": message})
-			return s.Fail(failureCtx, id, http.StatusBadGateway, taskErr)
+			return false, s.Fail(failureCtx, id, http.StatusBadGateway, taskErr)
 		}
 		result = rewritten
 	}
 	// 转存后只允许紧凑 JSON，未知扩展字段也不能把大 Base64 间接写进 Redis。
 	if len(result) > maxImageTaskStoredResultBytes {
-		return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "stored image result exceeds metadata limit"))
+		return false, s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "stored image result exceeds metadata limit"))
+	}
+	if settle != nil {
+		// 扣费使用独立预算：转存可能已耗尽 ctx，不能因此把已产出的图片当作扣费失败。
+		settleCtx, settleCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+		settleErr := settle(settleCtx)
+		settleCancel()
+		if settleErr != nil {
+			logger.L().Error("image_task.billing_settle_failed", zap.String("task_id", id), zap.Error(settleErr))
+			failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancel()
+			taskErr, _ := json.Marshal(map[string]string{"type": "api_error", "code": "image_billing_unavailable",
+				"message": "image was generated but billing could not be completed; the result was not delivered and no charge was applied"})
+			return false, errors.Join(ErrImageTaskBillingUnavailable, s.Fail(failureCtx, id, http.StatusServiceUnavailable, taskErr))
+		}
 	}
 	// 上传可能耗尽自己的预算，结果入库使用独立预算，避免图片已保存却丢失终态。
+	if settle != nil {
+		// 已扣费：结果必须交到用户手里。扣费不可撤销，因此按递增间隔持续重试落库（最长约 10 分钟），
+		// 期间任务保持 processing 且租约由执行者续期，用户轮询最终能取得结果。
+		return s.persistDeliveredResult(ctx, id, statusCode, result)
+	}
 	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
-	return s.finish(finishCtx, id, ImageTaskStatusCompleted, statusCode, result, nil)
+	if err := s.finish(finishCtx, id, ImageTaskStatusCompleted, statusCode, result, nil); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// deliveredResultPersistDelays 是扣费成功后结果落库的重试间隔；数据库或 Redis 的短暂故障通常在此窗口内恢复。
+var deliveredResultPersistDelays = []time.Duration{0, time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute, 2 * time.Minute, 2 * time.Minute, 2 * time.Minute}
+
+// persistDeliveredResult 在已扣费后反复保存完成结果；全部失败时记录可人工补交的错误日志（含任务 ID），
+// 对象仍在存储桶中，不撤销已发生的扣费，也不改写为失败（改写同样需要可用的存储）。
+func (s *ImageTaskService) persistDeliveredResult(ctx context.Context, id string, statusCode int, result json.RawMessage) (bool, error) {
+	var lastErr error
+	for attempt, delay := range deliveredResultPersistDelays {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		lastErr = s.finish(finishCtx, id, ImageTaskStatusCompleted, statusCode, result, nil)
+		cancel()
+		if lastErr == nil {
+			return true, nil
+		}
+		if errors.Is(lastErr, ErrImageTaskNotFound) {
+			break
+		}
+		logger.L().Warn("image_task.delivered_result_persist_retry", zap.String("task_id", id), zap.Int("attempt", attempt+1), zap.Error(lastErr))
+	}
+	// 结果 JSON 含签名链接，日志只记任务 ID；对象键以任务 ID 为前缀，可据此在存储中找回并人工补交。
+	logger.L().Error("image_task.delivered_result_persist_failed_after_capture", zap.String("task_id", id), zap.Error(lastErr))
+	return false, lastErr
+}
+
+// rewriteWithRetry 只对上传、超时等临时故障按档位重试；图片内容非法或过大立即失败。
+func (s *ImageTaskService) rewriteWithRetry(ctx context.Context, id string, result json.RawMessage, uploader *ImageResultUploader) (json.RawMessage, error) {
+	for attempt := 0; ; attempt++ {
+		rewritten, err := uploader.Rewrite(ctx, id, result)
+		if err == nil {
+			return rewritten, nil
+		}
+		if attempt >= len(s.deliveryRetryDelays) || !imageDeliveryRetryable(err) {
+			return nil, err
+		}
+		_, code, _ := ImageStorageFailureDetails(err)
+		logger.L().Warn("image_task.offload_retry_scheduled", zap.String("task_id", id), zap.String("code", code), zap.Int("attempt", attempt+1))
+		timer := time.NewTimer(s.deliveryRetryDelays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, err
+		case <-timer.C:
+		}
+	}
+}
+
+// imageDeliveryRetryable 只放行存储侧临时故障；解码失败、内容非法、过大等固定输入错误不重试。
+func imageDeliveryRetryable(err error) bool {
+	stage, code, _ := ImageStorageFailureDetails(err)
+	switch code {
+	case imageResultInvalid, imageResultTooLarge, imageStorageAccessDenied:
+		return false
+	}
+	return stage == "upload" || stage == "download" || stage == "result" || code == imageStorageTimeout || code == imageStorageUploadFailed
 }
 
 func (s *ImageTaskService) Fail(ctx context.Context, id string, statusCode int, taskErr json.RawMessage) error {

@@ -20,8 +20,8 @@ func (h *OpenAIGatewayHandler) retryImageOnDifferentAccount(c *gin.Context, ctx 
 	}
 	if decision.AttemptFault {
 		h.gatewayService.ReportOpenAIAccountScheduleResult(account, finalModel, false, nil, err)
-		// 缓存包装自己拥有短预算；客户端离开不能撤销已经确认的健康信息。
-		_ = h.gatewayService.RecordImageModelCooldown(context.WithoutCancel(ctx), account.ID, finalModel, operation, service.DefaultImageModelCooldown)
+		// 缓存包装自己拥有短预算；客户端离开不能撤销已经确认的健康信息。按故障类型与连续次数分级冷却。
+		_ = h.gatewayService.RecordImageModelFailure(context.WithoutCancel(ctx), account.ID, finalModel, operation, decision)
 	}
 	if imageAttemptDeadlineExceeded(c, ctx) || failoverClientGone(c) {
 		return false

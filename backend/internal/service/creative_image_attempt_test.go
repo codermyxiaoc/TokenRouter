@@ -106,6 +106,8 @@ func TestCreativeImageSafeSwitchPersistsBudgetAndSettlesOnce(t *testing.T) {
 	require.Len(t, e.calls, 2)
 	require.Equal(t, 1, f.billing.captureN)
 }
+
+// 未知、已受理但无图或产物未确认都不换号重发；用户没拿到成品，一次执行后直接失败并释放。
 func TestCreativeImageUnknownNeverSwitchesOrReleases(t *testing.T) {
 	for _, outcome := range []ImageAttemptOutcome{ImageAttemptUnknown, ImageAttemptAccepted, ImageAttemptResultReady} {
 		t.Run(string(outcome), func(t *testing.T) {
@@ -117,12 +119,13 @@ func TestCreativeImageUnknownNeverSwitchesOrReleases(t *testing.T) {
 			for range 3 {
 				result, err := f.worker.process(context.Background(), id)
 				require.NoError(t, err)
-				require.False(t, result.Terminal)
+				require.True(t, result.Terminal)
 			}
 			require.Equal(t, []int64{55}, e.calls)
-			require.Zero(t, f.billing.releaseN)
+			require.Equal(t, 1, f.billing.releaseN)
 			require.Zero(t, f.billing.captureN)
-			require.Equal(t, CreativeProvisioningPhaseProviderInflight, f.repo.runs[id].ProvisioningPhase)
+			require.Equal(t, CreativeRunStatusFailed, f.repo.runs[id].Status)
+			require.Equal(t, CreativeResultUnavailableCode, *f.repo.runs[id].ErrorCode)
 		})
 	}
 }
@@ -177,7 +180,7 @@ func TestCreativeImageDeadlineAndLocalQueueDoNotResetBudget(t *testing.T) {
 	require.Zero(t, f.repo.runs[id].AttemptCount)
 }
 
-// 旧无账号执行记录按未知核对，不能因新增预算字段为空再次生成或直接释放资金。
+// 旧无账号执行记录不能因新增预算字段为空再次生成；其原执行时限早已过去，直接失败并释放。
 func TestCreativeImageLegacyUnknownIsNotGrantedFreshAttempts(t *testing.T) {
 	f := newCreativeWorkerFixture()
 	id := "crun_image_legacy_unknown"
@@ -188,10 +191,41 @@ func TestCreativeImageLegacyUnknownIsNotGrantedFreshAttempts(t *testing.T) {
 	run.ProvisioningPhase = CreativeProvisioningPhaseProviderRetry
 	result, err := f.worker.process(context.Background(), id)
 	require.NoError(t, err)
+	require.True(t, result.Terminal)
+	require.Zero(t, f.exec.calls)
+	require.Equal(t, 1, f.billing.releaseN)
+	require.Zero(t, f.billing.captureN)
+	require.Equal(t, CreativeRunStatusFailed, run.Status)
+}
+
+// 原执行者可能仍在运行时只等待其结果落库，不重发也不提前释放；超过原执行时限加宽限期后才释放。
+func TestCreativeImageFenceWaitsUntilDeadlineThenReleases(t *testing.T) {
+	f := newCreativeWorkerFixture()
+	id := "crun_image_fence_wait"
+	seedCreativeRun(f, id, true)
+	run := f.repo.runs[id]
+	run.Status = CreativeRunStatusRunning
+	run.ProvisioningPhase = CreativeProvisioningPhaseProviderInflight
+	run.ImageAttemptAccountIDs = []int64{55}
+	future := time.Now().Add(time.Minute)
+	run.ImageExecutionDeadlineAt = &future
+	result, err := f.worker.process(context.Background(), id)
+	require.NoError(t, err)
 	require.False(t, result.Terminal)
+	require.Positive(t, result.RequeueAfter)
+	require.LessOrEqual(t, result.RequeueAfter, defaultCreativeUnconfirmedRequeueDelay)
 	require.Zero(t, f.exec.calls)
 	require.Zero(t, f.billing.releaseN)
-	require.Equal(t, CreativeProvisioningPhaseProviderInflight, run.ProvisioningPhase)
+
+	past := time.Now().Add(-defaultCreativeUnconfirmedGrace - time.Second)
+	run.ImageExecutionDeadlineAt = &past
+	result, err = f.worker.process(context.Background(), id)
+	require.NoError(t, err)
+	require.True(t, result.Terminal)
+	require.Zero(t, f.exec.calls)
+	require.Equal(t, 1, f.billing.releaseN)
+	require.Zero(t, f.billing.captureN)
+	require.Equal(t, CreativeRunStatusFailed, run.Status)
 }
 
 // 音频保留既有有限重试，不写图片账号预算或更改其资金处理。

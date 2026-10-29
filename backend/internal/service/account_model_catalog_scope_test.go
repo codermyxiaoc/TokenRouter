@@ -160,11 +160,10 @@ func TestRequestableCatalogVideoMappingPreservesIndependentEndpointBinding(t *te
 	require.False(t, accountDeclaresCatalogModel(account, "unlisted-video"))
 	configuration, err := account.VideoConfiguration()
 	require.NoError(t, err)
-	endpoint, err := configuration.SelectEndpoint("bound-only-video", "seedance", true)
-	require.NoError(t, err)
-	require.Equal(t, VideoEndpointSeedance, endpoint)
-	_, err = configuration.SelectEndpoint("bound-only-video", "openai_videos", false)
-	require.Error(t, err, "明确绑定只声明原端点，不能被目录可见性扩大权限")
+	// 旧多端点配置迁移后，显式绑定的模型只保留原 Seedance 协议，不会被目录可见性改成 OpenAI Videos。
+	binding, bound := configuration.Protocol("bound-only-video")
+	require.True(t, bound)
+	require.Equal(t, VideoEndpointSeedance, binding.Endpoint)
 	account.Credentials["model_whitelist"] = []any{"mapped-upstream-video"}
 	result = (&GatewayService{}).resolveRequestableModelsWithAccounts(context.Background(), nil, PlatformVideo, []string{"video-alias", "bound-only-video"}, []Account{*account})
 	require.Contains(t, RequestableModelIDs(result.Models), "video-alias")

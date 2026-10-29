@@ -1745,12 +1745,13 @@
           <p class="input-hint">{{ geminiProviderTypeHint }}</p>
         </div>
         <div v-if="!isCNPlatform || apiProtocol !== 'adaptive'">
-          <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
+          <label class="input-label">{{ t('admin.accounts.baseUrl') }}{{ form.platform === 'video' ? ' *' : '' }}</label>
           <input
             v-model="apiKeyBaseUrl"
             type="text"
             class="input"
             data-testid="create-account-base-url"
+            :required="form.platform === 'video'"
             :placeholder="
               form.platform === 'openai'
                 ? 'https://api.openai.com'
@@ -1760,7 +1761,7 @@
                     : 'https://generativelanguage.googleapis.com'
                   : form.platform === 'grok'
                     ? 'https://api.x.ai/v1'
-                    : form.platform === 'video' ? 'https://api.example.com' : additionalProviderBaseUrl(form.platform) || (form.platform === 'opencode_go' ? defaultCNBaseUrl(form.platform, openCodeAccountMode, apiProtocol) : 'https://api.anthropic.com')
+                    : form.platform === 'video' ? '' : additionalProviderBaseUrl(form.platform) || (form.platform === 'opencode_go' ? defaultCNBaseUrl(form.platform, openCodeAccountMode, apiProtocol) : 'https://api.anthropic.com')
             "
           />
           <p v-if="baseUrlHint" class="input-hint">{{ baseUrlHint }}</p>
@@ -1819,7 +1820,7 @@
                     : 'AQ.Ab...'
                   : form.platform === 'grok'
                     ? 'xai-...'
-                    : form.platform === 'opencode_go' || form.platform === 'video' ? 'sk-...' : 'sk-ant-...'
+                    : form.platform === 'opencode_go' ? 'sk-...' : form.platform === 'video' ? '' : 'sk-ant-...'
             "
           />
           <p v-if="apiKeyHint" class="input-hint">{{ apiKeyHint }}</p>
@@ -6946,6 +6947,8 @@ const handleSubmit = async () => {
 
   const enteredBaseUrl = apiKeyBaseUrl.value.trim()
   if (form.platform === 'video') {
+    // 视频账号的 Base URL 与 API Key 都必须由管理员填写，不提供默认值。
+    if (!enteredBaseUrl) { appStore.showError(t('admin.accounts.video.accountBaseUrlRequired')); return }
     const error = validateVideoAccountForm(videoAccountForm.value, enteredBaseUrl)
     if (error) { appStore.showError(t(`admin.accounts.video.${error}`)); return }
   }

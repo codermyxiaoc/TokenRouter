@@ -106,6 +106,7 @@ export default {
   },
 // Navigation
   nav: {
+    videoProtocolProfiles: '协议模板',
     tickets: '我的工单',
     ticketManagement: '工单管理',
     dashboard: '仪表盘',

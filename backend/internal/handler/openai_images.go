@@ -153,6 +153,10 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		}
 	}
 	requestCtx := service.WithOpenAIImagesEndpoint(service.WithOpenAIImageGenerationIntent(c.Request.Context()))
+	// 标记图片操作后，调度器和粘性会话会直接跳过冷却中的“账号 + 模型 + 操作”，避免反复命中同一故障模型。
+	// 全部候选都在冷却时退回逐个排除的旧路径一次，以便返回带 Retry-After 的冷却错误。
+	cooldownAwareSelectCtx := service.WithImageModelOperation(requestCtx, service.ImageAttemptOperation(parsed))
+	schedulerSkipsCooling := true
 	imageBilling := &asyncImageBillingState{gateway: h.gatewayService}
 	defer imageBilling.finish(c, reqLog)
 
@@ -169,8 +173,12 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 
 	for {
 		reqLog.Debug("openai.images.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
+		selectCtx := requestCtx
+		if schedulerSkipsCooling {
+			selectCtx = cooldownAwareSelectCtx
+		}
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForImages(
-			requestCtx,
+			selectCtx,
 			apiKey.GroupID,
 			sessionHash,
 			requestModel,
@@ -182,10 +190,19 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				reqLog.Info("openai.images.account_select_aborted_client_disconnected", zap.Error(err))
 				return
 			}
+			if schedulerSkipsCooling && errors.Is(err, service.ErrNoAvailableAccounts) {
+				// 只发生在选号阶段，不会发送请求；第二轮逐个识别冷却账号以给出准确的重试时间。
+				schedulerSkipsCooling = false
+				continue
+			}
 			reqLog.Warn("openai.images.account_select_failed",
 				zap.Error(err),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
+			if errors.Is(err, service.ErrNoAvailableAccounts) {
+				// 本组没有可用账号（多为生图模型全部冷却）且未发送，允许智能路由 Key 换到下一个分组。
+				service.MarkImageAttemptGroupUnsent(requestCtx)
+			}
 			if shortestImageCooldown > 0 && errors.Is(err, service.ErrNoAvailableAccounts) {
 				c.Header("Retry-After", strconv.Itoa(max(1, int((shortestImageCooldown+time.Second-1)/time.Second))))
 				h.errorResponse(c, http.StatusServiceUnavailable, "image_models_cooling_down", "Compatible image accounts are temporarily cooling down")
@@ -447,6 +464,10 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			}
 		}
 		if result != nil {
+			if result.ImageCount > 0 {
+				// 确认产出图片后清零该模型的连续失败计数，下次故障重新从第一档冷却。
+				h.gatewayService.RecordImageModelSuccess(requestCtx, account.ID, finalImageModel, imageOperation)
+			}
 			// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
 			if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
 				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(c.Request.Context(), account.ID, result.ResponseHeaders)
@@ -509,6 +530,15 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		if imageBilling.reservation != nil {
 			// 预占必须在任务完成前捕获，不能交给可能晚于当前请求执行的 usage worker。
 			recordUsage(requestCtx)
+		} else if deferred := service.AsyncImageDeferredCaptureFromContext(requestCtx); deferred != nil &&
+			deferred.Defer(func(context.Context) error {
+				// 记账沿用原请求上下文的值（请求 ID、载荷指纹等），只替换截止时间。
+				ctx, cancel := context.WithTimeout(context.WithoutCancel(requestCtx), 10*time.Second)
+				defer cancel()
+				recordUsage(ctx)
+				return nil
+			}, nil) {
+			// 无预占的异步后结算（如按 Token 计价）同样等图片交付后再记账，未交付不计费。
 		} else {
 			h.submitMandatoryUsageRecordTask(c, recordUsage)
 		}

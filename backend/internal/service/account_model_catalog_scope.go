@@ -13,9 +13,9 @@ func accountDeclaresCatalogModel(account *Account, model string) bool {
 		return true
 	}
 	if account.Platform == PlatformVideo {
-		// 视频模型的显式端点绑定同样属于目录声明；只认可精确键，不扩展端点权限或放行其它型号。
+		// 视频模型的显式协议绑定同样属于目录声明；只认可精确键，不扩展协议或放行其它型号。
 		if configuration, err := account.VideoConfiguration(); err == nil {
-			if _, declared := configuration.ModelBindings[model]; declared {
+			if _, declared := configuration.ModelProtocols[model]; declared && model != videoModelProtocolWildcard {
 				return true
 			}
 		}

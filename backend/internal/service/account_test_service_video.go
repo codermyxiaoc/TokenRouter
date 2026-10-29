@@ -23,43 +23,8 @@ const videoAccountTestTimeout = 10 * time.Minute
 var videoAccountTestResolution = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`)
 var videoAccountTestRatio = regexp.MustCompile(`^(adaptive|[1-9][0-9]{0,2}:[1-9][0-9]{0,2})$`)
 
-// VideoAccountTestEndpoints 返回最终上游模型真正允许的端点，保持账号配置顺序供测试选择框使用。
-func VideoAccountTestEndpoints(account *Account, requestedModel string) []VideoEndpoint {
-	out := make([]VideoEndpoint, 0)
-	if account == nil || !account.IsModelSupported(requestedModel) {
-		return out
-	}
-	cfg, err := account.VideoConfiguration()
-	if err != nil {
-		return out
-	}
-	model := account.GetMappedModel(requestedModel)
-	for _, endpoint := range cfg.Endpoints {
-		if _, err := cfg.SelectEndpoint(model, string(endpoint), true); err == nil {
-			out = append(out, endpoint)
-		}
-	}
-	return out
-}
-
-// VideoAccountTestAdapters 给管理员测试返回最终映射模型的有效协议，不把账号密钥或地址交给客户端。
-func VideoAccountTestAdapters(account *Account, requestedModel string) map[VideoEndpoint]string {
-	result := make(map[VideoEndpoint]string)
-	if account == nil {
-		return result
-	}
-	cfg, err := account.VideoConfiguration()
-	if err != nil {
-		return result
-	}
-	for _, endpoint := range VideoAccountTestEndpoints(account, requestedModel) {
-		result[endpoint], _ = cfg.ProtocolAdapter(account.GetMappedModel(requestedModel), endpoint)
-	}
-	return result
-}
-
-// VideoAccountTestViduOperation 只公开固定操作路径，不返回上游地址或凭据。
-func VideoAccountTestViduOperation(account *Account, requestedModel string) string {
+// VideoAccountTestProtocol 返回最终上游模型绑定的协议标识，供测试界面展示；不返回地址或凭据。
+func VideoAccountTestProtocol(account *Account, requestedModel string) string {
 	if account == nil || !account.IsModelSupported(requestedModel) {
 		return ""
 	}
@@ -68,21 +33,18 @@ func VideoAccountTestViduOperation(account *Account, requestedModel string) stri
 		return ""
 	}
 	model := account.GetMappedModel(requestedModel)
-	if _, err := cfg.SelectEndpoint(model, string(VideoEndpointVidu), true); err != nil {
+	binding, ok := cfg.ModelProtocols[model]
+	if !ok {
+		binding, ok = cfg.ModelProtocols[videoModelProtocolWildcard]
+	}
+	if _, valid := cfg.Protocol(model); !ok || !valid {
 		return ""
 	}
-	path := cfg.ViduModelPaths[model]
-	if !validViduVideoPath(path) {
-		return ""
-	}
-	// 默认测试操作与实际转发使用相同的方案边界，可美限制不能影响官方或保留协议。
-	if adapter, _ := cfg.ProtocolAdapter(model, VideoEndpointVidu); adapter == VideoProtocolAdapterKemei && validateVideoViduOperationModel(model, path) != nil {
-		return ""
-	}
-	return path
+	return strings.TrimSpace(binding.Protocol)
 }
 
 // testVideoAccountConnection 只做管理员明确发起的诊断，不创建站内任务、预算预留或使用记录。
+// 测试与正式网关一样按模型绑定的协议转换统一请求，不再由管理员选择端点。
 // @project-doc docs/interfaces/video_upstream.md#video_account_tests
 func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account *Account, modelID, prompt string, options AccountTestOptions) error {
 	if account == nil || account.Platform != PlatformVideo || account.Type != AccountTypeAPIKey || s.httpUpstream == nil {
@@ -95,13 +57,22 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 	if options.AudioDataURL != "" {
 		return s.sendErrorAndEnd(c, "Video account tests only accept an optional reference image")
 	}
+	model := strings.TrimSpace(account.GetMappedModel(modelID))
+	if model == "" || strings.ContainsAny(model, "*?") {
+		return s.sendErrorAndEnd(c, "Video test requires a concrete upstream model")
+	}
+	// 仅装配协议传输所需依赖，不接入正常网关的调度、停调、账务和持久任务服务。
+	upstream := ProvideVideoUpstreamService(&OpenAIGatewayService{cfg: s.cfg, httpUpstream: s.httpUpstream, tlsFPProfileService: s.tlsFPProfileService}, s.videoProfiles)
+	target, err := upstream.resolveTarget(c.Request.Context(), account, model)
+	if err != nil {
+		return s.sendErrorAndEnd(c, err.Error())
+	}
+	endpoint := target.Endpoint
+	adapter, _ := VideoTargetProtocolAdapter(target)
 	duration := 5
-	// 新官方协议的试跑默认值遵循协议；历史账号仍使用原先的五秒模板。
-	if cfg, err := account.VideoConfiguration(); err == nil {
-		adapter, _ := cfg.ProtocolAdapter(account.GetMappedModel(modelID), VideoEndpoint(options.VideoEndpoint))
-		if adapter == VideoProtocolAdapterOpenAI {
-			duration = 4
-		}
+	// OpenAI 官方方案只接受 4/8/12 秒，试跑默认值遵循协议。
+	if adapter == VideoProtocolAdapterOpenAI {
+		duration = 4
 	}
 	if options.Duration != nil {
 		duration = *options.Duration
@@ -118,78 +89,34 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 	if options.Ratio != "" && !videoAccountTestRatio.MatchString(options.Ratio) {
 		return s.sendErrorAndEnd(c, "Video ratio must be adaptive or a positive ratio such as 16:9")
 	}
-	endpoint := VideoEndpoint(strings.TrimSpace(options.VideoEndpoint))
-	allowed := false
-	for _, candidate := range VideoAccountTestEndpoints(account, modelID) {
-		allowed = allowed || candidate == endpoint
-	}
-	if !allowed {
-		return s.sendErrorAndEnd(c, "Selected video endpoint is not enabled for this model")
-	}
 	imageURL := ""
 	if options.ImageDataURL != "" {
-		var err error
 		imageURL, err = normalizeGrokTestImage(options.ImageDataURL)
 		if err != nil {
 			return s.sendErrorAndEnd(c, err.Error())
 		}
 	}
-	model := strings.TrimSpace(account.GetMappedModel(modelID))
-	if model == "" || strings.ContainsAny(model, "*?") {
-		return s.sendErrorAndEnd(c, "Video test requires a concrete upstream model")
-	}
-	// 仅装配协议传输所需依赖，不接入正常网关的调度、停调、账务和持久任务服务。
-	upstream := NewVideoUpstreamService(&OpenAIGatewayService{cfg: s.cfg, httpUpstream: s.httpUpstream, tlsFPProfileService: s.tlsFPProfileService})
-	request := VideoTaskSubmitRequest{InboundProtocol: string(endpoint), Native: true}
-	if endpoint == VideoEndpointVidu {
-		request.NativePath = strings.TrimSpace(options.VideoOperation)
-		if request.NativePath == "" {
-			request.NativePath = VideoAccountTestViduOperation(account, modelID)
-		}
-		if !validViduVideoPath(request.NativePath) {
-			return s.sendErrorAndEnd(c, "Select a Vidu operation before testing")
-		}
-		// 账号测试只有单图输入；首尾帧需通过正式 API 显式传入两张图片。
-		if request.NativePath == "/ent/v2/start-end2video" {
-			return s.sendErrorAndEnd(c, "Vidu start-end2video requires two reference images; use the native API to test")
-		}
-	}
 	if endpoint == VideoEndpointKling {
-		cfg, _ := account.VideoConfiguration()
-		request.NativePath = cfg.ModelPaths[model]
-		if request.NativePath == "" {
-			adapter, _ := cfg.ProtocolAdapter(model, endpoint)
-			if adapter == VideoProtocolAdapterKling || adapter == "kemei_v1" {
-				request.NativePath = "/text-to-video/{model}"
-				if imageURL != "" {
-					request.NativePath = "/image-to-video/{model}"
-				}
-			} else {
-				request.NativePath = "/v1/videos/text2video"
-				if imageURL != "" {
-					request.NativePath = "/v1/videos/omni-video"
-				}
-			}
-		}
-		if imageURL != "" && (request.NativePath == "/text-to-video/{model}" || request.NativePath == "/v1/videos/text2video") {
+		if imageURL != "" && (strings.HasPrefix(target.CreatePath, "/text-to-video/") || target.CreatePath == "/v1/videos/text2video") {
 			return s.sendErrorAndEnd(c, "The configured Kling text-to-video path does not accept a reference image")
 		}
-		if imageURL == "" && request.NativePath == "/image-to-video/{model}" {
+		if imageURL == "" && strings.HasPrefix(target.CreatePath, "/image-to-video/") {
 			return s.sendErrorAndEnd(c, "The configured Kling image-to-video path requires a reference image")
 		}
 	}
-	target, err := upstream.resolveTarget(account, model, request)
-	if err != nil {
-		return s.sendErrorAndEnd(c, err.Error())
+	// 账号测试只有单图输入；首尾帧需通过正式 API 显式传入两张图片。
+	if endpoint == VideoEndpointVidu && target.CreatePath == "/ent/v2/start-end2video" {
+		return s.sendErrorAndEnd(c, "Vidu start-end2video requires two reference images; use the API to test")
 	}
 	prompt = firstNonEmpty(strings.TrimSpace(prompt), "A red ball bouncing once on a white floor, short simple motion.")
 	body, err := s.prepareVideoAccountTestPayload(c.Request.Context(), target, prompt, imageURL, duration, options)
 	if err != nil {
 		return s.sendErrorAndEnd(c, err.Error())
 	}
-	adapter, _ := VideoTargetProtocolAdapter(target)
 	testTimeout := videoAccountTestTimeout
-	if adapter == VideoProtocolAdapterYezonghui {
+	// 分钟级查询的上游（Yezonghui 或查询间隔不少于一分钟的模板）扩大观察窗口，并容忍临时查询失败。
+	patient := adapter == VideoProtocolAdapterYezonghui || videoTaskPollDelay(target, 0) >= time.Minute
+	if patient {
 		// 该供应商文档建议至少等待三十分钟；仅扩大主动测试的观察窗口，不补发创建。
 		testTimeout = 30 * time.Minute
 	}
@@ -233,7 +160,7 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 		}
 		// 第一轮立即查询，之后 Yezonghui 使用分钟级间隔，其它方案保留原三秒节奏。
 		polled, pollErr := upstream.Poll(ctx, account, target, taskID)
-		if adapter == VideoProtocolAdapterYezonghui && pollErr == nil && polled != nil && polled.StatusCode >= 200 && polled.StatusCode < 300 && polled.Status == "failed" && polled.MetadataError == "" {
+		if patient && pollErr == nil && polled != nil && polled.StatusCode >= 200 && polled.StatusCode < 300 && polled.Status == "failed" && polled.MetadataError == "" {
 			// 已核对身份的明确生成失败不是临时查询错误，不能继续显示生成中。
 			return s.sendErrorAndEnd(c, "Video task "+taskID+" ended with status failed")
 		}
@@ -241,7 +168,7 @@ func (s *AccountTestService) testVideoAccountConnection(c *gin.Context, account 
 			pollErr = videoAccountTestResponseError(endpoint, polled, diagnosticSecrets...)
 		}
 		if pollErr != nil {
-			if adapter != VideoProtocolAdapterYezonghui || ctx.Err() != nil {
+			if !patient || ctx.Err() != nil {
 				return s.sendErrorAndEnd(c, "视频查询失败或已取消；已提交任务可能继续生成（任务 ID："+taskID+"）。"+pollErr.Error())
 			}
 			// 临时查询失败保留原任务；不回显可能含素材票据的响应，也不把查询失败当生成失败。
@@ -328,66 +255,19 @@ func videoAccountTestJSONFieldType(value gjson.Result) string {
 	}
 }
 
-// buildVideoAccountTestPayload 仅构造诊断模板，显式适配时与正式网关复用同一参数校验。
+// buildVideoAccountTestPayload 把测试参数构造成统一请求，再按冻结协议转换并执行与正式网关相同的校验。
 func buildVideoAccountTestPayload(target VideoUpstreamTarget, prompt, imageURL string, duration int, options AccountTestOptions) ([]byte, error) {
-	body := map[string]any{"model": target.Model, "duration": duration}
-	params := body
-	switch target.Endpoint {
-	case VideoEndpointSeedance, VideoEndpointMiniMax:
-		content := []map[string]any{{"type": "text", "text": prompt}}
-		if imageURL != "" {
-			content = append(content, map[string]any{"type": "image_url", "image_url": map[string]string{"url": imageURL}, "role": "first_frame"})
-		}
-		body["content"] = content
-	case VideoEndpointWan:
-		input := map[string]any{"prompt": prompt}
-		if imageURL != "" {
-			input["img_url"] = imageURL
-		}
-		params = map[string]any{"duration": duration}
-		delete(body, "duration")
-		body["input"], body["parameters"] = input, params
-	case VideoEndpointKling:
-		body["prompt"] = prompt
-		if imageURL != "" {
-			// 可美端点由统一素材数组转换为 contents，避免沿用旧 Omni 的 image_list 格式。
-			adapter, adapterErr := VideoTargetProtocolAdapter(target)
-			if adapterErr != nil {
-				return nil, adapterErr
-			}
-			if adapter == VideoProtocolAdapterKemei {
-				body["images"] = []string{imageURL}
-			} else if strings.HasPrefix(target.CreatePath, "/image-to-video/") {
-				body["image"] = imageURL
-			} else {
-				body["image_list"] = []map[string]string{{"image_url": imageURL}}
-			}
-		}
-	default:
-		body["prompt"] = prompt
-		if imageURL != "" {
-			body["images"] = []string{imageURL}
-		}
+	seconds := float64(duration)
+	req := &VideoCanonicalRequest{Model: target.Model, Prompt: prompt, Duration: &seconds, Resolution: options.Resolution, AspectRatio: options.Ratio}
+	if imageURL != "" {
+		req.Images = []VideoCanonicalMedia{{URL: imageURL, Role: VideoMediaRoleFirstFrame}}
 	}
-	if options.Resolution != "" {
-		params["resolution"] = options.Resolution
-	}
-	if options.Ratio != "" {
-		key := "ratio"
-		if target.Endpoint == VideoEndpointKling || target.Endpoint == VideoEndpointVidu {
-			key = "aspect_ratio"
-		}
-		params[key] = options.Ratio
-	}
-	encoded, err := json.Marshal(body)
+	body, err := videoCanonicalBodyForTarget(req, target)
 	if err != nil {
 		return nil, err
 	}
-	// 历史测试模板保持原行为；显式协议与正式网关使用同一转换及元数据校验。
-	if target.Version == 2 || target.Endpoint == VideoEndpointOpenAIVideos && target.OpenAIProfile == VideoOpenAIProfileMetasoH3 {
-		encoded, _, err = PrepareVideoProtocolRequest(encoded, "", target)
-	}
-	return encoded, err
+	body, _, err = PrepareVideoProtocolRequest(body, "", target)
+	return body, err
 }
 
 // videoAccountTestResponseError 仅供管理员诊断，错误摘要不能回显原包、凭据或素材。
@@ -530,7 +410,9 @@ func (s *AccountTestService) emitVideoAccountTestResult(c *gin.Context, ctx cont
 		s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 		return nil
 	}
-	if target.Endpoint != VideoEndpointOpenAIVideos {
+	// 内容端点由冻结协议决定：内置 openai_videos 与声明内容路径的模板（如 Metaso H3、Yezonghui）都可用原账号凭据下载。
+	contentPath, credentialed, pathErr := videoContentPath(target, taskID)
+	if pathErr != nil || !credentialed {
 		return s.sendErrorAndEnd(c, "Video task completed but returned no usable video URL (task_id="+taskID+")")
 	}
 	response, err := upstream.OpenContent(ctx, account, target, taskID, "")
@@ -540,8 +422,7 @@ func (s *AccountTestService) emitVideoAccountTestResult(c *gin.Context, ctx cont
 	if videoContentRedirect(response.StatusCode) {
 		location := response.Header.Get("Location")
 		_ = response.Body.Close()
-		path, _ := videoTaskPath(target, taskID)
-		base, _ := url.Parse(videoEndpointURL(target.BaseURL, path+"/content"))
+		base, _ := url.Parse(videoEndpointURL(target.BaseURL, contentPath))
 		next, parseErr := url.Parse(location)
 		if parseErr != nil || location == "" {
 			return s.sendErrorAndEnd(c, "Video content returned an invalid redirect")

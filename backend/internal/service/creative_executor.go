@@ -425,6 +425,12 @@ func (e *CreativeExecutor) Execute(ctx context.Context, run CreativeRun, payload
 		return nil, WrapImageAttemptError(err, ImageAttemptDecision{Outcome: ImageAttemptAccepted, Reason: "image_output_validation_failed"})
 	}
 	e.reportScheduleResult(execution, account.ID, true)
+	// 产出通过校验后清零该模型的连续失败计数，下次故障重新从第一档冷却。
+	if account.Platform == PlatformGemini && e.gatewayService != nil {
+		e.gatewayService.RecordImageModelSuccess(execCtx, account.ID, upstreamModel, run.Operation)
+	} else if e.gateway != nil {
+		e.gateway.RecordImageModelSuccess(execCtx, account.ID, upstreamModel, run.Operation)
+	}
 	return &CreativeExecuteResult{
 		Outputs:   outputs,
 		AccountID: account.ID,

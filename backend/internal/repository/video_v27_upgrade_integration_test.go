@@ -89,7 +89,10 @@ func TestVideoV27UpgradePreservesFinancialState(t *testing.T) {
 			excluded = "{video_prices,video_image_input_pricing,video_fallback_price,video_token_prepay,model_details}"
 		} else if table == "groups" {
 			// 新增展示字段另验空默认值，原有资金与模型价格仍逐字段保持一致。
-			excluded = "{i18n}"
+			excluded = "{i18n,image_subscription_rate_priority,video_subscription_rate_priority}"
+		} else if table == "media_tasks" {
+			// 后续迁移新增的可空列不属于旧记录内容。
+			excluded = "{billing_review_retry_at}"
 		}
 		expression := fmt.Sprintf("to_jsonb(t) - '%s'::text[]", excluded)
 		queries[table] = fmt.Sprintf("SELECT COALESCE(jsonb_agg(%s ORDER BY (%s)::text),'[]'::jsonb)::text FROM %s t", expression, expression, table)

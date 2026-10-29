@@ -557,6 +557,10 @@ func NewOpenAIGatewayService(
 	if len(tlsFPRouterServices) > 0 {
 		tlsFPRouterService = tlsFPRouterServices[0]
 	}
+	// 生图冷却分级是进程级策略，所有图片入口共享；启动时按配置覆盖默认值。
+	if cfg != nil {
+		SetImageModelCooldownPolicy(ImageModelCooldownPolicyFromConfig(cfg.Gateway.ImageModelCooldown))
+	}
 	svc := &OpenAIGatewayService{
 		accountRepo:         accountRepo,
 		usageLogRepo:        usageLogRepo,

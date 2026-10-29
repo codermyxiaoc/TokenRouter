@@ -10,6 +10,9 @@ import (
 
 // VideoProtocolResponseMatchesTask 在重放、恢复和轮询阶段使用同一份冻结协议校验归属。
 func VideoProtocolResponseMatchesTask(target VideoUpstreamTarget, body []byte, taskID string) bool {
+	if target.Version == videoTargetVersionProfile {
+		return videoProfileResponseMatchesTask(target, body, taskID)
+	}
 	if ValidateVideoProtocolTarget(target) != nil {
 		return false
 	}
@@ -21,6 +24,9 @@ func VideoProtocolResponseMatchesTask(target VideoUpstreamTarget, body []byte, t
 
 // VideoProtocolResponseHasConflictingTaskIDs 只识别任务字段，不把 Kling outputs[].id 产物 ID 当成任务。
 func VideoProtocolResponseHasConflictingTaskIDs(target VideoUpstreamTarget, body []byte) bool {
+	if target.Version == videoTargetVersionProfile {
+		return videoProfileHasConflictingTaskIDs(target, body)
+	}
 	if adapter, err := VideoTargetProtocolAdapter(target); err == nil && adapter == VideoProtocolAdapterYezonghui {
 		return ValidateVideoProtocolTarget(target) != nil || !videoYezonghuiResponseIdentityMatches(body, "")
 	}
@@ -29,6 +35,9 @@ func VideoProtocolResponseHasConflictingTaskIDs(target VideoUpstreamTarget, body
 
 // ExtractVideoProtocolResponse 保留原生正文，官方适配器只补充明确的规范观察字段。
 func ExtractVideoProtocolResponse(target VideoUpstreamTarget, status int, body []byte, expectedTaskID string) (*VideoUpstreamResponse, error) {
+	if target.Version == videoTargetVersionProfile {
+		return extractVideoProfileResponse(target, status, body, expectedTaskID)
+	}
 	if err := ValidateVideoProtocolTarget(target); err != nil {
 		return nil, err
 	}

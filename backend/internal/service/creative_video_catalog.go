@@ -68,7 +68,8 @@ func normalizeCreativeVideoCapabilities(endpoint VideoEndpoint, input *CreativeV
 	if input.MaxReferenceImages < 0 || input.MaxReferenceImages > 10 {
 		return nil, fmt.Errorf("creative video max_reference_images must be between 0 and 10")
 	}
-	if endpoint != VideoEndpointSeedance && endpoint != VideoEndpointVidu && input.MaxReferenceImages > 1 {
+	// 模板协议（unified）的参考图上限由模板能力在提交前校验，这里不按内置端点限制为一张。
+	if endpoint != VideoEndpointSeedance && endpoint != VideoEndpointVidu && endpoint != CreativeVideoEndpointUnified && input.MaxReferenceImages > 1 {
 		return nil, fmt.Errorf("creative video endpoint supports at most one reference image")
 	}
 	out := &CreativeVideoCapabilities{MaxReferenceImages: input.MaxReferenceImages}
@@ -180,21 +181,19 @@ func (s *CreativePublicService) creativeVideoCandidatesAndReferenceLimitsForGrou
 			if final == "" {
 				final = model
 			}
-			for _, endpoint := range cfg.Endpoints {
-				if _, selectErr := cfg.SelectEndpoint(final, string(endpoint), true); selectErr != nil {
-					continue
-				}
-				if endpoint == VideoEndpointKling && !validKlingVideoPath(cfg.ModelPaths[final]) {
-					continue
-				}
-				if endpoint == VideoEndpointVidu && !validViduVideoPath(cfg.ViduModelPaths[final]) {
-					continue
-				}
-				if models[model] == nil {
-					models[model] = map[VideoEndpoint]bool{}
-				}
-				models[model][endpoint] = true
+			// 每个模型在账号上只绑定一个协议；内置协议按其端点归类，模板协议归入 unified。
+			binding, bound := cfg.Protocol(final)
+			if !bound {
+				continue
 			}
+			endpoint := binding.Endpoint
+			if binding.IsProfile() {
+				endpoint = CreativeVideoEndpointUnified
+			}
+			if models[model] == nil {
+				models[model] = map[VideoEndpoint]bool{}
+			}
+			models[model][endpoint] = true
 		}
 	}
 	names := make([]string, 0, len(models))
@@ -205,7 +204,7 @@ func (s *CreativePublicService) creativeVideoCandidatesAndReferenceLimitsForGrou
 	for _, model := range names {
 		endpoints := []VideoEndpoint{}
 		referenceLimits[model] = map[VideoEndpoint]int64{}
-		for _, endpoint := range []VideoEndpoint{VideoEndpointCompat, VideoEndpointOpenAIVideos, VideoEndpointSeedance, VideoEndpointKling, VideoEndpointWan, VideoEndpointMiniMax, VideoEndpointVidu} {
+		for _, endpoint := range []VideoEndpoint{VideoEndpointCompat, VideoEndpointOpenAIVideos, VideoEndpointSeedance, VideoEndpointKling, VideoEndpointWan, VideoEndpointMiniMax, VideoEndpointVidu, CreativeVideoEndpointUnified} {
 			if models[model][endpoint] {
 				endpoints = append(endpoints, endpoint)
 				referenceLimits[model][endpoint] = s.creativeVideoReferenceImageLimit(ctx, group, model, endpoint, accounts)
@@ -219,8 +218,9 @@ func (s *CreativePublicService) creativeVideoCandidatesAndReferenceLimitsForGrou
 
 // 大小提示沿用渠道映射后再做账号映射；不能只检查公开模型名，否则模型级协议覆盖会误限旧协议。
 // 扫描全部候选也覆盖通配白名单和仅支持渠道目标名的账号，未知或混合方案保守省略前端限制。
+// 内置协议只有旧 H3 方案有上限；模板协议读取 capabilities.max_reference_bytes，全部候选都声明上限时取最小值。
 func (s *CreativePublicService) creativeVideoReferenceImageLimit(ctx context.Context, group *Group, model string, endpoint VideoEndpoint, accounts []Account) int64 {
-	if endpoint != VideoEndpointOpenAIVideos {
+	if endpoint != VideoEndpointOpenAIVideos && endpoint != CreativeVideoEndpointUnified {
 		return 0
 	}
 	channelModel := model
@@ -233,7 +233,7 @@ func (s *CreativePublicService) creativeVideoReferenceImageLimit(ctx context.Con
 			channelModel = resolveMapping(lookup, group.ID, model).MappedModel
 		}
 	}
-	found := false
+	var limit int64
 	for i := range accounts {
 		account := &accounts[i]
 		if account.Platform != PlatformVideo || account.Type != AccountTypeAPIKey || !account.IsSchedulable() || !openAIStickyAccountMatchesGroup(account, &group.ID) || !account.IsModelSupported(channelModel) {
@@ -244,18 +244,31 @@ func (s *CreativePublicService) creativeVideoReferenceImageLimit(ctx context.Con
 			continue
 		}
 		finalModel := account.GetMappedModel(channelModel)
-		if _, err := cfg.SelectEndpoint(finalModel, string(endpoint), true); err != nil {
+		binding, bound := cfg.Protocol(finalModel)
+		if !bound {
 			continue
 		}
-		if adapter, _ := cfg.ProtocolAdapter(finalModel, endpoint); adapter != VideoProtocolAdapterMetasoH3 {
-			return 0
+		var current int64
+		switch {
+		case endpoint == CreativeVideoEndpointUnified && binding.IsProfile():
+			profile, resolveErr := s.videoProfiles.Resolve(ctx, binding.ProfileKey, binding.ProfileVersion)
+			if resolveErr != nil || profile.Spec.Capabilities == nil || profile.Spec.Capabilities.MaxReferenceBytes <= 0 {
+				return 0
+			}
+			current = profile.Spec.Capabilities.MaxReferenceBytes
+		case endpoint == VideoEndpointOpenAIVideos && !binding.IsProfile() && binding.Endpoint == endpoint:
+			if binding.Adapter != VideoProtocolAdapterMetasoH3 {
+				return 0
+			}
+			current = CreativeVideoH3ReferenceImageLimit
+		default:
+			continue
 		}
-		found = true
+		if limit == 0 || current < limit {
+			limit = current
+		}
 	}
-	if found {
-		return CreativeVideoH3ReferenceImageLimit
-	}
-	return 0
+	return limit
 }
 
 func (s *CreativePublicService) creativeVideoModelsForGroup(ctx context.Context, group *Group, settings []CreativeModelSetting) ([]CreativeModelPublic, error) {
@@ -265,16 +278,35 @@ func (s *CreativePublicService) creativeVideoModelsForGroup(ctx context.Context,
 	}
 	out := []CreativeModelPublic{}
 	for _, candidate := range candidates {
+		// 旧厂商方案改绑为模板后候选端点变为 unified，而已保存的画布模型设置仍记在原端点（如 openai_videos、seedance）。
+		// 画布统一提交规范请求，端点只用于目录归类，因此该模型没有 unified 设置时沿用其原端点设置，避免模型从创作台消失。
+		legacyFallback := false
+		if containsVideoEndpoint(candidate.VideoEndpoints, CreativeVideoEndpointUnified) {
+			legacyFallback = true
+			for _, setting := range settings {
+				if setting.MediaType == "video" && setting.GroupID == group.ID && setting.Model == candidate.Model && containsVideoEndpoint(candidate.VideoEndpoints, setting.VideoEndpoint) {
+					legacyFallback = false
+					break
+				}
+			}
+		}
 		for _, setting := range settings {
-			if setting.MediaType != "video" || setting.GroupID != group.ID || setting.Model != candidate.Model || !containsVideoEndpoint(candidate.VideoEndpoints, setting.VideoEndpoint) {
+			if setting.MediaType != "video" || setting.GroupID != group.ID || setting.Model != candidate.Model || setting.VideoEndpoint == CreativeVideoEndpointGrok {
 				continue
+			}
+			limitEndpoint := setting.VideoEndpoint
+			if !containsVideoEndpoint(candidate.VideoEndpoints, setting.VideoEndpoint) {
+				if !legacyFallback {
+					continue
+				}
+				limitEndpoint = CreativeVideoEndpointUnified
 			}
 			caps, err := normalizeCreativeVideoCapabilities(setting.VideoEndpoint, setting.VideoCapabilities)
 			if err != nil {
 				continue
 			}
 			caps = creativeVideoCanvasCapabilities(caps)
-			caps.MaxReferenceImageBytes = referenceLimits[candidate.Model][setting.VideoEndpoint]
+			caps.MaxReferenceImageBytes = referenceLimits[candidate.Model][limitEndpoint]
 			out = append(out, CreativeModelPublic{GroupID: group.ID, GroupName: group.Name, Model: setting.Model, MediaType: "video", UsageNotes: setting.UsageNotes, Operations: []string{CreativeOperationGenerate}, VideoEndpoint: setting.VideoEndpoint, VideoCapabilities: caps, AspectRatios: caps.AspectRatios, OutputCount: 1, MaxOutputCount: 1, MaxReferenceImages: caps.MaxReferenceImages})
 		}
 	}

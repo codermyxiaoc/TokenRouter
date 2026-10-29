@@ -551,6 +551,29 @@ func (r *creativeRunRepository) ListCreativeRunsDueForTransientCleanup(ctx conte
 	return out, nil
 }
 
+// ListCreativeRunIDsForQueueRecovery 返回长时间未推进的非终态任务，供 Redis 队列丢失后从数据库重新入队。
+// 只读任务 ID，入队由 Redis 去重键保证幂等，处理仍由任务锁与状态机保护。
+func (r *creativeRunRepository) ListCreativeRunIDsForQueueRecovery(ctx context.Context, staleBefore time.Time, limit int) ([]string, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	return r.client.CreativeRun.Query().
+		Where(
+			creativerun.StatusIn(
+				service.CreativeRunStatusQueued,
+				service.CreativeRunStatusRunning,
+				service.CreativeRunStatusProviderSucceeded,
+				service.CreativeRunStatusSettlementPending,
+				service.CreativeRunStatusReleasePending,
+			),
+			creativerun.UpdatedAtLT(staleBefore),
+		).
+		Order(dbent.Asc(creativerun.FieldUpdatedAt)).
+		Limit(limit).
+		Select(creativerun.FieldRunID).
+		Strings(ctx)
+}
+
 // IncrementCreativeRunAttempt 原子递增 attempt_count 并返回最新值。
 func (r *creativeRunRepository) IncrementCreativeRunAttempt(ctx context.Context, runID string) (int, error) {
 	affected, err := r.client.CreativeRun.Update().

@@ -5,6 +5,8 @@ export default {
       description: 'Manage registration, email verification, default values, and SMTP settings',
       tabs: {
         dailyActivities: 'Daily activities',
+        videoProtocolAI: 'Video protocol AI',
+        apiDocs: 'API Docs',
         tickets: 'Tickets',
         general: 'General',
         agreement: 'Agreement',
@@ -125,6 +127,7 @@ export default {
             title: 'Image, Text, Video and Audio Models',
             description: 'Only selected models can be used. Video settings provide defaults and extra presets. Available durations, resolutions and aspect ratios depend on model capabilities and upstream protocol validation. Assets are retained for 7 days.',
             videoEndpoint: 'Video endpoint',
+            videoEndpointUnified: 'Template protocol',
             videoDurations: 'Default duration (smallest value, comma separated)',
             videoResolutions: 'Default and extra resolutions (first is default)',
             videoRatios: 'Default and extra aspect ratios (first is default)',

@@ -299,6 +299,10 @@ type CreativeConfig struct {
 	ExecuteTimeoutSeconds int `mapstructure:"execute_timeout_seconds"`
 	// MaxExecuteAttempts 是 provider 瞬时错误的最大执行次数（含首次）。
 	MaxExecuteAttempts int `mapstructure:"max_execute_attempts"`
+	// ShutdownDrainSeconds 是停机时等待在途任务完成的最长时间（秒），0 使用默认 120 秒。
+	ShutdownDrainSeconds int `mapstructure:"shutdown_drain_seconds"`
+	// OrphanRecoveryAfterSeconds 是数据库兜底扫描判定任务脱离队列的静止时长（秒），0 使用默认 20 分钟。
+	OrphanRecoveryAfterSeconds int `mapstructure:"orphan_recovery_after_seconds"`
 }
 
 type LinuxDoConnectConfig struct {
@@ -727,6 +731,9 @@ type H2CConfig struct {
 type CORSConfig struct {
 	AllowedOrigins   []string `mapstructure:"allowed_origins"`
 	AllowCredentials bool     `mapstructure:"allow_credentials"`
+	// GatewayAllowAllOrigins 让 /v1、/v1beta 等网关接口接受任意来源的跨域调用（不携带凭据）。
+	// 网关只用 API Key 请求头鉴权、不依赖 Cookie，放开来源不会泄露登录态；管理与用户接口仍按 allowed_origins 校验。
+	GatewayAllowAllOrigins bool `mapstructure:"gateway_allow_all_origins"`
 }
 
 // WebAuthnConfig 定义当前部署作为 WebAuthn 依赖方时使用的固定身份。
@@ -955,6 +962,16 @@ const (
 )
 
 // GatewayConfig API网关相关配置
+// ImageModelCooldownConfig 描述生图模型故障冷却分级，单位均为秒；0 或空表示使用默认值。
+// 默认：模型不可用/凭据失效 3600，429 为 60，其它拒绝 60→300→1800，未知/5xx 120→600→1800，计数窗口 7200。
+type ImageModelCooldownConfig struct {
+	UnavailableSeconds  int   `mapstructure:"unavailable_seconds"`
+	RateLimitedSeconds  int   `mapstructure:"rate_limited_seconds"`
+	RejectedSeconds     []int `mapstructure:"rejected_seconds"`
+	UnknownSeconds      []int `mapstructure:"unknown_seconds"`
+	StrikeWindowSeconds int   `mapstructure:"strike_window_seconds"`
+}
+
 type GatewayConfig struct {
 	// MinOutputTokens 是协议转换时显式输出预算的下限，不改变原生透传请求。
 	MinOutputTokens int `mapstructure:"min_output_tokens"`
@@ -988,6 +1005,8 @@ type GatewayConfig struct {
 	GeminiCachedContentMaxTTLSeconds int `mapstructure:"gemini_cached_content_max_ttl_seconds"`
 	// ConnectionPoolIsolation: 上游连接池隔离策略（proxy/account/account_proxy）
 	ConnectionPoolIsolation string `mapstructure:"connection_pool_isolation"`
+	// ImageModelCooldown 生图“账号 + 实际模型 + 操作”故障冷却分级；未填写项使用内置默认值。
+	ImageModelCooldown ImageModelCooldownConfig `mapstructure:"image_model_cooldown"`
 	// ForceCodexCLI: 强制将 OpenAI `/v1/responses` 请求按 Codex CLI 处理。
 	// 用于网关未透传/改写 User-Agent 时的兼容兜底（默认关闭，避免影响其他客户端）。
 	ForceCodexCLI bool `mapstructure:"force_codex_cli"`
@@ -1074,6 +1093,8 @@ type GatewayConfig struct {
 	MaxAccountSwitchesGemini int `mapstructure:"max_account_switches_gemini"`
 	// 独立视频创建及安全换号共用的秒数预算，0 使用默认 180 秒。
 	VideoCreateTimeoutSeconds int `mapstructure:"video_create_timeout_seconds"`
+	// VideoMaxProcessingMinutes 是独立视频任务排队与生成的最长等待（分钟），超时未交付成品即失败并释放预扣；0 使用默认 180。
+	VideoMaxProcessingMinutes int `mapstructure:"video_max_processing_minutes"`
 
 	// Antigravity 429 fallback 限流时间（分钟），解析重置时间失败时使用
 	AntigravityFallbackCooldownMinutes int `mapstructure:"antigravity_fallback_cooldown_minutes"`
@@ -2075,6 +2096,7 @@ func setDefaults() {
 	// CORS
 	viper.SetDefault("cors.allowed_origins", []string{})
 	viper.SetDefault("cors.allow_credentials", true)
+	viper.SetDefault("cors.gateway_allow_all_origins", true)
 
 	// Passkey 默认关闭，启用时部署方必须显式声明依赖方域名和可信浏览器 Origin。
 	viper.SetDefault("webauthn.enabled", false)
@@ -2245,6 +2267,10 @@ func setDefaults() {
 	viper.SetDefault("image_storage.access_key_id", "")
 	viper.SetDefault("image_storage.secret_access_key", "")
 	viper.SetDefault("image_storage.public_base_url", "")
+	// 存储后端默认 S3；本地后端目录与容量上限（0 不限制）
+	viper.SetDefault("image_storage.backend", ImageStorageBackendS3)
+	viper.SetDefault("image_storage.local_dir", ImageStorageDefaultLocalDir)
+	viper.SetDefault("image_storage.local_max_total_bytes", int64(0))
 	viper.SetDefault("batch_image.enabled", false)
 	viper.SetDefault("batch_image.max_items_per_job_default", 200)
 	viper.SetDefault("batch_image.max_items_per_job_trial", 50)
@@ -2317,6 +2343,9 @@ func setDefaults() {
 	viper.SetDefault("creative.recover_limit", 100)
 	viper.SetDefault("creative.execute_timeout_seconds", 300)
 	viper.SetDefault("creative.max_execute_attempts", 3)
+	// 停机排空需小于部署层终止宽限期；兜底扫描间隔须大于任何正常重排间隔。
+	viper.SetDefault("creative.shutdown_drain_seconds", 120)
+	viper.SetDefault("creative.orphan_recovery_after_seconds", 1200)
 
 	// Ops (vNext)
 	viper.SetDefault("ops.enabled", true)
@@ -2449,8 +2478,15 @@ func setDefaults() {
 	viper.SetDefault("gateway.inject_beta_for_apikey", false)
 	viper.SetDefault("gateway.failover_on_400", false)
 	viper.SetDefault("gateway.max_account_switches", 10)
+	// 生图模型冷却分级：0 或空表示使用内置默认（不可用 1h、429 1m、未知 2/10/30m、计数窗口 2h）
+	viper.SetDefault("gateway.image_model_cooldown.unavailable_seconds", 0)
+	viper.SetDefault("gateway.image_model_cooldown.rate_limited_seconds", 0)
+	viper.SetDefault("gateway.image_model_cooldown.rejected_seconds", []int{})
+	viper.SetDefault("gateway.image_model_cooldown.unknown_seconds", []int{})
+	viper.SetDefault("gateway.image_model_cooldown.strike_window_seconds", 0)
 	viper.SetDefault("gateway.max_account_switches_gemini", 3)
 	viper.SetDefault("gateway.video_create_timeout_seconds", 180)
+	viper.SetDefault("gateway.video_max_processing_minutes", 180)
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
@@ -3486,6 +3522,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.VideoCreateTimeoutSeconds < 0 || c.Gateway.VideoCreateTimeoutSeconds > 600 {
 		return fmt.Errorf("gateway.video_create_timeout_seconds must be between 0-600 seconds (0 uses 180)")
+	}
+	if c.Gateway.VideoMaxProcessingMinutes < 0 || c.Gateway.VideoMaxProcessingMinutes > 10080 {
+		return fmt.Errorf("gateway.video_max_processing_minutes must be between 0-10080 minutes (0 uses 180)")
 	}
 	if c.Gateway.StreamDataIntervalTimeout < 0 {
 		return fmt.Errorf("gateway.stream_data_interval_timeout must be non-negative")

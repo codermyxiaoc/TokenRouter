@@ -173,14 +173,16 @@ func TestVideoOpenAIProfileConfigurationAndFrozenResponse(t *testing.T) {
 	account.Credentials["video_openai_profile"] = VideoOpenAIProfileMetasoH3
 	require.NoError(t, normalizeVideoCredentials(account))
 	svc := NewVideoUpstreamService(&OpenAIGatewayService{})
-	target, err := svc.resolveTarget(account, "m", VideoTaskSubmitRequest{InboundProtocol: "openai_videos"})
+	target, err := svc.resolveTarget(context.Background(), account, "m")
 	require.NoError(t, err)
-	require.Equal(t, VideoOpenAIProfileMetasoH3, target.OpenAIProfile)
+	// 旧 OpenAI profile 迁移为 Metaso H3 预置模板，并冻结为模板快照。
+	require.Equal(t, "profile:metaso-h3@1", target.ProtocolAdapter)
+	require.Empty(t, target.OpenAIProfile)
 	raw, err := json.Marshal(target)
 	require.NoError(t, err)
 	var restored VideoUpstreamTarget
 	require.NoError(t, json.Unmarshal(raw, &restored))
-	account.Credentials["video_openai_profile"] = VideoOpenAIProfilePassthrough
+	account.Credentials["video_model_protocols"] = map[string]any{"*": map[string]any{"protocol": "openai_videos.legacy_v1"}}
 	fixture := &videoHTTPFixture{status: http.StatusOK, response: `{"id":"owned","status":"completed","seconds":"4","size":"1280x720"}`}
 	svc.gateway.httpUpstream = fixture
 	response, err := svc.Poll(context.Background(), account, restored, "owned")
@@ -190,15 +192,16 @@ func TestVideoOpenAIProfileConfigurationAndFrozenResponse(t *testing.T) {
 	require.Equal(t, "768p", response.Metadata.Resolution)
 	require.Equal(t, "1280x720", response.Metadata.Size)
 	for _, value := range []any{"auto", "METASO_H3", " metaso_h3", 1, true} {
-		account.Credentials["video_openai_profile"] = value
-		require.Error(t, normalizeVideoCredentials(account))
+		legacy := videoFixtureAccount(VideoEndpointOpenAIVideos)
+		legacy.Credentials["video_openai_profile"] = value
+		require.Error(t, normalizeVideoCredentials(legacy))
 	}
-	account.Credentials["video_openai_profile"] = VideoOpenAIProfileMetasoH3
-	account.Credentials["video_endpoints"] = []string{"compat"}
-	require.NoError(t, normalizeVideoCredentials(account))
-	legacy, err := svc.resolveTarget(account, "m", VideoTaskSubmitRequest{InboundProtocol: "unified"})
+	compat := videoFixtureAccount(VideoEndpointCompat)
+	compat.Credentials["video_openai_profile"] = VideoOpenAIProfileMetasoH3
+	require.NoError(t, normalizeVideoCredentials(compat))
+	legacy, err := svc.resolveTarget(context.Background(), compat, "m")
 	require.NoError(t, err)
-	require.Empty(t, legacy.OpenAIProfile)
+	require.Equal(t, "profile:generic-flat@1", legacy.ProtocolAdapter)
 }
 
 // 不可信终态仍保留归属与状态，由生命周期服务阻止回退旧请求量结算。
@@ -238,7 +241,7 @@ func TestVideoOpenAIResponseMetadataValidation(t *testing.T) {
 func TestVideoOpenAIResponseReadTimeoutClassification(t *testing.T) {
 	account := videoFixtureAccount(VideoEndpointOpenAIVideos)
 	svc := NewVideoUpstreamService(&OpenAIGatewayService{httpUpstream: &videoOpenAIReadFailureHTTP{}})
-	target, err := svc.resolveTarget(account, "m", VideoTaskSubmitRequest{InboundProtocol: "openai_videos"})
+	target, err := svc.resolveTarget(context.Background(), account, "m")
 	require.NoError(t, err)
 	response, err := svc.Submit(context.Background(), &VideoUpstreamSelection{Account: account, Target: target, Body: []byte(`{"model":"m"}`)})
 	require.Nil(t, response)

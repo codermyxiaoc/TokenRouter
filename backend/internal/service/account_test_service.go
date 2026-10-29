@@ -189,12 +189,14 @@ type AccountTestService struct {
 	cfg                       *config.Config
 	settingService            *SettingService
 	videoReferences           videoReferencePublisher
-	tlsFPProfileService       *TLSFingerprintProfileService
-	qoderSessionProvider      qoderAccountTestSessionProvider
-	qoderClient               qoderStreamClient
-	qoderOAuthClient          qoderAccountTestOAuthClient
-	agentIdentityTaskMu       sync.Mutex
-	agentIdentityWS           agentIdentityWSConnectionInvalidator
+	// videoProfiles 让账号测试解析模板协议绑定，与正式网关使用同一份启用版本。
+	videoProfiles        *VideoProtocolProfileService
+	tlsFPProfileService  *TLSFingerprintProfileService
+	qoderSessionProvider qoderAccountTestSessionProvider
+	qoderClient          qoderStreamClient
+	qoderOAuthClient     qoderAccountTestOAuthClient
+	agentIdentityTaskMu  sync.Mutex
+	agentIdentityWS      agentIdentityWSConnectionInvalidator
 }
 
 // SetSettingService 注入 Grok 系统级默认上游策略。

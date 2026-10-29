@@ -172,19 +172,14 @@ func creativeGrokVideoCanvasRequest(e *CreativeCanvasExecution, model *CreativeM
 	if !recognized || resolution != e.Params.Resolution || e.Params.Duration < VideoBillingMinDurationSeconds || e.Params.Duration > VideoBillingMaxDurationSeconds {
 		return nil, ErrCreativeGrokVideoParameters
 	}
-	body, images, err := creativeVideoCanvasRequest(e, model, assets, maxPrompt)
+	_, canonical, images, err := creativeVideoCanvasRequest(e, model, assets, maxPrompt)
 	if err != nil {
 		return nil, err
 	}
-	var values map[string]any
-	if err := json.Unmarshal(body, &values); err != nil {
-		return nil, err
-	}
-	delete(values, "images")
-	ratio, _ := values["ratio"].(string)
-	delete(values, "ratio")
-	if ratio != "adaptive" {
-		values["aspect_ratio"] = ratio
+	// Grok 沿用原 xAI JSON 合同：比例写入 aspect_ratio（自动比例不发送），单张参考图写入 image。
+	values := map[string]any{"model": canonical.Model, "prompt": canonical.Prompt, "duration": *canonical.Duration, "resolution": canonical.Resolution}
+	if canonical.AspectRatio != "adaptive" {
+		values["aspect_ratio"] = canonical.AspectRatio
 	}
 	if len(images) > 1 {
 		return nil, ErrCanvasInvalid

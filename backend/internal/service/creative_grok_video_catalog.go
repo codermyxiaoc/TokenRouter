@@ -10,6 +10,9 @@ import (
 // CreativeVideoEndpointGrok 只属于创作台，不能作为独立 Video 账号的协议配置。
 const CreativeVideoEndpointGrok VideoEndpoint = "grok"
 
+// CreativeVideoEndpointUnified 标记模型绑定了声明式模板协议；画布统一提交规范请求，不对应任何内置端点。
+const CreativeVideoEndpointUnified VideoEndpoint = "unified"
+
 // Grok 继续复用原计费口径，只允许能按原值计费的默认参数，不能静默降档或截断时长。
 func normalizeCreativeGrokVideoCapabilities(input *CreativeVideoCapabilities) (*CreativeVideoCapabilities, error) {
 	out, err := normalizeCreativeVideoCapabilities(CreativeVideoEndpointGrok, input)

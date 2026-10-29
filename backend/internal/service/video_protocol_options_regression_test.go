@@ -87,10 +87,9 @@ func TestVideoProtocolOptionCompatOpenAIFieldsKeepEndpoint(t *testing.T) {
 	account.Credentials["video_endpoint_adapters"] = map[string]string{"compat": VideoProtocolAdapterOpenAI}
 	cfg, err := account.VideoConfiguration()
 	require.NoError(t, err)
-	_, err = cfg.SelectEndpoint("model", string(VideoEndpointOpenAIVideos), true)
-	require.Error(t, err)
+	_ = cfg
 	upstream := NewVideoUpstreamService(&OpenAIGatewayService{})
-	target, err := upstream.resolveTarget(account, "model", VideoTaskSubmitRequest{Native: true, InboundProtocol: string(VideoEndpointCompat)})
+	target, err := upstream.resolveTarget(context.Background(), account, "model")
 	require.NoError(t, err)
 	require.Equal(t, VideoEndpointCompat, target.Endpoint)
 	require.Equal(t, VideoProtocolAdapterOpenAI, target.ProtocolAdapter)

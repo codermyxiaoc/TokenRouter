@@ -5,6 +5,8 @@ export default {
       description: '管理注册、邮箱验证、默认值和 SMTP 设置',
       tabs: {
         dailyActivities: '每日活动',
+        videoProtocolAI: '视频协议 AI',
+        apiDocs: 'API 文档',
         tickets: '工单设置',
         general: '通用设置',
         agreement: '登录条款',
@@ -123,6 +125,7 @@ export default {
             title: '图片、文本、视频与音频模型',
             description: '仅允许所选分组中的模型用于创作台。视频配置用于默认参数与补充档位；可用时长、分辨率和比例由模型能力决定，实际支持范围仍由上游协议校验。素材保留 7 天。',
             videoEndpoint: '视频端点',
+            videoEndpointUnified: '模板协议',
             videoDurations: '默认时长（秒，取最小值，逗号分隔）',
             videoResolutions: '默认与补充分辨率（首项默认，逗号分隔）',
             videoRatios: '默认与补充比例（首项默认，逗号分隔）',

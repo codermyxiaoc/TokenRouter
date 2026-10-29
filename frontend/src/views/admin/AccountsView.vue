@@ -471,9 +471,10 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <AdvancedSchedulerScoreModal :show="showAdvancedSchedulerScore" :account="advancedSchedulerScoreAcc" @close="closeAdvancedSchedulerScoreModal" />
+    <ImageModelCooldownsModal :show="showImageModelCooldowns" :account="imageModelCooldownsAcc" @close="showImageModelCooldowns = false; imageModelCooldownsAcc = null" />
     <CodexInviteResetModal :show="showInviteReset" :account="inviteResetAcc" @close="closeInviteResetModal" @updated="enterAutoRefreshSilentWindow" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @advanced-scheduler-score="handleAdvancedSchedulerScore" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @invite-reset="handleInviteReset" @create-spark-shadow="handleCreateSparkShadow" @delete="handleDelete" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @advanced-scheduler-score="handleAdvancedSchedulerScore" @image-model-cooldowns="handleImageModelCooldowns" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @invite-reset="handleInviteReset" @create-spark-shadow="handleCreateSparkShadow" @delete="handleDelete" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="handleExternalAccountsChanged" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -535,6 +536,7 @@ import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vu
 import AccountTestModal from '@/components/admin/account/AccountTestModal.vue'
 import AccountStatsModal from '@/components/admin/account/AccountStatsModal.vue'
 import AdvancedSchedulerScoreModal from '@/components/admin/account/AdvancedSchedulerScoreModal.vue'
+import ImageModelCooldownsModal from '@/components/admin/account/ImageModelCooldownsModal.vue'
 import CodexInviteResetModal from '@/components/admin/account/CodexInviteResetModal.vue'
 import ScheduledTestsPanel from '@/components/admin/account/ScheduledTestsPanel.vue'
 import type { SelectOption } from '@/components/common/Select.vue'
@@ -2865,6 +2867,10 @@ const closeReAuthModal = () => { showReAuth.value = false; reAuthAcc.value = nul
 const handleTest = (a: Account) => { testingAcc.value = a; showTest.value = true }
 const handleViewStats = (a: Account) => { statsAcc.value = a; showStats.value = true }
 const handleAdvancedSchedulerScore = (a: Account) => { advancedSchedulerScoreAcc.value = a; showAdvancedSchedulerScore.value = true }
+// 生图模型冷却弹窗：查看并手动解除账号下冷却中的生图模型
+const showImageModelCooldowns = ref(false)
+const imageModelCooldownsAcc = ref<Account | null>(null)
+const handleImageModelCooldowns = (a: Account) => { imageModelCooldownsAcc.value = a; showImageModelCooldowns.value = true }
 const handleInviteReset = (a: Account) => { inviteResetAcc.value = a; showInviteReset.value = true }
 const handleSchedule = async (a: Account) => {
   scheduleAcc.value = a

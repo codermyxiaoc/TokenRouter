@@ -220,13 +220,13 @@ func TestVideoKemeiViduUpstreamPathsAndExplicitConfiguration(t *testing.T) {
 	a.Credentials["video_model_paths"] = map[string]string{"viduq3-pro": "/image-to-video/{model}"}
 	require.NoError(t, normalizeVideoCredentials(a))
 	svc := NewVideoUpstreamService(&OpenAIGatewayService{})
-	target, err := svc.resolveTarget(a, "viduq3-pro", VideoTaskSubmitRequest{Native: true, InboundProtocol: "vidu", NativePath: "/ent/v2/reference2video"})
+	// Vidu 操作路径来自模型协议绑定，客户端不能再通过原生路径改写。
+	target, err := svc.resolveTarget(context.Background(), a, "viduq3-pro")
 	require.NoError(t, err)
-	require.Equal(t, "/ent/v2/reference2video", target.CreatePath)
-	require.Equal(t, 2, target.Version)
-	require.Equal(t, "/ent/v2/img2video", VideoAccountTestViduOperation(a, "viduq3-pro"))
-	_, err = svc.resolveTarget(a, "viduq3-pro", VideoTaskSubmitRequest{InboundProtocol: "openai_videos"})
-	require.Error(t, err)
+	require.Equal(t, "/ent/v2/img2video", target.CreatePath)
+	// 可美 Vidu 方案保存时改绑为对应操作的预置模板。
+	require.Equal(t, videoTargetVersionProfile, target.Version)
+	require.Equal(t, "profile:kemei-vidu-img2video", VideoAccountTestProtocol(a, "viduq3-pro"))
 	target = viduProtocolFixture("/ent/v2/img2video")
 	path, err := VideoProtocolTaskPath(target, "task-1")
 	require.NoError(t, err)

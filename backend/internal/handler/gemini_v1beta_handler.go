@@ -83,6 +83,15 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 		writeGeminiModelsListWithAPIKeyAliases(c, models, apiKey)
 		return
 	}
+	// 分组内 Gemini 账号都声明了模型映射时，列表与 /v1/models 同源（渠道映射、限制与账号映射），不透传单个账号的上游列表。
+	if models, ok := h.declaredGeminiModels(c, apiKey); ok {
+		payload := gemini.ModelsListResponse{Models: make([]gemini.Model, 0, len(models))}
+		for _, model := range models {
+			payload.Models = append(payload.Models, gemini.FallbackModel(model))
+		}
+		writeGeminiModelsListWithAPIKeyAliases(c, payload, apiKey)
+		return
+	}
 
 	account, err := h.geminiCompatService.SelectAccountForModelsEndpoints(c.Request.Context(), apiKey.GroupID)
 	if err != nil {
@@ -233,6 +242,17 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 	// 强制 antigravity 模式：返回 antigravity 模型信息
 	if forcePlatform == service.PlatformAntigravity {
 		c.JSON(http.StatusOK, antigravity.FallbackGeminiModel(modelName))
+		return
+	}
+	// 与列表同源判断模型是否存在：账号都声明映射时不再让单个账号的上游决定。
+	if models, ok := h.declaredGeminiModels(c, apiKey); ok {
+		for _, model := range service.AppendAPIKeyModelAliases(models, apiKey.ModelMapping) {
+			if model == modelName {
+				c.JSON(http.StatusOK, gemini.FallbackModel(modelName))
+				return
+			}
+		}
+		googleError(c, http.StatusNotFound, "models/"+modelName+" is not found")
 		return
 	}
 
@@ -1086,6 +1106,23 @@ func googleClientErrorType(status int) string {
 func googleConcurrencyError(c *gin.Context, err error, slotType string) {
 	status, errType, code, message := concurrencyErrorResponse(err, slotType)
 	googleErrorWithType(c, status, errType, code, message)
+}
+
+// declaredGeminiModels 在分组内每个可调度 Gemini 账号都声明了模型映射时，返回与 /v1/models 同一解析链路的模型；
+// 解析结果为空、查询失败或有账号未声明映射时返回 false，由调用方回落到原有的选号透传。
+func (h *GatewayHandler) declaredGeminiModels(c *gin.Context, apiKey *service.APIKey) ([]string, bool) {
+	if h.gatewayService == nil || h.geminiCompatService == nil || apiKey == nil || apiKey.Group == nil || apiKey.Group.Platform != service.PlatformGemini {
+		return nil, false
+	}
+	declared, err := h.geminiCompatService.AllGeminiAccountsDeclareModels(c.Request.Context(), apiKey.GroupID)
+	if err != nil || !declared {
+		return nil, false
+	}
+	models := service.RequestableModelIDs(h.gatewayService.ResolveRequestableModels(c.Request.Context(), apiKey.GroupID, service.PlatformGemini).Models)
+	if len(models) == 0 {
+		return nil, false
+	}
+	return models, true
 }
 
 // antigravityGeminiModels 从当前分组可请求目录保留映射到 Gemini 的型号。

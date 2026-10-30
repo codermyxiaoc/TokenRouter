@@ -24,6 +24,27 @@ import (
 // errGeminiModelsUpstreamStatus 在 Vertex 分页读取遇到非 2xx 时中止分页，原始响应由调用方另行保存。
 var errGeminiModelsUpstreamStatus = errors.New("upstream model list returned non-2xx status")
 
+// AllGeminiAccountsDeclareModels 判断分组内每个可调度 Gemini 账号是否都有生效的 model_mapping（含 Google One 默认映射）。
+// 全部声明时模型接口应与 /v1/models 同源应答，不透传某个账号的上游列表；有账号未配置映射（可接受任意模型）
+// 或没有 Gemini 账号时返回 false，保持选号透传。同步上游 Sub2API de44e3a0b 的触发条件。
+func (s *GeminiMessagesCompatService) AllGeminiAccountsDeclareModels(ctx context.Context, groupID *int64) (bool, error) {
+	accounts, err := s.listSchedulableAccountsOnce(ctx, groupID, PlatformGemini, true)
+	if err != nil {
+		return false, fmt.Errorf("query accounts failed: %w", err)
+	}
+	seen := false
+	for i := range accounts {
+		if accounts[i].Platform != PlatformGemini {
+			continue
+		}
+		if len(accounts[i].GetModelMapping()) == 0 {
+			return false, nil
+		}
+		seen = true
+	}
+	return seen, nil
+}
+
 // SelectAccountForModelsEndpoints 为模型列表与模型详情接口选择账号。
 //
 // 优先级：

@@ -329,6 +329,10 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 		if nResult.Type != gjson.Number {
 			return fmt.Errorf("invalid n field type")
 		}
+		// 只接受正整数：1.5 等小数原先被截断成 1 用于路由和计费，原始请求却按 1.5 转发，口径不一致。
+		if nResult.Float() != float64(nResult.Int()) {
+			return fmt.Errorf("n must be a positive integer")
+		}
 		req.N = int(nResult.Int())
 		if req.N <= 0 {
 			return fmt.Errorf("n must be greater than 0")

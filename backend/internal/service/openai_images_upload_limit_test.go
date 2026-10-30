@@ -62,3 +62,24 @@ func TestParseGrokMediaRequest_MultipartKeepsUploadAbove20MB(t *testing.T) {
 	require.Len(t, info.Uploads, 1)
 	require.Equal(t, len(image), len(info.Uploads[0].Data))
 }
+
+// n 只接受正整数：小数原先被截断成 1 参与路由和计费，原始请求却按小数转发给上游。
+func TestParseOpenAIImagesRequest_RejectsNonIntegerN(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	parse := func(body string) (*OpenAIImagesRequest, error) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader([]byte(body)))
+		req.Header.Set("Content-Type", "application/json")
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = req
+		return (&OpenAIGatewayService{}).ParseOpenAIImagesRequest(c, []byte(body))
+	}
+	for _, n := range []string{"1.5", "0.5", "1e30", "-1", "0"} {
+		_, err := parse(`{"model":"gpt-image-2","prompt":"p","n":` + n + `}`)
+		require.Error(t, err, n)
+	}
+	for n, want := range map[string]int{"1": 1, "2.0": 2, "4": 4} {
+		parsed, err := parse(`{"model":"gpt-image-2","prompt":"p","n":` + n + `}`)
+		require.NoError(t, err, n)
+		require.Equal(t, want, parsed.N, n)
+	}
+}

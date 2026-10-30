@@ -520,3 +520,41 @@ func TestDurableImageTaskIntegrationLegacyTerminalProjectionCannotRegress(t *tes
 	require.Equal(t, "completed", stored)
 	require.Equal(t, "completed", projected)
 }
+
+// 扣费前已落库待交付结果、执行者随后中断：维护器按账本决定，已扣费则补交结果，未扣费仍按中断处理。
+func TestDurableImageTaskIntegrationPendingDeliveryRecoveredByLedger(t *testing.T) {
+	for _, charged := range []bool{true, false} {
+		t.Run(fmt.Sprintf("charged=%v", charged), func(t *testing.T) {
+			s, task, _ := durableImageFixture(t)
+			ctx := context.Background()
+			task.ID += fmt.Sprintf("_%v", charged)
+			requestID := "client:pending-" + task.ID
+			task.LeaseExpiresAt = time.Now().Add(-time.Minute).Unix()
+			task.PendingResult = json.RawMessage(`{"data":[{"url":"https://images.example.test/pending.png"}]}`)
+			task.PendingHTTPStatus, task.BillingRequestID = 200, requestID
+			require.NoError(t, s.Save(ctx, task, 24*time.Hour))
+			if charged {
+				_, err := integrationDB.ExecContext(ctx, `INSERT INTO usage_billing_dedup(request_id,api_key_id,request_fingerprint) VALUES($1,$2,'fp')`, requestID, task.APIKeyID)
+				require.NoError(t, err)
+			}
+			recreated := NewDurableImageTaskStore(integrationDB, s.rdb).(service.ImageTaskDurableStore)
+			require.NoError(t, recreated.Maintain(ctx, time.Now()))
+			got, err := recreated.Get(ctx, task.ID)
+			require.NoError(t, err)
+			require.Empty(t, got.PendingResult, "判定后不再保留待交付副本")
+			stored, projected := durableImageStatuses(t, task.ID)
+			if charged {
+				require.Equal(t, "completed", got.Status)
+				require.Equal(t, 200, got.HTTPStatus)
+				require.JSONEq(t, `{"data":[{"url":"https://images.example.test/pending.png"}]}`, string(got.Result))
+				require.Equal(t, "completed", stored)
+				require.Equal(t, "completed", projected)
+				return
+			}
+			require.Equal(t, "failed", got.Status)
+			require.Empty(t, got.Result, "未扣费不能交付结果")
+			require.Contains(t, string(got.Error), "execution_interrupted")
+			require.Equal(t, "failed", projected)
+		})
+	}
+}

@@ -53,6 +53,11 @@ type ImageTaskRecord struct {
 	LeaseExpiresAt    int64                 `json:"lease_expires_at,omitempty"`
 	ExecutionDeadline int64                 `json:"execution_deadline,omitempty"`
 	Observation       *MediaTaskObservation `json:"observation,omitempty"`
+	// PendingResult 是已转存、等待扣费确认的紧凑结果，任务仍为 processing 且不对外返回；
+	// BillingRequestID 是对应资金动作的请求 ID。执行者中断时维护器据账本决定交付结果或判为中断。
+	PendingResult     json.RawMessage `json:"pending_result,omitempty"`
+	PendingHTTPStatus int             `json:"pending_http_status,omitempty"`
+	BillingRequestID  string          `json:"billing_request_id,omitempty"`
 }
 
 type ImageTask struct {
@@ -104,6 +109,8 @@ type ImageTaskService struct {
 	billingRecovery func(context.Context) error
 	// deliveryRetryDelays 是转存临时失败的重试档位，生产装配时设置。
 	deliveryRetryDelays []time.Duration
+	// chargeRecorder 只读确认扣费是否已提交，用于扣费报错时区分“未扣费”与“已扣费但回执丢失”。
+	chargeRecorder UsageBillingRequestRecorder
 }
 
 // SetBillingRecovery 在启动维护循环前装配已确认图片的结算补偿。
@@ -294,6 +301,15 @@ func (s *ImageTaskService) deliveryRetryWindow() time.Duration {
 // 转存临时失败会在 ctx 预算内按档位重试，仍失败才判定未交付。
 // @project-doc docs/domains/media_tasks.md#async_image_billing
 func (s *ImageTaskService) CompleteDelivered(ctx context.Context, id string, statusCode int, result json.RawMessage, uploader *ImageResultUploader, settle func(context.Context) error) (bool, error) {
+	return s.CompleteDeliveredWithBilling(ctx, id, statusCode, result, uploader, "", settle)
+}
+
+// CompleteDeliveredWithBilling 在扣费前先把待交付结果与扣费请求 ID 落库（仍为 processing、不对外返回），
+// 保存失败则不扣费。这样扣费成功后进程退出或结果写入持续失败，维护器也能按账本补交结果；
+// 扣费报错时先核对账本，已扣费仍交付结果，避免“钱扣了、图没给”或误报未扣费。
+// billingRequestID 为空时退回只在内存中重试的旧流程。
+// @project-doc docs/domains/media_tasks.md#async_image_billing
+func (s *ImageTaskService) CompleteDeliveredWithBilling(ctx context.Context, id string, statusCode int, result json.RawMessage, uploader *ImageResultUploader, billingRequestID string, settle func(context.Context) error) (bool, error) {
 	if !json.Valid(result) {
 		return false, s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "upstream returned a non-JSON image response"))
 	}
@@ -329,6 +345,18 @@ func (s *ImageTaskService) CompleteDelivered(ctx context.Context, id string, sta
 	if len(result) > maxImageTaskStoredResultBytes {
 		return false, s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "stored image result exceeds metadata limit"))
 	}
+	billingRequestID = strings.TrimSpace(billingRequestID)
+	if settle != nil && billingRequestID != "" {
+		// 先落库待交付结果再扣费：保存失败说明没有可恢复的记录，此时不扣费，按未交付失败处理。
+		if err := s.stagePendingDelivery(ctx, id, statusCode, result, billingRequestID); err != nil {
+			logger.L().Error("image_task.pending_delivery_store_failed", zap.String("task_id", id), zap.Error(err))
+			failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancel()
+			taskErr, _ := json.Marshal(map[string]string{"type": "api_error", "code": "image_billing_unavailable",
+				"message": "image was generated but the result could not be saved; the result was not delivered and no charge was applied"})
+			return false, errors.Join(ErrImageTaskBillingUnavailable, s.Fail(failureCtx, id, http.StatusServiceUnavailable, taskErr))
+		}
+	}
 	if settle != nil {
 		// 扣费使用独立预算：转存可能已耗尽 ctx，不能因此把已产出的图片当作扣费失败。
 		settleCtx, settleCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
@@ -336,10 +364,20 @@ func (s *ImageTaskService) CompleteDelivered(ctx context.Context, id string, sta
 		settleCancel()
 		if settleErr != nil {
 			logger.L().Error("image_task.billing_settle_failed", zap.String("task_id", id), zap.Error(settleErr))
+			// 扣费可能已提交但回执丢失：账本确认已扣费时照常交付，不能把已收费的图片判为失败。
+			charged, checkErr := s.chargeRecorded(ctx, id, billingRequestID)
+			if charged {
+				logger.L().Warn("image_task.billing_settle_error_but_captured", zap.String("task_id", id))
+				return s.persistDeliveredResult(ctx, id, statusCode, result)
+			}
+			message := "image was generated but billing could not be completed; the result was not delivered and no charge was applied"
+			if checkErr != nil {
+				// 无法确认账本时不能断言未扣费；已扣费的预占不会再被释放，可凭任务 ID 核对。
+				message = "image was generated but billing could not be confirmed; the result was not delivered. If a charge appears, contact support with the task ID"
+			}
 			failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 			defer cancel()
-			taskErr, _ := json.Marshal(map[string]string{"type": "api_error", "code": "image_billing_unavailable",
-				"message": "image was generated but billing could not be completed; the result was not delivered and no charge was applied"})
+			taskErr, _ := json.Marshal(map[string]string{"type": "api_error", "code": "image_billing_unavailable", "message": message})
 			return false, errors.Join(ErrImageTaskBillingUnavailable, s.Fail(failureCtx, id, http.StatusServiceUnavailable, taskErr))
 		}
 	}
@@ -355,6 +393,66 @@ func (s *ImageTaskService) CompleteDelivered(ctx context.Context, id string, sta
 		return false, err
 	}
 	return true, nil
+}
+
+// stagePendingDelivery 把待交付结果写入仍处于 processing 的任务，并读回确认写入生效；
+// 任务已被维护器判为终态或执行者不符时返回错误，调用方不得继续扣费。
+func (s *ImageTaskService) stagePendingDelivery(ctx context.Context, id string, statusCode int, result json.RawMessage, billingRequestID string) error {
+	if s == nil || s.store == nil {
+		return ErrImageTaskUnavailable
+	}
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
+		}
+		stageCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		lastErr = s.stagePendingDeliveryOnce(stageCtx, id, statusCode, result, billingRequestID)
+		cancel()
+		if lastErr == nil || errors.Is(lastErr, ErrImageTaskNotFound) || errors.Is(lastErr, errImageTaskNotPending) {
+			return lastErr
+		}
+	}
+	return lastErr
+}
+
+// errImageTaskNotPending 表示任务已不在执行中（例如已被判为中断），不能再登记待交付结果。
+var errImageTaskNotPending = errors.New("image task is no longer processing")
+
+func (s *ImageTaskService) stagePendingDeliveryOnce(ctx context.Context, id string, statusCode int, result json.RawMessage, billingRequestID string) error {
+	task, err := s.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if task.Status != ImageTaskStatusProcessing {
+		return errImageTaskNotPending
+	}
+	task.PendingResult, task.PendingHTTPStatus, task.BillingRequestID = result, statusCode, billingRequestID
+	if err := s.store.Save(ctx, task, s.ttl); err != nil {
+		return err
+	}
+	stored, err := s.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if stored.Status != ImageTaskStatusProcessing || stored.BillingRequestID != billingRequestID || len(stored.PendingResult) == 0 {
+		return errImageTaskNotPending
+	}
+	return nil
+}
+
+// chargeRecorded 按扣费请求 ID 与任务所属 Key 只读核对账本；没有请求 ID 或查询能力时返回未扣费且无错误。
+func (s *ImageTaskService) chargeRecorded(ctx context.Context, id, billingRequestID string) (bool, error) {
+	if s == nil || s.chargeRecorder == nil || billingRequestID == "" {
+		return false, nil
+	}
+	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	task, err := s.store.Get(checkCtx, id)
+	if err != nil {
+		return false, err
+	}
+	return s.chargeRecorder.UsageBillingRequestRecorded(checkCtx, billingRequestID, task.APIKeyID)
 }
 
 // deliveredResultPersistDelays 是扣费成功后结果落库的重试间隔；数据库或 Redis 的短暂故障通常在此窗口内恢复。
@@ -462,6 +560,8 @@ func (s *ImageTaskService) finishOnce(ctx context.Context, id, status string, st
 	task.HTTPStatus = statusCode
 	task.Result = result
 	task.Error = taskErr
+	// 终态不再保留待交付副本，避免记录翻倍；扣费请求 ID 保留供核对。
+	task.PendingResult, task.PendingHTTPStatus = nil, 0
 	task.CompletedAt = &completedAt
 	task.ExpiresAt = now.Add(s.ttl).Unix()
 	if err := s.store.Save(ctx, task, s.ttl); err != nil {

@@ -1105,6 +1105,7 @@ func ProvideImageTaskService(store ImageTaskStore, settings *ImageStorageSetting
 	svc := NewImageTaskServiceWithResolver(store, settings.Resolver(), 0, 0)
 	svc.objectRetention = retention
 	svc.imageBilling, _ = billing.(ImageBillingReservationRepository)
+	svc.chargeRecorder, _ = billing.(UsageBillingRequestRecorder)
 	// 转存临时失败按档位重试，交付成功后才捕获预占。
 	svc.SetDeliveryRetryDelays(DefaultImageDeliveryRetryDelays)
 	// 与任务维护共用生命周期，只恢复已确认成果的账务和使用记录。

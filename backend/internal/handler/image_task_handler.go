@@ -374,7 +374,8 @@ func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, r
 		if deferred.Pending() {
 			settle = func(ctx context.Context) error { return h.captureDeferredImageBilling(ctx, taskID, deferred) }
 		}
-		if _, err := h.tasks.CompleteDelivered(storageCtx, taskID, statusCode, json.RawMessage(body), uploader, settle); err != nil {
+		// 扣费请求 ID 与网关结算一致（客户端请求 ID），用于扣费前落库待交付结果并在中断后核对账本。
+		if _, err := h.tasks.CompleteDeliveredWithBilling(storageCtx, taskID, statusCode, json.RawMessage(body), uploader, observation.RequestID, settle); err != nil {
 			logger.L().Error("image_task.complete_store_failed", zap.String("task_id", taskID), zap.Error(err))
 		}
 		return

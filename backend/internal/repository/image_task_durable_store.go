@@ -319,9 +319,12 @@ func prepareDurableImageTask(task *service.ImageTaskRecord, ttl time.Duration) (
 		return nil, fmt.Errorf("invalid durable image task")
 	}
 	// 用已定义结构序列化，不接受未知请求字段；结果内禁止内嵌图片。
-	if len(task.Result) > 0 {
+	for _, raw := range []json.RawMessage{task.Result, task.PendingResult} {
+		if len(raw) == 0 {
+			continue
+		}
 		var result any
-		if json.Unmarshal(task.Result, &result) != nil || hasInlineImage(result) {
+		if json.Unmarshal(raw, &result) != nil || hasInlineImage(result) {
 			return nil, fmt.Errorf("image task result must contain compact image URLs")
 		}
 	}
@@ -428,12 +431,29 @@ func (s *durableImageTaskStore) savePostgres(ctx context.Context, next *service.
 		// 行锁内重新检查心跳，避免维护扫描刚结束就误判另一个活跃实例。
 		if imageTaskLeaseExpired(current, now) {
 			completed := now.Unix()
-			chosen.Status = service.ImageTaskStatusFailed
-			chosen.HTTPStatus = http.StatusServiceUnavailable
 			chosen.CompletedAt = &completed
 			chosen.ExpiresAt = now.Add(imageTaskResultTTL).Unix()
-			chosen.Result = nil
-			chosen.Error = json.RawMessage(`{"type":"execution_interrupted","message":"Image execution was interrupted; the upstream result is unknown and generation usage may already have been billed. The request was not replayed."}`)
+			// 执行者已落库待交付结果：账本确认已扣费就交付该结果，否则说明扣费未发生，按中断处理。
+			charged := false
+			if len(current.PendingResult) > 0 && current.BillingRequestID != "" {
+				if charged, err = imageTaskChargeRecorded(ctx, tx, current.BillingRequestID, current.APIKeyID); err != nil {
+					return nil, err
+				}
+			}
+			if charged {
+				chosen.Status = service.ImageTaskStatusCompleted
+				chosen.HTTPStatus = current.PendingHTTPStatus
+				if chosen.HTTPStatus == 0 {
+					chosen.HTTPStatus = http.StatusOK
+				}
+				chosen.Result, chosen.Error = current.PendingResult, nil
+			} else {
+				chosen.Status = service.ImageTaskStatusFailed
+				chosen.HTTPStatus = http.StatusServiceUnavailable
+				chosen.Result = nil
+				chosen.Error = json.RawMessage(`{"type":"execution_interrupted","message":"Image execution was interrupted; the upstream result is unknown and generation usage may already have been billed. The request was not replayed."}`)
+			}
+			chosen.PendingResult, chosen.PendingHTTPStatus = nil, 0
 		}
 	} else if imageTaskTerminal(current) && (!imageTaskInterrupted(current) || !imageTaskTerminal(next) || imageTaskInterrupted(next)) {
 		chosen = current
@@ -472,6 +492,14 @@ func (s *durableImageTaskStore) savePostgres(ctx context.Context, next *service.
 		return nil, err
 	}
 	return chosen, nil
+}
+
+// imageTaskChargeRecorded 在维护事务内只读核对扣费是否已提交（含归档去重记录），不执行任何资金动作。
+func imageTaskChargeRecorded(ctx context.Context, tx *sql.Tx, requestID string, apiKeyID int64) (bool, error) {
+	var exists bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM usage_billing_dedup WHERE request_id=$1 AND api_key_id=$2)
+ OR EXISTS (SELECT 1 FROM usage_billing_dedup_archive WHERE request_id=$1 AND api_key_id=$2)`, requestID, apiKeyID).Scan(&exists)
+	return exists, err
 }
 
 func normalizeImageTaskObservation(task *service.ImageTaskRecord) {

@@ -105,3 +105,24 @@ func TestUpdateAccountPreservesGrokBillingSnapshotForUnrelatedEdit(t *testing.T)
 	require.False(t, eligible)
 	require.Equal(t, "billing_forbidden", reason)
 }
+
+// 目录观察与上游能力快照只由同步写入：编辑表单携带的旧值或注入值被丢弃，以账号现有值为准；
+// 账号原来没有时也不会凭表单写入。
+func TestUpdateAccountKeepsSyncManagedCatalogSnapshots(t *testing.T) {
+	accountID := int64(113)
+	observed := map[string]any{"models": []any{"grok-4.6"}, "fetched_at": "2026-10-30T00:00:00Z"}
+	repo := &accountServiceTestRepo{accounts: map[int64]*Account{
+		accountID: {ID: accountID, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Extra: map[string]any{grokObservedModelsExtraKey: observed}},
+	}}
+	updated, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+		Extra: map[string]any{
+			grokObservedModelsExtraKey:    map[string]any{"models": []any{"forged"}},
+			UpstreamModelMetadataExtraKey: map[string]any{"forged": true},
+			"custom":                      "value",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, observed, updated.Extra[grokObservedModelsExtraKey])
+	require.NotContains(t, updated.Extra, UpstreamModelMetadataExtraKey)
+	require.Equal(t, "value", updated.Extra["custom"])
+}

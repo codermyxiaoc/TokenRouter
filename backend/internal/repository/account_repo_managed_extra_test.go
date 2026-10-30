@@ -91,8 +91,8 @@ func TestLockAndMergeAccountManagedExtraProtectsOllamaFields(t *testing.T) {
 
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(int64(29), service.PlatformAnthropic, service.AccountTypeAPIKey, `{"api_key":"key","base_url":"https://ollama.com"}`, nil, sqlmock.AnyArg()).
-				WillReturnRows(sqlmock.NewRows([]string{"ollama_group_unchanged", "ollama_proxy_unchanged", "ollama_session", "ollama_auto", "ollama_snapshot", "probe_identity", "probe_enabled", "sync_enabled", "probe_snapshot", "rate"}).
-					AddRow(tt.groupIdentityMatches, tt.proxyIdentityMatches, []byte(`"local-ciphertext"`), []byte(`true`), []byte(`{"status":"ok"}`), true, nil, nil, nil, 1.0))
+				WillReturnRows(sqlmock.NewRows([]string{"ollama_group_unchanged", "ollama_proxy_unchanged", "ollama_session", "ollama_auto", "ollama_snapshot", "probe_identity", "probe_enabled", "sync_enabled", "probe_snapshot", "rate", "grok_observed", "upstream_metadata"}).
+					AddRow(tt.groupIdentityMatches, tt.proxyIdentityMatches, []byte(`"local-ciphertext"`), []byte(`true`), []byte(`{"status":"ok"}`), true, nil, nil, nil, 1.0, nil, nil))
 
 			account := &service.Account{
 				ID: 29, Platform: service.PlatformAnthropic, Type: service.AccountTypeAPIKey,
@@ -118,6 +118,49 @@ func TestLockAndMergeAccountManagedExtraProtectsOllamaFields(t *testing.T) {
 				require.Equal(t, map[string]any{"status": "ok"}, got[service.OllamaCloudUsageSnapshotExtraKey])
 			} else {
 				require.NotContains(t, got, service.OllamaCloudUsageSnapshotExtraKey)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+// Grok 目录观察与上游能力快照只由同步写入：普通编辑在行锁内采用数据库最新值，
+// 表单携带的旧值或注入值被丢弃，数据库中没有时也不会凭表单写入。
+func TestLockAndMergeAccountManagedExtraKeepsCatalogSnapshots(t *testing.T) {
+	for _, tt := range []struct {
+		name               string
+		observed, metadata []byte
+	}{
+		{name: "数据库已有快照时以数据库为准", observed: []byte(`{"models":["grok-4.6"],"fetched_at":"2026-10-30T00:00:00Z"}`), metadata: []byte(`{"gemini-3-pro":{"thinking":true}}`)},
+		{name: "数据库没有快照时不接受表单值"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = db.Close() })
+			client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+			t.Cleanup(func() { _ = client.Close() })
+			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("extra -> 'grok_observed_models'")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
+				WillReturnRows(sqlmock.NewRows([]string{"ollama_group_unchanged", "ollama_proxy_unchanged", "ollama_session", "ollama_auto", "ollama_snapshot", "probe_identity", "probe_enabled", "sync_enabled", "probe_snapshot", "rate", "grok_observed", "upstream_metadata"}).
+					AddRow(false, false, nil, nil, nil, true, nil, nil, nil, 1.0, tt.observed, tt.metadata))
+			account := &service.Account{
+				ID: 31, Platform: service.PlatformGrok, Type: service.AccountTypeOAuth,
+				Credentials: map[string]any{"access_token": "token"},
+				Extra: map[string]any{
+					"grok_observed_models":                map[string]any{"models": []any{"forged"}},
+					service.UpstreamModelMetadataExtraKey: map[string]any{"forged": true},
+					"keep":                                "value",
+				},
+			}
+			got, err := lockAndMergeAccountManagedExtra(context.Background(), client, account)
+			require.NoError(t, err)
+			require.Equal(t, "value", got["keep"])
+			if tt.observed == nil {
+				require.NotContains(t, got, "grok_observed_models")
+				require.NotContains(t, got, service.UpstreamModelMetadataExtraKey)
+			} else {
+				require.Equal(t, []any{"grok-4.6"}, got["grok_observed_models"].(map[string]any)["models"])
+				require.Equal(t, map[string]any{"thinking": true}, got[service.UpstreamModelMetadataExtraKey].(map[string]any)["gemini-3-pro"])
 			}
 			require.NoError(t, mock.ExpectationsWereMet())
 		})

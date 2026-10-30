@@ -34,11 +34,15 @@ type UpstreamModelCatalog struct {
 }
 
 // GetUpstreamModelMetadataSnapshot 返回独立副本，避免读取者修改共享调度账号。
+
+// UpstreamModelMetadataExtraKey 保存上游模型能力快照，只由模型同步写入；普通账号编辑不能覆盖或注入。
+const UpstreamModelMetadataExtraKey = "upstream_model_metadata"
+
 func (a *Account) GetUpstreamModelMetadataSnapshot() *UpstreamModelMetadataSnapshot {
 	if a == nil || a.Extra == nil {
 		return nil
 	}
-	raw, ok := a.Extra["upstream_model_metadata"]
+	raw, ok := a.Extra[UpstreamModelMetadataExtraKey]
 	if !ok {
 		return nil
 	}
@@ -91,7 +95,7 @@ func (s *AccountTestService) SyncUpstreamModelCatalog(ctx context.Context, accou
 		return nil, err
 	}
 	if s.accountRepo != nil && account.ID > 0 {
-		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"upstream_model_metadata": value}); err != nil {
+		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{UpstreamModelMetadataExtraKey: value}); err != nil {
 			return nil, fmt.Errorf("save upstream model metadata: %w", err)
 		}
 	}
@@ -100,7 +104,7 @@ func (s *AccountTestService) SyncUpstreamModelCatalog(ctx context.Context, accou
 	for key, v := range account.Extra {
 		extra[key] = v
 	}
-	extra["upstream_model_metadata"] = value
+	extra[UpstreamModelMetadataExtraKey] = value
 	account.Extra = extra
 	return result, nil
 }

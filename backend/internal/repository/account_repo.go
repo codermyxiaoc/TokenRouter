@@ -624,7 +624,9 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 			extra -> 'upstream_billing_probe_enabled',
 			extra -> 'upstream_billing_rate_sync_enabled',
 			extra -> 'upstream_billing_probe',
-			rate_multiplier
+			rate_multiplier,
+			extra -> 'grok_observed_models',
+			extra -> 'upstream_model_metadata'
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -651,6 +653,8 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 		currentRateSyncEnabled       []byte
 		currentProbeSnapshot         []byte
 		currentRate                  float64
+		currentGrokObservedModels    []byte
+		currentUpstreamModelMetadata []byte
 	)
 	if err := rows.Scan(
 		&ollamaGroupIdentityUnchanged,
@@ -663,6 +667,8 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 		&currentRateSyncEnabled,
 		&currentProbeSnapshot,
 		&currentRate,
+		&currentGrokObservedModels,
+		&currentUpstreamModelMetadata,
 	); err != nil {
 		return nil, err
 	}
@@ -700,6 +706,21 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 			} else if ok {
 				extra[service.OllamaCloudUsageSnapshotExtraKey] = snapshot
 			}
+		}
+	}
+	// Grok 目录观察和上游能力快照是同步写入的受管状态：普通更新在行锁内采用数据库最新值，
+	// 忽略表单旧值、缺键和注入；来源身份变化也不删除已有快照，由下一次同步刷新。
+	for key, raw := range map[string][]byte{
+		"grok_observed_models":                currentGrokObservedModels,
+		service.UpstreamModelMetadataExtraKey: currentUpstreamModelMetadata,
+	} {
+		delete(extra, key)
+		value, ok, err := decodeAccountExtraJSON(raw)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			extra[key] = value
 		}
 	}
 	return extra, nil

@@ -3,6 +3,7 @@ package antigravity
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -11,6 +12,9 @@ import (
 
 	"github.com/tidwall/gjson"
 )
+
+// ErrMalformedFunctionCall 表示上游以 MALFORMED_FUNCTION_CALL 结束，不能把残缺的工具调用当作成功结果返回。
+var ErrMalformedFunctionCall = errors.New("upstream returned MALFORMED_FUNCTION_CALL")
 
 // TransformGeminiToClaude 将 Gemini 响应转换为 Claude 格式（非流式）
 func TransformGeminiToClaude(geminiResp []byte, originalModel string) ([]byte, *ClaudeUsage, error) {
@@ -34,6 +38,11 @@ func TransformGeminiToClaude(geminiResp []byte, originalModel string) ([]byte, *
 		v1Resp.Response = directResp
 		v1Resp.ResponseID = directResp.ResponseID
 		v1Resp.ModelVersion = directResp.ModelVersion
+	}
+
+	// 畸形工具调用直接报错，由调用方返回 502，而不是 200 与残缺结果。
+	if len(v1Resp.Response.Candidates) > 0 && v1Resp.Response.Candidates[0].FinishReason == "MALFORMED_FUNCTION_CALL" {
+		return nil, nil, ErrMalformedFunctionCall
 	}
 
 	// 使用处理器转换

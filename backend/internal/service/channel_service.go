@@ -1081,7 +1081,7 @@ func (s *ChannelService) applyUpdateInput(ctx context.Context, channel *Channel,
 		channel.BillingModelSource = input.BillingModelSource
 	}
 	if input.FeaturesConfig != nil {
-		channel.FeaturesConfig = input.FeaturesConfig
+		channel.FeaturesConfig = mergeWebSearchEmulationDimensions(channel.FeaturesConfig, input.FeaturesConfig)
 	}
 	if input.ApplyPricingToAccountStats != nil {
 		channel.ApplyPricingToAccountStats = *input.ApplyPricingToAccountStats
@@ -1090,6 +1090,52 @@ func (s *ChannelService) applyUpdateInput(ctx context.Context, channel *Channel,
 		channel.AccountStatsPricingRules = *input.AccountStatsPricingRules
 	}
 	return nil
+}
+
+// mergeWebSearchEmulationDimensions 在渠道更新时保留 features_config.web_search_emulation 的各平台维度。
+// 该键是按平台（anthropic、openai 等）划分的对象，而更新会整块替换 features_config；只认识部分平台的
+// 客户端（管理端原先只提交 anthropic）每次保存都会抹掉其它平台的设置。规则：
+//   - 请求带该键：请求中的维度优先，缺失的维度沿用当前值；
+//   - 请求不带该键：整键沿用，不认识该功能的客户端无法清空它；
+//   - 显式空对象 {} 或 null：视为清空并替换。
+//
+// 其它 features_config 键仍整块替换；不做通用深合并，以便仍能删除某个维度。同步上游 Sub2API 9eba61736。
+func mergeWebSearchEmulationDimensions(existing, incoming map[string]any) map[string]any {
+	if incoming == nil {
+		return nil
+	}
+	current, _ := existing[featureKeyWebSearchEmulation].(map[string]any)
+	rawIncoming, present := incoming[featureKeyWebSearchEmulation]
+	incomingDims, incomingIsMap := rawIncoming.(map[string]any)
+
+	if !present && len(current) > 0 {
+		return withWebSearchEmulationKey(incoming, current)
+	}
+	if !incomingIsMap || len(current) == 0 || len(incomingDims) == 0 {
+		return incoming
+	}
+	merged := make(map[string]any, len(incomingDims)+len(current))
+	for platform, value := range current {
+		merged[platform] = value
+	}
+	for platform, value := range incomingDims {
+		merged[platform] = value
+	}
+	return withWebSearchEmulationKey(incoming, merged)
+}
+
+// withWebSearchEmulationKey 返回 incoming 的副本，其 web_search_emulation 键指向 value 的副本，不修改调用方对象。
+func withWebSearchEmulationKey(incoming, value map[string]any) map[string]any {
+	out := make(map[string]any, len(incoming)+1)
+	for key, item := range incoming {
+		out[key] = item
+	}
+	copied := make(map[string]any, len(value))
+	for platform, item := range value {
+		copied[platform] = item
+	}
+	out[featureKeyWebSearchEmulation] = copied
+	return out
 }
 
 // checkGroupConflicts 检查待关联的分组是否已属于其他渠道。

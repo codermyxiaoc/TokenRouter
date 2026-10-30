@@ -327,7 +327,7 @@
             </div>
 
             <!-- Web Search 模拟（仅 Anthropic，未开启全局开关时隐藏） -->
-            <div v-if="section.platform === 'anthropic' && webSearchGlobalEnabled" class="border-t border-gray-200 pt-3 dark:border-dark-600">
+            <div v-if="WEB_SEARCH_EMULATION_PLATFORMS.has(section.platform) && webSearchGlobalEnabled" class="border-t border-gray-200 pt-3 dark:border-dark-600">
               <div class="flex items-center justify-between">
                 <div>
                   <label class="text-xs font-medium text-gray-700 dark:text-gray-300">
@@ -669,6 +669,10 @@ const appStore = useAppStore()
 const channelFormRef = ref<HTMLFormElement | null>(null)
 
 // Web Search global enabled state (loaded once on mount)
+// 支持联网搜索模拟开关的平台，须与后端账号级白名单（service/account.go GetWebSearchEmulationMode：
+// anthropic、openai）保持一致；渲染与提交共用这一集合。
+const WEB_SEARCH_EMULATION_PLATFORMS: ReadonlySet<string> = new Set(['anthropic', 'openai'])
+
 const webSearchGlobalEnabled = ref(false)
 async function loadWebSearchGlobalState() {
   try {
@@ -1223,15 +1227,13 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
     }
   }
 
-  // Collect web_search_emulation (only anthropic platform supports it)
-  // Always write the key so that disabling in the UI correctly sets platform to false,
-  // rather than leaving a stale true value from the cloned features_config.
+  // 收集 web_search_emulation，平台范围与后端账号级白名单一致。
   const wsEmulation: Record<string, boolean> = {}
   for (const section of form.platforms) {
-    if (!section.enabled) continue
-    if (section.platform === 'anthropic') {
-      wsEmulation[section.platform] = !!section.web_search_emulation
-    }
+    if (!WEB_SEARCH_EMULATION_PLATFORMS.has(section.platform)) continue
+    // 白名单平台逐个显式写入（未启用的平台写 false），避免克隆来的 features_config 残留 true；
+    // 后端按平台维度合并，未提交的平台沿用原值，不会被本次保存抹掉。
+    wsEmulation[section.platform] = section.enabled ? !!section.web_search_emulation : false
   }
   if (Object.keys(wsEmulation).length > 0) {
     featuresConfig.web_search_emulation = wsEmulation

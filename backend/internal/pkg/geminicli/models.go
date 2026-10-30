@@ -41,4 +41,5 @@ func GoogleOneModelMapping() map[string]string {
 }
 
 // DefaultTestModel is the default model to preselect in test flows.
-const DefaultTestModel = "gemini-2.0-flash"
+// 2.x 已被上游停用，测试默认改用目录中现役的 3.5 Flash（同步上游 Sub2API 31564b2e8）。
+const DefaultTestModel = "gemini-3.5-flash"

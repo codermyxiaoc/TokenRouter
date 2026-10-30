@@ -22,6 +22,23 @@ describe('载入画布时补齐节点几何信息', () => {
     expect(normalizeCanvasDocument({ ...doc, nodes: [doc.nodes[2]] }).nodes[0]).toBe(doc.nodes[2]);
   });
 
+  // 报告反例：节点字段完整但整个文档没有 viewport/connections 时，编辑器报 viewport 未定义并白屏。
+  it('缺少 viewport、connections 或 title 时补默认值', () => {
+    const doc = { nodes: [
+      { id: 'a', type: 'image', position: { x: 1, y: 2 }, width: 340, height: 240 },
+      { id: 'b', type: 'text', title: '   ', position: { x: 3, y: 4 }, width: 320, height: 200 },
+    ] } as unknown as CanvasDocument;
+    const out = normalizeCanvasDocument(doc);
+    expect(out.viewport).toEqual({ x: 0, y: 0, k: 1 });
+    expect(out.connections).toEqual([]);
+    expect(out.nodes[0]).toMatchObject({ title: 'image' });
+    expect(out.nodes[1]).toMatchObject({ title: 'text' });
+    // 非法视口同样补默认值；已合法的视口与原对象保持不变，不触发无谓保存。
+    expect(normalizeCanvasDocument({ nodes: [], connections: [], viewport: { x: 0, y: 0, k: 0 } } as unknown as CanvasDocument).viewport).toEqual({ x: 0, y: 0, k: 1 });
+    const valid = { nodes: [], connections: [], viewport: { x: 1, y: 2, k: 1.5 } } as unknown as CanvasDocument;
+    expect(normalizeCanvasDocument(valid)).toBe(valid);
+  });
+
   it('getCanvas 返回的记录已补齐', async () => {
     setSession({ userId: 1, token: 'unit-test-token', locale: 'zh-CN', theme: 'light' });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { id: 'c1', title: 't', revision: 1, created_at: '', updated_at: '',

@@ -143,7 +143,7 @@ func (s *CreativeVideoCanvasExecutor) Submit(ctx context.Context, e *CreativeCan
 	videoAssets := []VideoReferenceAsset{}
 	for _, asset := range assets {
 		if asset.Role == VideoMediaRoleReferenceVideo {
-			videoAssets = append(videoAssets, VideoReferenceAsset{AssetID: asset.Asset.ID, MIMEType: asset.Asset.MIMEType, Size: asset.Asset.ByteSize})
+			videoAssets = append(videoAssets, VideoReferenceAsset{AssetID: asset.Asset.ID, MIMEType: asset.Asset.MIMEType, Size: asset.Asset.ByteSize, Placeholder: creativeVideoAssetPlaceholder(e.ID, asset.Asset.ID)})
 			continue
 		}
 		if size := int64(len(asset.Content)); size > maxReferenceImageBytes {
@@ -272,7 +272,7 @@ func creativeVideoCanvasRequest(e *CreativeCanvasExecution, model *CreativeModel
 				return nil, nil, nil, ErrCanvasInvalid
 			}
 			seen[asset.Asset.ID] = true
-			videos = append(videos, VideoCanonicalMedia{URL: creativeVideoAssetURL(asset.Asset.ID), Role: VideoMediaRoleReferenceVideo})
+			videos = append(videos, VideoCanonicalMedia{URL: creativeVideoAssetPlaceholder(e.ID, asset.Asset.ID), Role: VideoMediaRoleReferenceVideo})
 			continue
 		}
 		if asset.Asset.MediaType != "image" {

@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -19,11 +21,15 @@ type videoReferencePublisher interface {
 	PrepareAssetURLs(context.Context, int64, []VideoReferenceAsset) ([]string, error)
 }
 
-// creativeVideoAssetURLPrefix 标记画布参考视频的内部占位链接；只有画布执行器的准备器能把它换成短期链接，
-// 任何残留或由外部请求提交的占位都会在发送上游前被拒绝。
+// creativeVideoAssetURLPrefix 标记画布参考视频的内部占位链接；只有画布执行器的准备器能把它换成短期链接。
 const creativeVideoAssetURLPrefix = "creative-asset://"
 
-func creativeVideoAssetURL(assetID string) string { return creativeVideoAssetURLPrefix + assetID }
+// creativeVideoAssetPlaceholder 生成绑定执行与素材的占位链接：摘要不可预测，提示词不可能恰好等于它而被误替换；
+// 同一执行重试时值不变，正文与幂等摘要保持一致。不含原始素材 ID，提交正文也不暴露素材标识。
+func creativeVideoAssetPlaceholder(executionID, assetID string) string {
+	sum := sha256.Sum256([]byte("creative-video-reference|" + executionID + "|" + assetID))
+	return creativeVideoAssetURLPrefix + hex.EncodeToString(sum[:16])
+}
 
 // 保留原始画布正文作为幂等摘要；参考视频的占位对任何目标都替换为短期链接，参考图仅在实际选中只收公网素材的
 // 协议（Yezonghui 或 public_media 模板）时替换传输副本。同一次提交的选号、容量重选和安全换号共享一批链接，
@@ -69,26 +75,25 @@ func newCreativeVideoReferencePreparer(publisher videoReferencePublisher, userID
 
 // replaceCreativeVideoAssetURLs 把每个参考视频占位按精确 JSON 字符串替换为校验用的公网样例链接。内置协议会把规范请求
 // 转换为厂商原生结构，因此不按字段路径查找，而是在整个正文中替换；某个视频未出现在正文中或仍有残留占位时拒绝。
+// 只处理执行器声明的占位：普通请求或提示词里出现 creative-asset:// 文字不受影响；外部伪造的占位不会被签发，
+// 按普通无效链接交给协议校验。声明的视频未出现在正文中时拒绝，避免静默丢失参考视频。
 func replaceCreativeVideoAssetURLs(body []byte, videos []VideoReferenceAsset) ([]byte, [][]byte, error) {
 	if len(videos) == 0 {
-		if bytes.Contains(body, []byte(creativeVideoAssetURLPrefix)) {
-			return nil, nil, ErrVideoReferenceInvalid
-		}
 		return body, nil, nil
 	}
 	out := body
 	placeholders := make([][]byte, 0, len(videos))
 	for i, video := range videos {
-		token := creativeVideoJSONString(creativeVideoAssetURL(video.AssetID))
+		if !strings.HasPrefix(video.Placeholder, creativeVideoAssetURLPrefix) {
+			return nil, nil, ErrVideoReferenceInvalid
+		}
+		token := creativeVideoJSONString(video.Placeholder)
 		if !bytes.Contains(out, token) {
 			return nil, nil, ErrVideoReferenceInvalid
 		}
 		placeholder := creativeVideoJSONString("https://reference.example/video-" + strconv.Itoa(i) + ".mp4")
 		out = bytes.ReplaceAll(out, token, placeholder)
 		placeholders = append(placeholders, placeholder)
-	}
-	if bytes.Contains(out, []byte(creativeVideoAssetURLPrefix)) {
-		return nil, nil, ErrVideoReferenceInvalid
 	}
 	return out, placeholders, nil
 }

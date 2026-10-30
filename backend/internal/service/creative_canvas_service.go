@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -602,10 +603,14 @@ func (s *CreativeCanvasService) loadInputs(ctx context.Context, e *CreativeCanva
 		if a.Status != "ready" || !s.now().Before(a.ExpiresAt) {
 			return nil, ErrCanvasExpired
 		}
-		// 参考视频经短期链接由上游自行读取，不读入内存也不计入内嵌素材总量；只核对归属、就绪与有效期。
+		// 参考视频经短期链接由上游自行读取，不读入内存也不计入内嵌素材总量；核对归属、就绪与有效期，
+		// 并确认私有存储里的文件仍在且大小与登记一致，避免签发链接、提交上游后才因读取失败而失败。
 		if a.MediaType == "video" && ref.Role == VideoMediaRoleReferenceVideo {
 			if a.ByteSize < 1 || a.ByteSize > VideoReferenceAssetMaxBytes {
 				return nil, ErrCreativeAssetTooLarge
+			}
+			if err := s.checkStoredSize(ctx, a); err != nil {
+				return nil, err
 			}
 			out = append(out, CreativeCanvasInputAsset{Asset: a, Role: ref.Role})
 			continue
@@ -629,6 +634,25 @@ func (s *CreativeCanvasService) loadInputs(ctx context.Context, e *CreativeCanva
 		out = append(out, CreativeCanvasInputAsset{Asset: a, Role: ref.Role, Content: data})
 	}
 	return out, nil
+}
+// checkStoredSize 只打开并定位到文件末尾核对大小，不读取内容；文件缺失按素材不存在处理。
+func (s *CreativeCanvasService) checkStoredSize(ctx context.Context, a *CreativeCanvasAsset) error {
+	r, err := s.store.Open(ctx, a.ID)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ErrCanvasNotFound
+	}
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	size, err := r.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+	if size != a.ByteSize {
+		return ErrCanvasInvalid
+	}
+	return nil
 }
 func (s *CreativeCanvasService) saveExecution(ctx context.Context, e *CreativeCanvasExecution, delay time.Duration) {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)

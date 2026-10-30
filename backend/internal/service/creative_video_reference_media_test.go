@@ -28,6 +28,19 @@ func TestCreativeVideoProfileReferenceLimit(t *testing.T) {
 	require.Equal(t, CreativeVideoReferenceLimit{}, creativeVideoProfileReferenceLimit(spec), "没有规则读取素材时不开放")
 	spec.Create.Body = append(spec.Create.Body, VideoProfileRule{From: "images", To: "images"}, VideoProfileRule{From: "videos", To: "videos"})
 	require.Equal(t, CreativeVideoReferenceLimit{MaxImages: videoCanonicalMaxMedia, MaxVideos: videoCanonicalMaxMedia}, creativeVideoProfileReferenceLimit(spec), "未声明上限时取规范请求上限")
+	// 只映射单项时按可消费的项数推导：多发的素材会被引擎以未映射拒绝，画布不能放开到规范上限。
+	only := func(rules ...VideoProfileRule) CreativeVideoReferenceLimit {
+		return creativeVideoProfileReferenceLimit(&VideoProtocolProfileSpec{Create: VideoProfileCreate{Body: append([]VideoProfileRule{{From: "prompt", To: "prompt"}}, rules...)}})
+	}
+	require.Equal(t, CreativeVideoReferenceLimit{MaxImages: 1}, only(VideoProfileRule{From: "images[0]", To: "image"}))
+	require.Equal(t, CreativeVideoReferenceLimit{MaxImages: 1}, only(VideoProfileRule{From: "images[role=first_frame]", To: "first_frame"}))
+	require.Equal(t, CreativeVideoReferenceLimit{MaxImages: 2}, only(VideoProfileRule{From: "images[0]", To: "a"}, VideoProfileRule{From: "images[1]", To: "b"}))
+	require.Equal(t, CreativeVideoReferenceLimit{}, only(VideoProfileRule{From: "images[1]", To: "b"}), "缺少下标 0 时第一张就无法发送")
+	require.Equal(t, CreativeVideoReferenceLimit{}, only(VideoProfileRule{From: "images[role=last_frame]", To: "last"}), "画布不会发送尾帧角色")
+	require.Equal(t, CreativeVideoReferenceLimit{MaxVideos: 1}, only(VideoProfileRule{From: "videos[0]", To: "video"}))
+	// 能力上限只会收紧推导结果，不会放大单项映射。
+	capped := &VideoProtocolProfileSpec{Create: VideoProfileCreate{Body: []VideoProfileRule{{From: "images[0]", To: "image"}}}, Capabilities: &VideoProfileCapabilities{MaxImages: 4}}
+	require.Equal(t, CreativeVideoReferenceLimit{MaxImages: 1}, creativeVideoProfileReferenceLimit(capped))
 }
 
 // 保存只校验取值范围：模板协议可配到规范上限，内置协议沿用代码声明的上限且不能配置参考视频。
@@ -91,14 +104,18 @@ func TestCreativeVideoCatalogUsesTemplateReferenceLimits(t *testing.T) {
 // 参考视频只以内部占位进入正文，不读取内容；超过生效上限或素材类型不符时拒绝。
 func TestCreativeVideoCanvasRequestReferenceVideos(t *testing.T) {
 	videoID, imageID := "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
-	e := &CreativeCanvasExecution{UserID: 7, Params: CreativeCanvasExecutionParams{Model: "m", Operation: CreativeOperationGenerate, Prompt: "p", Duration: 5, Resolution: "720p", AspectRatio: "16:9",
+	e := &CreativeCanvasExecution{ID: "exec-1", UserID: 7, Params: CreativeCanvasExecutionParams{Model: "m", Operation: CreativeOperationGenerate, Prompt: "p", Duration: 5, Resolution: "720p", AspectRatio: "16:9",
 		References: []CreativeCanvasReference{{AssetID: imageID, Role: VideoMediaRoleReferenceImage}, {AssetID: videoID, Role: VideoMediaRoleReferenceVideo}}}}
 	model := &CreativeModelPublic{VideoCapabilities: &CreativeVideoCapabilities{Durations: []float64{5}, Resolutions: []string{"720p"}, AspectRatios: []string{"16:9"}, MaxReferenceImages: 1, MaxReferenceVideos: 1}}
 	image := CreativeCanvasInputAsset{Asset: &CreativeCanvasAsset{ID: imageID, UserID: 7, MediaType: "image", MIMEType: "image/png"}, Role: VideoMediaRoleReferenceImage, Content: makeTestPNG(t, 16, 16)}
 	video := CreativeCanvasInputAsset{Asset: &CreativeCanvasAsset{ID: videoID, UserID: 7, MediaType: "video", MIMEType: "video/mp4", ByteSize: 1024}, Role: VideoMediaRoleReferenceVideo}
 	body, canonical, _, err := creativeVideoCanvasRequest(e, model, []CreativeCanvasInputAsset{image, video}, 1000)
 	require.NoError(t, err)
-	require.Equal(t, creativeVideoAssetURL(videoID), gjson.GetBytes(body, "videos.0.url").String())
+	// 占位绑定执行与素材、不暴露素材 ID，同一执行重试时保持不变。
+	placeholder := gjson.GetBytes(body, "videos.0.url").String()
+	require.Equal(t, creativeVideoAssetPlaceholder("exec-1", videoID), placeholder)
+	require.NotContains(t, placeholder, videoID)
+	require.NotEqual(t, placeholder, creativeVideoAssetPlaceholder("exec-2", videoID))
 	require.Equal(t, VideoMediaRoleReferenceVideo, gjson.GetBytes(body, "videos.0.role").String())
 	require.Equal(t, VideoMediaRoleReferenceImage, canonical.Images[0].Role)
 	require.Len(t, canonical.Videos, 1)
@@ -119,18 +136,22 @@ func TestCreativeVideoCanvasRequestReferenceVideos(t *testing.T) {
 	require.ErrorIs(t, err, ErrCanvasInvalid)
 }
 
-// 参考视频占位对任何目标都换成短期链接：先用样例链接校验协议，再签发一次并在重选候选时复用；外部请求携带占位一律拒绝。
+// 参考视频占位对任何目标都换成短期链接：先用样例链接校验协议，再签发一次并在重选候选时复用；只替换声明的占位，提示词原样保留。
 func TestCreativeVideoReferencePreparerPublishesVideos(t *testing.T) {
 	videoID := "33333333-3333-4333-8333-333333333333"
-	assets := []VideoReferenceAsset{{AssetID: videoID, MIMEType: "video/mp4", Size: 2048}}
+	placeholder := creativeVideoAssetPlaceholder("exec-1", videoID)
+	assets := []VideoReferenceAsset{{AssetID: videoID, MIMEType: "video/mp4", Size: 2048, Placeholder: placeholder}}
 	target := videoPresetTarget(t, "kemei-minimax", "m")
-	body := []byte(`{"model":"m","prompt":"p","duration":6,"resolution":"768p","aspect_ratio":"16:9","videos":[{"url":"` + creativeVideoAssetURL(videoID) + `","role":"reference_video"}]}`)
+	// 提示词里出现 creative-asset:// 文字（即使形如素材 ID 的旧占位）必须原样保留，只替换执行器声明的占位。
+	prompt := "参考 creative-asset://" + videoID + " 的运镜"
+	body := []byte(`{"model":"m","prompt":"` + prompt + `","duration":6,"resolution":"768p","aspect_ratio":"16:9","videos":[{"url":"` + placeholder + `","role":"reference_video"}]}`)
 	pub := &internalVideoReferenceStub{}
 	prepare := newCreativeVideoReferencePreparer(pub, 5, assets...)
 	for i := 0; i < 2; i++ {
 		out, err := prepare(context.Background(), target, body)
 		require.NoError(t, err)
-		require.NotContains(t, string(out), creativeVideoAssetURLPrefix)
+		require.NotContains(t, string(out), placeholder)
+		require.Equal(t, prompt, gjson.GetBytes(out, "prompt").String())
 		require.Contains(t, string(out), "https://canvas.example.com/api/v1/video-references/video-"+videoID)
 	}
 	require.Equal(t, 1, pub.assetCalls, "同一次提交只签发一次")
@@ -142,10 +163,17 @@ func TestCreativeVideoReferencePreparerPublishesVideos(t *testing.T) {
 	_, err := newCreativeVideoReferencePreparer(invalid, 5, assets...)(context.Background(), target, bytes.Replace(body, []byte(`"duration":6`), []byte(`"duration":60`), 1))
 	require.Error(t, err)
 	require.Zero(t, invalid.assetCalls)
-	// 外部请求伪造占位、或执行器声明的视频没有出现在正文中，都在发送前拒绝。
-	_, err = newCreativeVideoReferencePreparer(&internalVideoReferenceStub{}, 5)(context.Background(), target, body)
+	// 没有声明参考视频时正文原样通过，提示词里的 creative-asset:// 文字不触发拒绝，也不会签发任何链接。
+	plain := &internalVideoReferenceStub{}
+	textOnly := []byte(`{"model":"m","prompt":"` + prompt + `","duration":6,"resolution":"768p","aspect_ratio":"16:9"}`)
+	out, err := newCreativeVideoReferencePreparer(plain, 5)(context.Background(), target, textOnly)
+	require.NoError(t, err)
+	require.Equal(t, prompt, gjson.GetBytes(out, "prompt").String())
+	require.Zero(t, plain.assetCalls)
+	// 执行器声明的视频没有出现在正文中、或占位格式不对，都在发送前拒绝。
+	_, err = newCreativeVideoReferencePreparer(&internalVideoReferenceStub{}, 5, VideoReferenceAsset{AssetID: "44444444-4444-4444-8444-444444444444", MIMEType: "video/mp4", Size: 1, Placeholder: creativeVideoAssetPlaceholder("exec-1", "44444444-4444-4444-8444-444444444444")})(context.Background(), target, body)
 	require.ErrorIs(t, err, ErrVideoReferenceInvalid)
-	_, err = newCreativeVideoReferencePreparer(&internalVideoReferenceStub{}, 5, VideoReferenceAsset{AssetID: "44444444-4444-4444-8444-444444444444", MIMEType: "video/mp4", Size: 1})(context.Background(), target, body)
+	_, err = newCreativeVideoReferencePreparer(&internalVideoReferenceStub{}, 5, VideoReferenceAsset{AssetID: videoID, MIMEType: "video/mp4", Size: 2048})(context.Background(), target, body)
 	require.ErrorIs(t, err, ErrVideoReferenceInvalid)
 	// 签发失败直接返回，不留下部分替换的正文。
 	failing := &internalVideoReferenceStub{assetErr: ErrVideoReferenceQuota}

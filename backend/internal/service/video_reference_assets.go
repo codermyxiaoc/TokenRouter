@@ -24,6 +24,8 @@ type VideoReferenceAsset struct {
 	AssetID  string
 	MIMEType string
 	Size     int64
+	// Placeholder 是该素材在提交正文中的内部占位链接，准备器据此精确替换，不参与签发。
+	Placeholder string
 }
 
 // VideoReferenceAssetBatch 与图片票据一样固定签发与过期时刻，并独立计算每用户每小时的视频额度。

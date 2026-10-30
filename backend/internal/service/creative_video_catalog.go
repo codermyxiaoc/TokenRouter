@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -59,22 +60,19 @@ func creativeBuiltinVideoReferenceLimit(endpoint VideoEndpoint) CreativeVideoRef
 	}
 }
 
-// 画布能发出的素材取决于模板：没有规则读取 images/videos 时为 0；限定角色且不含 reference_image 时，
+// 画布能发出的素材取决于模板：没有规则读取 images/videos 时为 0；只映射下标或角色时按可消费的项数；限定角色且不含 reference_image 时，
 // 画布只能以首帧发送一张图；其余按 max_images/max_videos，未声明时取规范请求上限。
 func creativeVideoProfileReferenceLimit(spec *VideoProtocolProfileSpec) CreativeVideoReferenceLimit {
 	if spec == nil {
 		return CreativeVideoReferenceLimit{}
 	}
-	readsImages, readsVideos := false, false
-	for _, rule := range spec.Create.Body {
-		readsImages = readsImages || rule.From == "images" || strings.HasPrefix(rule.From, "images[")
-		readsVideos = readsVideos || rule.From == "videos"
+	out := CreativeVideoReferenceLimit{
+		MaxImages: creativeVideoProfileMediaLimit(spec.Create.Body, "images", VideoMediaRoleFirstFrame, VideoMediaRoleReferenceImage),
+		MaxVideos: creativeVideoProfileMediaLimit(spec.Create.Body, "videos", VideoMediaRoleReferenceVideo),
 	}
-	out := CreativeVideoReferenceLimit{}
 	caps := spec.Capabilities
-	if readsImages {
-		out.MaxImages = videoCanonicalMaxMedia
-		if caps != nil && caps.MaxImages > 0 {
+	if out.MaxImages > 0 {
+		if caps != nil && caps.MaxImages > 0 && caps.MaxImages < out.MaxImages {
 			out.MaxImages = caps.MaxImages
 		}
 		if caps != nil && len(caps.ImageRoles) > 0 && !containsFold(caps.ImageRoles, VideoMediaRoleReferenceImage) {
@@ -84,13 +82,39 @@ func creativeVideoProfileReferenceLimit(spec *VideoProtocolProfileSpec) Creative
 			}
 		}
 	}
-	if readsVideos {
-		out.MaxVideos = videoCanonicalMaxMedia
-		if caps != nil && caps.MaxVideos > 0 {
-			out.MaxVideos = caps.MaxVideos
-		}
+	if out.MaxVideos > 0 && caps != nil && caps.MaxVideos > 0 && caps.MaxVideos < out.MaxVideos {
+		out.MaxVideos = caps.MaxVideos
 	}
 	return out
+}
+
+// creativeVideoProfileMediaLimit 按模板实际映射的媒体来源推导画布最多能发送几项：整列映射不限（交给能力上限）；
+// 只映射下标时只有从 0 开始连续的下标能被消费，其余会被引擎以“未映射”拒绝；只映射角色时每个角色最多一项，
+// 画布按顺序发送且不保证角色组合，因此仅当存在画布会使用的角色时保守地允许 1 项。
+func creativeVideoProfileMediaLimit(rules []VideoProfileRule, field string, canvasRoles ...string) int {
+	indexes, roleMatched := map[int]bool{}, false
+	for _, rule := range rules {
+		source, isList, err := parseVideoProfileSource(rule.From)
+		if err != nil || source.field != field {
+			continue
+		}
+		if isList {
+			return videoCanonicalMaxMedia
+		}
+		if source.role != "" {
+			roleMatched = roleMatched || slices.Contains(canvasRoles, source.role)
+		} else if source.index >= 0 {
+			indexes[source.index] = true
+		}
+	}
+	limit := 0
+	for indexes[limit] {
+		limit++
+	}
+	if limit == 0 && roleMatched {
+		limit = 1
+	}
+	return limit
 }
 
 func normalizeCreativeVideoCapabilities(endpoint VideoEndpoint, input *CreativeVideoCapabilities) (*CreativeVideoCapabilities, error) {

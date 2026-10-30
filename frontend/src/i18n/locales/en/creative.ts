@@ -2,7 +2,7 @@ export default {
   creative: {
     title: 'Creative Studio',
     sessionExpired: 'Your session has expired. Sign in again. Existing tasks continue in the background.',
-    description: 'Create images and videos on your private cloud canvases. Assets are retained for 7 days.',
+    description: 'Create images and videos on your private cloud canvases. Assets are retained for {days} days.',
     panel: {
       model: 'Model',
       // Edit / inpaint prerequisite hint (also shown as the form error when generating without a selection)

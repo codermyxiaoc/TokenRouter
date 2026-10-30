@@ -30,9 +30,17 @@ export function usePageMeta() {
     return (route.meta.title as string) || ''
   })
 
+  // 创作台描述里的素材保存期取后台公开设置；缺失或旧后端未返回时按 7 天，不能沿用写死的文案。
+  const creativeAssetRetentionDays = computed(() => {
+    const hours = appStore.cachedPublicSettings?.creative_canvas_asset_retention_hours
+    return typeof hours === 'number' && Number.isFinite(hours) && hours > 0 ? Math.max(1, Math.round(hours / 24)) : 7
+  })
+
   const pageDescription = computed(() => {
     const descriptionKey = route.meta.descriptionKey as string
-    if (descriptionKey) return t(descriptionKey)
+    if (descriptionKey) {
+      return descriptionKey === 'creative.description' ? t(descriptionKey, { days: creativeAssetRetentionDays.value }) : t(descriptionKey)
+    }
     return (route.meta.description as string) || ''
   })
 

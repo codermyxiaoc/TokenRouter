@@ -1,7 +1,7 @@
 export default {
   creative: {
     title: '创作台',
-    description: '在个人云端画布中创作图片和视频，素材保留 7 天。',
+    description: '在个人云端画布中创作图片和视频，素材保留 {days} 天。',
     sessionExpired: '登录会话已失效，请重新登录。任务仍会在后台处理。',
     panel: {
       model: '模型',

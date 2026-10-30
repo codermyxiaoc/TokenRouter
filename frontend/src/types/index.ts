@@ -267,6 +267,8 @@ export interface PublicSettings {
   ticket_enabled?: boolean
   // 旧版公开设置可能缺少该字段，调用方应仅在明确为 false 时关闭创作台入口。
   creative_enabled?: boolean
+  // 画布素材保存期（小时），画布库据此展示真实期限；旧后端缺失时按 168 小时（7 天）。
+  creative_canvas_asset_retention_hours?: number
   intelligence_enabled?: boolean
   daily_activity_enabled?: boolean
   table_default_page_size: number

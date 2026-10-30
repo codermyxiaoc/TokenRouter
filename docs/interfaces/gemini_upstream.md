@@ -89,6 +89,9 @@ Vertex `service_account`（包含 Service Account JSON 与 Vertex API Key 认证
 
 Gemini tier、上游配额和按模型 reset 信息作为账号资格与容量信号。普通账号的 429 响应可以更新账号或模型的 `rate_limited_until`，后续调度在恢复时间前过滤该候选；公共池账号由请求级同账号重试或切号消化 429，不写默认本地账号限流，但管理员显式配置的自定义错误策略仍然优先。实时配额查询失败不应伪造剩余额度。
 
+<a id="gemini_same_account_retries"></a>
+原生 v1beta、Claude 兼容与 Chat/Responses 兼容三条转发路径对 429/5xx 等可重试错误先在同一账号上重发，次数由 `gateway.max_same_account_retries_gemini` 控制（默认 4 次，即首次加重试共 5 次请求，范围 0–10，修改后需重启），用尽后才交给切号或返回上游错误。Claude 兼容路径因思考签名错误触发的降级重发不占用这个次数。429 冷却仍在每次失败时按下述规则写入，与重试次数无关。
+
 显式配置 `provider_type=third_party` 的账号保留本站原有第三方冷却规则（默认 5 分钟）；旧账号仅凭非官方 Base URL 被识别为第三方时，优先使用响应明确给出的重试时间，没有重试时间则遵守全局 429 秒级兜底设置（默认 5 秒，可关闭）。两类第三方都不从 Google 每日配额文案推断午夜恢复，官方 AI Studio 与 Vertex 各自规则不变。
 
 显式开启 mixed scheduling 的 Antigravity 账号可以加入 Gemini 分组候选，但仍需满足目标分组、模型、endpoint、额度、并发和凭据约束。普通 Gemini 请求保持 Gemini 协议和计费归属；专用 Antigravity 路由不混入 Gemini 账号。

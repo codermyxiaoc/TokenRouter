@@ -1091,6 +1091,8 @@ type GatewayConfig struct {
 	MaxAccountSwitches int `mapstructure:"max_account_switches"`
 	// Gemini 账户切换最大次数（Gemini 平台单独配置，因 API 限制更严格）
 	MaxAccountSwitchesGemini int `mapstructure:"max_account_switches_gemini"`
+	// Gemini 同账号重试次数：429/5xx 等可重试错误在换号前对同一账号的重发次数，不含首次请求。
+	MaxSameAccountRetriesGemini int `mapstructure:"max_same_account_retries_gemini"`
 	// 独立视频创建及安全换号共用的秒数预算，0 使用默认 180 秒。
 	VideoCreateTimeoutSeconds int `mapstructure:"video_create_timeout_seconds"`
 	// VideoMaxProcessingMinutes 是独立视频任务排队与生成的最长等待（分钟），超时未交付成品即失败并释放预扣；0 使用默认 180。
@@ -2485,6 +2487,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.image_model_cooldown.unknown_seconds", []int{})
 	viper.SetDefault("gateway.image_model_cooldown.strike_window_seconds", 0)
 	viper.SetDefault("gateway.max_account_switches_gemini", 3)
+	// 默认 4 次重试，加首次共 5 次请求，与改为可配置前的固定次数一致。
+	viper.SetDefault("gateway.max_same_account_retries_gemini", 4)
 	viper.SetDefault("gateway.video_create_timeout_seconds", 180)
 	viper.SetDefault("gateway.video_max_processing_minutes", 180)
 	viper.SetDefault("gateway.force_codex_cli", false)
@@ -3458,6 +3462,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIResponseHeaderTimeout < 0 {
 		return fmt.Errorf("gateway.openai_response_header_timeout must be non-negative")
+	}
+	if c.Gateway.MaxSameAccountRetriesGemini < 0 || c.Gateway.MaxSameAccountRetriesGemini > 10 {
+		return fmt.Errorf("gateway.max_same_account_retries_gemini must be between 0-10")
 	}
 	if c.Gateway.GrokResponseHeaderTimeout < 0 || c.Gateway.GrokResponseHeaderTimeout > 1800 {
 		return fmt.Errorf("gateway.grok_response_header_timeout must be between 0-1800 seconds")

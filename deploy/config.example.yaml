@@ -223,6 +223,8 @@ security:
 gateway:
   # 协议转换时显式输出预算的下限（最低 16，默认 128）；修改后需要重启。
   min_output_tokens: 128
+  # Gemini 可重试错误（429/5xx）在换号前对同一账号的重发次数，不含首次请求；默认 4，范围 0–10。
+  # max_same_account_retries_gemini: 4
   # Timeout for waiting upstream response headers (seconds)
   # 等待上游响应头超时时间（秒）
   response_header_timeout: 600

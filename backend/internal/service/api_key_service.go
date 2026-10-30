@@ -1000,11 +1000,8 @@ func paginateAPIKeys(keys []APIKey, params pagination.PaginationParams) []APIKey
 		return []APIKey{}
 	}
 	limit := params.Limit()
-	page := params.Page
-	if page < 1 {
-		page = 1
-	}
-	offset := (page - 1) * limit
+	// 复用饱和后的偏移量，极大页码不会溢出成负数导致切片越界。
+	offset := params.Offset()
 	if offset >= len(keys) {
 		return []APIKey{}
 	}

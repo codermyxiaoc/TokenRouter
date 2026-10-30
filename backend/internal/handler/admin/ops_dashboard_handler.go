@@ -2,6 +2,7 @@ package admin
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -331,6 +332,10 @@ func parseOpsTokenStatsFilter(c *gin.Context) (*service.OpsTokenStatsFilter, err
 			return nil, fmt.Errorf("invalid page_size")
 		}
 		filter.PageSize = pageSize
+	}
+	// 极大页码会让偏移量溢出，直接按参数错误拒绝。
+	if filter.Page > math.MaxInt/filter.PageSize {
+		return nil, fmt.Errorf("invalid page")
 	}
 	return filter, nil
 }

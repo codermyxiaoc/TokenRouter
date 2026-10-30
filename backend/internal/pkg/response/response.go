@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"strconv"
 
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/TokenFlux/TokenRouter/internal/util/logredact"
@@ -188,16 +189,16 @@ func ParsePagination(c *gin.Context) (page, pageSize int) {
 		}
 	}
 
+	// 页码按 pageSize 限制上限，调用方计算 (page-1)*pageSize 与 offset+pageSize 不会溢出。
+	if page > math.MaxInt/pageSize {
+		page = math.MaxInt / pageSize
+	}
+
 	return page, pageSize
 }
 
+// parseInt 只接受 int 正数范围内的十进制数字；非数字或越界返回错误，由调用方回落到默认值。
 func parseInt(s string) (int, error) {
-	var result int
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, nil
-		}
-		result = result*10 + int(c-'0')
-	}
-	return result, nil
+	value, err := strconv.ParseUint(s, 10, strconv.IntSize-1)
+	return int(value), err
 }

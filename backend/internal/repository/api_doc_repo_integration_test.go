@@ -5,6 +5,7 @@ package repository
 import (
 	"context"
 	"io/fs"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -306,5 +307,41 @@ func TestAPIDocMigrationImportsLegacyOverrides(t *testing.T) {
 			require.False(t, doc.Custom)
 			require.Equal(t, int64(1), doc.Version)
 		})
+	}
+}
+
+// 两个一级分类并发互设上级：层级锁内复核后最多只有一个成功，不能形成环或第三级。
+func TestAPIDocConcurrentMutualParentsCannotFormCycle(t *testing.T) {
+	cleanAPIDocs(t)
+	t.Cleanup(func() { cleanAPIDocs(t) })
+	ctx := context.Background()
+	svc := service.NewAPIDocService(NewAPIDocRepository(integrationDB))
+	for round := 0; round < 10; round++ {
+		cleanAPIDocs(t)
+		a, err := svc.SaveCategory(ctx, "cycle-a", service.APIDocCategoryInput{Custom: true, Title: apiDocText("A")}, 1)
+		require.NoError(t, err)
+		b, err := svc.SaveCategory(ctx, "cycle-b", service.APIDocCategoryInput{Custom: true, Title: apiDocText("B")}, 1)
+		require.NoError(t, err)
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		start := make(chan struct{})
+		for i, pair := range [][2]string{{"cycle-a", "cycle-b"}, {"cycle-b", "cycle-a"}} {
+			version := a.Version
+			if pair[0] == "cycle-b" {
+				version = b.Version
+			}
+			wg.Add(1)
+			go func(i int, id, parent string, version int64) {
+				defer wg.Done()
+				<-start
+				_, errs[i] = svc.SaveCategory(ctx, id, service.APIDocCategoryInput{Custom: true, Title: apiDocText(id), ParentID: apiDocText(parent), Version: version}, 1)
+			}(i, pair[0], pair[1], version)
+		}
+		close(start)
+		wg.Wait()
+		require.False(t, errs[0] == nil && errs[1] == nil, "round %d: 两个互设上级的请求不能同时成功", round)
+		var cycles int
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_doc_categories c JOIN api_doc_categories p ON c.parent_id=p.id WHERE p.parent_id IS NOT NULL`).Scan(&cycles))
+		require.Zero(t, cycles, "round %d: 不能出现上级本身也有上级的层级", round)
 	}
 }

@@ -124,17 +124,37 @@ func (r *apiDocRepository) GetDocument(ctx context.Context, id string) (*service
 
 // SaveCategory：version=0 时插入（已存在即冲突），否则仅在 version 一致时更新并递增。
 func (r *apiDocRepository) SaveCategory(ctx context.Context, id string, in service.APIDocCategoryInput, actorID int64) (*service.APIDocCategory, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// 层级变更按全局咨询锁串行：服务层的父级校验读的是保存前的目录，两个一级分类并发互设上级时各自都会通过，
+	// 这里在锁内按最新数据复核，防止形成环或超过两级。
+	if err := lockAPIDocCategoryHierarchy(ctx, tx); err != nil {
+		return nil, err
+	}
+	if in.ParentID != nil {
+		var invalid bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM api_doc_categories WHERE id=$1 AND parent_id IS NOT NULL)
+ OR EXISTS(SELECT 1 FROM api_doc_categories WHERE parent_id=$2)`, *in.ParentID, id).Scan(&invalid); err != nil {
+			return nil, err
+		}
+		if invalid {
+			return nil, service.ErrAPIDocCategoryHierarchy
+		}
+	}
 	var row *sql.Row
 	if in.Version == 0 {
 		// 排序占位行（version=0）可被接管并保留排序，其它已存在的行视为冲突。
-		row = r.db.QueryRowContext(ctx, `INSERT INTO api_doc_categories (id,parent_id,title,hidden,custom,updated_by)
+		row = tx.QueryRowContext(ctx, `INSERT INTO api_doc_categories (id,parent_id,title,hidden,custom,updated_by)
  VALUES ($1,$2,$3,$4,$5,$6)
  ON CONFLICT (id) DO UPDATE SET parent_id=EXCLUDED.parent_id,title=EXCLUDED.title,hidden=EXCLUDED.hidden,custom=EXCLUDED.custom,
  updated_by=EXCLUDED.updated_by,version=1,updated_at=NOW() WHERE api_doc_categories.version=0
  RETURNING `+apiDocCategoryColumns,
 			id, in.ParentID, in.Title, in.Hidden, in.Custom, nullableActor(actorID))
 	} else {
-		row = r.db.QueryRowContext(ctx, `UPDATE api_doc_categories SET parent_id=$2,title=$3,hidden=$4,custom=$5,updated_by=$6,
+		row = tx.QueryRowContext(ctx, `UPDATE api_doc_categories SET parent_id=$2,title=$3,hidden=$4,custom=$5,updated_by=$6,
  version=version+1,updated_at=NOW() WHERE id=$1 AND version=$7 RETURNING `+apiDocCategoryColumns,
 			id, in.ParentID, in.Title, in.Hidden, in.Custom, nullableActor(actorID), in.Version)
 	}
@@ -142,7 +162,19 @@ func (r *apiDocRepository) SaveCategory(ctx context.Context, id string, in servi
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrAPIDocConflict
 	}
-	return saved, err
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return saved, nil
+}
+
+// lockAPIDocCategoryHierarchy 串行化分类层级的写入与删除，锁随事务释放。
+func lockAPIDocCategoryHierarchy(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('api-doc-category-hierarchy',0))`)
+	return err
 }
 
 // DeleteCategory 在同一事务内确认版本，自定义分类下仍有文档时拒绝删除，避免文档失去归属。
@@ -152,6 +184,10 @@ func (r *apiDocRepository) DeleteCategory(ctx context.Context, id string, versio
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// 与保存共用层级锁，避免删除上级的同时有新的子分类挂上来。
+	if err := lockAPIDocCategoryHierarchy(ctx, tx); err != nil {
+		return err
+	}
 	var custom bool
 	err = tx.QueryRowContext(ctx, `SELECT custom FROM api_doc_categories WHERE id=$1 AND version=$2 FOR UPDATE`, id, version).Scan(&custom)
 	if errors.Is(err, sql.ErrNoRows) {

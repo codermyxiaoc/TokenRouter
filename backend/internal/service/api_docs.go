@@ -46,6 +46,8 @@ var (
 	// ErrAPIDocConflict 表示条目在编辑期间已被他人修改（或已存在），需重新载入后再保存。
 	ErrAPIDocConflict = infraerrors.Conflict("API_DOC_CONFLICT", "This document was changed by someone else; reload it before saving")
 	// ErrAPIDocCategoryNotEmpty 表示自定义分类下仍有文档，删除前须先移走或删除这些文档。
+	// ErrAPIDocCategoryHierarchy 表示并发修改后层级已变化，本次保存会超过两级或形成环。
+	ErrAPIDocCategoryHierarchy = infraerrors.Conflict("API_DOC_CATEGORY_HIERARCHY", "The category hierarchy changed; reload it before saving")
 	ErrAPIDocCategoryNotEmpty = infraerrors.Conflict("API_DOC_CATEGORY_NOT_EMPTY", "Move or delete the documents in this category first")
 )
 

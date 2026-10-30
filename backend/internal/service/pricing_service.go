@@ -104,6 +104,15 @@ var (
 		LongContextInputTokenThreshold: 272000, LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
 		SupportsServiceTier: true, LiteLLMProvider: "openai", Mode: "chat", SupportsPromptCaching: true,
 	}
+	// GPT-6.1 Terra 官方价：输入 1、输出 5、缓存写 1.25、缓存读 0.05 美元/百万 Token，Fast 2 倍，同一长上下文门槛。
+	openAIGPT61TerraPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 1e-6, OutputCostPerToken: 5e-6,
+		CacheCreationInputTokenCost: 1.25e-6, CacheReadInputTokenCost: 0.05e-6,
+		InputCostPerTokenPriority: 2e-6, OutputCostPerTokenPriority: 10e-6,
+		CacheCreationInputTokenCostPriority: 2.5e-6, CacheReadInputTokenCostPriority: 0.1e-6,
+		LongContextInputTokenThreshold: 272000, LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
+		SupportsServiceTier: true, LiteLLMProvider: "openai", Mode: "chat", SupportsPromptCaching: true,
+	}
 	openAIGPT6LunaPricing = &LiteLLMModelPricing{
 		InputCostPerToken: 0.1e-6, OutputCostPerToken: 0.5e-6,
 		CacheCreationInputTokenCost: 0.125e-6, CacheReadInputTokenCost: 0.01e-6,
@@ -713,7 +722,7 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 			continue
 		}
 
-		preserveCatalogPrices := isOpenAIGPT61SolModel(modelName) || isOpenAIGPT6SolModel(modelName) || isOpenAIGPT6LunaModel(modelName)
+		preserveCatalogPrices := isOpenAIGPT61SolModel(modelName) || isOpenAIGPT61TerraModel(modelName) || isOpenAIGPT6SolModel(modelName) || isOpenAIGPT6LunaModel(modelName)
 		pricing := &LiteLLMModelPricing{
 			LiteLLMProvider:                             entry.LiteLLMProvider,
 			Mode:                                        entry.Mode,
@@ -1724,6 +1733,8 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		product, fallback = "gpt-6-astra", openAIGPT6AstraPricing
 	case isOpenAIGPT61SolModel(sameModel):
 		product, fallback = "gpt-6.1-sol", openAIGPT61SolPricing
+	case isOpenAIGPT61TerraModel(sameModel):
+		product, fallback = "gpt-6.1-terra", openAIGPT61TerraPricing
 	case isOpenAIGPT6SolModel(sameModel):
 		product, fallback = "gpt-6-sol", openAIGPT6SolPricing
 	case isOpenAIGPT6LunaModel(sameModel):
@@ -1754,7 +1765,7 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		return fallback
 	}
 	// 新产品的未知变体不按其它 GPT 型号收费；完整目录中的显式条目仍优先。
-	if strings.HasPrefix(model, "gpt-6.1-sol-") || strings.HasPrefix(model, "gpt-6-sol-") || strings.HasPrefix(model, "gpt-6-luna-") {
+	if strings.HasPrefix(model, "gpt-6.1-sol-") || strings.HasPrefix(model, "gpt-6.1-terra-") || strings.HasPrefix(model, "gpt-6-sol-") || strings.HasPrefix(model, "gpt-6-luna-") {
 		return nil
 	}
 

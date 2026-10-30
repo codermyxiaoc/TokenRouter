@@ -560,7 +560,7 @@ func isReasoningModel(model string) bool {
 // supportsResponsesSamplingParameters 根据实际出站推理档位裁定新模型的采样参数。
 func supportsResponsesSamplingParameters(model, effort string) bool {
 	switch normalizeResponsesGPTModel(model) {
-	case "gpt-6-sol", "gpt-6-luna":
+	case "gpt-6-sol", "gpt-6-luna", "gpt-6.1-terra":
 		return effort == "none"
 	default:
 		return !isReasoningModel(model)

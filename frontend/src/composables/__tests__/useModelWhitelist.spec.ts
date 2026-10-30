@@ -48,6 +48,7 @@ describe('useModelWhitelist', () => {
 			'gpt-6-astra',
       'gpt-6-sol',
       'gpt-6.1-sol',
+      'gpt-6.1-terra',
       'gpt-6-luna',
 			'gpt-5.4',
 			'gpt-5.4-mini',
@@ -84,7 +85,7 @@ describe('useModelWhitelist', () => {
   })
 
   it('新增官方型号可选择和原名映射，且不扩展第三方平台预设', () => {
-    for (const model of ['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol']) {
+    for (const model of ['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-terra']) {
       expect(getModelsByPlatform('openai')).toContain(model)
       expect(getPresetMappingsByPlatform('openai')).toEqual(expect.arrayContaining([
         expect.objectContaining({ from: model, to: model })

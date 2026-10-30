@@ -238,6 +238,8 @@ OpenAI OAuth、Setup Token 和订阅影子账号不再调度最终上游目标�
 
 `gpt-6.1-sol` 保持独立模型身份，支持 `low/medium/high/xhigh/max`，在 HTTP 与 WS 现有参数校验路径拒绝显式 `none/minimal`（包括模型后缀及账号映射目标），不自动降低或提高档位。普通目录、价卡和客户端配置接入沿用 fork 现有架构；未引入上游 Codex manifest、远程目录或专属 descriptor。价格及长上下文阈值见[模型目录与市场](model_catalog_and_marketplace.md)。
 
+`gpt-6.1-terra` 同样保持独立身份，推理档位与 6 Sol/Luna 一致：支持 `none/low/medium/high/xhigh/max`，`none` 按原生语义保留（兼容后缀、Claude 桥接与 OpenAI API Key 上游均不改成默认档位），`minimal`、`pro` 等未公布后缀不归入 Terra 也不按其它型号计价。与 6.1 Sol 一样不引入上游“工具调用必须改走 Responses”的拦截，Chat 回退路径的协议选择仍由管理员策略决定、不静默改协议；OAuth 订阅长上下文成本豁免目前只适用于 6.1 Sol。
+
 Astra 的 Ultrafast 为独立服务档，对最终普通 token 价按 6 倍结算，不使用普通 Fast 渠道倍率。上游权威声明降为 Fast/priority/default/Flex 时按更低档计费；OAuth/Codex 的 default 回显仍遵守现有非权威规则，不因此误降档。
 
 `gpt-6-sol`、`gpt-6-luna` 使用独立模型身份，支持 `none/low/medium/high/xhigh/max`，官方默认 `medium`。原生 Responses 请求中的显式 `none` 在自定义 API Key 上游地址也保持原值；Messages 转换到 Responses 时，两款模型仅在有效档位为 `none` 时保留采样参数。目录和客户端配置扩展不改变旧默认模型，也不改变管理员选择的上游协议。官方要求带工具的 Chat Completions 使用 `reasoning_effort=none`；其余推理档位的工具调用应走 Responses，网关不静默降低推理强度以强行适配 Chat。依据：[Sol 模型说明](https://developers.openai.com/api/docs/models/gpt-6-sol)、[Luna 模型说明](https://developers.openai.com/api/docs/models/gpt-6-luna)。

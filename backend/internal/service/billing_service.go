@@ -618,7 +618,7 @@ func (s *BillingService) initFallbackPricing() {
 	}
 	// Sol/Luna 共用官方 272K 边界和 Fast 2 倍策略，但保留各自价格。
 	for model, price := range map[string]*LiteLLMModelPricing{
-		"gpt-6.1-sol": openAIGPT61SolPricing, "gpt-6-sol": openAIGPT6SolPricing, "gpt-6-luna": openAIGPT6LunaPricing,
+		"gpt-6.1-sol": openAIGPT61SolPricing, "gpt-6.1-terra": openAIGPT61TerraPricing, "gpt-6-sol": openAIGPT6SolPricing, "gpt-6-luna": openAIGPT6LunaPricing,
 	} {
 		s.fallbackPrices[model] = &ModelPricing{
 			InputPricePerToken: price.InputCostPerToken, OutputPricePerToken: price.OutputCostPerToken,
@@ -1202,7 +1202,7 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	// OpenAI 仅匹配已知 GPT/Codex 族，避免未知 OpenAI 型号误计价。
 	if normalized := normalizeKnownOpenAICodexModel(modelLower); normalized != "" {
 		switch normalized {
-		case "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna":
+		case "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna":
 			return s.fallbackPrices[normalized]
 		case "gpt-6-astra":
 			return s.fallbackPrices["gpt-6-astra"]
@@ -1329,7 +1329,7 @@ func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 			price1h := litellmPricing.CacheCreationInputTokenCostAbove1hr
 			enableBreakdown := price1h > 0 && price1h > price5m
 			// 只为新 Sol/Luna 保留目录字段来源，旧 GPT 的已部署补价策略保持原样。
-			preserveCatalogPrices := isOpenAIGPT61SolModel(model) || isOpenAIGPT6SolModel(model) || isOpenAIGPT6LunaModel(model)
+			preserveCatalogPrices := isOpenAIGPT61SolModel(model) || isOpenAIGPT61TerraModel(model) || isOpenAIGPT6SolModel(model) || isOpenAIGPT6LunaModel(model)
 			return s.applyModelSpecificPricingPolicy(model, &ModelPricing{
 				InputPricePerToken:                         litellmPricing.InputCostPerToken,
 				InputPricePerTokenPriority:                 litellmPricing.InputCostPerTokenPriority,
@@ -1830,7 +1830,7 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		cloned.UltrafastMultiplier = 6
 		return &cloned
 	}
-	if isOpenAIGPT61SolModel(normalized) || isOpenAIGPT6SolModel(normalized) || isOpenAIGPT6LunaModel(normalized) {
+	if isOpenAIGPT61SolModel(normalized) || isOpenAIGPT61TerraModel(normalized) || isOpenAIGPT6SolModel(normalized) || isOpenAIGPT6LunaModel(normalized) {
 		// 目录与 override 的显式价格优先；只有缺失项才补官方 1.25x/2x。
 		// 每次克隆，避免渠道覆盖修改共享目录或静态回退价。
 		cloned := *pricing
@@ -1886,7 +1886,7 @@ func longContextMultiplierOrOne(multiplier float64) float64 {
 // 档的模型（如 gpt-5.5-pro、gpt-5.4-mini/nano）返回 0。
 func openAIModelFastPricingRatio(normalized string) float64 {
 	switch normalized {
-	case "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+	case "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
 		return 2.0
 	case "gpt-5.5":
 		return 2.5

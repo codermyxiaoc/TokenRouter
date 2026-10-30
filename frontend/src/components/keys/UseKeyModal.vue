@@ -1571,6 +1571,20 @@ function generateOpenCodeConfig(
         max: {}
       }
     },
+    // 6.1 Terra 与 6 Sol/Luna 一样支持关闭推理（none）。
+    'gpt-6.1-terra': {
+      name: 'GPT-6.1 Terra',
+      limit: { context: 1050000, output: 128000 },
+      options: { store: false, reasoningEffort: 'medium' },
+      variants: {
+        none: { reasoningEffort: 'none' },
+        low: { reasoningEffort: 'low' },
+        medium: { reasoningEffort: 'medium' },
+        high: { reasoningEffort: 'high' },
+        xhigh: { reasoningEffort: 'xhigh' },
+        max: { reasoningEffort: 'max' }
+      }
+    },
     // 6.1 Sol 与后端目录一致，不提供不受支持的 none/minimal 档位。
     'gpt-6.1-sol': {
       name: 'GPT-6.1 Sol',

@@ -97,7 +97,7 @@ func shouldPreserveOpenAIResponsesNoneReasoningEffortForModel(account *Account, 
 		return true
 	}
 	return account != nil && account.IsOpenAIApiKey() &&
-		(isOpenAIGPT6SolModel(model) || isOpenAIGPT6LunaModel(model))
+		(isOpenAIGPT6SolModel(model) || isOpenAIGPT6LunaModel(model) || isOpenAIGPT61TerraModel(model))
 }
 
 // filterOpenAIResponsesNoneReasoningEffortForAccount 删除兼容上游不应接收的目录占位值。

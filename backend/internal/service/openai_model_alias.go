@@ -157,11 +157,13 @@ func normalizeKnownOpenAICodexModel(model string) string {
 	if isOpenAIGPT61SolModel(normalized) {
 		return "gpt-6.1-sol"
 	}
+	// 6.1 Terra 与 6 Sol/Luna 一样接受 none 档位，共用受支持别名的归一规则。
 	if mapped := normalizeOpenAIGPT6SolLunaModel(normalized); mapped != "" {
 		return mapped
 	}
 	// 新产品只接受已登记的别名，未知后缀不能再进入旧 Codex 兜底。
 	if normalized == "gpt-6.1-sol" || strings.HasPrefix(normalized, "gpt-6.1-sol-") ||
+		normalized == "gpt-6.1-terra" || strings.HasPrefix(normalized, "gpt-6.1-terra-") ||
 		normalized == "gpt-6-sol" || strings.HasPrefix(normalized, "gpt-6-sol-") ||
 		normalized == "gpt-6-luna" || strings.HasPrefix(normalized, "gpt-6-luna-") {
 		return ""
@@ -238,7 +240,7 @@ func isOpenAIGPT6AstraModel(model string) bool {
 func normalizeOpenAIGPT6SolLunaModel(model string) string {
 	normalized := canonicalizeOpenAIModelAliasSpelling(model)
 	normalized = strings.TrimSuffix(normalized, "-openai-compact")
-	for _, base := range []string{"gpt-6-sol", "gpt-6-luna"} {
+	for _, base := range []string{"gpt-6-sol", "gpt-6-luna", "gpt-6.1-terra"} {
 		if normalized == base {
 			return base
 		}
@@ -255,6 +257,11 @@ func normalizeOpenAIGPT6SolLunaModel(model string) string {
 // isOpenAIGPT6SolModel 供模型能力和专属价格回退复用同一产品边界。
 func isOpenAIGPT6SolModel(model string) bool {
 	return normalizeOpenAIGPT6SolLunaModel(model) == "gpt-6-sol"
+}
+
+// isOpenAIGPT61TerraModel 识别 6.1 Terra 及其受支持的推理别名（含 none），未知后缀不归入。
+func isOpenAIGPT61TerraModel(model string) bool {
+	return normalizeOpenAIGPT6SolLunaModel(model) == "gpt-6.1-terra"
 }
 
 // isOpenAIGPT6LunaModel 不接受未公布的其它 Luna 变体。

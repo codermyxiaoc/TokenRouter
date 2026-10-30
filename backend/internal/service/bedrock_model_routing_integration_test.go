@@ -192,7 +192,8 @@ func TestBedrockRegionRouting_MarketplaceUsesSharedResolution(t *testing.T) {
 			account := newBedrockRoutingTestAccount(1, "ap-northeast-1", forceGlobal)
 			account.GroupIDs = []int64{groupID}
 			account.AccountGroups = []AccountGroup{{AccountID: 1, GroupID: groupID}}
-			account.Credentials["model_mapping"] = map[string]any{"client-alias": "claude-sonnet-5"}
+			// 同时映射一个本地区可用的型号：分组仍有可请求模型才会出现在广场，用来核对只移除不可用型号。
+			account.Credentials["model_mapping"] = map[string]any{"client-alias": "claude-sonnet-5", "regional-alias": "claude-sonnet-4-20250514"}
 			repo := &modelsListAccountRepoStub{all: []Account{account}, byGroup: map[int64][]Account{groupID: {account}}}
 			gateway := &GatewayService{accountRepo: repo}
 			models := gateway.ResolveRequestableModels(context.Background(), &groupID, PlatformAnthropic)
@@ -213,6 +214,7 @@ func TestBedrockRegionRouting_MarketplaceUsesSharedResolution(t *testing.T) {
 				publicModels = append(publicModels, model.ID)
 			}
 			// 其它可请求型号仍正常展示；只移除本地区不可用的型号及其别名。
+			require.Contains(t, RequestableModelIDs(models.Models), "regional-alias")
 			require.ElementsMatch(t, RequestableModelIDs(models.Models), publicModels)
 			if forceGlobal {
 				require.Contains(t, publicModels, "client-alias")

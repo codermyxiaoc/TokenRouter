@@ -49,6 +49,12 @@ func adminAuth(
 		// 检查 x-api-key header（Admin API Key 认证）
 		apiKey := c.GetHeader("x-api-key")
 		if apiKey != "" {
+			// 全权 Admin API Key 不能查看、轮换或删除自己：泄露的密钥否则可以轮换密钥把管理员锁在外面。
+			// 密钥管理只允许 JWT 管理员会话（同步上游 Sub2API e445cc3e2 的旧版密钥加固）。
+			if strings.Contains(c.FullPath(), "/settings/admin-api-key") {
+				AbortWithError(c, 403, "ADMIN_API_KEY_SELF_MANAGEMENT_FORBIDDEN", "Admin API key cannot manage admin API keys; use an admin session")
+				return
+			}
 			if !validateAdminAPIKey(c, apiKey, settingService, userService) {
 				return
 			}

@@ -200,7 +200,7 @@ gemini_generate_content
 | --- | --- | --- |
 | JWT access token | 面板 `Authorization: Bearer`，少量 WebSocket 子协议 | 当前用户状态、token version、可选 session binding；管理员还校验当前 role |
 | Refresh token | `/api/v1/auth/refresh` 与 logout payload/cookie 约定 | 只用于轮换/撤销，不可直接访问业务资源 |
-| 管理 API Key | 管理接口 `x-api-key` | 绑定首个真实管理员；启用敏感 step-up 后不能执行需近期 TOTP 的操作 |
+| 管理 API Key | 管理接口 `x-api-key` | 绑定首个真实管理员；启用敏感 step-up 后不能执行需近期 TOTP 的操作；不能查看、轮换或删除管理密钥本身 |
 | TokenRouter API Key | 网关 `Authorization: Bearer`、`x-api-key`，Gemini 兼容 `x-goog-api-key` | Key、用户/团队、分组、IP、额度/订阅和请求资源归属；通用网关不接受 query Key |
 | OAuth/pending completion 状态 | auth callback 和完成接口 | provider state、浏览器会话、一次性完成码与过期时间共同约束 |
 | Google GIS ID Token | `/api/v1/auth/oauth/google/one-tap` 请求体 | 仅经官方验证器校验后的 `sub` 和 verified email 可进入现有 Google 身份与 pending 流程；不能作为其它接口的 Bearer 凭据 |

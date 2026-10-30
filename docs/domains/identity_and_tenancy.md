@@ -55,7 +55,7 @@ Google One Tap 是现有 Google 登录的浏览器凭据入口，不创建新的
 3. 比较声明中的 `token_version` 与当前用户版本；密码或身份安全变更可以统一淘汰旧 token。
 4. 启用会话绑定时校验 `sid` 对应的客户端绑定摘要，再把当前用户 ID、邮箱和角色写入 Gin 上下文。
 
-管理员路由允许两类凭据，但能力并不完全相同：管理员 JWT 仍经过用户状态和 token version 校验；`x-api-key` 管理密钥只代表配置的首个真实管理员账户。敏感设置启用 step-up 后，管理密钥不能绕过二次验证，必须使用具有真实 `sid` 的管理员 JWT。WebSocket 场景可以从约定的子协议读取 JWT，但仍遵守相同的当前用户校验。
+管理员路由允许两类凭据，但能力并不完全相同：管理员 JWT 仍经过用户状态和 token version 校验；`x-api-key` 管理密钥只代表配置的首个真实管理员账户。敏感设置启用 step-up 后，管理密钥不能绕过二次验证，必须使用具有真实 `sid` 的管理员 JWT。管理密钥一律不能访问 `/admin/settings/admin-api-key*`（403 `ADMIN_API_KEY_SELF_MANAGEMENT_FORBIDDEN`），泄露的密钥无法查看、轮换或删除自己；轮换与删除在启用 step-up 时还需要近期 TOTP 验证。WebSocket 场景可以从约定的子协议读取 JWT，但仍遵守相同的当前用户校验。
 
 用户和管理员 JWT 的用户读取都区分身份失效与基础设施故障：明确的用户不存在返回 `401 USER_NOT_FOUND`，数据库超时或连接故障返回 `500 INTERNAL_ERROR`。两类情况都拒绝当前私有请求，读取失败不得放行，也不得把临时故障错误标记为用户被删除。
 

@@ -276,3 +276,28 @@ func (s *stubUserRepo) DisableTotp(ctx context.Context, userID int64) error {
 func (s *stubUserRepo) GetByIDIncludeDeleted(ctx context.Context, id int64) (*service.User, error) {
 	panic("unexpected GetByIDIncludeDeleted call")
 }
+
+// 全权 Admin API Key 访问密钥管理接口时在校验密钥前即被拒绝，泄露的密钥无法查看、轮换或删除自己。
+func TestAdminAuthRejectsAdminAPIKeySelfManagement(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{JWT: config.JWTConfig{Secret: "test-secret", ExpireHour: 1}}
+	authService := service.NewAuthService(nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := gin.New()
+	router.Use(gin.HandlerFunc(NewAdminAuthMiddleware(authService, nil, nil, nil)))
+	ok := func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) }
+	router.GET("/api/v1/admin/settings/admin-api-key", ok)
+	router.POST("/api/v1/admin/settings/admin-api-key/regenerate", ok)
+	router.DELETE("/api/v1/admin/settings/admin-api-key", ok)
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/admin/settings/admin-api-key"},
+		{http.MethodPost, "/api/v1/admin/settings/admin-api-key/regenerate"},
+		{http.MethodDelete, "/api/v1/admin/settings/admin-api-key"},
+	} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		req.Header.Set("x-api-key", "admin-full-access-key")
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusForbidden, w.Code, tc.path)
+		require.Contains(t, w.Body.String(), "ADMIN_API_KEY_SELF_MANAGEMENT_FORBIDDEN", tc.path)
+	}
+}

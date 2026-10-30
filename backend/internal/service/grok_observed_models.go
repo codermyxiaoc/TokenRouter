@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
-	"github.com/tidwall/gjson"
 )
 
 const (
@@ -24,6 +24,8 @@ type grokObservedModelsSnapshot struct {
 	Models    []string `json:"models"`
 	FetchedAt string   `json:"fetched_at"`
 	Source    string   `json:"source,omitempty"`
+	// Scope 记录目录来源；切换 base URL 或账号类型后旧快照不再视为新鲜。
+	Scope *GrokCatalogScope `json:"scope,omitempty"`
 }
 
 var grokObservedModelsFlight sync.Map // accountID -> 进行中的同步标记
@@ -45,7 +47,9 @@ func (s *GrokQuotaService) scheduleGrokObservedModelsSync(account *Account) {
 		ctx, cancel := context.WithTimeout(context.Background(), grokObservedModelsTimeout)
 		defer cancel()
 		if err := s.syncGrokObservedModels(ctx, &acc); err != nil {
-			slog.Debug("grok_observed_models_sync_failed", "account_id", id, "error", err)
+			// 只记录失败分类与状态码，不输出底层错误，避免传输层细节或凭据进入日志。
+			kind, statusCode := grokObservedModelsSyncLogFields(err)
+			slog.Debug("grok_observed_models_sync_failed", "account_id", id, "error_kind", kind, "status_code", statusCode)
 		}
 	}()
 }
@@ -53,12 +57,6 @@ func (s *GrokQuotaService) scheduleGrokObservedModelsSync(account *Account) {
 func (s *GrokQuotaService) syncGrokObservedModels(ctx context.Context, account *Account) error {
 	if s == nil || account == nil {
 		return nil
-	}
-	// 快照仍新鲜时跳过同步。
-	if snap := parseGrokObservedModels(account.Extra); snap != nil {
-		if t, err := time.Parse(time.RFC3339, snap.FetchedAt); err == nil && time.Since(t) < grokObservedModelsTTL {
-			return nil
-		}
 	}
 	token := strings.TrimSpace(account.GetGrokAccessToken())
 	if token == "" && s.tokenProvider != nil {
@@ -68,7 +66,7 @@ func (s *GrokQuotaService) syncGrokObservedModels(ctx context.Context, account *
 		}
 	}
 	if token == "" {
-		return nil
+		return &grokCatalogSyncError{Kind: "configuration"}
 	}
 	baseURL := strings.TrimSpace(account.GetGrokBaseURL())
 	if s.settingService != nil {
@@ -79,15 +77,23 @@ func (s *GrokQuotaService) syncGrokObservedModels(ctx context.Context, account *
 	}
 	validator, err := grokBaseURLValidator(account, s.cfg)
 	if err != nil {
-		return err
+		return &grokCatalogSyncError{Kind: "configuration", Err: err}
 	}
 	validatedBaseURL, err := validator(baseURL)
 	if err != nil {
-		return err
+		return &grokCatalogSyncError{Kind: "configuration", Err: err}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildOpenAIModelsURL(validatedBaseURL), nil)
 	if err != nil {
-		return err
+		return &grokCatalogSyncError{Kind: "configuration"}
+	}
+	// 同一来源的快照仍新鲜时跳过；来源变化、时间非法或在未来时重新拉取。
+	scope, err := NewGrokCatalogScope(account.ID, account.Type, req.URL.String())
+	if err != nil {
+		return &grokCatalogSyncError{Kind: "configuration"}
+	}
+	if grokObservedSnapshotFresh(parseGrokObservedModels(account.Extra), scope, time.Now().UTC()) {
+		return nil
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
@@ -118,24 +124,34 @@ func (s *GrokQuotaService) syncGrokObservedModels(ctx context.Context, account *
 	}
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
-		return err
+		return &grokCatalogSyncError{Kind: "transport"}
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// 读取上限与模型列表接口共用配置，超出即放弃，不截断后解析。
+	limit := resolveModelsListReadLimit(s.cfg)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return err
+		return &grokCatalogSyncError{Kind: "transport"}
 	}
-	if resp.StatusCode >= 400 {
-		return nil
+	if int64(len(body)) > limit {
+		return &grokCatalogSyncError{Kind: "too_large", StatusCode: resp.StatusCode}
 	}
-	ids := extractGrokModelIDsFromModelsBody(body)
-	if len(ids) == 0 {
-		return nil
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return &grokCatalogSyncError{Kind: "http_error", StatusCode: resp.StatusCode}
+	}
+	ids, err := extractGrokModelIDsFromModelsBody(body)
+	if err != nil {
+		kind := "invalid_response"
+		if errors.Is(err, errGrokCatalogEmpty) {
+			kind = "empty_catalog"
+		}
+		return &grokCatalogSyncError{Kind: kind, StatusCode: resp.StatusCode}
 	}
 	snap := grokObservedModelsSnapshot{
 		Models:    ids,
 		FetchedAt: time.Now().UTC().Format(time.RFC3339),
 		Source:    "upstream_v1_models",
+		Scope:     scope,
 	}
 	raw, err := json.Marshal(snap)
 	if err != nil {
@@ -150,30 +166,9 @@ func (s *GrokQuotaService) syncGrokObservedModels(ctx context.Context, account *
 	})
 }
 
-func extractGrokModelIDsFromModelsBody(body []byte) []string {
-	data := gjson.GetBytes(body, "data")
-	if !data.IsArray() {
-		// 兼容部分网关直接返回数组。
-		data = gjson.ParseBytes(body)
-	}
-	seen := make(map[string]struct{})
-	var out []string
-	data.ForEach(func(_, v gjson.Result) bool {
-		id := strings.TrimSpace(v.Get("id").String())
-		if id == "" {
-			id = strings.TrimSpace(v.String())
-		}
-		if id == "" {
-			return true
-		}
-		if _, ok := seen[id]; ok {
-			return true
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-		return true
-	})
-	return out
+// extractGrokModelIDsFromModelsBody 使用严格解析，错误响应与空目录都返回错误，不写入快照。
+func extractGrokModelIDsFromModelsBody(body []byte) ([]string, error) {
+	return parseGrokCatalogModelIDs(body)
 }
 
 func parseGrokObservedModels(extra map[string]any) *grokObservedModelsSnapshot {

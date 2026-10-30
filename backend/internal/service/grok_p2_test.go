@@ -59,8 +59,10 @@ func TestGrokStickyAffinitySeed_ScopesByModel(t *testing.T) {
 
 func TestExtractGrokModelIDsFromModelsBody(t *testing.T) {
 	body := []byte(`{"object":"list","data":[{"id":"grok-4.5"},{"id":"grok-4.3"},{"id":"grok-4.5"}]}`)
-	ids := extractGrokModelIDsFromModelsBody(body)
-	require.Equal(t, []string{"grok-4.5", "grok-4.3"}, ids)
+	ids, err := extractGrokModelIDsFromModelsBody(body)
+	require.NoError(t, err)
+	// 严格解析与手动同步一致：去重后按 ID 排序。
+	require.Equal(t, []string{"grok-4.3", "grok-4.5"}, ids)
 }
 
 func TestAccountGrokNeedsReauth(t *testing.T) {
@@ -99,4 +101,43 @@ func TestApplyGrokUpstreamFailure_SpendingLimitRemainsRecoverable(t *testing.T) 
 	require.Zero(t, repo.tempUnschedCalls)
 	// 缺少账期快照时使用可恢复的短期探测冷却。
 	require.WithinDuration(t, time.Now().Add(grokSpendingLimitProbeCooldown), repo.lastRateLimitResetAt, 2*time.Second)
+}
+
+// 后台目录严格解析：HTTP 200 的错误包、非数组目录、空目录都不能被当作模型 ID 写入快照。
+func TestGrokCatalogStrictParsing(t *testing.T) {
+	for _, body := range []string{`{"error":{"message":"denied"}}`, `{"data":{"id":"x"}}`, `{"object":"list"}`, `[1,2]`, `null`, `not json`} {
+		_, err := extractGrokModelIDsFromModelsBody([]byte(body))
+		require.ErrorIs(t, err, errGrokCatalogInvalidResponse, body)
+	}
+	_, err := extractGrokModelIDsFromModelsBody([]byte(`{"data":[]}`))
+	require.ErrorIs(t, err, errGrokCatalogEmpty)
+	// 与手动同步一致：优先 model 字段，字符串数组与 models 字段也接受。
+	ids, err := extractGrokModelIDsFromModelsBody([]byte(`{"data":[{"id":"display","model":"grok-4.6"}],"models":["grok-imagine"]}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"grok-4.6", "grok-imagine"}, ids)
+}
+
+// 快照只在来源相同、时间合法且不在未来时视为新鲜；切换端点或旧格式快照会重新同步。
+func TestGrokObservedSnapshotFreshness(t *testing.T) {
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	scope, err := NewGrokCatalogScope(7, AccountTypeOAuth, "https://cli-chat-proxy.grok.com/v1/models")
+	require.NoError(t, err)
+	other, err := NewGrokCatalogScope(7, AccountTypeOAuth, "https://api.x.ai/v1/models")
+	require.NoError(t, err)
+	snap := &grokObservedModelsSnapshot{Models: []string{"grok-4.6"}, FetchedAt: now.Add(-time.Hour).Format(time.RFC3339), Scope: scope}
+	require.True(t, grokObservedSnapshotFresh(snap, scope, now))
+	require.False(t, grokObservedSnapshotFresh(snap, other, now), "来源变化")
+	future := *snap
+	future.FetchedAt = now.Add(time.Hour).Format(time.RFC3339)
+	require.False(t, grokObservedSnapshotFresh(&future, scope, now), "未来时间不能永远新鲜")
+	legacy := *snap
+	legacy.Scope = nil
+	require.False(t, grokObservedSnapshotFresh(&legacy, scope, now), "旧格式快照没有来源")
+	stale := *snap
+	stale.FetchedAt = now.Add(-7 * time.Hour).Format(time.RFC3339Nano)
+	require.False(t, grokObservedSnapshotFresh(&stale, scope, now))
+	// 日志字段只取分类与状态码，不带出底层错误。
+	kind, status := grokObservedModelsSyncLogFields(&grokCatalogSyncError{Kind: "http_error", StatusCode: 403})
+	require.Equal(t, "http_error", kind)
+	require.Equal(t, 403, status)
 }

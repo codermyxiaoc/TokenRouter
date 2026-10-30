@@ -223,4 +223,23 @@ describe('ModelWhitelistSelector', () => {
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
     wrapper.unmount()
   })
+
+  // 同步进行中切换账号：旧账号的结果返回时丢弃，不合并进新账号，新账号可立即重新同步。
+  it('切换账号后丢弃进行中的旧同步结果', async () => {
+    let resolveOld: (value: { models: string[] }) => void = () => {}
+    syncUpstreamModels.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve }))
+    const wrapper = mountSelector({ platform: 'anthropic', accountId: 7 })
+    const button = () => wrapper.findAll('button').find((item) => item.text().includes('admin.accounts.syncUpstreamModels'))!
+    await button().trigger('click')
+    await wrapper.setProps({ accountId: 8 })
+    resolveOld({ models: ['old-account-model'] })
+    await flushPromises()
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    syncUpstreamModels.mockResolvedValueOnce({ models: ['new-account-model'] })
+    await button().trigger('click')
+    await flushPromises()
+    expect(syncUpstreamModels).toHaveBeenLastCalledWith(8)
+    expect(wrapper.emitted('update:modelValue')?.[0]?.[0]).toEqual(['new-account-model'])
+    wrapper.unmount()
+  })
 })

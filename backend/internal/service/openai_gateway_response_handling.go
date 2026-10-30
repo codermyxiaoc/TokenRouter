@@ -1545,6 +1545,8 @@ func openAICacheReadTokensFromUsage(value gjson.Result) int {
 		value.Get("cache_read_input_tokens"),
 		value.Get("cache_read_tokens"),
 		value.Get("cached_tokens"),
+		// DeepSeek 兼容接口：prompt_tokens = 命中 + 未命中，命中部分只在该字段返回。
+		value.Get("prompt_cache_hit_tokens"),
 	)
 }
 

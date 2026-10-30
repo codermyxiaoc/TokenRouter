@@ -345,3 +345,35 @@ func TestAPIDocConcurrentMutualParentsCannotFormCycle(t *testing.T) {
 		require.Zero(t, cycles, "round %d: 不能出现上级本身也有上级的层级", round)
 	}
 }
+
+// 删除父分类与把分类挂到它下面并发：要么挂接先成功随后删除被拒，要么删除先成功挂接被拒，
+// 不能出现子分类的 parent_id 指向已删除父级。
+func TestAPIDocConcurrentDeleteParentAndAttachChild(t *testing.T) {
+	cleanAPIDocs(t)
+	t.Cleanup(func() { cleanAPIDocs(t) })
+	ctx := context.Background()
+	svc := service.NewAPIDocService(NewAPIDocRepository(integrationDB))
+	for round := 0; round < 10; round++ {
+		cleanAPIDocs(t)
+		parent, err := svc.SaveCategory(ctx, "del-parent", service.APIDocCategoryInput{Custom: true, Title: apiDocText("父")}, 1)
+		require.NoError(t, err)
+		child, err := svc.SaveCategory(ctx, "del-child", service.APIDocCategoryInput{Custom: true, Title: apiDocText("子")}, 1)
+		require.NoError(t, err)
+		var wg sync.WaitGroup
+		var deleteErr, attachErr error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; deleteErr = svc.DeleteCategory(ctx, "del-parent", parent.Version) }()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, attachErr = svc.SaveCategory(ctx, "del-child", service.APIDocCategoryInput{Custom: true, Title: apiDocText("子"), ParentID: apiDocText("del-parent"), Version: child.Version}, 1)
+		}()
+		close(start)
+		wg.Wait()
+		var orphans int
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_doc_categories c
+ LEFT JOIN api_doc_categories p ON c.parent_id = p.id WHERE c.parent_id IS NOT NULL AND p.id IS NULL`).Scan(&orphans))
+		require.Zero(t, orphans, "round %d: 不能留下指向已删除父级的分类（deleteErr=%v attachErr=%v）", round, deleteErr, attachErr)
+	}
+}

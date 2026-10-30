@@ -440,6 +440,8 @@ type PublicSettings struct {
 	TeamEnabled                         bool                     `json:"team_enabled"`
 	TeamSelfServiceEnabled              bool                     `json:"team_self_service_enabled"`
 	CreativeEnabled                     bool                     `json:"creative_enabled"`
+	// 画布素材保存期（小时），前端据此展示真实期限；旧后端缺失时前端按 168 小时（7 天）显示。
+	CreativeCanvasAssetRetentionHours   int                      `json:"creative_canvas_asset_retention_hours"`
 	IntelligenceEnabled                 bool                     `json:"intelligence_enabled"`
 	DailyActivityEnabled                bool                     `json:"daily_activity_enabled"`
 	TicketEnabled                       bool                     `json:"ticket_enabled"`

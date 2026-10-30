@@ -119,6 +119,8 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		TeamEnabled:                         settings.TeamEnabled,
 		TeamSelfServiceEnabled:              settings.TeamSelfServiceEnabled,
 		CreativeEnabled:                     settings.CreativeEnabled,
+		// 画布素材保存期（小时）：前端据此展示真实期限，缺省时按 168 小时（7 天）显示。
+		CreativeCanvasAssetRetentionHours:   settings.CreativeCanvasAssetRetentionHours,
 		IntelligenceEnabled:                 settings.IntelligenceEnabled,
 		DailyActivityEnabled:                settings.DailyActivityEnabled,
 		TicketEnabled:                       settings.TicketEnabled,

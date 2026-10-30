@@ -6,6 +6,7 @@ let publicSettings: Record<string, unknown> | null = null
 const params: Record<string, unknown>[] = []
 const translations: Record<string, (p?: Record<string, unknown>) => string> = {
   'creative.description': (p) => `素材保留 ${p?.days} 天`,
+  'creative.descriptionHours': (p) => `素材保留 ${p?.hours} 小时`,
   'keys.description': (p) => (p ? 'bad' : 'ok')
 }
 
@@ -33,6 +34,15 @@ describe('创作台页面描述使用真实素材保存期', () => {
     expect(usePageMeta().pageDescription.value).toBe('素材保留 7 天')
     publicSettings = { creative_canvas_asset_retention_hours: -1 }
     expect(usePageMeta().pageDescription.value).toBe('素材保留 7 天')
+    // 不足一天按小时描述，不能把 1/12/25 小时都说成 1 天。
+    publicSettings = { creative_canvas_asset_retention_hours: 1 }
+    expect(usePageMeta().pageDescription.value).toBe('素材保留 1 小时')
+    publicSettings = { creative_canvas_asset_retention_hours: 12 }
+    expect(usePageMeta().pageDescription.value).toBe('素材保留 12 小时')
+    publicSettings = { creative_canvas_asset_retention_hours: 25 }
+    expect(usePageMeta().pageDescription.value).toBe('素材保留 25 小时')
+    publicSettings = { creative_canvas_asset_retention_hours: 48 }
+    expect(usePageMeta().pageDescription.value).toBe('素材保留 2 天')
     publicSettings = null
     expect(usePageMeta().pageDescription.value).toBe('素材保留 7 天')
   })

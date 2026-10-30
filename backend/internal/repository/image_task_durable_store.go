@@ -539,6 +539,11 @@ func (s *durableImageTaskStore) deliverLateCapturedResult(ctx context.Context, t
 	if !imageTaskInterrupted(task) || len(task.PendingResult) == 0 || task.BillingRequestID == "" {
 		return false, nil
 	}
+	// 记录已过期（查询按 404 处理）后不再补交：过期清理与晚到补交以既有期限为准，过期记录不复活，
+	// 待交付副本由到期清理一并删除；此时出现的扣费按任务 ID 走人工核对流程。
+	if task.ExpiresAt <= now.Unix() {
+		return false, nil
+	}
 	checkCtx, cancel := context.WithTimeout(ctx, imageTaskPrimaryBudget)
 	charged, err := imageTaskChargeRecorded(checkCtx, s.db, task.BillingRequestID, task.APIKeyID)
 	cancel()

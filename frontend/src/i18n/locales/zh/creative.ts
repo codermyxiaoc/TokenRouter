@@ -2,6 +2,8 @@ export default {
   creative: {
     title: '创作台',
     description: '在个人云端画布中创作图片和视频，素材保留 {days} 天。',
+    // 保存期不足一天时按小时描述，避免四舍五入成 1 天。
+    descriptionHours: '在个人云端画布中创作图片和视频，素材保留 {hours} 小时。',
     sessionExpired: '登录会话已失效，请重新登录。任务仍会在后台处理。',
     panel: {
       model: '模型',

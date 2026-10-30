@@ -182,10 +182,11 @@ const searchQuery = ref('')
 const customModel = ref('')
 const isComposing = ref(false)
 const isSyncingUpstream = ref(false)
-// 同步版本号：切换账号或卸载组件后，进行中的旧请求返回时直接丢弃，不能把旧账号的模型合并进新账号。
+// 同步版本号：切换账号、新建账号时修改预览凭据（Base URL、Key 等）或卸载组件后，进行中的旧请求返回时
+// 直接丢弃，不能把旧来源的模型合并进当前表单。预览凭据按值比较，父组件每次渲染重建对象不会误判为变化。
 let upstreamSyncVersion = 0
 watch(
-  () => props.accountId,
+  () => [props.accountId, props.syncCredentials ? JSON.stringify(props.syncCredentials) : ''],
   () => {
     upstreamSyncVersion += 1
     isSyncingUpstream.value = false

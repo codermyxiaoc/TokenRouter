@@ -242,4 +242,25 @@ describe('ModelWhitelistSelector', () => {
     expect(wrapper.emitted('update:modelValue')?.[0]?.[0]).toEqual(['new-account-model'])
     wrapper.unmount()
   })
+
+  // 新建账号预览同步进行中修改了 Base URL 或 Key：旧凭据的结果返回时丢弃；凭据内容不变时正常合并。
+  it('预览凭据变化后丢弃进行中的旧同步结果', async () => {
+    const credentials = (baseURL: string) => ({ platform: 'anthropic', type: 'apikey', api_key: 'k', base_url: baseURL })
+    let resolveOld: (value: { models: string[] }) => void = () => {}
+    syncUpstreamModelsPreview.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve }))
+    const wrapper = mountSelector({ platform: 'anthropic', syncCredentials: credentials('https://old.example.com') })
+    const button = () => wrapper.findAll('button').find((item) => item.text().includes('admin.accounts.syncUpstreamModels'))!
+    await button().trigger('click')
+    await wrapper.setProps({ syncCredentials: credentials('https://new.example.com') })
+    resolveOld({ models: ['old-source-model'] })
+    await flushPromises()
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    // 同值的新对象不算变化。
+    syncUpstreamModelsPreview.mockResolvedValueOnce({ models: ['new-source-model'] })
+    await button().trigger('click')
+    await wrapper.setProps({ syncCredentials: credentials('https://new.example.com') })
+    await flushPromises()
+    expect(wrapper.emitted('update:modelValue')?.[0]?.[0]).toEqual(['new-source-model'])
+    wrapper.unmount()
+  })
 })

@@ -12,6 +12,8 @@ const {
   getWebSearchEmulationConfig,
   updateWebSearchEmulationConfig,
   getAdminApiKey,
+  regenerateAdminApiKey,
+  deleteAdminApiKey,
   getOverloadCooldownSettings,
   getOpenAI403CooldownSettings,
   updateOpenAI403CooldownSettings,
@@ -50,6 +52,8 @@ const {
   getWebSearchEmulationConfig: vi.fn(),
   updateWebSearchEmulationConfig: vi.fn(),
   getAdminApiKey: vi.fn(),
+  regenerateAdminApiKey: vi.fn(),
+  deleteAdminApiKey: vi.fn(),
   getOverloadCooldownSettings: vi.fn(),
   getOpenAI403CooldownSettings: vi.fn(),
   updateOpenAI403CooldownSettings: vi.fn(),
@@ -122,6 +126,8 @@ vi.mock("@/api", () => ({
       getWebSearchEmulationConfig,
       updateWebSearchEmulationConfig,
       getAdminApiKey,
+      regenerateAdminApiKey,
+      deleteAdminApiKey,
       getOverloadCooldownSettings,
       getOpenAI403CooldownSettings,
       updateOpenAI403CooldownSettings,
@@ -725,6 +731,11 @@ function mountView() {
         BackupSettings: true,
         TicketSettingsTab: true,
         DailyActivitySettingsTab: true,
+        // 二次验证对话框替身：打开时渲染“验证”按钮，点击即视为 TOTP 验证通过。
+        TotpStepUpDialog: {
+          props: ["controller"],
+          template: '<div v-if="controller.visible" data-testid="step-up-dialog"><button data-testid="step-up-verify" @click="controller.onVerified()">verify</button></div>',
+        },
       },
     },
   });
@@ -3642,4 +3653,26 @@ describe("admin SettingsView platform quota matrix", () => {
   });
 
 
+
+  // 启用 step-up 时创建/轮换管理密钥收到 STEP_UP_REQUIRED：弹出 TOTP 验证，通过后重试本次操作，而不是只报错。
+  it("prompts TOTP step-up for admin API key creation and retries once verified", async () => {
+    getAdminApiKey.mockResolvedValue({ exists: false, masked_key: "" });
+    regenerateAdminApiKey.mockReset()
+      .mockRejectedValueOnce({ status: 403, reason: "STEP_UP_REQUIRED" })
+      .mockResolvedValueOnce({ key: "admin-0123456789abcdef" });
+    const wrapper = mountView();
+    await flushPromises();
+    const create = wrapper.findAll("button").find((node) => node.text().includes("admin.settings.adminApiKey.create"));
+    expect(create).toBeDefined();
+    const errorsBefore = showError.mock.calls.length;
+    await create!.trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="step-up-dialog"]').exists()).toBe(true);
+    expect(showError.mock.calls.length).toBe(errorsBefore);
+    await wrapper.get('[data-testid="step-up-verify"]').trigger("click");
+    await flushPromises();
+    expect(regenerateAdminApiKey).toHaveBeenCalledTimes(2);
+    expect(showSuccess).toHaveBeenCalledWith("admin.settings.adminApiKey.keyGenerated");
+    wrapper.unmount();
+  });
 });

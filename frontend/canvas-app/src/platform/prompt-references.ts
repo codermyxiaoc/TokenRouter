@@ -17,6 +17,8 @@ export function promptReferences(nodes: CanvasNodeData[]): PromptReference[] {
 export function deleteAdjacentLabel(value: string, caret: number, direction: 'backward' | 'forward', labels: string[]): { value: string; caret: number } | null {
   const ordered = [...labels].sort((a, b) => b.length - a.length);
   if (direction === 'backward') {
+    // 光标后紧跟数字时说明位于更长的编号中间（如“图片10”的“1”之后），不能当作完整标签删除。
+    if (/[0-9]/.test(value[caret] ?? '')) return null;
     const before = value.slice(0, caret);
     for (const label of ordered) {
       const match = new RegExp(`(^|\\s)(${escapeRegExp(label)})\\s?$`).exec(before);

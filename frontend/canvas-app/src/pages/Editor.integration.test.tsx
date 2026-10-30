@@ -1320,6 +1320,29 @@ describe('画布 @ 引用、拖线新建与就地错误', () => {
     expect(vi.mocked(createImageBatch).mock.calls[0][2]).toMatchObject({ prompt: '让 图片2', references: [{ asset_id: 'asset-a' }, { asset_id: 'asset-b' }] });
   });
 
+  // 已连接的文本会随请求拼接，图片节点的 @ 菜单同样列出；编号仍按类型分别计算。
+  it('图片节点的 @ 菜单包含已连接文本', async () => {
+    withReferences();
+    cloudState.document!.nodes.push({ id: 'ref-text', type: 'text', title: '文案', position: { x: -300, y: 600 }, width: 320, height: 200, metadata: { content: '金色夕阳' } });
+    cloudState.document!.connections.push({ id: 'edge-text', fromNodeId: 'ref-text', toNodeId: imageNode.id });
+    await mount();
+    await writePrompt('@');
+    const labels = [...document.querySelectorAll<HTMLButtonElement>('.prompt-mention-menu [role="option"] strong')].map(item => item.textContent);
+    expect(labels).toEqual(['图片1', '图片2', '文本1']);
+  });
+
+  // 菜单打开后光标移走再确认：不按旧的 @ 位置替换，提示词不被重复或截断。
+  it('光标移走后确认 @ 选项不会改写提示词', async () => {
+    withReferences();
+    await mount();
+    await writePrompt('海边 @');
+    const input = host.querySelector<HTMLTextAreaElement>('.composer-prompt')!;
+    input.setSelectionRange(0, 0);
+    await click(document.querySelectorAll<HTMLButtonElement>('.prompt-mention-menu [role="option"]')[0]);
+    expect(currentNode().metadata?.prompt).toBe('海边 @');
+    expect(document.querySelector('.prompt-mention-menu')).toBeNull();
+  });
+
   // 拖线落在空白处弹出新建菜单，按拖出方向创建节点与连线，不触发任何生成请求。
   it('拖线到空白处可新建节点并自动连线', async () => {
     await mount();

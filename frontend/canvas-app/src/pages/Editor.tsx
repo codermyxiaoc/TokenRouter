@@ -300,8 +300,10 @@ export function Editor(){
  const videoCaps=chosenModel?.video_capabilities as {durations:number[];resolutions:string[];aspect_ratios:string[]}|undefined;
  const canGenerate=!!active&&['image','video','audio','text'].includes(active.type);
  const referenceNodes=active&&doc?selectedReferences(doc,active.id).filter(n=>kind==='audio'||kind==='text'?['text','image','video','audio'].includes(n.type):n.type==='image'||n.type==='video'):[];
- // @ 标签沿用提交时的素材顺序编号：“图片1”就是请求中的第一张参考图；语音会逐字朗读输入，不提供 @ 标签。
- const mentionReferences=kind==='audio'?[]:promptReferences(referenceNodes);
+ // @ 标签沿用提交时的素材顺序编号：“图片1”就是请求中的第一张参考图；已连接的文本也会随请求拼接，同样可引用。
+ // 只列出当前生成类型会实际提交的素材类型；语音会逐字朗读输入，不提供 @ 标签。
+ const mentionTypes=kind==='image'?['image','text']:kind==='video'?['image','video','text']:kind==='text'?['text']:[];
+ const mentionReferences=active&&doc?promptReferences(selectedReferences(doc,active.id).filter(n=>mentionTypes.includes(n.type))):[];
  const sizeWarning=active?referenceWarning(active):undefined;
  const effectiveSettings=resolveGenerationSettings(chosenModel,active?.metadata,kind);
  const qualityLabels:Record<string,string>={auto:'自动',low:'低',medium:'中',high:'高',hd:'高清',standard:'标准'};

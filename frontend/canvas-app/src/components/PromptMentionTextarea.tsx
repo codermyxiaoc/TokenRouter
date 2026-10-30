@@ -38,6 +38,11 @@ export const PromptMentionTextarea = forwardRef<HTMLTextAreaElement, Props>(func
   const insertReference = (reference: PromptReference) => {
     if (!mention) return;
     const end = textareaRef.current?.selectionStart ?? value.length;
+    // 菜单打开后光标可能已移走：只有光标仍紧跟在原 @ 查询之后才替换，否则按当前光标重新判断，避免重复或截断提示词。
+    if (end < mention.start || !/^@[^\s@]*$/.test(value.slice(mention.start, end))) {
+      syncMention(value, end);
+      return;
+    }
     const text = `${reference.label} `;
     closeMention();
     updateValue(`${value.slice(0, mention.start)}${text}${value.slice(end)}`, mention.start + text.length);
@@ -54,6 +59,7 @@ export const PromptMentionTextarea = forwardRef<HTMLTextAreaElement, Props>(func
       onCompositionStart={() => { composing.current = true; }}
       onCompositionEnd={event => { composing.current = false; syncMention(event.currentTarget.value, event.currentTarget.selectionStart); }}
       onScroll={event => { syncOverlayScroll(); onScroll?.(event); }}
+      onSelect={event => { if (!composing.current) syncMention(event.currentTarget.value, event.currentTarget.selectionStart); props.onSelect?.(event); }}
       onBlur={event => { window.setTimeout(closeMention, 120); onBlur?.(event); }}
       onKeyDown={event => {
         if (composing.current || event.nativeEvent.isComposing) { onKeyDown?.(event); return; }

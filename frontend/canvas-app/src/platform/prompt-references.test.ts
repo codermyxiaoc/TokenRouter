@@ -17,6 +17,8 @@ describe('提示词 @ 引用标签', () => {
     expect(deleteAdjacentLabel('把 图片1 变亮', 2, 'forward', labels)).toEqual({ value: '把 变亮', caret: 2 });
     expect(deleteAdjacentLabel('普通文字', 4, 'backward', labels)).toBeNull();
     expect(deleteAdjacentLabel('x图片1', 1, 'forward', labels)).toBeNull();
+    // 光标位于“图片10”的“1”之后（后面还有数字）时不能误删“图片1”。
+    expect(deleteAdjacentLabel('参考 图片10', 6, 'backward', ['图片1'])).toBeNull();
   });
   it('高亮只匹配完整标签，不把“图片10”拆成“图片1”', () => {
     expect(splitPromptLabels('用图片10和图片1', ['图片1'])).toEqual([{ text: '用图片10和', label: false }, { text: '图片1', label: true }]);

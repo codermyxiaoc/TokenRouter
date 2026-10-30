@@ -190,9 +190,13 @@ func (s *APIDocService) Document(ctx context.Context, id string, publicOnly bool
 	if doc.Hidden {
 		return nil, ErrAPIDocNotFound
 	}
-	// 隐藏分类下的文档对访客同样不存在，不能靠已知地址直达读到草稿。
+	// 隐藏分类下的文档对访客同样不存在，不能靠已知地址直达读到草稿；内置文档未改分类时按默认分类判断。
+	categoryID := builtinAPIDocDocumentCategories[doc.ID]
 	if doc.CategoryID != nil {
-		hidden, err := s.categoryHidden(ctx, *doc.CategoryID)
+		categoryID = *doc.CategoryID
+	}
+	if categoryID != "" {
+		hidden, err := s.categoryHidden(ctx, categoryID)
 		if err != nil {
 			return nil, err
 		}

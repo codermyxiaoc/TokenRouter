@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path'
 import { Marked } from 'marked'
 import { apiDocCategories, apiDocEndpoints, apiDocPlatforms, apiDocVideoProtocols, filterApiDocEndpoints } from '..'
 import { apiDocBaseUrl, apiDocCurl, apiDocEnvironment, apiDocFence, apiDocMarkdown } from '../format'
+import { buildApiDocCatalog } from '../catalog'
 
 describe('公开网关文档契约', () => {
   it('异步图片文档与真实查询错误码一致，并在页面与导出中说明停止轮询条件', () => {
@@ -200,6 +201,17 @@ describe('公开网关文档契约', () => {
     const frontend: Record<string, string> = { guides: '' }
     for (const category of apiDocCategories) frontend[category.id] = ''
     for (const protocol of apiDocVideoProtocols) frontend[`video-${protocol.id}`] = 'video'
+    expect(backend).toEqual(frontend)
+  })
+
+  // 内置文档沿用默认分类时，服务端据此判断正文是否随分类隐藏，两边的内置文档归属必须一致。
+  it('后端内置文档默认分类与前端目录一致', () => {
+    const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../backend/internal/service/api_docs_builtin_documents.go'), 'utf8')
+    const block = source.match(/builtinAPIDocDocumentCategories = map\[string\]string\{([\s\S]*?)\r?\n\}/)?.[1] ?? ''
+    const backend = Object.fromEntries([...block.matchAll(/"([a-z0-9-]+)":\s*"([a-z0-9-]+)"/g)].map(match => [match[1], match[2]]))
+    const catalog = buildApiDocCatalog({ categories: [], documents: [] }, true)
+    const frontend = Object.fromEntries(catalog.documents.filter(doc => doc.builtin).map(doc => [doc.id, doc.defaultCategoryId]))
+    expect(Object.keys(frontend).length).toBeGreaterThan(60)
     expect(backend).toEqual(frontend)
   })
 })

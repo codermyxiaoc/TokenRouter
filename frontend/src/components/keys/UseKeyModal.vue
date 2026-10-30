@@ -374,7 +374,7 @@ const compositeExamples = computed(() => (props.compositeGroups || []).map((bind
   const model = platform === 'openai'
     ? 'gpt-5'
     : platform === 'gemini'
-      ? 'gemini-2.5-pro'
+      ? 'gemini-3.5-flash'
       : platform === 'grok'
         ? 'grok-4'
         : platform === 'qoder'
@@ -1056,7 +1056,8 @@ function generateModelBoundClaudeFiles(baseUrl: string, apiKey: string, model: s
 }
 
 function generateGeminiCliContent(baseUrl: string, apiKey: string): FileConfig {
-  const model = 'gemini-2.0-flash'
+  // 示例沿用站点默认 Gemini 目录中的现役模型，避免复制到已停用的 2.x。
+  const model = 'gemini-3.5-flash'
   const modelComment = t('keys.useKeyModal.gemini.modelComment')
   let path: string
   let content: string
@@ -1177,7 +1178,7 @@ function generateCompatibleCodexFiles(
     gemini: {
       provider: 'tokenrouter_gemini',
       name: 'TokenRouter Gemini',
-      model: 'gemini-2.5-pro',
+      model: 'gemini-3.5-flash',
       contextWindow: 2097152
     },
     antigravity: {

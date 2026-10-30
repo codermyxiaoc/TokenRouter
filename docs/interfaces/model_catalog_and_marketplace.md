@@ -94,6 +94,8 @@ GPT-5.6 系列的内置目录、白名单和配置导出只提供 `gpt-5.6-sol/t
 
 `gpt-6.1-sol`、`gpt-6.1-terra` 与 `claude-sonnet-5-5` 也有独立目录和离线兜底价，均支持文字/图片输入及文字输出；两个 GPT-6.1 型号上下文 1,050,000、Sonnet 5.5 输入上限 1,000,000，最大输出均为 128,000。目录扩展不创建 Codex 专用 manifest、远程目录或 CLI descriptor；普通 `/models` 与现有配置导出继续按当前可请求集合工作。
 
+Gemini 默认目录（`geminicli.DefaultModels`、`/v1beta/models` 回落用的 `gemini.DefaultModels` 与前端 Gemini 白名单）三处保持一致，同步上游 Sub2API 31564b2e8：移除已停用的 2.0/2.5 与 `gemini-3-pro-preview`，列出 3.x 现役文本与生图型号（含 3.1 Flash Lite、3 Pro Image、3.1 Flash Lite Image 及其 preview）、3.5/3.6 Flash 和 `gemini-4-argon`。它决定未配置映射账号的 `/v1/models`、模型广场与账号测试默认列表；连接测试默认 `gemini-3.5-flash`，Google One 账号仍用其保守模型集。上游列入的 `gemini-3.5-flash-lite`、`gemini-3.7-flash`、`gemini-3.8-flash` 在价格目录中没有官方价，静态回退会按同族型号收费，因此暂不列入默认目录，待价格目录补齐后再加入；已配置映射的账号不受此限制。Antigravity 专属型号单独维护（仍含 2.5 系列），并进入前端总表，白名单选择器可以列出。
+
 目录未命中后，价格仍可按既有专属静态价和跨型号计费政策回退，Spark 的专用重定向保持独立。OpenAI 日期快照和协议后缀的价格回退保留产品名，优先同产品目录及已有专属静态价格。日期回退、静态价和跨型号计费重定向均不向能力查询提供继承依据。上述目录处理不改写公开模型 ID 或 Gemini 上游请求 ID。
 
 Antigravity 管理员同步在保留 `models: string[]` 响应的基础上附加可选 `metadata` 与 `warnings`；从该账号实际生成端点采集能力，失败不跨环境回退。安全白名单字段保存为 `extra.upstream_model_metadata` 的来源、时间和逐模型快照；不保存原始正文或 token。已保存账号的测试模型列表可附带相应 `metadata`（推理能力/档位、输入模态、上下文和输出上限），显式模型授权仍决定可见范围；同步不改变白名单、路由、价格或公开市场的全局能力来源。

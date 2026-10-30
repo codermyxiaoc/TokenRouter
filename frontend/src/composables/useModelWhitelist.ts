@@ -53,15 +53,20 @@ export const claudeModels = [
 // Google Gemini
 const geminiModels = [
   // Keep in sync with backend curated Gemini lists.
-  // This list is intentionally conservative (models commonly available across OAuth/API key).
+  // 已停用的 2.x 不再列出；没有官方价的 3.5-flash-lite、3.7-flash、3.8-flash 暂不列入。
   'gemini-3.1-flash-image',
-  'gemini-2.5-flash-image',
-  'gemini-2.0-flash',
-  'gemini-2.5-flash',
-  'gemini-2.5-pro',
-  'gemini-3.5-flash',
+  'gemini-3.1-flash-image-preview',
+  'gemini-3.1-flash-lite-image',
+  'gemini-3-pro-image',
+  'gemini-3-pro-image-preview',
+  'gemini-3-flash',
   'gemini-3-flash-preview',
-  'gemini-3-pro-preview',
+  'gemini-3.1-pro-preview',
+  'gemini-3.1-pro-preview-customtools',
+  'gemini-3.1-flash-lite',
+  'gemini-3.1-flash-lite-preview',
+  'gemini-3.5-flash',
+  'gemini-3.6-flash',
   'gemini-4-argon'
 ]
 
@@ -323,8 +328,9 @@ const perplexityModels = [
 const typesafeModels = ['jev-latest']
 const clineModels = ['deepseek/deepseek-v4-flash', 'cline-pass/glm-5.3-flash']
 
-// 所有模型（去重）
+// 所有模型（去重）；Antigravity 专属型号也要进入总表，否则其白名单选择器无法列出这些型号。
 const allModelsList: string[] = Array.from(new Set([
+  ...antigravityModels,
   ...typesafeModels,
   ...clineModels,
   ...openaiModels,

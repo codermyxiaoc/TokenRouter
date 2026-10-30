@@ -5,6 +5,7 @@ vi.mock('@/api/admin/accounts', () => ({
 }))
 
 import {
+  allModels,
   buildCombinedModelMappingObject,
   findModelWhitelistMappingConflict,
   buildModelMappingObject,
@@ -335,13 +336,25 @@ describe('useModelWhitelist', () => {
     expect(models).toContain('composer-2.5')
   })
 
-  it('gemini 模型列表包含原生生图模型', () => {
+  it('gemini 模型列表包含原生生图模型且不再列出已停用的 2.x', () => {
     const models = getModelsByPlatform('gemini')
 
-    expect(models).toContain('gemini-2.5-flash-image')
     expect(models).toContain('gemini-3.1-flash-image')
-    expect(models.indexOf('gemini-3.1-flash-image')).toBeLessThan(models.indexOf('gemini-2.0-flash'))
-    expect(models.indexOf('gemini-2.5-flash-image')).toBeLessThan(models.indexOf('gemini-2.5-flash'))
+    expect(models).toContain('gemini-3.1-flash-lite-image')
+    expect(models).toContain('gemini-3-pro-image')
+    expect(models.indexOf('gemini-3.1-flash-image')).toBeLessThan(models.indexOf('gemini-3.5-flash'))
+    expect(models.some(model => model.startsWith('gemini-2.'))).toBe(false)
+    // 没有官方价的新型号暂不列入，避免按同族价格误计费。
+    for (const unpriced of ['gemini-3.5-flash-lite', 'gemini-3.7-flash', 'gemini-3.8-flash']) {
+      expect(models).not.toContain(unpriced)
+    }
+  })
+
+  it('总表包含 Antigravity 专属型号且不重复', () => {
+    const values = allModels.map(model => model.value)
+    expect(values).toContain('gemini-2.5-flash-image')
+    expect(values).toContain('gemini-4-argon-high')
+    expect(new Set(values).size).toBe(values.length)
   })
 
   it('antigravity 模型列表会把新的 Gemini 图片模型排在前面', () => {

@@ -122,7 +122,7 @@ func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
 		Group:        &service.Group{ID: groupID, Platform: service.PlatformGemini},
-		ModelMapping: map[string]string{"gemini-review": "gemini-2.5-flash", "wild-*": "gemini-2.5-flash"},
+		ModelMapping: map[string]string{"gemini-review": "gemini-3.5-flash", "wild-*": "gemini-3.5-flash"},
 	})
 
 	h.Models(c)
@@ -132,7 +132,7 @@ func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Equal(t, "list", got.Object)
-	require.Contains(t, modelIDsForTest(got.Data), "gemini-2.5-flash")
+	require.Contains(t, modelIDsForTest(got.Data), "gemini-3.5-flash")
 	require.Contains(t, modelIDsForTest(got.Data), "gemini-review")
 	require.NotContains(t, modelIDsForTest(got.Data), "wild-*")
 	require.NotContains(t, modelIDsForTest(got.Data), "claude-sonnet-4-6")

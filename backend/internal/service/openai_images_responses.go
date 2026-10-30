@@ -1811,14 +1811,20 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	direct := usesCodexDirectImages(upstreamModel) && !isOpenAIImagesForceResponses(ctx)
 	beginUpstreamResponseModelObservation(c)
 	SetOpsUpstreamModel(c, upstreamModel)
+	// 记录每个上传分片的类型与大小（不含内容），便于排查上游拒绝的图片。
+	uploadParts := make([]string, 0, len(parsed.Uploads))
+	for _, upload := range parsed.Uploads {
+		uploadParts = append(uploadParts, fmt.Sprintf("%s:%d", upload.ContentType, len(upload.Data)))
+	}
 	logger.LegacyPrintf(
 		"service.openai_gateway",
-		"[OpenAI] Images request routing request_model=%s upstream_model=%s endpoint=%s account_type=%s uploads=%d",
+		"[OpenAI] Images request routing request_model=%s upstream_model=%s endpoint=%s account_type=%s uploads=%d upload_parts=%v",
 		requestModel,
 		upstreamModel,
 		parsed.Endpoint,
 		account.Type,
 		len(parsed.Uploads),
+		uploadParts,
 	)
 	upstreamCtx, releaseUpstreamCtx := DetachImageAttemptContext(ctx)
 	defer releaseUpstreamCtx()

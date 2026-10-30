@@ -40,7 +40,7 @@ const (
 	openAIChatGPTFilesURL                  = "https://chatgpt.com/backend-api/files"
 	openAIImageBackendUserAgent            = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 	openAIImageMaxDownloadBytes            = 20 << 20 // 20MB per image download
-	openAIImageMaxUploadPartSize           = 20 << 20 // 20MB per multipart upload part
+	openAIImageMaxUploadPartSize           = 50 << 20 // 单个 multipart 分片上限，对齐 OpenAI 图片编辑的单图上限
 	openAIImagesResponsesMainModel         = "gpt-5.4-mini"
 	openAIImagesVerbatimPromptInstructions = "When invoking the image_generation tool, use the user's image prompt verbatim. Do not rewrite, expand, summarize, embellish, translate, normalize punctuation, or add or remove visual details or constraints. Preserve the original language, wording, capitalization, quotes, and punctuation exactly."
 )
@@ -419,10 +419,14 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 			continue
 		}
 
-		data, err := io.ReadAll(io.LimitReader(part, openAIImageMaxUploadPartSize))
+		// 多读一个字节判断是否超限：超大分片直接拒绝，不能截断后当作损坏图片发给上游。
+		data, err := io.ReadAll(io.LimitReader(part, openAIImageMaxUploadPartSize+1))
 		_ = part.Close()
 		if err != nil {
 			return fmt.Errorf("read multipart field %s: %w", name, err)
+		}
+		if len(data) > openAIImageMaxUploadPartSize {
+			return fmt.Errorf("multipart field %q exceeds the %d MB per-part limit", name, openAIImageMaxUploadPartSize>>20)
 		}
 
 		fileName := strings.TrimSpace(part.FileName())

@@ -235,7 +235,8 @@ func parseGrokMediaMultipartRequest(contentType string, body []byte, info *GrokM
 			_ = part.Close()
 			continue
 		}
-		data, err := io.ReadAll(io.LimitReader(part, openAIImageMaxUploadPartSize))
+		// 请求体总量已由网关上限约束；按分片截断会把损坏的图片转发给上游。
+		data, err := io.ReadAll(part)
 		_ = part.Close()
 		if err != nil {
 			return

@@ -7950,8 +7950,16 @@
                         </label>
                         <label class="text-xs text-gray-600 dark:text-dark-300">
                           {{ t('admin.settings.features.creative.modelSettings.videoReferences') }}
-                          <input :value="item.video_capabilities?.max_reference_images ?? ''" type="number" min="0" :max="creativeVideoReferenceMax(item)" step="1" class="input mt-1" data-testid="creative-video-reference-limit" @input="setCreativeVideoReferenceLimit(item, ($event.target as HTMLInputElement).value)" />
+                          <input :value="item.video_capabilities?.max_reference_images ?? ''" type="number" min="0" step="1" class="input mt-1" data-testid="creative-video-reference-limit" @input="setCreativeVideoReferenceLimit(item, 'max_reference_images', ($event.target as HTMLInputElement).value)" />
                         </label>
+                        <label class="text-xs text-gray-600 dark:text-dark-300">
+                          {{ t('admin.settings.features.creative.modelSettings.videoReferenceVideos') }}
+                          <input :value="item.video_capabilities?.max_reference_videos ?? 0" type="number" min="0" step="1" class="input mt-1" data-testid="creative-video-reference-video-limit" @input="setCreativeVideoReferenceLimit(item, 'max_reference_videos', ($event.target as HTMLInputElement).value)" />
+                        </label>
+                        <!-- 协议上限来自服务端：模板协议按绑定模板的能力计算，内置协议由服务端代码声明。 -->
+                        <p v-if="creativeVideoReferenceLimit(item)" class="text-xs text-gray-500 sm:col-span-2 dark:text-dark-400" data-testid="creative-video-reference-protocol-limit">
+                          {{ t('admin.settings.features.creative.modelSettings.videoReferenceProtocolLimit', { images: creativeVideoReferenceLimit(item)!.max_images, videos: creativeVideoReferenceLimit(item)!.max_videos }) }}
+                        </p>
                         <p class="text-xs text-gray-500 sm:col-span-2 dark:text-dark-400">{{ t('admin.settings.features.creative.modelSettings.videoDefaultsHint') }}</p>
                         <div class="sm:col-span-2">
                           <label :for="`creative-video-usage-notes-${index}`" class="text-xs text-gray-600 dark:text-dark-300">
@@ -9201,6 +9209,7 @@ import type {
   UsageRankingSortBy,
   CreativeModelCandidate,
   CreativeModelSetting,
+  CreativeVideoReferenceLimit,
   CreativeWorkerStatus,
 } from "@/api/admin/settings";
 import type { CreativeOperation } from "@/api/creative";
@@ -10443,9 +10452,12 @@ function creativeVideoCapabilityDefaults(item: CreativeModelSetting) {
     ? candidate?.video_capabilities : undefined;
 }
 
-function creativeVideoReferenceMax(item: CreativeModelSetting) {
-  return item.video_endpoint === 'seedance' || item.video_endpoint === 'vidu' ? 10 : 1;
+// 参考素材上限由服务端按协议给出（模板能力或内置协议声明），前端不写死端点规则；未知候选不做上限提示。
+function creativeVideoReferenceLimit(item: CreativeModelSetting): CreativeVideoReferenceLimit | undefined {
+  if (!item.video_endpoint) return undefined;
+  return creativeCandidateForSetting(item)?.video_reference_limits?.[item.video_endpoint];
 }
+
 
 function onCreativeVideoEndpointChanged(item: CreativeModelSetting, value: string | number | boolean | null) {
   if (typeof value !== 'string' || value === item.video_endpoint) return;
@@ -10480,8 +10492,8 @@ function setCreativeVideoCapability(item: CreativeModelSetting, key: CreativeVid
   creativeVideoAutomaticFields.set(toRaw(item), automaticFields);
 }
 
-function setCreativeVideoReferenceLimit(item: CreativeModelSetting, value: string) {
-  ensureCreativeVideoCapabilities(item).max_reference_images = Number(value);
+function setCreativeVideoReferenceLimit(item: CreativeModelSetting, key: 'max_reference_images' | 'max_reference_videos', value: string) {
+  ensureCreativeVideoCapabilities(item)[key] = Number(value);
 }
 
 function creativeOperationSupported(index: number, operation: CreativeOperation): boolean {
@@ -10562,10 +10574,10 @@ function normalizeCreativeModelSettingsForSave(): CreativeModelSetting[] | null 
       return null;
     }
     if (item.media_type === 'video') {
-      const invalid = (field: string) => {
+      const invalid = (field: string, params: Record<string, number> = {}) => {
         creativeModelSettingsValidationError.value = t('admin.settings.features.creative.modelSettings.videoValidationError', {
           model,
-          reason: t(`admin.settings.features.creative.modelSettings.${field}`),
+          reason: t(`admin.settings.features.creative.modelSettings.${field}`, params),
         });
         return null;
       };
@@ -10581,8 +10593,13 @@ function normalizeCreativeModelSettingsForSave(): CreativeModelSetting[] | null 
         const allowedRatios = ['1:1', '16:9', '9:16', '4:3', '3:4', '21:9', '9:21', '3:2', '2:3', 'adaptive'];
         if (caps.aspect_ratios.length > 10 || caps.aspect_ratios.some((value) => !allowedRatios.includes(value.trim())) ||
           new Set(caps.aspect_ratios.map((value) => value.trim())).size !== caps.aspect_ratios.length) return invalid('videoRatiosInvalid');
-        if (!Number.isSafeInteger(caps.max_reference_images) || caps.max_reference_images < 0 ||
-          caps.max_reference_images > creativeVideoReferenceMax(item)) return invalid('videoReferencesInvalid');
+        // 上限取服务端按协议给出的值（模板能力或内置协议声明）；未知候选只校验数字本身，其余交给服务端。
+        const limit = creativeVideoReferenceLimit(item);
+        const videos = caps.max_reference_videos ?? 0;
+        if (!Number.isSafeInteger(caps.max_reference_images) || caps.max_reference_images < 0) return invalid('videoReferencesInvalid');
+        if (!Number.isSafeInteger(videos) || videos < 0) return invalid('videoReferenceVideosInvalid');
+        if (limit && caps.max_reference_images > limit.max_images) return invalid('videoReferencesOverLimit', { max: limit.max_images });
+        if (limit && videos > limit.max_videos) return invalid('videoReferenceVideosOverLimit', { max: limit.max_videos });
       }
     }
     if (operations.length === 0) {

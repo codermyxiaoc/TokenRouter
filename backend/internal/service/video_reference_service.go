@@ -66,6 +66,8 @@ type VideoReferenceBlob struct {
 type VideoReferenceService struct {
 	store   VideoReferenceStore
 	baseURL func(context.Context) string
+	// assets 为参考视频票据提供素材读取，由画布服务装配时注入，见 video_reference_assets.go。
+	assets VideoReferenceAssetSource
 }
 
 func NewVideoReferenceService(store VideoReferenceStore, settings *SettingService) *VideoReferenceService {

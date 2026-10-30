@@ -20,6 +20,8 @@ type CreativeVideoCapabilities struct {
 	DefaultAspectRatio     string   `json:"default_aspect_ratio,omitempty"`
 	AspectRatios           []string `json:"aspect_ratios"`
 	MaxReferenceImages     int      `json:"max_reference_images"`
+	// MaxReferenceVideos 是管理员为画布开放的参考视频数；公开目录再与协议上限取较小值，0 表示不开放。
+	MaxReferenceVideos int `json:"max_reference_videos,omitempty"`
 	// 仅运行目录在所有可用候选均受限时公开；上传存储上限与供应商官方限制不由此字段定义。
 	MaxReferenceImageBytes int64 `json:"max_reference_image_bytes,omitempty"`
 }
@@ -35,6 +37,60 @@ func defaultCreativeVideoCapabilities(endpoint VideoEndpoint) *CreativeVideoCapa
 		duration, resolution = 6, "768p"
 	}
 	return &CreativeVideoCapabilities{Durations: []float64{duration}, Resolutions: []string{resolution}, AspectRatios: []string{"16:9", "9:16"}, MaxReferenceImages: 1}
+}
+
+// CreativeVideoReferenceLimit 是协议能表达的画布参考素材数量上限，管理员配置只能在此范围内再收紧。
+type CreativeVideoReferenceLimit struct {
+	MaxImages int `json:"max_images"`
+	MaxVideos int `json:"max_videos"`
+}
+
+// 内置协议由代码实现，上限随适配器固定：Seedance、Vidu 可多图，其余一张，画布暂不经内置协议发送参考视频。
+// 模板协议（unified）在保存时允许到规范请求上限，实际上限由绑定模板的能力决定，见 creativeVideoProfileReferenceLimit。
+// @project-doc docs/interfaces/cloud_canvas.md#video_reference_limits
+func creativeBuiltinVideoReferenceLimit(endpoint VideoEndpoint) CreativeVideoReferenceLimit {
+	switch endpoint {
+	case CreativeVideoEndpointUnified:
+		return CreativeVideoReferenceLimit{MaxImages: videoCanonicalMaxMedia, MaxVideos: videoCanonicalMaxMedia}
+	case VideoEndpointSeedance, VideoEndpointVidu:
+		return CreativeVideoReferenceLimit{MaxImages: 10}
+	default:
+		return CreativeVideoReferenceLimit{MaxImages: 1}
+	}
+}
+
+// 画布能发出的素材取决于模板：没有规则读取 images/videos 时为 0；限定角色且不含 reference_image 时，
+// 画布只能以首帧发送一张图；其余按 max_images/max_videos，未声明时取规范请求上限。
+func creativeVideoProfileReferenceLimit(spec *VideoProtocolProfileSpec) CreativeVideoReferenceLimit {
+	if spec == nil {
+		return CreativeVideoReferenceLimit{}
+	}
+	readsImages, readsVideos := false, false
+	for _, rule := range spec.Create.Body {
+		readsImages = readsImages || rule.From == "images" || strings.HasPrefix(rule.From, "images[")
+		readsVideos = readsVideos || rule.From == "videos"
+	}
+	out := CreativeVideoReferenceLimit{}
+	caps := spec.Capabilities
+	if readsImages {
+		out.MaxImages = videoCanonicalMaxMedia
+		if caps != nil && caps.MaxImages > 0 {
+			out.MaxImages = caps.MaxImages
+		}
+		if caps != nil && len(caps.ImageRoles) > 0 && !containsFold(caps.ImageRoles, VideoMediaRoleReferenceImage) {
+			out.MaxImages = 0
+			if containsFold(caps.ImageRoles, VideoMediaRoleFirstFrame) {
+				out.MaxImages = 1
+			}
+		}
+	}
+	if readsVideos {
+		out.MaxVideos = videoCanonicalMaxMedia
+		if caps != nil && caps.MaxVideos > 0 {
+			out.MaxVideos = caps.MaxVideos
+		}
+	}
+	return out
 }
 
 func normalizeCreativeVideoCapabilities(endpoint VideoEndpoint, input *CreativeVideoCapabilities) (*CreativeVideoCapabilities, error) {
@@ -65,14 +121,18 @@ func normalizeCreativeVideoCapabilities(endpoint VideoEndpoint, input *CreativeV
 	if len(input.AspectRatios) > 10 {
 		return nil, fmt.Errorf("creative video aspect_ratios must contain at most 10 values")
 	}
-	if input.MaxReferenceImages < 0 || input.MaxReferenceImages > 10 {
-		return nil, fmt.Errorf("creative video max_reference_images must be between 0 and 10")
+	// 这里只校验配置本身的取值范围；模板协议的真实上限来自模板，公开目录按较小值生效，保存时不因模板变化而拒绝。
+	limit := creativeBuiltinVideoReferenceLimit(endpoint)
+	if input.MaxReferenceImages < 0 || input.MaxReferenceImages > limit.MaxImages {
+		return nil, fmt.Errorf("creative video max_reference_images must be between 0 and %d for endpoint %s", limit.MaxImages, endpoint)
 	}
-	// 模板协议（unified）的参考图上限由模板能力在提交前校验，这里不按内置端点限制为一张。
-	if endpoint != VideoEndpointSeedance && endpoint != VideoEndpointVidu && endpoint != CreativeVideoEndpointUnified && input.MaxReferenceImages > 1 {
-		return nil, fmt.Errorf("creative video endpoint supports at most one reference image")
+	if input.MaxReferenceVideos < 0 || input.MaxReferenceVideos > limit.MaxVideos {
+		return nil, fmt.Errorf("creative video max_reference_videos must be between 0 and %d for endpoint %s", limit.MaxVideos, endpoint)
 	}
-	out := &CreativeVideoCapabilities{MaxReferenceImages: input.MaxReferenceImages}
+	if input.MaxReferenceImages+input.MaxReferenceVideos > videoCanonicalMaxMedia {
+		return nil, fmt.Errorf("creative video reference media must not exceed %d in total", videoCanonicalMaxMedia)
+	}
+	out := &CreativeVideoCapabilities{MaxReferenceImages: input.MaxReferenceImages, MaxReferenceVideos: input.MaxReferenceVideos}
 	seenDuration := map[float64]bool{}
 	for _, duration := range input.Durations {
 		if duration <= 0 || duration > 60 || math.IsNaN(duration) || math.IsInf(duration, 0) || math.Trunc(duration) != duration || seenDuration[duration] {
@@ -149,9 +209,9 @@ func (s *CreativePublicService) creativeVideoCandidatesForGroup(ctx context.Cont
 
 // 同一次候选扫描收集发送限制，避免目录与实际公开模型使用不同账号快照。
 // 混合协议不声明统一限制，提交仍按实际选中候选在预扣前校验。
-func (s *CreativePublicService) creativeVideoCandidatesAndReferenceLimitsForGroup(ctx context.Context, group *Group) ([]CreativeModelCandidate, map[string]map[VideoEndpoint]int64, error) {
+func (s *CreativePublicService) creativeVideoCandidatesAndReferenceLimitsForGroup(ctx context.Context, group *Group) ([]CreativeModelCandidate, map[string]map[VideoEndpoint]creativeVideoMediaLimits, error) {
 	out := []CreativeModelCandidate{}
-	referenceLimits := map[string]map[VideoEndpoint]int64{}
+	referenceLimits := map[string]map[VideoEndpoint]creativeVideoMediaLimits{}
 	if group == nil || group.Platform != PlatformVideo || !group.IsActive() || s.AccountRepo == nil {
 		return out, referenceLimits, nil
 	}
@@ -203,37 +263,54 @@ func (s *CreativePublicService) creativeVideoCandidatesAndReferenceLimitsForGrou
 	sort.Strings(names)
 	for _, model := range names {
 		endpoints := []VideoEndpoint{}
-		referenceLimits[model] = map[VideoEndpoint]int64{}
+		referenceLimits[model] = map[VideoEndpoint]creativeVideoMediaLimits{}
+		protocolLimits := map[VideoEndpoint]CreativeVideoReferenceLimit{}
 		for _, endpoint := range []VideoEndpoint{VideoEndpointCompat, VideoEndpointOpenAIVideos, VideoEndpointSeedance, VideoEndpointKling, VideoEndpointWan, VideoEndpointMiniMax, VideoEndpointVidu, CreativeVideoEndpointUnified} {
 			if models[model][endpoint] {
 				endpoints = append(endpoints, endpoint)
-				referenceLimits[model][endpoint] = s.creativeVideoReferenceImageLimit(ctx, group, model, endpoint, accounts)
+				limits := s.creativeVideoReferenceLimits(ctx, group, model, endpoint, accounts)
+				referenceLimits[model][endpoint] = limits
+				protocolLimits[endpoint] = limits.Reference
 			}
 		}
-		// 候选直接返回首个可用端点的真实初始值，避免表单占位符被误认为已保存参数。
-		out = append(out, CreativeModelCandidate{GroupID: group.ID, GroupName: group.Name, Platform: PlatformVideo, Model: model, Operations: []string{CreativeOperationGenerate}, MediaType: "video", VideoEndpoints: endpoints, VideoEndpoint: endpoints[0], VideoCapabilities: defaultCreativeVideoCapabilities(endpoints[0])})
+		// 候选直接返回首个可用端点的真实初始值，避免表单占位符被误认为已保存参数；
+		// 各端点的协议素材上限一并返回，后台表单据此校验和提示，不在前端写死。
+		out = append(out, CreativeModelCandidate{GroupID: group.ID, GroupName: group.Name, Platform: PlatformVideo, Model: model, Operations: []string{CreativeOperationGenerate}, MediaType: "video", VideoEndpoints: endpoints, VideoEndpoint: endpoints[0], VideoCapabilities: defaultCreativeVideoCapabilities(endpoints[0]), VideoReferenceLimits: protocolLimits})
 	}
 	return out, referenceLimits, nil
 }
 
-// 大小提示沿用渠道映射后再做账号映射；不能只检查公开模型名，否则模型级协议覆盖会误限旧协议。
-// 扫描全部候选也覆盖通配白名单和仅支持渠道目标名的账号，未知或混合方案保守省略前端限制。
-// 内置协议只有旧 H3 方案有上限；模板协议读取 capabilities.max_reference_bytes，全部候选都声明上限时取最小值。
-func (s *CreativePublicService) creativeVideoReferenceImageLimit(ctx context.Context, group *Group, model string, endpoint VideoEndpoint, accounts []Account) int64 {
+// creativeVideoMediaLimits 汇总一个模型端点在全部可调度账号上的画布素材限制。
+type creativeVideoMediaLimits struct {
+	// ImageBytes 是单张参考图字节上限，0 表示不在前端提示限制。
+	ImageBytes int64
+	// Reference 是协议能表达的参考图/参考视频数量，多账号取最小值。
+	Reference CreativeVideoReferenceLimit
+}
+
+// 大小提示与数量上限都沿用渠道映射后再做账号映射；不能只检查公开模型名，否则模型级协议覆盖会误限旧协议。
+// 扫描全部候选也覆盖通配白名单和仅支持渠道目标名的账号。单图字节：内置协议只有旧 H3 方案有上限，模板读取
+// capabilities.max_reference_bytes，全部候选都声明上限时取最小值，未知或混合方案保守省略前端限制。
+// 素材数量：内置协议取代码声明的上限，模板按绑定版本的能力与请求体规则推导，多账号取最小值；
+// 模板无法解析时按 0 处理，宁可不开放也不让画布提交注定被拒绝的请求。
+func (s *CreativePublicService) creativeVideoReferenceLimits(ctx context.Context, group *Group, model string, endpoint VideoEndpoint, accounts []Account) creativeVideoMediaLimits {
+	reference := creativeBuiltinVideoReferenceLimit(endpoint)
 	if endpoint != VideoEndpointOpenAIVideos && endpoint != CreativeVideoEndpointUnified {
-		return 0
+		return creativeVideoMediaLimits{Reference: reference}
 	}
 	channelModel := model
 	if s.PricingResolver != nil && s.PricingResolver.channelService != nil {
 		lookup, err := s.PricingResolver.channelService.lookupGroupChannel(ctx, group.ID)
 		if err != nil {
-			return 0
+			return creativeVideoMediaLimits{Reference: creativeVideoUnknownReferenceLimit(endpoint, reference)}
 		}
 		if lookup != nil {
 			channelModel = resolveMapping(lookup, group.ID, model).MappedModel
 		}
 	}
 	var limit int64
+	bytesKnown, profileSeen := true, false
+	profileLimit := CreativeVideoReferenceLimit{MaxImages: videoCanonicalMaxMedia, MaxVideos: videoCanonicalMaxMedia}
 	for i := range accounts {
 		account := &accounts[i]
 		if account.Platform != PlatformVideo || account.Type != AccountTypeAPIKey || !account.IsSchedulable() || !openAIStickyAccountMatchesGroup(account, &group.ID) || !account.IsModelSupported(channelModel) {
@@ -251,14 +328,25 @@ func (s *CreativePublicService) creativeVideoReferenceImageLimit(ctx context.Con
 		var current int64
 		switch {
 		case endpoint == CreativeVideoEndpointUnified && binding.IsProfile():
+			profileSeen = true
+			// 模板服务为空时 Resolve 回落到内置预置模板，与提交链路一致。
 			profile, resolveErr := s.videoProfiles.Resolve(ctx, binding.ProfileKey, binding.ProfileVersion)
-			if resolveErr != nil || profile.Spec.Capabilities == nil || profile.Spec.Capabilities.MaxReferenceBytes <= 0 {
-				return 0
+			if resolveErr != nil || profile == nil {
+				profileLimit, bytesKnown = CreativeVideoReferenceLimit{}, false
+				continue
+			}
+			accountLimit := creativeVideoProfileReferenceLimit(&profile.Spec)
+			profileLimit.MaxImages = min(profileLimit.MaxImages, accountLimit.MaxImages)
+			profileLimit.MaxVideos = min(profileLimit.MaxVideos, accountLimit.MaxVideos)
+			if profile.Spec.Capabilities == nil || profile.Spec.Capabilities.MaxReferenceBytes <= 0 {
+				bytesKnown = false
+				continue
 			}
 			current = profile.Spec.Capabilities.MaxReferenceBytes
 		case endpoint == VideoEndpointOpenAIVideos && !binding.IsProfile() && binding.Endpoint == endpoint:
 			if binding.Adapter != VideoProtocolAdapterMetasoH3 {
-				return 0
+				bytesKnown = false
+				continue
 			}
 			current = CreativeVideoH3ReferenceImageLimit
 		default:
@@ -268,7 +356,24 @@ func (s *CreativePublicService) creativeVideoReferenceImageLimit(ctx context.Con
 			limit = current
 		}
 	}
-	return limit
+	if !bytesKnown {
+		limit = 0
+	}
+	if endpoint == CreativeVideoEndpointUnified {
+		if !profileSeen {
+			profileLimit = CreativeVideoReferenceLimit{}
+		}
+		reference = profileLimit
+	}
+	return creativeVideoMediaLimits{ImageBytes: limit, Reference: reference}
+}
+
+// 渠道映射查询失败时无法确定最终模板，模板协议不开放素材，内置协议仍按代码声明。
+func creativeVideoUnknownReferenceLimit(endpoint VideoEndpoint, builtin CreativeVideoReferenceLimit) CreativeVideoReferenceLimit {
+	if endpoint == CreativeVideoEndpointUnified {
+		return CreativeVideoReferenceLimit{}
+	}
+	return builtin
 }
 
 func (s *CreativePublicService) creativeVideoModelsForGroup(ctx context.Context, group *Group, settings []CreativeModelSetting) ([]CreativeModelPublic, error) {
@@ -306,7 +411,11 @@ func (s *CreativePublicService) creativeVideoModelsForGroup(ctx context.Context,
 				continue
 			}
 			caps = creativeVideoCanvasCapabilities(caps)
-			caps.MaxReferenceImageBytes = referenceLimits[candidate.Model][limitEndpoint]
+			// 生效数量取管理员配置与协议上限的较小值，模板收紧后已有配置自动随之收紧，不需要重新保存。
+			limits := referenceLimits[candidate.Model][limitEndpoint]
+			caps.MaxReferenceImageBytes = limits.ImageBytes
+			caps.MaxReferenceImages = min(caps.MaxReferenceImages, limits.Reference.MaxImages)
+			caps.MaxReferenceVideos = min(caps.MaxReferenceVideos, limits.Reference.MaxVideos)
 			out = append(out, CreativeModelPublic{GroupID: group.ID, GroupName: group.Name, Model: setting.Model, MediaType: "video", UsageNotes: setting.UsageNotes, Operations: []string{CreativeOperationGenerate}, VideoEndpoint: setting.VideoEndpoint, VideoCapabilities: caps, AspectRatios: caps.AspectRatios, OutputCount: 1, MaxOutputCount: 1, MaxReferenceImages: caps.MaxReferenceImages})
 		}
 	}

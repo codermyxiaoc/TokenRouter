@@ -43,12 +43,14 @@ type CreativeVideoCanvasExecutor struct {
 	subscriptions creativeVideoSubscriptions
 	moderation    creativeVideoModeration
 	references    videoReferencePublisher
+	// publisher 是同一短期链接服务的具体实例，装配时用于注入画布素材读取。
+	publisher *VideoReferenceService
 }
 
 func NewCreativeVideoCanvasExecutor(public *CreativePublicService, tasks *VideoTaskService, keys APIKeyRepository, concurrency *ConcurrencyService, billing *BillingCacheService, subscriptions *SubscriptionService, references *VideoReferenceService) *CreativeVideoCanvasExecutor {
 	executor := &CreativeVideoCanvasExecutor{public: public, keys: keys}
 	if references != nil {
-		executor.references = references
+		executor.references, executor.publisher = references, references
 	}
 	// 避免将空具体指针装进非空接口后绕过依赖检查。
 	if tasks != nil {
@@ -138,7 +140,12 @@ func (s *CreativeVideoCanvasExecutor) Submit(ctx context.Context, e *CreativeCan
 	}
 	// 原图保留在素材库；仅把可信原始字节上限交给真实账号的协议准入检查，不压缩或改写素材。
 	var maxReferenceImageBytes int64
+	videoAssets := []VideoReferenceAsset{}
 	for _, asset := range assets {
+		if asset.Role == VideoMediaRoleReferenceVideo {
+			videoAssets = append(videoAssets, VideoReferenceAsset{AssetID: asset.Asset.ID, MIMEType: asset.Asset.MIMEType, Size: asset.Asset.ByteSize})
+			continue
+		}
 		if size := int64(len(asset.Content)); size > maxReferenceImageBytes {
 			maxReferenceImageBytes = size
 		}
@@ -173,7 +180,7 @@ func (s *CreativeVideoCanvasExecutor) Submit(ctx context.Context, e *CreativeCan
 		return "", err
 	}
 	// 画布与正式 /v1/videos 走同一统一链路：协议由账号对该模型的绑定决定，画布端点只用于目录归类。
-	response, err := s.tasks.Submit(ctx, key, VideoTaskSubmitRequest{Body: body, Canonical: canonical, ContentType: "application/json", InboundProtocol: string(VideoEndpointOpenAIVideos), IdempotencyKey: idempotency, canvasAdaptiveRatio: adaptiveRatio, canvasMaxReferenceImageBytes: maxReferenceImageBytes, canvasPrepareReferences: newCreativeVideoReferencePreparer(s.references, user.ID)})
+	response, err := s.tasks.Submit(ctx, key, VideoTaskSubmitRequest{Body: body, Canonical: canonical, ContentType: "application/json", InboundProtocol: string(VideoEndpointOpenAIVideos), IdempotencyKey: idempotency, canvasAdaptiveRatio: adaptiveRatio, canvasMaxReferenceImageBytes: maxReferenceImageBytes, canvasPrepareReferences: newCreativeVideoReferencePreparer(s.references, user.ID, videoAssets...)})
 	if err != nil {
 		// 预扣后保存失败也可能已经存在任务，必须先绑定原账本，不能让画布丢掉冻结金额。
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -240,15 +247,35 @@ func creativeVideoCanvasRequest(e *CreativeCanvasExecution, model *CreativeModel
 	}
 	resolution, resolutionAllowed := creativeVideoCanvasResolution(caps, p.Resolution)
 	ratio, ratioAllowed := creativeVideoCanvasAspectRatio(caps, p.AspectRatio)
-	if !durationAllowed || !resolutionAllowed || !ratioAllowed || len(assets) > caps.MaxReferenceImages || len(assets) != len(p.References) {
+	imageCount, videoCount := 0, 0
+	for _, asset := range assets {
+		if asset.Role == VideoMediaRoleReferenceVideo {
+			videoCount++
+		} else {
+			imageCount++
+		}
+	}
+	if !durationAllowed || !resolutionAllowed || !ratioAllowed || imageCount > caps.MaxReferenceImages || videoCount > caps.MaxReferenceVideos || len(assets) != len(p.References) {
 		return nil, nil, nil, ErrCanvasInvalid
 	}
-	urls := []string{}
+	urls, imageRoles, videos := []string{}, []string{}, []VideoCanonicalMedia{}
 	moderationImages := []map[string]string{}
 	seen := map[string]bool{}
 	var total int64
 	for i, asset := range assets {
-		if asset.Asset == nil || asset.Asset.UserID != e.UserID || asset.Asset.ID != p.References[i].AssetID || asset.Asset.MediaType != "image" || seen[asset.Asset.ID] || asset.Role != p.References[i].Role {
+		if asset.Asset == nil || asset.Asset.UserID != e.UserID || asset.Asset.ID != p.References[i].AssetID || seen[asset.Asset.ID] || asset.Role != p.References[i].Role {
+			return nil, nil, nil, ErrCanvasInvalid
+		}
+		// 参考视频只写入内部占位链接，发送前由准备器替换为短期票据链接；正文与幂等摘要不含票据或视频字节。
+		if asset.Role == VideoMediaRoleReferenceVideo {
+			if asset.Asset.MediaType != "video" || !videoReferenceAssetMIME(asset.Asset.MIMEType) || asset.Asset.ByteSize < 1 || asset.Asset.ByteSize > VideoReferenceAssetMaxBytes {
+				return nil, nil, nil, ErrCanvasInvalid
+			}
+			seen[asset.Asset.ID] = true
+			videos = append(videos, VideoCanonicalMedia{URL: creativeVideoAssetURL(asset.Asset.ID), Role: VideoMediaRoleReferenceVideo})
+			continue
+		}
+		if asset.Asset.MediaType != "image" {
 			return nil, nil, nil, ErrCanvasInvalid
 		}
 		if asset.Role != "" && asset.Role != "first_frame" && asset.Role != "reference_image" {
@@ -268,14 +295,17 @@ func creativeVideoCanvasRequest(e *CreativeCanvasExecution, model *CreativeModel
 			return nil, nil, nil, ErrCreativeInvalidMime
 		}
 		url := "data:" + image.Mime + ";base64," + base64.StdEncoding.EncodeToString(image.Bytes)
-		urls = append(urls, url)
+		urls, imageRoles = append(urls, url), append(imageRoles, p.References[i].Role)
 		moderationImages = append(moderationImages, map[string]string{"image_url": url})
 	}
 	values := &VideoCanonicalRequest{Model: p.Model, Prompt: p.Prompt, Resolution: resolution, AspectRatio: ratio, GenerateAudio: p.GenerateAudio, Watermark: p.Watermark}
 	duration := p.Duration
 	values.Duration = &duration
 	for i, url := range urls {
-		values.Images = append(values.Images, VideoCanonicalMedia{URL: url, Role: p.References[i].Role})
+		values.Images = append(values.Images, VideoCanonicalMedia{URL: url, Role: imageRoles[i]})
+	}
+	if len(videos) > 0 {
+		values.Videos = videos
 	}
 	// 画布只提交统一规范请求；各账号协议的请求体转换与正式 /v1/videos 共用同一实现。
 	body, err := json.Marshal(values)

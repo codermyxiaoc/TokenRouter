@@ -203,3 +203,52 @@ func TestVideoReferenceCacheFailureAndInvalidLookupFailClosed(t *testing.T) {
 	_, err = store.Open(context.Background(), strings.Repeat("a", 64), http.MethodGet)
 	require.ErrorIs(t, err, service.ErrVideoReferenceNotFound)
 }
+
+func videoReferenceAssetCacheBatch(userID int64, size int64, digests ...string) service.VideoReferenceAssetBatch {
+	now := time.Now().UTC()
+	batch := service.VideoReferenceAssetBatch{UserID: userID, IssuedAt: now, ExpiresAt: now.Add(service.VideoReferenceTTL), MaxReads: 64, HourlyMaxBytes: 4 << 30, HourlyMaxCount: 32}
+	for i, digest := range digests {
+		batch.Assets = append(batch.Assets, service.VideoReferenceAssetGrant{Digest: digest, UserID: userID, AssetID: fmt.Sprintf("00000000-0000-4000-8000-%012d", i), MIMEType: "video/mp4", Size: size})
+	}
+	return batch
+}
+
+// 参考视频票据只保存摘要到素材授权的映射，不复制内容；读取次数用尽或到期后删除，额度按用户每小时计算。
+func TestVideoReferenceCacheAssetGrants(t *testing.T) {
+	store, mr := videoReferenceCacheFixture(t)
+	assets := store.(service.VideoReferenceAssetStore)
+	a, b := strings.Repeat("c", 64), strings.Repeat("d", 64)
+	require.NoError(t, assets.IssueAssetBatch(context.Background(), videoReferenceAssetCacheBatch(7, 1024, a, b)))
+	require.Empty(t, mr.HGet(videoReferenceAssetKey(a), "body"), "视频内容不进入 Redis")
+	grant, err := assets.OpenAsset(context.Background(), a, http.MethodGet)
+	require.NoError(t, err)
+	require.Equal(t, service.VideoReferenceAssetGrant{Digest: a, UserID: 7, AssetID: "00000000-0000-4000-8000-000000000000", MIMEType: "video/mp4", Size: 1024}, *grant)
+	for i := 1; i < 64; i++ {
+		_, err = assets.OpenAsset(context.Background(), a, http.MethodHead)
+		require.NoError(t, err)
+	}
+	_, err = assets.OpenAsset(context.Background(), a, http.MethodGet)
+	require.ErrorIs(t, err, service.ErrVideoReferenceNotFound)
+	require.False(t, mr.Exists(videoReferenceAssetKey(a)))
+	// 图片读取入口不能读出视频票据。
+	_, err = store.Open(context.Background(), b, http.MethodGet)
+	require.ErrorIs(t, err, service.ErrVideoReferenceNotFound)
+	mr.FastForward(service.VideoReferenceTTL + time.Second)
+	_, err = assets.OpenAsset(context.Background(), b, http.MethodGet)
+	require.ErrorIs(t, err, service.ErrVideoReferenceNotFound)
+	// 每小时额度按字节和数量原子检查，超额时整批不签发。
+	big := videoReferenceAssetCacheBatch(8, 200<<20, strings.Repeat("e", 64))
+	big.HourlyMaxBytes = 300 << 20
+	require.NoError(t, assets.IssueAssetBatch(context.Background(), big))
+	over := videoReferenceAssetCacheBatch(8, 200<<20, strings.Repeat("f", 64))
+	over.HourlyMaxBytes = 300 << 20
+	require.ErrorIs(t, assets.IssueAssetBatch(context.Background(), over), service.ErrVideoReferenceQuota)
+	require.False(t, mr.Exists(videoReferenceAssetKey(strings.Repeat("f", 64))))
+	// 非法批次在写入前拒绝。
+	invalid := videoReferenceAssetCacheBatch(9, 10, strings.Repeat("1", 64))
+	invalid.Assets[0].MIMEType = "image/png"
+	require.ErrorIs(t, assets.IssueAssetBatch(context.Background(), invalid), service.ErrVideoReferenceInvalid)
+	invalid = videoReferenceAssetCacheBatch(9, 10, strings.Repeat("2", 64))
+	invalid.Assets[0].UserID = 10
+	require.ErrorIs(t, assets.IssueAssetBatch(context.Background(), invalid), service.ErrVideoReferenceInvalid)
+}

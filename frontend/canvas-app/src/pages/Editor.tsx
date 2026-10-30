@@ -46,6 +46,9 @@ const terminal=new Set(['succeeded','failed','result_lost']);
 const snapshot=(doc:CanvasDocument)=>structuredClone(doc);
 type Gesture={kind:'move'|'resize'|'select';x:number;y:number;start:CanvasDocument;ids:Set<string>;nodeId?:string;deferMoveHistory?:boolean;moved?:boolean};
 
+// 视频参考图角色：只有一张图且没有参考视频时作为首帧；多图或带参考视频时全部作为参考图，避免首帧与参考素材混用被协议拒绝。
+export function videoImageRole(images:number,videos:number):'first_frame'|'reference_image'{return images===1&&videos===0?'first_frame':'reference_image';}
+
 export function Editor(){
  const {id=''}=useParams();const canvasIdRef=useRef(id);canvasIdRef.current=id;const navigate=useNavigate();const cloud=useCloudDocument(id);const doc=cloud.document;
  const [models,setModels]=useState<Model[]>([]);const [assets,setAssets]=useState<Asset[]>([]);const [assetPage,setAssetPage]=useState(1);const [assetTotal,setAssetTotal]=useState(0);const [capabilities,setCapabilities]=useState<{max_asset_bytes?:number;max_prompt_chars?:number}>({});
@@ -215,15 +218,21 @@ export function Editor(){
     if(!prompt)throw new Error('请填写提示词或连接文本节点');
     const inputLimit=kind==='audio'?selectedModel.audio_capabilities?.max_input_chars:kind==='text'?selectedModel.text_capabilities?.max_input_chars:capabilities.max_prompt_chars;
     if(inputLimit&&Array.from(prompt).length>inputLimit)throw new Error(kind==='audio'?`朗读文本最多 ${inputLimit.toLocaleString()} 个字符（包含参考文本）`:'提示词超过服务器允许长度');
-    const videoCaps=selectedModel.video_capabilities as {durations:number[];resolutions:string[];aspect_ratios:string[];max_reference_images:number}|undefined;
+    const videoCaps=selectedModel.video_capabilities as {durations:number[];resolutions:string[];aspect_ratios:string[];max_reference_images:number;max_reference_videos?:number}|undefined;
     if((kind==='audio'||kind==='text')&&inputs.some(n=>['image','video','audio'].includes(n.type)))throw new Error(kind==='audio'?'语音生成只支持文本参考，请移除图片、视频或音频连线':'当前文本模型只支持文本参考，请移除图片、视频或音频引用');
     const maxReferences=kind==='video'?(videoCaps?.max_reference_images||0):selectedModel.max_reference_images;
     if(imageInputs.length>maxReferences)throw new Error(`当前模型最多支持 ${maxReferences} 张参考图`);
     if(imageInputs.some(n=>n.metadata?.expires_at&&Date.parse(n.metadata.expires_at)<=Date.now()))throw new Error('参考图已过期，请重新上传');
-    if(inputs.some(n=>['video','audio'].includes(n.type)&&n.metadata?.asset_id))throw new Error('当前开放模型不支持视频或音频参考素材');
+    // 参考视频数量来自服务端目录（协议能力与管理员配置的较小值）；音频参考尚无协议承载，图片生成也不接受视频。
+    const videoInputs=inputs.filter(n=>n.type==='video'&&n.metadata?.asset_id);
+    if(inputs.some(n=>n.type==='audio'&&n.metadata?.asset_id))throw new Error('创作台暂不支持音频参考素材，请移除音频连线');
+    if(videoInputs.length&&kind!=='video')throw new Error('图片生成不支持视频参考素材，请移除视频连线');
+    const maxVideos=kind==='video'?(videoCaps?.max_reference_videos||0):0;
+    if(videoInputs.length>maxVideos)throw new Error(maxVideos?`当前模型最多支持 ${maxVideos} 个参考视频`:'当前模型的协议不支持参考视频，请移除视频连线或换用支持参考视频的模型');
+    if(videoInputs.some(n=>n.metadata?.expires_at&&Date.parse(n.metadata.expires_at)<=Date.now()))throw new Error('参考视频已过期，请重新上传');
     const operation=mask?'inpaint':imageInputs.length&&kind==='image'?'edit':'generate';
     if(!selectedModel.operations.includes(operation))throw new Error('此模型未开放所需的生成能力');
-    const params:ExecuteParams={group_id:selectedModel.group_id,model:selectedModel.model,operation,prompt,references:imageInputs.map((n,index)=>({asset_id:n.metadata!.asset_id!,...(kind==='video'?{role:index===0?'first_frame':'reference'}:{})}))};
+    const params:ExecuteParams={group_id:selectedModel.group_id,model:selectedModel.model,operation,prompt,references:[...imageInputs.map(n=>({asset_id:n.metadata!.asset_id!,...(kind==='video'?{role:videoImageRole(imageInputs.length,videoInputs.length)}:{})})),...videoInputs.map(n=>({asset_id:n.metadata!.asset_id!,role:'reference_video'}))]};
     // 显示与提交统一按当前模型能力取值，导入或旧节点不能发送已停用的参数。
     const settings=resolveGenerationSettings(selectedModel,source.metadata,kind);
     if(kind==='image'){

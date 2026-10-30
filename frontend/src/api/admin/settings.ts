@@ -26,6 +26,14 @@ export interface CreativeVideoCapabilities {
   resolutions: string[];
   aspect_ratios: string[];
   max_reference_images: number;
+  /** 画布开放的参考视频数；0 表示不开放。生效值与协议上限取较小值。 */
+  max_reference_videos?: number;
+}
+
+/** 协议能表达的参考素材上限：模板协议来自模板能力，内置协议由服务端代码声明。 */
+export interface CreativeVideoReferenceLimit {
+  max_images: number;
+  max_videos: number;
 }
 
 /** 音频能力由服务端按上游协议提供，管理员无需手动维护声音列表。 */
@@ -67,6 +75,8 @@ export interface CreativeModelCandidate {
   video_endpoints?: string[];
   video_capabilities?: CreativeVideoCapabilities;
   audio_capabilities?: CreativeAudioCapabilities;
+  /** 各端点的协议参考素材上限，后台表单据此提示，不在前端写死。 */
+  video_reference_limits?: Record<string, CreativeVideoReferenceLimit>;
 }
 
 /** 创作台任务 worker 池状态快照。 */

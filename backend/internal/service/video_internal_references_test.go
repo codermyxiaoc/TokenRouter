@@ -19,6 +19,23 @@ type internalVideoReferenceStub struct {
 	userID int64
 	inputs []string
 	err    error
+	// 参考视频签发记录：只记录素材元数据，验证占位不会被当作内容发送。
+	assetCalls int
+	assets     []VideoReferenceAsset
+	assetErr   error
+}
+
+func (s *internalVideoReferenceStub) PrepareAssetURLs(_ context.Context, userID int64, assets []VideoReferenceAsset) ([]string, error) {
+	s.assetCalls++
+	s.userID, s.assets = userID, assets
+	if s.assetErr != nil {
+		return nil, s.assetErr
+	}
+	urls := make([]string, len(assets))
+	for i := range urls {
+		urls[i] = "https://canvas.example.com/api/v1/video-references/video-" + assets[i].AssetID
+	}
+	return urls, nil
 }
 
 func (s *internalVideoReferenceStub) PrepareDataURLs(_ context.Context, userID int64, inputs []string) ([]string, error) {

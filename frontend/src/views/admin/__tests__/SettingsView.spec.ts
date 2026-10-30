@@ -2560,7 +2560,8 @@ describe("admin SettingsView payment visible method controls", () => {
     expect((wrapper.get('input[placeholder="5, 10"]').element as HTMLInputElement).value).toBe('5');
     expect((wrapper.get('input[placeholder="720p, 1080p"]').element as HTMLInputElement).value).toBe('720p');
     expect((wrapper.get('input[placeholder="16:9, 9:16"]').element as HTMLInputElement).value).toBe('16:9');
-    expect(wrapper.get('[data-testid="creative-video-reference-limit"]').attributes('max')).toBe('1');
+    // Grok 候选没有协议素材上限时不显示提示，也不在前端臆测上限。
+    expect(wrapper.find('[data-testid="creative-video-reference-protocol-limit"]').exists()).toBe(false);
     await wrapper.find('form').trigger('submit');
     await flushPromises();
     expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
@@ -2845,6 +2846,7 @@ describe("admin SettingsView payment visible method controls", () => {
   it("keeps an explicit reference count above a newly selected endpoint limit and reports it", async () => {
     const video = { group_id: 3, model: 'minimax-h3-y', group_name: 'Video', platform: 'video', media_type: 'video', operations: ['generate'],
       video_endpoint: 'vidu', video_endpoints: ['vidu', 'openai_videos'],
+      video_reference_limits: { vidu: { max_images: 10, max_videos: 0 }, openai_videos: { max_images: 1, max_videos: 0 } },
       video_capabilities: { durations: [5], resolutions: ['720p'], aspect_ratios: ['16:9'], max_reference_images: 1 } };
     getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [] });
     getCreativeModelCandidates.mockResolvedValue([video]);
@@ -2854,7 +2856,7 @@ describe("admin SettingsView payment visible method controls", () => {
     await wrapper.get('[data-testid="creative-video-reference-limit"]').setValue('2');
     await wrapper.get('[data-testid="creative-video-endpoint"]').setValue('openai_videos');
     expect((wrapper.get('[data-testid="creative-video-reference-limit"]').element as HTMLInputElement).value).toBe('2');
-    expect(wrapper.get('[data-testid="creative-video-reference-limit"]').attributes('max')).toBe('1');
+    expect(wrapper.get('[data-testid="creative-video-reference-protocol-limit"]').text()).toContain('videoReferenceProtocolLimit');
     await wrapper.get('form').trigger('submit');
     await flushPromises();
     expect(updateSettings).not.toHaveBeenCalled();
@@ -2869,7 +2871,7 @@ describe("admin SettingsView payment visible method controls", () => {
     const video = { group_id: 3, model: 'minimax-h3-y', media_type: 'video', operations: ['generate'], video_endpoint: 'openai_videos',
       video_capabilities: { durations: [5], resolutions: ['720p'], aspect_ratios: ['16:9'], max_reference_images: 1 } };
     getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [video] });
-    getCreativeModelCandidates.mockResolvedValue([{ ...video, group_name: 'Video', platform: 'video', video_endpoints: ['openai_videos'] }]);
+    getCreativeModelCandidates.mockResolvedValue([{ ...video, group_name: 'Video', platform: 'video', video_endpoints: ['openai_videos'], video_reference_limits: { openai_videos: { max_images: 1, max_videos: 0 } } }]);
     const wrapper = mountView();
     await flushPromises();
     const input = wrapper.get(field === 'resolution' ? 'input[placeholder="720p, 1080p"]' : field === 'ratio' ? 'input[placeholder="16:9, 9:16"]' : '[data-testid="creative-video-reference-limit"]');
@@ -2879,6 +2881,28 @@ describe("admin SettingsView payment visible method controls", () => {
     await flushPromises();
     expect(updateSettings).not.toHaveBeenCalled();
     expect(showError).toHaveBeenCalledWith('admin.settings.features.creative.modelSettings.videoValidationError');
+    wrapper.unmount();
+  });
+
+  // 模板协议的素材上限来自服务端候选（如可美 MiniMax 模板的 9 图 3 视频），不再沿用写死的“其余端点 1 张”。
+  it("validates template protocol reference limits from the server candidate", async () => {
+    const caps = { durations: [5], resolutions: ['720p'], aspect_ratios: ['16:9'], max_reference_images: 1 };
+    const video = { group_id: 3, model: 'minimax-h3', media_type: 'video', operations: ['generate'], video_endpoint: 'unified', video_capabilities: caps };
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, creative_model_settings: [video] });
+    getCreativeModelCandidates.mockResolvedValue([{ ...video, group_name: 'Video', platform: 'video', video_endpoints: ['unified'], video_reference_limits: { unified: { max_images: 9, max_videos: 3 } } }]);
+    const wrapper = mountView();
+    await flushPromises();
+    expect(wrapper.get('[data-testid="creative-video-reference-protocol-limit"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="creative-video-reference-limit"]').setValue('9');
+    await wrapper.get('[data-testid="creative-video-reference-video-limit"]').setValue('4');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith('admin.settings.features.creative.modelSettings.videoValidationError');
+    await wrapper.get('[data-testid="creative-video-reference-video-limit"]').setValue('3');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ creative_model_settings: [{ ...video, video_capabilities: { ...caps, max_reference_images: 9, max_reference_videos: 3 } }] }));
     wrapper.unmount();
   });
 

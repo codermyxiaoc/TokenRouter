@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"image"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -100,4 +101,75 @@ func TestVideoReferenceHTTPContentAndSecurityHeaders(t *testing.T) {
 		require.Equal(t, tt.status, w.Code)
 		require.NotContains(t, w.Body.String(), "session")
 	}
+}
+
+// 参考视频票据的 HTTP 替身：存储只保存授权，素材源返回固定字节。
+type videoReferenceHTTPAssetStore struct {
+	videoReferenceHTTPStore
+	grants map[string]service.VideoReferenceAssetGrant
+	reads  int
+}
+
+func (s *videoReferenceHTTPAssetStore) IssueAssetBatch(_ context.Context, batch service.VideoReferenceAssetBatch) error {
+	for _, grant := range batch.Assets {
+		s.grants[grant.Digest] = grant
+	}
+	return nil
+}
+func (s *videoReferenceHTTPAssetStore) OpenAsset(_ context.Context, digest, _ string) (*service.VideoReferenceAssetGrant, error) {
+	grant, ok := s.grants[digest]
+	if !ok {
+		return nil, service.ErrVideoReferenceNotFound
+	}
+	s.reads++
+	return &grant, nil
+}
+
+type videoReferenceHTTPAssetSource struct{ body []byte }
+type videoReferenceHTTPReader struct{ *bytes.Reader }
+
+func (videoReferenceHTTPReader) Close() error { return nil }
+func (s videoReferenceHTTPAssetSource) OpenVideoReferenceAsset(_ context.Context, userID int64, assetID string) (io.ReadSeekCloser, *service.CreativeCanvasAsset, error) {
+	return videoReferenceHTTPReader{bytes.NewReader(s.body)}, &service.CreativeCanvasAsset{ID: assetID, UserID: userID, MediaType: "video", MIMEType: "video/mp4", ByteSize: int64(len(s.body))}, nil
+}
+
+// 参考视频支持单段 Range 与 HEAD，每次请求消耗一次读取；多段 Range 拒绝；安全响应头与图片一致。
+func TestVideoReferenceHTTPAssetStreaming(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &videoReferenceHTTPAssetStore{videoReferenceHTTPStore: videoReferenceHTTPStore{blobs: map[string]service.VideoReferenceBlob{}}, grants: map[string]service.VideoReferenceAssetGrant{}}
+	svc := service.NewVideoReferenceService(store, service.NewSettingService(videoReferenceSettingStub{}, &config.Config{}))
+	body := []byte("0123456789abcdef")
+	svc.SetAssetSource(videoReferenceHTTPAssetSource{body: body})
+	urls, err := svc.PrepareAssetURLs(context.Background(), 7, []service.VideoReferenceAsset{{AssetID: "66666666-6666-4666-8666-666666666666", MIMEType: "video/mp4", Size: int64(len(body))}})
+	require.NoError(t, err)
+	u, err := url.Parse(urls[0])
+	require.NoError(t, err)
+	router := gin.New()
+	h := NewVideoReferenceHandler(svc)
+	router.GET("/api/v1/video-references/:ticket", h.Content)
+	router.HEAD("/api/v1/video-references/:ticket", h.Content)
+	request := func(method, rangeHeader string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, u.Path, nil)
+		if rangeHeader != "" {
+			r.Header.Set("Range", rangeHeader)
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, r)
+		return w
+	}
+	full := request(http.MethodGet, "")
+	require.Equal(t, http.StatusOK, full.Code)
+	require.Equal(t, body, full.Body.Bytes())
+	require.Equal(t, "video/mp4", full.Header().Get("Content-Type"))
+	require.Equal(t, "private, no-store", full.Header().Get("Cache-Control"))
+	require.Equal(t, "nosniff", full.Header().Get("X-Content-Type-Options"))
+	partial := request(http.MethodGet, "bytes=2-5")
+	require.Equal(t, http.StatusPartialContent, partial.Code)
+	require.Equal(t, "2345", partial.Body.String())
+	require.Equal(t, "bytes 2-5/16", partial.Header().Get("Content-Range"))
+	head := request(http.MethodHead, "")
+	require.Equal(t, http.StatusOK, head.Code)
+	require.Empty(t, head.Body.Bytes())
+	require.Equal(t, http.StatusNotFound, request(http.MethodGet, "bytes=0-1,4-5").Code)
+	require.Equal(t, 3, store.reads, "多段 Range 在消耗读取前拒绝")
 }

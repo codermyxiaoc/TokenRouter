@@ -5,6 +5,8 @@ export type Page<T> = {items:T[]; total:number; page:number; page_size:number};
 export type Asset = {id:string; canvas_id?:string; media_type:'image'|'video'|'audio'; mime_type:string; byte_size:number; expires_at:string; created_at:string};
 export type VideoCapabilities = {
   durations?:number[]; resolutions?:string[]; aspect_ratios?:string[]; max_reference_images?:number;
+  // 参考视频数量已由服务端取管理员配置与协议上限的较小值；省略或 0 表示该模型不接受参考视频。
+  max_reference_videos?:number;
   // 可选的本站单图提交限制；省略时不在浏览器猜测限制，仍由服务端校验。
   max_reference_image_bytes?:number;
   allow_custom_resolution?:boolean; allow_custom_aspect_ratio?:boolean;

@@ -124,6 +124,10 @@ func ProvideCreativeCanvasAssetStore() (CreativeCanvasAssetStore, error) {
 // 图片、视频执行器仅桥接原任务服务，后台独立恢复归档并定期回收过期文件。
 func ProvideCreativeCanvasService(repo CreativeCanvasRepository, store CreativeCanvasAssetStore, creative *CreativePublicService, video *CreativeVideoCanvasExecutor, gateway *GatewayService) *CreativeCanvasService {
 	svc := NewCreativeCanvasService(repo, store, creative)
+	// 参考视频票据读取时需要按素材重新校验归属并打开私有存储，由画布服务提供。
+	if video != nil && video.publisher != nil {
+		video.publisher.SetAssetSource(svc)
+	}
 	// 画布任务的图片结果在 provider 事实落库后先写入私有目录，避免 Redis TTL 期间进程停机导致成品丢失。
 	if creative != nil {
 		creative.CloudOutputSink = svc

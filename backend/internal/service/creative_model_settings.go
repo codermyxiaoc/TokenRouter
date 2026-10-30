@@ -33,6 +33,8 @@ type CreativeModelCandidate struct {
 	VideoEndpoint     VideoEndpoint              `json:"video_endpoint,omitempty"`
 	VideoCapabilities *CreativeVideoCapabilities `json:"video_capabilities,omitempty"`
 	AudioCapabilities *CreativeAudioCapabilities `json:"audio_capabilities,omitempty"`
+	// VideoReferenceLimits 是各端点协议能表达的参考素材上限，后台表单据此校验，不在前端写死。
+	VideoReferenceLimits map[VideoEndpoint]CreativeVideoReferenceLimit `json:"video_reference_limits,omitempty"`
 }
 
 // NormalizeCreativeModelSettingsForSave 按实际分组平台清理即将保存的能力白名单。

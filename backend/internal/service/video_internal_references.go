@@ -1,7 +1,9 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,12 +15,91 @@ import (
 // 只有已经完成身份、素材归属及格式校验的内部入口可以签发参考图。
 type videoReferencePublisher interface {
 	PrepareDataURLs(context.Context, int64, []string) ([]string, error)
+	// PrepareAssetURLs 为已校验归属的画布参考视频签发短期链接。
+	PrepareAssetURLs(context.Context, int64, []VideoReferenceAsset) ([]string, error)
 }
 
-// 保留原始画布正文作为幂等摘要；仅在实际选中只收公网素材的协议（Yezonghui 或 public_media 模板）时替换传输副本。
-// 同一次提交的选号、容量重选和安全换号共享一批链接，避免重复发布及刷新期限。
+// creativeVideoAssetURLPrefix 标记画布参考视频的内部占位链接；只有画布执行器的准备器能把它换成短期链接，
+// 任何残留或由外部请求提交的占位都会在发送上游前被拒绝。
+const creativeVideoAssetURLPrefix = "creative-asset://"
+
+func creativeVideoAssetURL(assetID string) string { return creativeVideoAssetURLPrefix + assetID }
+
+// 保留原始画布正文作为幂等摘要；参考视频的占位对任何目标都替换为短期链接，参考图仅在实际选中只收公网素材的
+// 协议（Yezonghui 或 public_media 模板）时替换传输副本。同一次提交的选号、容量重选和安全换号共享一批链接，
+// 避免重复发布及刷新期限。videos 必须是画布执行器已校验归属的素材，外部 API 请求不传。
 // @project-doc docs/interfaces/cloud_canvas.md#video_reference_delivery
-func newCreativeVideoReferencePreparer(publisher videoReferencePublisher, userID int64) func(context.Context, VideoUpstreamTarget, []byte) ([]byte, error) {
+func newCreativeVideoReferencePreparer(publisher videoReferencePublisher, userID int64, videos ...VideoReferenceAsset) func(context.Context, VideoUpstreamTarget, []byte) ([]byte, error) {
+	var mu sync.Mutex
+	var publishedVideos []string
+	prepareImages := newCreativeVideoImagePreparer(publisher, userID)
+	return func(ctx context.Context, target VideoUpstreamTarget, body []byte) ([]byte, error) {
+		placeholderBody, placeholders, err := replaceCreativeVideoAssetURLs(body, videos)
+		if err != nil {
+			return nil, err
+		}
+		out, err := prepareImages(ctx, target, placeholderBody)
+		if err != nil || len(videos) == 0 {
+			return out, err
+		}
+		// 先用占位链接完整校验协议参数，避免无效请求消耗参考视频签发额度。
+		if _, _, err = PrepareVideoProtocolRequest(out, "", target); err != nil {
+			return nil, err
+		}
+		if publisher == nil {
+			return nil, ErrVideoReferenceUnavailable
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if publishedVideos == nil {
+			if publishedVideos, err = publisher.PrepareAssetURLs(ctx, userID, videos); err != nil {
+				publishedVideos = nil
+				return nil, err
+			}
+		}
+		if len(publishedVideos) != len(videos) {
+			return nil, ErrVideoReferenceUnavailable
+		}
+		for i, placeholder := range placeholders {
+			out = bytes.ReplaceAll(out, placeholder, creativeVideoJSONString(publishedVideos[i]))
+		}
+		return out, nil
+	}
+}
+
+// replaceCreativeVideoAssetURLs 把每个参考视频占位按精确 JSON 字符串替换为校验用的公网样例链接。内置协议会把规范请求
+// 转换为厂商原生结构，因此不按字段路径查找，而是在整个正文中替换；某个视频未出现在正文中或仍有残留占位时拒绝。
+func replaceCreativeVideoAssetURLs(body []byte, videos []VideoReferenceAsset) ([]byte, [][]byte, error) {
+	if len(videos) == 0 {
+		if bytes.Contains(body, []byte(creativeVideoAssetURLPrefix)) {
+			return nil, nil, ErrVideoReferenceInvalid
+		}
+		return body, nil, nil
+	}
+	out := body
+	placeholders := make([][]byte, 0, len(videos))
+	for i, video := range videos {
+		token := creativeVideoJSONString(creativeVideoAssetURL(video.AssetID))
+		if !bytes.Contains(out, token) {
+			return nil, nil, ErrVideoReferenceInvalid
+		}
+		placeholder := creativeVideoJSONString("https://reference.example/video-" + strconv.Itoa(i) + ".mp4")
+		out = bytes.ReplaceAll(out, token, placeholder)
+		placeholders = append(placeholders, placeholder)
+	}
+	if bytes.Contains(out, []byte(creativeVideoAssetURLPrefix)) {
+		return nil, nil, ErrVideoReferenceInvalid
+	}
+	return out, placeholders, nil
+}
+
+func creativeVideoJSONString(value string) []byte {
+	encoded, _ := json.Marshal(value)
+	return encoded
+}
+
+// newCreativeVideoImagePreparer 只处理参考图：选中只收公网素材的协议时把 data URL 发布为短期链接。
+func newCreativeVideoImagePreparer(publisher videoReferencePublisher, userID int64) func(context.Context, VideoUpstreamTarget, []byte) ([]byte, error) {
 	var mu sync.Mutex
 	var published []string
 	return func(ctx context.Context, target VideoUpstreamTarget, body []byte) ([]byte, error) {

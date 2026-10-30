@@ -1363,3 +1363,64 @@ describe('画布 @ 引用、拖线新建与就地错误', () => {
     expect(currentNode().metadata?.generation_request).toBeTruthy();
   });
 });
+
+describe('视频参考素材按模型能力提交', () => {
+  const videoModel = (videos: number): Model => ({ ...model, model: 'minimax-h3', media_type: 'video', video_endpoint: 'unified', video_capabilities: { resolutions: ['768p'], durations: [6], aspect_ratios: ['16:9'], max_reference_images: 9, max_reference_videos: videos } });
+  const prepare = (images: number, videos: number, capability: number) => {
+    cloudState.document!.nodes = [{ ...structuredClone(imageNode), type: 'video', title: '当前视频', metadata: { prompt: '海边漫步', model: '7::minimax-h3', resolution: '768p', aspect_ratio: '16:9', seconds: '6' } }];
+    cloudState.document!.connections = [];
+    for (let index = 0; index < images + videos; index++) {
+      const video = index >= images;
+      const id = video ? `ref-video-${index}` : `ref-image-${index}`;
+      cloudState.document!.nodes.push({ ...structuredClone(imageNode), id, type: video ? 'video' : 'image', title: id, position: { x: -400, y: index * 300 }, metadata: { asset_id: `asset-${id}`, expires_at: '2099-10-25T00:00:00Z', status: 'success' } });
+      cloudState.document!.connections.push({ id: `edge-${id}`, fromNodeId: id, toNodeId: imageNode.id });
+    }
+    vi.mocked(listModels).mockResolvedValue([videoModel(capability)]);
+    vi.mocked(createExecution).mockImplementation(async (canvasId, nodeId) => ({ id: 'video-new', canvas_id: canvasId, node_id: nodeId, kind: 'video', status: 'queued', task_id: 'task', assets: [], created_at: '2026-10-18T00:00:00Z', updated_at: '2026-10-18T00:01:00Z' }));
+  };
+
+  // 协议支持参考视频时，视频以 reference_video 提交；带视频时图片统一作为参考图，避免与首帧混用被协议拒绝。
+  it('支持参考视频的模型按顺序提交图片与视频', async () => {
+    prepare(1, 2, 3);
+    await mount();
+    await click(button('生成视频'));
+    expect(createExecution).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createExecution).mock.calls[0][3].references).toEqual([
+      { asset_id: 'asset-ref-image-0', role: 'reference_image' },
+      { asset_id: 'asset-ref-video-1', role: 'reference_video' },
+      { asset_id: 'asset-ref-video-2', role: 'reference_video' },
+    ]);
+  });
+
+  // 多张参考图统一使用 reference_image，不再发送服务端不认识的 reference 角色。
+  it('多张参考图全部作为参考图，单张仍为首帧', async () => {
+    prepare(2, 0, 0);
+    await mount();
+    await click(button('生成视频'));
+    expect(vi.mocked(createExecution).mock.calls[0][3].references).toEqual([
+      { asset_id: 'asset-ref-image-0', role: 'reference_image' },
+      { asset_id: 'asset-ref-image-1', role: 'reference_image' },
+    ]);
+  });
+
+  // 协议不支持或超过上限时给出准确原因，不创建任务。
+  it('参考视频超出模型能力时在面板内说明原因且不提交', async () => {
+    prepare(0, 1, 0);
+    await mount();
+    await click(button('生成视频'));
+    expect(host.querySelector('.panel-error')?.textContent).toContain('当前模型的协议不支持参考视频');
+    expect(createExecution).not.toHaveBeenCalled();
+    act(() => root.unmount());
+    root = createRoot(host);
+    vi.clearAllMocks();
+    cloudState.flush.mockImplementation(async () => {});
+    vi.mocked(api).mockResolvedValue({ max_asset_bytes: 1_000_000, max_prompt_chars: 10_000 });
+    vi.mocked(listAssets).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50 });
+    vi.mocked(listExecutions).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
+    prepare(0, 3, 2);
+    await mount();
+    await click(button('生成视频'));
+    expect(host.querySelector('.panel-error')?.textContent).toContain('当前模型最多支持 2 个参考视频');
+    expect(createExecution).not.toHaveBeenCalled();
+  });
+});

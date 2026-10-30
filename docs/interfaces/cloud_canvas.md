@@ -73,6 +73,9 @@ Grok 视频复用受理、结算与账务核对状态，但没有独立 Video �
 
 `GET /api/v1/admin/settings/creative-model-candidates` 为符合条件的 Grok 分组返回视频候选，固定 `platform=grok`、`media_type=video`、`video_endpoint=grok` 和 `video_endpoints=[grok]`，默认 5 秒、720p、16:9、最多一张参考图。候选要求分组处于启用状态并开放媒体生成、存在已知具备媒体资格的可调度 OAuth/API Key 账号、映射后的最终模型明确属于 Grok 视频且价格可解析；账号/渠道模型限制、别名和定价歧义检查继续生效。候选扫描只读现有资格，不发起付费生成或上游资格探测。运行能力按 Grok 专用的 1–15 秒和三个固定分辨率派生，不把表单默认值当作上游能力保证，也不套用独立 Video 的自定义扩展。
 
+<a id="video_reference_limits"></a>
+参考素材数量由协议决定，不在前后端写死端点规则。候选接口为每个端点返回 `video_reference_limits`（`max_images`、`max_videos`）：内置协议按代码声明（Seedance、Vidu 最多 10 张参考图，其余 1 张，均不经画布发送参考视频）；`unified` 按全部可调度账号绑定的模板版本推导，多账号取最小值——请求体没有读取 `images`/`videos` 的规则时为 0，`image_roles` 限定且不含 `reference_image` 时只能发一张首帧，其余取 `capabilities.max_images`/`max_videos`，未声明时取规范请求上限 16；模板无法解析时按 0 处理。视频设置的 `max_reference_images`、`max_reference_videos` 是管理员额外上限：保存时内置端点受上述代码上限约束、`unified` 两项合计不超过 16，后台表单按候选上限阻止保存并提示；公开目录再取设置值与协议上限的较小值，因此模板收紧后已有设置自动收紧，无需重新保存。`max_reference_videos` 为 0 时省略，旧设置序列化不变。
+
 `grok` 只属于创作台 Grok 分组；保存时不能给 Grok 分组配置独立 Video 端点，也不能给独立 Video 分组配置 `grok`。该值不扩展独立 Video 账号的端点枚举。前端根据服务端 `media_type` 展示视频参数，不通过模型名称自行判定媒体类型。
 
 ## 前端交付
@@ -80,9 +83,11 @@ Grok 视频复用受理、结算与账务核对状态，但没有独立 Video �
 `/canvas-app/index.html` 是与 Vue 宿主同源的 React 子应用。宿主只向 iframe 发送当前用户的运行时 JWT，子应用不把令牌写入 localStorage、sessionStorage 或画布文档。父子窗口同时校验消息来源和消息发送方，登出、切换用户或组件卸载时清理内存会话和对象 URL。
 
 <a id="video_reference_delivery"></a>
+
+**参考视频票据。** 画布视频执行在正文中只写入内部占位 `creative-asset://<素材 ID>`，不内嵌视频字节，也不把票据写入正文或数据库；选定候选账号后，准备器先用样例链接按该账号协议完整校验，再签发并在整段正文中按精确字符串替换（内置协议转换后的厂商结构同样适用），残留占位或外部请求伪造的占位一律在发送前拒绝。同一次提交的重选候选复用同一批链接。`PrepareAssetURLs` 只接受执行器已校验归属的素材 ID、类型与大小（MP4/WebM，单个 ≤256 MiB，每批 ≤16 个），不接受 URL 或路径；Redis 只保存票据摘要到“用户 + 素材 + 类型 + 大小”的授权，不复制视频内容。有效期同为 2 小时，每个票据 GET/HEAD 共 64 次读取；每用户每自然小时最多 32 个、4 GiB，整批原子签发。读取时先扣减次数，再按签发用户重新校验素材仍为就绪、未过期的视频且类型、大小未变，然后从私有存储流式输出；支持单段 `Range`，多段 `Range` 与带 `Range` 的图片票据请求在消耗次数前拒绝。参考视频不读入执行内存，也不计入内嵌素材的 64 MiB 总量。
 ## 视频供应商的短期参考图交付
 
-仅要求公网 HTTP(S) 图片链接的视频协议可在原有素材归属校验后，通过 `VideoReferenceService` 将图片内容转换成单图短期能力票据。管理员测试也复用此服务；普通视频方案继续沿用原有图片传递方式。该服务只接收调用方已获授权的 PNG、JPEG、WebP 数据，不接受文件路径、资产 ID 或远程 URL，不下载任意目标，也不改变私有原图或桶权限。
+仅要求公网 HTTP(S) 图片链接的视频协议可在原有素材归属校验后，通过 `VideoReferenceService` 将图片内容转换成单图短期能力票据；画布参考视频另有按素材签发的视频票据，见下文。管理员测试也复用此服务；普通视频方案继续沿用原有图片传递方式。该服务只接收调用方已获授权的 PNG、JPEG、WebP 数据，不接受文件路径、资产 ID 或远程 URL，不下载任意目标，也不改变私有原图或桶权限。
 
 票据读取路径为 `GET /api/v1/video-references/{ticket}` 和 `HEAD /api/v1/video-references/{ticket}`。没有对浏览器开放的票据签发、列表或批量读取接口。随机 256 位票据只授权对应图片，Redis 键只保存票据摘要；URL 不携带面板 JWT、用户 API Key 或供应商凭据。所有内容响应禁止缓存，并设置 `nosniff`、`no-referrer` 和隔离 CSP。
 

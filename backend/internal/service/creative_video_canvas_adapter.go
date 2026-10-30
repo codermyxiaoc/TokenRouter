@@ -54,8 +54,15 @@ func creativeVideoCanvasAdaptiveRatio(e *CreativeCanvasExecution, model *Creativ
 	if e.Params.AspectRatio != "adaptive" {
 		return "", nil
 	}
-	if len(assets) > 0 {
-		asset := assets[0]
+	// 自动比例按第一张参考图的方向换算；参考视频不解码，只有视频时按默认比例处理。
+	images := make([]CreativeCanvasInputAsset, 0, len(assets))
+	for _, asset := range assets {
+		if asset.Role != VideoMediaRoleReferenceVideo {
+			images = append(images, asset)
+		}
+	}
+	if len(images) > 0 {
+		asset := images[0]
 		if asset.Asset == nil {
 			return "", ErrCanvasInvalid
 		}

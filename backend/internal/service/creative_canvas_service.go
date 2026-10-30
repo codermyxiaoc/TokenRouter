@@ -602,6 +602,14 @@ func (s *CreativeCanvasService) loadInputs(ctx context.Context, e *CreativeCanva
 		if a.Status != "ready" || !s.now().Before(a.ExpiresAt) {
 			return nil, ErrCanvasExpired
 		}
+		// 参考视频经短期链接由上游自行读取，不读入内存也不计入内嵌素材总量；只核对归属、就绪与有效期。
+		if a.MediaType == "video" && ref.Role == VideoMediaRoleReferenceVideo {
+			if a.ByteSize < 1 || a.ByteSize > VideoReferenceAssetMaxBytes {
+				return nil, ErrCreativeAssetTooLarge
+			}
+			out = append(out, CreativeCanvasInputAsset{Asset: a, Role: ref.Role})
+			continue
+		}
 		if a.ByteSize > CreativeCanvasUploadLimit-total {
 			return nil, ErrCanvasQuota
 		}
@@ -843,4 +851,24 @@ func (s *CreativeCanvasService) CreativeOutputDelivered(ctx context.Context, run
 	}
 	_ = reader.Close()
 	return true, true, nil
+}
+
+// OpenVideoReferenceAsset 供参考视频票据读取：只按签发时的用户查找素材，要求是已就绪、未过期的视频，
+// 不接受其它用户或图片素材；不更新素材状态，也不延长有效期。
+func (s *CreativeCanvasService) OpenVideoReferenceAsset(ctx context.Context, userID int64, assetID string) (io.ReadSeekCloser, *CreativeCanvasAsset, error) {
+	if s == nil || s.repo == nil || s.store == nil || userID <= 0 || !validCanvasID(assetID) {
+		return nil, nil, ErrCanvasNotFound
+	}
+	asset, err := s.repo.GetAsset(ctx, userID, assetID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if asset == nil || asset.UserID != userID || asset.MediaType != "video" || asset.Status != "ready" || !s.now().Before(asset.ExpiresAt) {
+		return nil, nil, ErrCanvasNotFound
+	}
+	reader, err := s.store.Open(ctx, asset.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return reader, asset, nil
 }

@@ -172,3 +172,42 @@ func TestVideoHandlerRejectsConflictingModelAndKeepsUnknownAcceptanceError(t *te
 	require.Equal(t, "upstream unavailable", w.Body.String())
 	require.Equal(t, "local-unknown", w.Header().Get("X-Video-Task-ID"))
 }
+
+// 支持幂等重放的生命周期替身：已受理的键直接返回原任务。
+type videoReplayLifecycleFixture struct {
+	videoLifecycleFixture
+	replay  *service.VideoTaskResponse
+	replays int
+}
+
+func (f *videoReplayLifecycleFixture) ReplayIdempotent(_ context.Context, _ *service.APIKey, request service.VideoTaskSubmitRequest) (*service.VideoTaskResponse, bool, error) {
+	f.replays++
+	f.request = request
+	return f.replay, f.replay != nil, nil
+}
+
+// 余额已用尽时，同一幂等键的重放返回原任务而不创建新任务；不是重放时按原规则返回 403。
+func TestVideoHandlerIdempotentReplayBypassesDeferredBalanceCheck(t *testing.T) {
+	body := `{"model":"video-model","prompt":"x"}`
+	existing := &service.VideoTaskResponse{StatusCode: 200, Body: []byte(`{"id":"vid_existing"}`), LocalTaskID: "vid_existing"}
+	f := &videoReplayLifecycleFixture{replay: existing}
+	c, w := videoHandlerContext(http.MethodPost, "/v1/videos", body, service.PlatformVideo)
+	c.Request.Header.Set("Idempotency-Key", "retry-1")
+	c.Set(middleware.ContextKeyVideoBalanceDeferred, true)
+	NewVideoHandler(f).Handle(c)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Equal(t, `{"id":"vid_existing"}`, w.Body.String())
+	require.Equal(t, "vid_existing", w.Header().Get("X-Video-Task-ID"))
+	require.Equal(t, 1, f.replays)
+	require.Zero(t, f.creates)
+	require.Equal(t, "retry-1", f.request.IdempotencyKey)
+
+	f = &videoReplayLifecycleFixture{}
+	c, w = videoHandlerContext(http.MethodPost, "/v1/videos", body, service.PlatformVideo)
+	c.Request.Header.Set("Idempotency-Key", "new-request")
+	c.Set(middleware.ContextKeyVideoBalanceDeferred, true)
+	NewVideoHandler(f).Handle(c)
+	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Contains(t, w.Body.String(), "INSUFFICIENT_BALANCE")
+	require.Zero(t, f.creates, "新请求不能绕过余额检查创建任务")
+}

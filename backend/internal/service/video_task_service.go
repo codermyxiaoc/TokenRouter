@@ -133,6 +133,37 @@ func videoCredentialNumber(account *Account, name string) float64 {
 	return number
 }
 
+// ReplayIdempotent 只查询同一 Key 下已受理的幂等任务，不选号、不预扣、不访问上游。找到且正文一致时返回原任务响应；
+// 正文或归属不一致返回冲突；没有记录时 found=false，由调用方继续正常创建。余额已用尽时，同一请求的重放
+// 也能取回原任务，而不是被创建前的余额检查拒绝。
+// @project-doc docs/domains/video_tasks.md#video_idempotent_replay
+func (s *VideoTaskService) ReplayIdempotent(ctx context.Context, key *APIKey, req VideoTaskSubmitRequest) (*VideoTaskResponse, bool, error) {
+	if key == nil || key.User == nil || key.Group == nil || key.Group.Platform != PlatformVideo || (s.cfg != nil && s.cfg.RunMode == config.RunModeSimple) || len(req.IdempotencyKey) > 128 {
+		return nil, false, nil
+	}
+	return s.replayIdempotent(ctx, key, req, videoPayloadHash(req))
+}
+
+func (s *VideoTaskService) replayIdempotent(ctx context.Context, key *APIKey, req VideoTaskSubmitRequest, hash string) (*VideoTaskResponse, bool, error) {
+	if req.IdempotencyKey == "" {
+		return nil, false, nil
+	}
+	old, err := s.repo.FindIdempotent(ctx, key.ID, req.IdempotencyKey)
+	if errors.Is(err, ErrVideoTaskNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if old.PayloadHash != hash || old.UserID != usageActorUserID(key, key.User) {
+		return nil, false, ErrVideoTaskConflict
+	}
+	if !videoStoredResponseMatchesTask(old) {
+		return nil, false, errVideoTaskResponseMismatch
+	}
+	return videoCreateProtocolResponse(old, req), true, nil
+}
+
 func (s *VideoTaskService) Submit(ctx context.Context, key *APIKey, req VideoTaskSubmitRequest) (*VideoTaskResponse, error) {
 	if key == nil || key.User == nil || key.Group == nil || key.Group.Platform != PlatformVideo {
 		return nil, ErrVideoTaskNotFound
@@ -149,20 +180,8 @@ func (s *VideoTaskService) Submit(ctx context.Context, key *APIKey, req VideoTas
 	if req.Canonical != nil && req.canvasPrepareReferences == nil && s.references != nil {
 		req.canvasPrepareReferences = newCreativeVideoReferencePreparer(s.references, usageActorUserID(key, key.User))
 	}
-	if req.IdempotencyKey != "" {
-		old, err := s.repo.FindIdempotent(ctx, key.ID, req.IdempotencyKey)
-		if err == nil {
-			if old.PayloadHash != hash || old.UserID != usageActorUserID(key, key.User) {
-				return nil, ErrVideoTaskConflict
-			}
-			if !videoStoredResponseMatchesTask(old) {
-				return nil, errVideoTaskResponseMismatch
-			}
-			return videoCreateProtocolResponse(old, req), nil
-		}
-		if !errors.Is(err, ErrVideoTaskNotFound) {
-			return nil, err
-		}
+	if replay, found, err := s.replayIdempotent(ctx, key, req, hash); err != nil || found {
+		return replay, err
 	}
 	var task *VideoTaskRecord
 	var selection *VideoUpstreamSelection

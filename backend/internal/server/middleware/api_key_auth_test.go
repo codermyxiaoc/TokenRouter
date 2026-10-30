@@ -2404,3 +2404,41 @@ func (r *stubUserSubscriptionRepo) IncrementUsage(ctx context.Context, id int64,
 func (r *stubUserSubscriptionRepo) BatchUpdateExpiredStatus(ctx context.Context) (int64, error) {
 	return 0, errors.New("not implemented")
 }
+
+// 独立 Video 带幂等键的创建在余额为零时延后余额判断，交给处理器先查原任务；其它请求仍直接 403。
+func TestAPIKeyAuthDefersZeroBalanceForIdempotentVideoCreate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	user := &service.User{ID: 21, Role: service.RoleUser, Status: service.StatusActive, Balance: 0, Concurrency: 3}
+	groupID := int64(31)
+	group := &service.Group{ID: groupID, Platform: service.PlatformVideo, Status: service.StatusActive}
+	apiKey := &service.APIKey{ID: 121, UserID: user.ID, Key: "video-zero-balance", Status: service.StatusActive, User: user, GroupID: &groupID, Group: group}
+	apiKeyRepo := &stubApiKeyRepo{getByKey: func(ctx context.Context, key string) (*service.APIKey, error) {
+		if key != apiKey.Key {
+			return nil, service.ErrAPIKeyNotFound
+		}
+		clone, userClone, groupClone := *apiKey, *user, *group
+		clone.User, clone.Group = &userClone, &groupClone
+		return &clone, nil
+	}}
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	router := gin.New()
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg), nil, cfg)))
+	router.POST("/v1/videos", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"deferred": c.GetBool(ContextKeyVideoBalanceDeferred)}) })
+	send := func(idempotencyKey string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"video-model"}`))
+		req.Header.Set("x-api-key", apiKey.Key)
+		req.Header.Set("Content-Type", "application/json")
+		if idempotencyKey != "" {
+			req.Header.Set("Idempotency-Key", idempotencyKey)
+		}
+		router.ServeHTTP(w, req)
+		return w
+	}
+	w := send("retry-1")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.JSONEq(t, `{"deferred":true}`, w.Body.String())
+	w = send("")
+	require.Equal(t, http.StatusForbidden, w.Code)
+	requireAPIKeyAuthError(t, w, "INSUFFICIENT_BALANCE", "Insufficient account balance")
+}

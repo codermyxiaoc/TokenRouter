@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"io"
 	"mime"
 	"net/http"
@@ -13,6 +14,11 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
 )
+
+// videoIdempotentReplayer 由视频任务服务实现；测试替身未实现时直接走原有创建流程。
+type videoIdempotentReplayer interface {
+	ReplayIdempotent(ctx context.Context, key *service.APIKey, req service.VideoTaskSubmitRequest) (*service.VideoTaskResponse, bool, error)
+}
 
 // VideoHandler 仅处理原生HTTP边界；任务服务负责原子归属和资金状态。
 type VideoHandler struct {
@@ -96,20 +102,39 @@ func (h *VideoHandler) handle(c *gin.Context, legacy gin.HandlerFunc) {
 			writeVideoError(c, infraerrors.BadRequest("VIDEO_INVALID_REQUEST", "Unable to read video request"))
 			return
 		}
-		release, allowed := h.admitVideo(c, key, body, route.Model)
-		if !allowed {
-			return
+		// 带幂等键的重放先取回原任务，不再经过内容审核、并发和余额准入，也不会重复创建或扣费。
+		submitRequest := service.VideoTaskSubmitRequest{Body: body, ContentType: mediaType, InboundProtocol: route.Protocol, IdempotencyKey: c.GetHeader("Idempotency-Key")}
+		replayed := false
+		if replayer, ok := h.lifecycle.(videoIdempotentReplayer); ok && submitRequest.IdempotencyKey != "" {
+			replay, found, replayErr := replayer.ReplayIdempotent(c.Request.Context(), key, submitRequest)
+			if replayErr != nil {
+				writeVideoError(c, replayErr)
+				return
+			}
+			result, replayed = replay, found
 		}
-		if release != nil {
-			defer release()
+		if !replayed {
+			// 鉴权中间件延后的余额不足：不是重放时按原规则拒绝。
+			if c.GetBool(middleware.ContextKeyVideoBalanceDeferred) {
+				middleware.AbortWithError(c, http.StatusForbidden, "INSUFFICIENT_BALANCE", "Insufficient account balance")
+				return
+			}
+			release, allowed := h.admitVideo(c, key, body, route.Model)
+			if !allowed {
+				return
+			}
+			if release != nil {
+				defer release()
+			}
+			// 统一入口先严格解析规范请求；未知字段、别名冲突在选号与预扣前拒绝。
+			canonical, parseErr := service.ParseVideoCanonicalRequest(body)
+			if parseErr != nil {
+				writeVideoError(c, parseErr)
+				return
+			}
+			submitRequest.Canonical = canonical
+			result, err = h.lifecycle.Submit(c.Request.Context(), key, submitRequest)
 		}
-		// 统一入口先严格解析规范请求；未知字段、别名冲突在选号与预扣前拒绝。
-		canonical, parseErr := service.ParseVideoCanonicalRequest(body)
-		if parseErr != nil {
-			writeVideoError(c, parseErr)
-			return
-		}
-		result, err = h.lifecycle.Submit(c.Request.Context(), key, service.VideoTaskSubmitRequest{Body: body, ContentType: mediaType, InboundProtocol: route.Protocol, Canonical: canonical, IdempotencyKey: c.GetHeader("Idempotency-Key")})
 	} else {
 		id := route.TaskID
 		if route.Protocol == "kling" {

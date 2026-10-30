@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/service"
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -46,6 +47,22 @@ func isVideoTaskBillingBypassRequest(method, path string, key *service.APIKey) b
 	route, _ := service.MatchVideoGatewayRoute(method, path)
 	return route.Protocol != "openai_videos" || (key != nil &&
 		(key.IsComposite || key.SmartRouting || (key.Group != nil && key.Group.Platform == service.PlatformVideo)))
+}
+
+// ContextKeyVideoBalanceDeferred 标记余额不足检查已延后到视频处理器（仅限带幂等键的独立 Video 创建）。
+const ContextKeyVideoBalanceDeferred = "video_insufficient_balance_deferred"
+
+// isVideoIdempotentCreateRequest 识别独立 Video 统一入口带幂等键的创建请求。
+func isVideoIdempotentCreateRequest(c *gin.Context, key *service.APIKey) bool {
+	if c == nil || c.Request == nil || key == nil || key.IsComposite || key.SmartRouting || key.Group == nil || key.Group.Platform != service.PlatformVideo {
+		return false
+	}
+	idempotencyKey := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if idempotencyKey == "" || len(idempotencyKey) > 128 {
+		return false
+	}
+	route, ok := service.MatchVideoGatewayRoute(c.Request.Method, c.Request.URL.Path)
+	return ok && route.Create && route.Protocol == "openai_videos"
 }
 
 func videoRequestPathModel(request *http.Request) string {

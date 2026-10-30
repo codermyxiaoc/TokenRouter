@@ -308,8 +308,14 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			} else {
 				// auto 与 balance 可使用余额；指定订阅在上方已严格解析，绝不回退。
 				if apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
-					AbortWithError(c, 403, "INSUFFICIENT_BALANCE", "Insufficient account balance")
-					return
+					// 独立 Video 带幂等键的创建可能是对已受理任务的重放：交给处理器先查原任务，
+					// 没有原任务时处理器返回同样的 403，新任务不会因此绕过余额检查。
+					if isVideoIdempotentCreateRequest(c, apiKey) {
+						c.Set(ContextKeyVideoBalanceDeferred, true)
+					} else {
+						AbortWithError(c, 403, "INSUFFICIENT_BALANCE", "Insufficient account balance")
+						return
+					}
 				}
 			}
 		}

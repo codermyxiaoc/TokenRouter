@@ -140,7 +140,7 @@ func TestLockAndMergeAccountManagedExtraKeepsCatalogSnapshots(t *testing.T) {
 			t.Cleanup(func() { _ = db.Close() })
 			client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
 			t.Cleanup(func() { _ = client.Close() })
-			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("extra -> 'grok_observed_models'")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
+			mock.ExpectQuery(`(?s)` + regexp.QuoteMeta("SELECT") + `.*` + regexp.QuoteMeta("extra -> 'grok_observed_models'") + `.*` + regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WillReturnRows(sqlmock.NewRows([]string{"ollama_group_unchanged", "ollama_proxy_unchanged", "ollama_session", "ollama_auto", "ollama_snapshot", "probe_identity", "probe_enabled", "sync_enabled", "probe_snapshot", "rate", "grok_observed", "upstream_metadata"}).
 					AddRow(false, false, nil, nil, nil, true, nil, nil, nil, 1.0, tt.observed, tt.metadata))
 			account := &service.Account{

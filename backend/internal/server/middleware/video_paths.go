@@ -65,6 +65,28 @@ func isVideoIdempotentCreateRequest(c *gin.Context, key *service.APIKey) bool {
 	return ok && route.Create && route.Protocol == "openai_videos"
 }
 
+// ContextKeyAsyncImageBalanceDeferred 标记余额不足检查已延后到异步图片提交处理器（仅限带幂等键的提交）。
+const ContextKeyAsyncImageBalanceDeferred = "async_image_insufficient_balance_deferred"
+
+// isAsyncImageIdempotentSubmitRequest 识别 OpenAI/Grok 分组带幂等键的异步图片提交；
+// 复合 Key 与智能路由不在此列，后台重入网关时仍按原规则检查余额。
+func isAsyncImageIdempotentSubmitRequest(c *gin.Context, key *service.APIKey) bool {
+	if c == nil || c.Request == nil || c.Request.Method != http.MethodPost || key == nil || key.IsComposite || key.SmartRouting || key.Group == nil ||
+		(key.Group.Platform != service.PlatformOpenAI && key.Group.Platform != service.PlatformGrok) {
+		return false
+	}
+	idempotencyKey := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if idempotencyKey == "" || len(idempotencyKey) > service.ImageTaskIdempotencyMaxKeyLength {
+		return false
+	}
+	switch strings.TrimSuffix(c.Request.URL.Path, "/") {
+	case "/v1/images/generations/async", "/images/generations/async", "/v1/images/edits/async", "/images/edits/async":
+		return true
+	default:
+		return false
+	}
+}
+
 func videoRequestPathModel(request *http.Request) string {
 	if request == nil {
 		return ""

@@ -188,6 +188,11 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 			return
 		}
 	}
+	// 鉴权中间件延后的余额不足：不是重放时按原规则拒绝，新任务不能绕过余额检查。
+	if c.GetBool(middleware2.ContextKeyAsyncImageBalanceDeferred) {
+		middleware2.AbortWithError(c, http.StatusForbidden, "INSUFFICIENT_BALANCE", "Insufficient account balance")
+		return
+	}
 
 	uploader, enabled := h.tasks.ExecutionStorage()
 	if !enabled {

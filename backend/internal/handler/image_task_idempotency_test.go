@@ -155,3 +155,37 @@ func TestAsyncImagePayloadHashIgnoresMultipartBoundary(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, jsonEdit, jsonGenerate)
 }
+
+// 鉴权中间件延后余额检查时：同键重放仍取回原任务；没有原任务的新提交返回 403，不创建、不执行。
+func TestAsyncImageDeferredBalanceOnlyAllowsReplay(t *testing.T) {
+	store := &asyncImageIdempotentStore{asyncImageMemoryStore{tasks: map[string]*service.ImageTaskRecord{}}}
+	router, executions := newIdempotentAsyncImageRouter(t, store)
+	body := `{"model":"gpt-image-2","prompt":"cat"}`
+	first := submitAsyncImage(router, "retry-1", body)
+	require.Equal(t, http.StatusAccepted, first.Code)
+	require.Eventually(t, func() bool { return executions.Load() == 1 }, time.Second, 10*time.Millisecond)
+
+	deferred := gin.New()
+	tasks := service.NewImageTaskServiceWithUploader(store, nil, time.Hour, time.Minute)
+	h := NewAsyncImageHandler(tasks, nil)
+	h.SetGatewayExecutor(func(string, *gin.Context) { executions.Add(1) })
+	deferred.Use(middleware2.ClientRequestID(), h.CaptureRequest, func(c *gin.Context) {
+		groupID := int64(3)
+		c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{ID: 9, UserID: 7, GroupID: &groupID, Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI, AllowImageGeneration: true}})
+		c.Set(middleware2.ContextKeyAsyncImageBalanceDeferred, true)
+		c.Next()
+	})
+	deferred.POST("/v1/images/generations/async", h.Submit)
+
+	replay := submitAsyncImage(deferred, "retry-1", body)
+	require.Equal(t, http.StatusAccepted, replay.Code, replay.Body.String())
+	require.Equal(t, "true", replay.Header().Get("Idempotent-Replayed"))
+
+	before := len(store.tasks)
+	fresh := submitAsyncImage(deferred, "retry-2", body)
+	require.Equal(t, http.StatusForbidden, fresh.Code)
+	require.Contains(t, fresh.Body.String(), "INSUFFICIENT_BALANCE")
+	require.Len(t, store.tasks, before, "余额不足的新提交不能创建任务")
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, int32(1), executions.Load())
+}

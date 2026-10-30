@@ -310,8 +310,11 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 				if apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
 					// 独立 Video 带幂等键的创建可能是对已受理任务的重放：交给处理器先查原任务，
 					// 没有原任务时处理器返回同样的 403，新任务不会因此绕过余额检查。
+					// 异步图片提交同理：带幂等键的重试先由处理器取回原任务，没有原任务时同样返回 403。
 					if isVideoIdempotentCreateRequest(c, apiKey) {
 						c.Set(ContextKeyVideoBalanceDeferred, true)
+					} else if isAsyncImageIdempotentSubmitRequest(c, apiKey) {
+						c.Set(ContextKeyAsyncImageBalanceDeferred, true)
 					} else {
 						AbortWithError(c, 403, "INSUFFICIENT_BALANCE", "Insufficient account balance")
 						return

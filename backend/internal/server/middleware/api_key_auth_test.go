@@ -2442,3 +2442,52 @@ func TestAPIKeyAuthDefersZeroBalanceForIdempotentVideoCreate(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, w.Code)
 	requireAPIKeyAuthError(t, w, "INSUFFICIENT_BALANCE", "Insufficient account balance")
 }
+
+// 异步图片带幂等键的提交在余额为零时同样延后余额判断；同步图片、不带幂等键或复合 Key 仍直接 403。
+func TestAPIKeyAuthDefersZeroBalanceForIdempotentAsyncImageSubmit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	user := &service.User{ID: 22, Role: service.RoleUser, Status: service.StatusActive, Balance: 0, Concurrency: 3}
+	groupID := int64(32)
+	group := &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive, AllowImageGeneration: true}
+	apiKey := &service.APIKey{ID: 122, UserID: user.ID, Key: "image-zero-balance", Status: service.StatusActive, User: user, GroupID: &groupID, Group: group}
+	apiKeyRepo := &stubApiKeyRepo{getByKey: func(ctx context.Context, key string) (*service.APIKey, error) {
+		if key != apiKey.Key {
+			return nil, service.ErrAPIKeyNotFound
+		}
+		clone, userClone, groupClone := *apiKey, *user, *group
+		clone.User, clone.Group = &userClone, &groupClone
+		return &clone, nil
+	}}
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	router := gin.New()
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg), nil, cfg)))
+	handler := func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"deferred": c.GetBool(ContextKeyAsyncImageBalanceDeferred)})
+	}
+	for _, path := range []string{"/v1/images/generations/async", "/images/edits/async", "/v1/images/generations"} {
+		router.POST(path, handler)
+	}
+	send := func(path, idempotencyKey string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"gpt-image-2","prompt":"cat"}`))
+		req.Header.Set("x-api-key", apiKey.Key)
+		req.Header.Set("Content-Type", "application/json")
+		if idempotencyKey != "" {
+			req.Header.Set("Idempotency-Key", idempotencyKey)
+		}
+		router.ServeHTTP(w, req)
+		return w
+	}
+	for _, path := range []string{"/v1/images/generations/async", "/images/edits/async"} {
+		w := send(path, "retry-1")
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		require.JSONEq(t, `{"deferred":true}`, w.Body.String())
+	}
+	w := send("/v1/images/generations/async", "")
+	require.Equal(t, http.StatusForbidden, w.Code)
+	requireAPIKeyAuthError(t, w, "INSUFFICIENT_BALANCE", "Insufficient account balance")
+	w = send("/v1/images/generations", "retry-1")
+	require.Equal(t, http.StatusForbidden, w.Code, "同步图片不受影响")
+	w = send("/v1/images/generations/async", strings.Repeat("k", 129))
+	require.Equal(t, http.StatusForbidden, w.Code, "超长幂等键不延后")
+}

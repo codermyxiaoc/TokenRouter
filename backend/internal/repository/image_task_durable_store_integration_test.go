@@ -558,3 +558,31 @@ func TestDurableImageTaskIntegrationPendingDeliveryRecoveredByLedger(t *testing.
 		})
 	}
 }
+
+// 幂等键由唯一索引裁决：同键只能落一个任务，可按键取回；过期任务不再占用幂等键。
+func TestDurableImageTaskIntegrationIdempotencyKey(t *testing.T) {
+	s, task, _ := durableImageFixture(t)
+	ctx := context.Background()
+	task.IdempotencyKey, task.PayloadHash = "retry-"+t.Name(), "hash-a"
+	require.NoError(t, s.Save(ctx, task, 24*time.Hour))
+	found, err := s.FindIdempotent(ctx, task.APIKeyID, task.IdempotencyKey)
+	require.NoError(t, err)
+	require.Equal(t, task.ID, found.ID)
+	require.Equal(t, "hash-a", found.PayloadHash)
+	duplicate := *task
+	duplicate.ID = task.ID + "_dup"
+	require.ErrorIs(t, s.Save(ctx, &duplicate, 24*time.Hour), service.ErrImageTaskDuplicate)
+	_, err = s.FindIdempotent(ctx, task.APIKeyID+1000, task.IdempotencyKey)
+	require.ErrorIs(t, err, service.ErrImageTaskNotFound, "幂等键按 API Key 隔离")
+	// 原任务过期后幂等键可被新任务复用。
+	_, err = integrationDB.ExecContext(ctx, `UPDATE image_tasks SET expires_at=$2 WHERE id=$1`, task.ID, time.Now().Add(-time.Minute).Unix())
+	require.NoError(t, err)
+	_, err = s.FindIdempotent(ctx, task.APIKeyID, task.IdempotencyKey)
+	require.ErrorIs(t, err, service.ErrImageTaskNotFound)
+	reused := *task
+	reused.ID, reused.PayloadHash = task.ID+"_new", "hash-b"
+	require.NoError(t, s.Save(ctx, &reused, 24*time.Hour))
+	found, err = s.FindIdempotent(ctx, task.APIKeyID, task.IdempotencyKey)
+	require.NoError(t, err)
+	require.Equal(t, reused.ID, found.ID)
+}

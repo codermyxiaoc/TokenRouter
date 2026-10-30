@@ -43,6 +43,26 @@ func NewDurableImageTaskStore(db *sql.DB, rdb *redis.Client) service.ImageTaskSt
 }
 
 var _ service.ImageTaskDurableStore = (*durableImageTaskStore)(nil)
+var _ service.ImageTaskIdempotentStore = (*durableImageTaskStore)(nil)
+
+// FindIdempotent 只查 PostgreSQL 中未过期的同键任务；幂等判定不能依赖可能丢失的缓存。
+func (s *durableImageTaskStore) FindIdempotent(ctx context.Context, apiKeyID int64, key string) (*service.ImageTaskRecord, error) {
+	if s.db == nil {
+		return nil, service.ErrImageTaskUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, imageTaskPrimaryBudget)
+	defer cancel()
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM image_tasks WHERE api_key_id=$1 AND idempotency_key=$2 AND expires_at>$3`, apiKeyID, key, time.Now().Unix()).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrImageTaskNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	// 经 Get 读取，缓存中更新的终态同样能被取回。
+	return s.Get(ctx, id)
+}
 
 // Save 首次受理必须落 PostgreSQL；终态与列表同事务，缓存故障不会丢掉数据库结果。
 func (s *durableImageTaskStore) Save(ctx context.Context, task *service.ImageTaskRecord, ttl time.Duration) error {
@@ -409,10 +429,21 @@ func (s *durableImageTaskStore) savePostgres(ctx context.Context, next *service.
 	if err != nil {
 		return nil, err
 	}
+	if next.IdempotencyKey != "" {
+		// 已过期的同键任务不再占用幂等键（结果仍按原规则清理），新的请求才能复用该键。
+		if _, err = tx.ExecContext(ctx, `UPDATE image_tasks SET idempotency_key=NULL WHERE api_key_id=$1 AND idempotency_key=$2 AND expires_at<=$3 AND id<>$4`,
+			next.APIKeyID, next.IdempotencyKey, now.Unix(), next.ID); err != nil {
+			return nil, err
+		}
+	}
 	// INSERT 先占据唯一 ID，后续并发写通过行锁串行决定状态；不依赖应用进程锁。
-	_, err = tx.ExecContext(ctx, `INSERT INTO image_tasks(id,user_id,api_key_id,status,execution_id,lease_expires_at,execution_deadline,expires_at,record)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO NOTHING`, next.ID, next.UserID, next.APIKeyID, next.Status, next.ExecutionID, next.LeaseExpiresAt, next.ExecutionDeadline, next.ExpiresAt, raw)
+	// 幂等键由唯一索引裁决，并发的同键请求只有一个能写入，落败方返回 ErrImageTaskDuplicate。
+	_, err = tx.ExecContext(ctx, `INSERT INTO image_tasks(id,user_id,api_key_id,status,execution_id,lease_expires_at,execution_deadline,expires_at,record,idempotency_key)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')) ON CONFLICT(id) DO NOTHING`, next.ID, next.UserID, next.APIKeyID, next.Status, next.ExecutionID, next.LeaseExpiresAt, next.ExecutionDeadline, next.ExpiresAt, raw, next.IdempotencyKey)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, service.ErrImageTaskDuplicate
+		}
 		return nil, err
 	}
 	if err = tx.QueryRowContext(ctx, `SELECT record FROM image_tasks WHERE id=$1 FOR UPDATE`, next.ID).Scan(&raw); err != nil {

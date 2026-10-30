@@ -35,7 +35,14 @@ var (
 	ErrImageTaskNotFound    = infraerrors.New(http.StatusNotFound, "IMAGE_TASK_NOT_FOUND", "image task not found")
 	ErrImageTaskForbidden   = infraerrors.New(http.StatusForbidden, "IMAGE_TASK_FORBIDDEN", "image task does not belong to this API key")
 	ErrImageTaskUnavailable = infraerrors.New(http.StatusServiceUnavailable, "IMAGE_TASK_UNAVAILABLE", "image task storage is unavailable")
+	// ErrImageTaskIdempotencyConflict 表示同一幂等键已用于内容不同的请求。
+	ErrImageTaskIdempotencyConflict = infraerrors.New(http.StatusConflict, "IMAGE_TASK_IDEMPOTENCY_CONFLICT", "Idempotency-Key was already used with a different image request")
+	// ErrImageTaskDuplicate 是仓储在幂等键已被占用时返回的内部错误，服务据此改为取回原任务。
+	ErrImageTaskDuplicate = errors.New("image task idempotency key already exists")
 )
+
+// ImageTaskIdempotencyMaxKeyLength 是幂等键的最大长度，与数据库列宽一致。
+const ImageTaskIdempotencyMaxKeyLength = 128
 
 type ImageTaskRecord struct {
 	ID          string          `json:"id"`
@@ -58,6 +65,20 @@ type ImageTaskRecord struct {
 	PendingResult     json.RawMessage `json:"pending_result,omitempty"`
 	PendingHTTPStatus int             `json:"pending_http_status,omitempty"`
 	BillingRequestID  string          `json:"billing_request_id,omitempty"`
+	// IdempotencyKey 与 PayloadHash 记录创建时的幂等键和请求指纹，只用于重放判定，不对外返回。
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	PayloadHash    string `json:"payload_hash,omitempty"`
+}
+
+// ImageTaskIdempotency 是一次带幂等键的创建：Key 来自 Idempotency-Key，PayloadHash 是接口与请求内容的指纹。
+type ImageTaskIdempotency struct {
+	Key         string
+	PayloadHash string
+}
+
+// ImageTaskIdempotentStore 按 API Key 与幂等键查询未过期任务；没有时返回 ErrImageTaskNotFound。
+type ImageTaskIdempotentStore interface {
+	FindIdempotent(ctx context.Context, apiKeyID int64, key string) (*ImageTaskRecord, error)
 }
 
 type ImageTask struct {
@@ -199,8 +220,64 @@ func (s *ImageTaskService) Create(ctx context.Context, owner ImageTaskOwner) (*I
 	return s.CreateObserved(ctx, owner, nil)
 }
 
+// SupportsIdempotency 表示任务仓储能按幂等键查询；不支持时调用方必须拒绝带幂等键的请求，不能静默忽略。
+func (s *ImageTaskService) SupportsIdempotency() bool {
+	if s == nil || s.store == nil {
+		return false
+	}
+	_, ok := s.store.(ImageTaskIdempotentStore)
+	return ok
+}
+
+// ReplayIdempotent 只查询同一 Key 下的原任务，不创建、不生成、不扣费。找到且指纹一致返回原任务；
+// 指纹或归属不一致返回冲突；没有记录时 found=false。
+// @project-doc docs/domains/media_tasks.md#async_image_idempotency
+func (s *ImageTaskService) ReplayIdempotent(ctx context.Context, owner ImageTaskOwner, idem ImageTaskIdempotency) (*ImageTask, bool, error) {
+	if s == nil || s.store == nil {
+		return nil, false, ErrImageTaskUnavailable
+	}
+	store, ok := s.store.(ImageTaskIdempotentStore)
+	if !ok {
+		return nil, false, ErrImageTaskUnavailable
+	}
+	if idem.Key == "" {
+		return nil, false, nil
+	}
+	task, err := store.FindIdempotent(ctx, owner.APIKeyID, idem.Key)
+	if errors.Is(err, ErrImageTaskNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, ErrImageTaskUnavailable.WithCause(err)
+	}
+	if task.UserID != owner.UserID || task.APIKeyID != owner.APIKeyID || task.PayloadHash != idem.PayloadHash {
+		return nil, false, ErrImageTaskIdempotencyConflict
+	}
+	return imageTaskToPublic(task), true, nil
+}
+
+// CreateObservedIdempotent 带幂等键创建任务；并发的同键请求由仓储唯一约束裁决，落败方取回胜出的任务（replayed=true）。
+func (s *ImageTaskService) CreateObservedIdempotent(ctx context.Context, owner ImageTaskOwner, observation *MediaTaskObservation, idem ImageTaskIdempotency) (*ImageTask, bool, error) {
+	task, err := s.createObserved(ctx, owner, observation, idem)
+	if !errors.Is(err, ErrImageTaskDuplicate) {
+		return task, false, err
+	}
+	replay, found, replayErr := s.ReplayIdempotent(ctx, owner, idem)
+	if replayErr != nil {
+		return nil, false, replayErr
+	}
+	if !found {
+		return nil, false, ErrImageTaskUnavailable
+	}
+	return replay, true, nil
+}
+
 // CreateObserved 在受理前持久化任务及列表快照，保证二者共用同一执行标识。
 func (s *ImageTaskService) CreateObserved(ctx context.Context, owner ImageTaskOwner, observation *MediaTaskObservation) (*ImageTask, error) {
+	return s.createObserved(ctx, owner, observation, ImageTaskIdempotency{})
+}
+
+func (s *ImageTaskService) createObserved(ctx context.Context, owner ImageTaskOwner, observation *MediaTaskObservation, idem ImageTaskIdempotency) (*ImageTask, error) {
 	if s == nil || s.store == nil {
 		return nil, ErrImageTaskUnavailable
 	}
@@ -216,6 +293,8 @@ func (s *ImageTaskService) CreateObserved(ctx context.Context, owner ImageTaskOw
 		LeaseExpiresAt: now.Add(imageTaskLeaseDuration).Unix(),
 		// 截止时间额外包含转存重试窗口，避免维护循环在“已生成、等待保存”期间误判中断。
 		ExecutionDeadline: now.Add(s.executionTimeout + 3*time.Minute + s.deliveryRetryWindow()).Unix(),
+		IdempotencyKey:    idem.Key,
+		PayloadHash:       idem.PayloadHash,
 	}
 	if observation != nil {
 		copy := *observation
@@ -227,6 +306,9 @@ func (s *ImageTaskService) CreateObserved(ctx context.Context, owner ImageTaskOw
 		task.Observation = &copy
 	}
 	if err := s.store.Save(ctx, task, s.ttl); err != nil {
+		if errors.Is(err, ErrImageTaskDuplicate) {
+			return nil, ErrImageTaskDuplicate
+		}
 		return nil, ErrImageTaskUnavailable.WithCause(err)
 	}
 	return imageTaskToPublic(task), nil

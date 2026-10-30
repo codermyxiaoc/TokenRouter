@@ -166,6 +166,28 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 		imageTaskJSONError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
+	// 带幂等键的重试先取回原任务：不探测存储、不创建任务，也不会重新生成或扣费。
+	owner := service.ImageTaskOwner{UserID: apiKey.UserID, APIKeyID: apiKey.ID}
+	idem, err := asyncImageIdempotency(c, body)
+	if err != nil {
+		imageTaskJSONError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	if idem.Key != "" {
+		if !h.tasks.SupportsIdempotency() {
+			imageTaskJSONError(c, http.StatusBadRequest, "invalid_request_error", "Idempotency-Key is not supported for async image tasks")
+			return
+		}
+		replay, found, replayErr := h.tasks.ReplayIdempotent(c.Request.Context(), owner, idem)
+		if replayErr != nil {
+			imageTaskError(c, replayErr)
+			return
+		}
+		if found {
+			writeImageTaskAccepted(c, replay, true)
+			return
+		}
+	}
 
 	uploader, enabled := h.tasks.ExecutionStorage()
 	if !enabled {
@@ -194,10 +216,22 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 			observation.Model = parsed.Model
 		}
 	}
-	task, err := h.tasks.CreateObserved(c.Request.Context(), service.ImageTaskOwner{UserID: apiKey.UserID, APIKeyID: apiKey.ID}, &observation)
+	var task *service.ImageTask
+	replayed := false
+	if idem.Key != "" {
+		task, replayed, err = h.tasks.CreateObservedIdempotent(c.Request.Context(), owner, &observation, idem)
+	} else {
+		task, err = h.tasks.CreateObserved(c.Request.Context(), owner, &observation)
+	}
 	if err != nil {
 		cancel()
 		imageTaskError(c, err)
+		return
+	}
+	if replayed {
+		// 并发的同键请求已由另一方受理，这里只返回原任务，不启动执行。
+		cancel()
+		writeImageTaskAccepted(c, task, true)
 		return
 	}
 	expiresAt := time.Unix(task.ExpiresAt, 0)
@@ -210,19 +244,7 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 			return
 		}
 	}
-	pollURL := imageTaskPollURL(c.Request.URL.Path, task.ID)
-	c.Header("Cache-Control", "no-store")
-	c.Header("Location", pollURL)
-	c.Header("Retry-After", "3")
-	c.JSON(http.StatusAccepted, gin.H{
-		"id":         task.ID,
-		"task_id":    task.TaskID,
-		"object":     task.Object,
-		"status":     task.Status,
-		"created_at": task.CreatedAt,
-		"expires_at": task.ExpiresAt,
-		"poll_url":   pollURL,
-	})
+	writeImageTaskAccepted(c, task, false)
 
 	started = true
 	go h.run(task.ID, platform, taskCtx, recorder, cancel, uploader, observation, release)
@@ -509,6 +531,26 @@ func asyncImageRequestStreams(contentType string, body []byte) bool {
 		Stream bool `json:"stream"`
 	}
 	return json.Unmarshal(body, &envelope) == nil && envelope.Stream
+}
+
+// writeImageTaskAccepted 返回受理响应；幂等重放返回原任务的当前状态，并以 Idempotent-Replayed 头标明。
+func writeImageTaskAccepted(c *gin.Context, task *service.ImageTask, replayed bool) {
+	pollURL := imageTaskPollURL(c.Request.URL.Path, task.ID)
+	c.Header("Cache-Control", "no-store")
+	c.Header("Location", pollURL)
+	c.Header("Retry-After", "3")
+	if replayed {
+		c.Header("Idempotent-Replayed", "true")
+	}
+	c.JSON(http.StatusAccepted, gin.H{
+		"id":         task.ID,
+		"task_id":    task.TaskID,
+		"object":     task.Object,
+		"status":     task.Status,
+		"created_at": task.CreatedAt,
+		"expires_at": task.ExpiresAt,
+		"poll_url":   pollURL,
+	})
 }
 
 func imageTaskPollURL(submitPath, taskID string) string {

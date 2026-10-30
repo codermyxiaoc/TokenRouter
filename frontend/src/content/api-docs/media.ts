@@ -43,6 +43,12 @@ const asyncNotes = [
   '查询请求遇到网络错误或临时服务错误时可按 Retry-After 和有界退避重试，但必须设置最大尝试次数或截止时间；不得恢复已失败、已完成、404 或已过期任务的定时查询。已持久化结果可跨重启查询，执行中的上游调用不能在重启后安全续跑。',
   '执行中断或结果转存失败时可能已产生上游用量，不应仅根据 failed 自动重试。轮询不会再次生成或收费。'
 ]
+// 只用于两个提交端点：幂等键让超时重试取回原任务，而不是重复生成和收费。
+const asyncSubmitNotes = [
+  ...asyncNotes,
+  '可选请求头 Idempotency-Key（最长 128 字符，按 API Key 隔离）：同一键且请求内容相同的重试返回原任务的 HTTP 202（响应头 Idempotent-Replayed: true），不会再次生成或收费；同一键用于不同内容返回 HTTP 409 IMAGE_TASK_IDEMPOTENCY_CONFLICT。生成与编辑接口分别判定；multipart 按字段与文件内容判定，不受 boundary 影响。幂等键随任务查询记录过期后可再次使用。'
+]
+const asyncIdempotencyError = { status: 409, code: 'IMAGE_TASK_IDEMPOTENCY_CONFLICT', description: '同一 Idempotency-Key 已用于内容不同的图片请求；换用新的幂等键或重放原请求。' }
 const batchID = parameter('id', 'string', true, 'Path：创建批量任务返回的 id；将示例 batch_example 替换为真实值，并使用创建任务的同一个站内 API Key。')
 const batchResponse = { id: 'batch_example', object: 'image.batch', task_name: '风景图片', status: 'queued', model: 'gemini-2.5-flash-image', provider: 'gemini_api', item_count: 1, success_count: 0, fail_count: 0, estimated_cost: 0.02, hold_amount: 0.024, actual_cost: null, created_at: 1790900000, submitted_at: 1790900000, settled_at: null }
 const batchErrors = [
@@ -112,13 +118,13 @@ export const mediaEndpoints: ApiDocEndpoint[] = [
     id: 'images-generate-async', category: 'images', title: '异步生成图片', summary: '立即返回图片任务 ID，再查询结果，避免长连接等待生成。',
     platforms: ['openai', 'grok'], method: 'POST', path: '/v1/images/generations/async', aliases: ['/images/generations/async'], auth: 'bearer', contentType: 'application/json',
     parameters: imageParameters, requestExample: json({ model: 'gpt-image-2', prompt: '一幅山间日出的水彩画', size: '1024x1024', n: 1 }),
-    responseStatus: 202, responseExample: json(imageTaskResponse), notes: asyncNotes, errors: [...imageErrors, { status: 503, code: 'image_task_busy', description: '异步待处理任务容量已满，按 Retry-After 提示稍后再提交。' }]
+    responseStatus: 202, responseExample: json(imageTaskResponse), notes: asyncSubmitNotes, errors: [...imageErrors, asyncIdempotencyError, { status: 503, code: 'image_task_busy', description: '异步待处理任务容量已满，按 Retry-After 提示稍后再提交。' }]
   },
   {
     id: 'images-edit-async', category: 'images', title: '异步编辑图片', summary: '将图片编辑放到后台执行，使用同一个 Key 查询任务。',
     platforms: ['openai', 'grok'], method: 'POST', path: '/v1/images/edits/async', aliases: ['/images/edits/async'], auth: 'bearer', contentType: 'application/json 或 multipart/form-data',
     parameters: editParameters, requestHeaders: { 'Content-Type': 'application/json' }, requestExample: json({ model: 'gpt-image-2', prompt: '将天空修改为星空', images: [{ image_url: 'https://images.example.com/input.png' }] }),
-    responseStatus: 202, responseExample: json(imageTaskResponse), notes: asyncNotes, errors: imageErrors
+    responseStatus: 202, responseExample: json(imageTaskResponse), notes: asyncSubmitNotes, errors: [...imageErrors, asyncIdempotencyError]
   },
   {
     id: 'images-task', category: 'images', title: '查询异步图片任务', summary: '查询处理状态、错误和最终图片结果。',

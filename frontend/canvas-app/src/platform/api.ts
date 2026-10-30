@@ -1,4 +1,5 @@
 import {getSession,getEpoch,getSessionSignal,tellParent,onSessionClear} from './session';
+import {normalizeCanvasRecord} from './node-geometry';
 import {blankDocument,type Asset,type CanvasRecord,type CanvasDocument,type Page,type Execution,type ExecutionBatch,type ExecuteParams,type GenerationKind,type Model} from './types';
 export class ApiError extends Error { constructor(public status:number, message:string, public code='') {super(message);} }
 const base = '/api/v1/creative';
@@ -23,9 +24,10 @@ export async function api<T>(path:string, init:RequestInit = {}, binary=false):P
   return (envelope.data === undefined ? envelope : envelope.data) as T;
 }
 export const listCanvases = (page=1) => api<Page<CanvasRecord>>(`/canvases?page=${page}&page_size=30`);
-export const getCanvas = (id:string) => api<CanvasRecord>(`/canvases/${encodeURIComponent(id)}`);
-export const createCanvas = (title:string, document:CanvasDocument=blankDocument()) => api<CanvasRecord>('/canvases',{method:'POST',body:JSON.stringify({title,document})});
-export const saveCanvas = (canvas:CanvasRecord, document:CanvasDocument, title=canvas.title) => api<CanvasRecord>(`/canvases/${encodeURIComponent(canvas.id)}`,{method:'PUT',body:JSON.stringify({title,document,revision:canvas.revision})});
+// 画布记录统一在载入时补齐节点坐标与尺寸，精简节点不会让编辑器崩溃。
+export const getCanvas = (id:string) => api<CanvasRecord>(`/canvases/${encodeURIComponent(id)}`).then(normalizeCanvasRecord);
+export const createCanvas = (title:string, document:CanvasDocument=blankDocument()) => api<CanvasRecord>('/canvases',{method:'POST',body:JSON.stringify({title,document})}).then(normalizeCanvasRecord);
+export const saveCanvas = (canvas:CanvasRecord, document:CanvasDocument, title=canvas.title) => api<CanvasRecord>(`/canvases/${encodeURIComponent(canvas.id)}`,{method:'PUT',body:JSON.stringify({title,document,revision:canvas.revision})}).then(normalizeCanvasRecord);
 export const deleteCanvas = async (id:string) => {const current=await getCanvas(id);return api<void>(`/canvases/${encodeURIComponent(id)}?revision=${current.revision}`,{method:'DELETE'});};
 export const listAssets = (canvasId:string,page=1) => api<Page<Asset>>(`/assets?canvas_id=${encodeURIComponent(canvasId)}&page=${page}&page_size=50`);
 export const assetMetadata = (id:string) => api<Asset>(`/assets/${encodeURIComponent(id)}`);

@@ -191,4 +191,15 @@ describe('公开网关文档契约', () => {
     expect(apiDocCurl(remove)).not.toContain('--data-raw')
     expect(remove.notes!.join(' ')).toContain('删除不退还')
   })
+
+  // 服务端据内置层级判断上级是否存在、是否超过两级和上级隐藏，两边的内置分类必须一致。
+  it('后端内置分类层级与前端目录一致', () => {
+    const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../backend/internal/service/api_docs.go'), 'utf8')
+    const block = source.match(/builtinAPIDocCategoryParents = map\[string\]string\{([\s\S]*?)\r?\n\}/)?.[1] ?? ''
+    const backend = Object.fromEntries([...block.matchAll(/"([a-z0-9-]+)":\s*"([a-z0-9-]*)"/g)].map(match => [match[1], match[2]]))
+    const frontend: Record<string, string> = { guides: '' }
+    for (const category of apiDocCategories) frontend[category.id] = ''
+    for (const protocol of apiDocVideoProtocols) frontend[`video-${protocol.id}`] = 'video'
+    expect(backend).toEqual(frontend)
+  })
 })

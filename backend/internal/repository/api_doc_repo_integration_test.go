@@ -236,6 +236,27 @@ func TestAPIDocTwoLevelCategories(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, builtin.ParentID)
 	require.True(t, builtin.Hidden)
+
+	// 上级必须真实存在且是一级分类：不存在的上级、内置二级分类作上级（第三级）都拒绝。
+	_, err = svc.SaveCategory(ctx, "ghost-child", service.APIDocCategoryInput{Custom: true, Title: apiDocText("x"), ParentID: apiDocText("no-such-parent")}, 1)
+	require.Error(t, err)
+	_, err = svc.SaveCategory(ctx, "third-level", service.APIDocCategoryInput{Custom: true, Title: apiDocText("x"), ParentID: apiDocText("video-grok")}, 1)
+	require.Error(t, err)
+	// 内置一级分类可作上级；内置分类的层级不能改挂。
+	_, err = svc.SaveCategory(ctx, "video-sora", service.APIDocCategoryInput{Custom: true, Title: apiDocText("Sora"), ParentID: apiDocText("video")}, 1)
+	require.NoError(t, err)
+	_, err = svc.SaveCategory(ctx, "video-grok", service.APIDocCategoryInput{ParentID: apiDocText("text")}, 1)
+	require.Error(t, err)
+
+	// 只隐藏内置一级分类“视频”时，没有叠加行的内置二级分类下的文档对访客同样不可直读。
+	_, err = svc.SaveDocument(ctx, "grok-guide", service.APIDocEntryInput{Custom: true, Title: apiDocText("Grok"), CategoryID: apiDocText("video-grok"), Markdown: apiDocText("# g")}, 1)
+	require.NoError(t, err)
+	_, err = svc.Document(ctx, "grok-guide", true)
+	require.NoError(t, err)
+	_, err = svc.SaveCategory(ctx, "video", service.APIDocCategoryInput{Hidden: true}, 1)
+	require.NoError(t, err)
+	_, err = svc.Document(ctx, "grok-guide", true)
+	require.ErrorIs(t, err, service.ErrAPIDocNotFound)
 }
 
 // 升级迁移：旧设置中的逐篇改写转为文档叠加行，损坏的旧值不阻断升级。

@@ -22,6 +22,25 @@ const (
 
 var apiDocIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
 
+// builtinAPIDocCategoryParents 是内置分类的固定层级（值为空表示一级分类），必须与前端
+// content/api-docs/catalog.ts 的内置分类一致（前端测试会核对）。内置分类没有叠加行时服务端也据此判断
+// 上级是否存在、是否超过两级，以及上级隐藏时二级分类是否随之隐藏。
+var builtinAPIDocCategoryParents = map[string]string{
+	"guides": "", "text": "", "models": "", "images": "", "video": "", "audio": "", "tools": "",
+	"video-openai": "video", "video-grok": "video",
+}
+
+// effectiveAPIDocParent 返回分类实际生效的上级：内置分类层级固定，自定义分类取叠加行的 parent_id。
+func effectiveAPIDocParent(id string, overlay *APIDocCategory) string {
+	if parent, builtin := builtinAPIDocCategoryParents[id]; builtin {
+		return parent
+	}
+	if overlay != nil && overlay.ParentID != nil {
+		return *overlay.ParentID
+	}
+	return ""
+}
+
 var (
 	ErrAPIDocNotFound = infraerrors.NotFound("API_DOC_NOT_FOUND", "API document not found")
 	// ErrAPIDocConflict 表示条目在编辑期间已被他人修改（或已存在），需重新载入后再保存。
@@ -194,16 +213,16 @@ func (s *APIDocService) categoryHidden(ctx context.Context, id string) (bool, er
 	for _, category := range catalog.Categories {
 		byID[category.ID] = category
 	}
-	category, ok := byID[id]
-	if !ok {
-		return false, nil
+	var overlay *APIDocCategory
+	if category, ok := byID[id]; ok {
+		if category.Hidden {
+			return true, nil
+		}
+		overlay = &category
 	}
-	if category.Hidden {
-		return true, nil
-	}
-	// 二级分类所属的一级分类被隐藏时，其下文档同样不公开。
-	if category.ParentID != nil {
-		if parent, ok := byID[*category.ParentID]; ok && parent.Hidden {
+	// 二级分类所属的一级分类被隐藏时，其下文档同样不公开；内置二级分类没有叠加行时按固定上级判断。
+	if parentID := effectiveAPIDocParent(id, overlay); parentID != "" {
+		if parent, ok := byID[parentID]; ok && parent.Hidden {
 			return true, nil
 		}
 	}
@@ -228,6 +247,13 @@ func (s *APIDocService) SaveCategory(ctx context.Context, id string, in APIDocCa
 	if in.ParentID != nil && *in.ParentID == "" {
 		in.ParentID = nil
 	}
+	// 内置分类层级固定：只能沿用内置上级（叠加行保存为空），不能改挂到其它分类。
+	if builtinParent, builtin := builtinAPIDocCategoryParents[id]; builtin {
+		if in.ParentID != nil && *in.ParentID != builtinParent {
+			return nil, apiDocInvalid("built-in category level cannot be changed")
+		}
+		in.ParentID = nil
+	}
 	if in.ParentID != nil {
 		if err := validateAPIDocID(*in.ParentID); err != nil {
 			return nil, apiDocInvalid("invalid parent category id")
@@ -240,13 +266,27 @@ func (s *APIDocService) SaveCategory(ctx context.Context, id string, in APIDocCa
 		if err != nil {
 			return nil, err
 		}
-		for _, category := range catalog.Categories {
-			if category.ID == *in.ParentID && category.ParentID != nil {
+		// 上级必须真实存在且是一级分类：内置一级分类，或叠加中未删除的自定义一级分类。
+		parentExists := false
+		if builtinParent, builtin := builtinAPIDocCategoryParents[*in.ParentID]; builtin {
+			if builtinParent != "" {
 				return nil, apiDocInvalid("categories support at most two levels")
+			}
+			parentExists = true
+		}
+		for _, category := range catalog.Categories {
+			if category.ID == *in.ParentID {
+				if effectiveAPIDocParent(category.ID, &category) != "" {
+					return nil, apiDocInvalid("categories support at most two levels")
+				}
+				parentExists = parentExists || category.Custom
 			}
 			if category.ParentID != nil && *category.ParentID == id {
 				return nil, apiDocInvalid("a category with sub-categories cannot become a sub-category")
 			}
+		}
+		if !parentExists {
+			return nil, apiDocInvalid("parent category does not exist")
 		}
 	}
 	in.Title = title

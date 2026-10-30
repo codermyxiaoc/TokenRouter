@@ -269,6 +269,10 @@ func (s *durableImageTaskStore) maintainTask(ctx context.Context, id string, now
 	if err != nil {
 		return err
 	}
+	// 已判为中断但仍保留待交付结果的任务：每轮复查账本，晚到的扣费一旦提交就补交结果。
+	if delivered, deliverErr := s.deliverLateCapturedResult(ctx, task, now); deliverErr != nil || delivered {
+		return deliverErr
+	}
 	if cached, cacheErr := s.getRedis(ctx, id); cacheErr == nil && sameImageTaskExecution(task, cached) && imageTaskTerminal(cached) {
 		stored, writeErr := s.savePostgres(ctx, cached, false, now)
 		if writeErr != nil {
@@ -484,7 +488,11 @@ func (s *durableImageTaskStore) savePostgres(ctx context.Context, next *service.
 				chosen.Result = nil
 				chosen.Error = json.RawMessage(`{"type":"execution_interrupted","message":"Image execution was interrupted; the upstream result is unknown and generation usage may already have been billed. The request was not replayed."}`)
 			}
-			chosen.PendingResult, chosen.PendingHTTPStatus = nil, 0
+			// 已扣费时结果已交付，清除副本；判为中断时保留待交付结果（不对外返回）：原执行者的扣费可能晚于本次判定才提交，
+			// 维护器后续复查账本，发现已扣费即可补交，不会出现“钱扣了、结果已被清掉”。
+			if charged {
+				chosen.PendingResult, chosen.PendingHTTPStatus = nil, 0
+			}
 		}
 	} else if imageTaskTerminal(current) && (!imageTaskInterrupted(current) || !imageTaskTerminal(next) || imageTaskInterrupted(next)) {
 		chosen = current
@@ -525,8 +533,43 @@ func (s *durableImageTaskStore) savePostgres(ctx context.Context, next *service.
 	return chosen, nil
 }
 
-// imageTaskChargeRecorded 在维护事务内只读核对扣费是否已提交（含归档去重记录），不执行任何资金动作。
-func imageTaskChargeRecorded(ctx context.Context, tx *sql.Tx, requestID string, apiKeyID int64) (bool, error) {
+// deliverLateCapturedResult 处理“判为中断后扣费才提交”的竞争：账本确认已扣费时，把保留的待交付结果写为完成。
+// 只读核对账本，不执行任何资金动作；写入经 savePostgres 的行锁裁决，真实中断允许被同一执行的成功结果纠正。
+func (s *durableImageTaskStore) deliverLateCapturedResult(ctx context.Context, task *service.ImageTaskRecord, now time.Time) (bool, error) {
+	if !imageTaskInterrupted(task) || len(task.PendingResult) == 0 || task.BillingRequestID == "" {
+		return false, nil
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, imageTaskPrimaryBudget)
+	charged, err := imageTaskChargeRecorded(checkCtx, s.db, task.BillingRequestID, task.APIKeyID)
+	cancel()
+	if err != nil || !charged {
+		return false, err
+	}
+	next := *task
+	completed := now.Unix()
+	next.Status, next.HTTPStatus = service.ImageTaskStatusCompleted, task.PendingHTTPStatus
+	if next.HTTPStatus == 0 {
+		next.HTTPStatus = http.StatusOK
+	}
+	next.Result, next.Error = task.PendingResult, nil
+	next.PendingResult, next.PendingHTTPStatus = nil, 0
+	next.CompletedAt = &completed
+	next.ExpiresAt = now.Add(imageTaskResultTTL).Unix()
+	stored, err := s.savePostgres(ctx, &next, false, now)
+	if err != nil {
+		return false, err
+	}
+	_, _ = s.mirror(ctx, stored, false)
+	return true, nil
+}
+
+// imageTaskChargeQuerier 同时匹配事务与连接池，判中断（行锁事务内）和晚到补交（事务外）共用同一查询。
+type imageTaskChargeQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// imageTaskChargeRecorded 只读核对扣费是否已提交（含归档去重记录），不执行任何资金动作。
+func imageTaskChargeRecorded(ctx context.Context, tx imageTaskChargeQuerier, requestID string, apiKeyID int64) (bool, error) {
 	var exists bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM usage_billing_dedup WHERE request_id=$1 AND api_key_id=$2)
  OR EXISTS (SELECT 1 FROM usage_billing_dedup_archive WHERE request_id=$1 AND api_key_id=$2)`, requestID, apiKeyID).Scan(&exists)

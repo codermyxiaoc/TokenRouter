@@ -541,9 +541,9 @@ func TestDurableImageTaskIntegrationPendingDeliveryRecoveredByLedger(t *testing.
 			require.NoError(t, recreated.Maintain(ctx, time.Now()))
 			got, err := recreated.Get(ctx, task.ID)
 			require.NoError(t, err)
-			require.Empty(t, got.PendingResult, "判定后不再保留待交付副本")
 			stored, projected := durableImageStatuses(t, task.ID)
 			if charged {
+				require.Empty(t, got.PendingResult, "已交付后不再保留待交付副本")
 				require.Equal(t, "completed", got.Status)
 				require.Equal(t, 200, got.HTTPStatus)
 				require.JSONEq(t, `{"data":[{"url":"https://images.example.test/pending.png"}]}`, string(got.Result))
@@ -555,8 +555,57 @@ func TestDurableImageTaskIntegrationPendingDeliveryRecoveredByLedger(t *testing.
 			require.Empty(t, got.Result, "未扣费不能交付结果")
 			require.Contains(t, string(got.Error), "execution_interrupted")
 			require.Equal(t, "failed", projected)
+			require.NotEmpty(t, got.PendingResult, "判为中断时保留待交付结果，供晚到的扣费补交")
 		})
 	}
+}
+
+// 晚到扣费竞争：维护器先按未扣费判为中断，原执行者随后扣费成功但终态未能写入、进程退出；
+// 后续维护轮次复查账本，补交保留的结果，缓存中的旧中断记录不能把它改回失败。
+func TestDurableImageTaskIntegrationLateCaptureAfterInterruption(t *testing.T) {
+	s, task, rdb := durableImageFixture(t)
+	ctx := context.Background()
+	requestID := "client:late-" + task.ID
+	task.LeaseExpiresAt = time.Now().Add(-time.Minute).Unix()
+	task.PendingResult = json.RawMessage(`{"data":[{"url":"https://images.example.test/late.png"}]}`)
+	task.PendingHTTPStatus, task.BillingRequestID = 200, requestID
+	require.NoError(t, s.Save(ctx, task, 24*time.Hour))
+
+	// 1. 扣费尚未提交：维护器判为中断，保留待交付结果，不对外返回结果。
+	require.NoError(t, s.Maintain(ctx, time.Now()))
+	got, err := s.Get(ctx, task.ID)
+	require.NoError(t, err)
+	require.Equal(t, "failed", got.Status)
+	require.Empty(t, got.Result)
+	require.NotEmpty(t, got.PendingResult)
+	// 再跑一轮维护，账本仍未扣费：保持中断，不误交付。
+	require.NoError(t, s.Maintain(ctx, time.Now()))
+	got, err = s.Get(ctx, task.ID)
+	require.NoError(t, err)
+	require.Equal(t, "failed", got.Status)
+
+	// 2. 原执行者的扣费晚到提交，随后进程退出、终态没写入。
+	_, err = integrationDB.ExecContext(ctx, `INSERT INTO usage_billing_dedup(request_id,api_key_id,request_fingerprint) VALUES($1,$2,'fp')`, requestID, task.APIKeyID)
+	require.NoError(t, err)
+
+	// 3. 重启后的新仓储实例在维护中补交结果。
+	recreated := NewDurableImageTaskStore(integrationDB, rdb).(service.ImageTaskDurableStore)
+	require.NoError(t, recreated.Maintain(ctx, time.Now()))
+	got, err = recreated.Get(ctx, task.ID)
+	require.NoError(t, err)
+	require.Equal(t, "completed", got.Status)
+	require.Equal(t, 200, got.HTTPStatus)
+	require.JSONEq(t, `{"data":[{"url":"https://images.example.test/late.png"}]}`, string(got.Result))
+	require.Empty(t, got.PendingResult)
+	stored, projected := durableImageStatuses(t, task.ID)
+	require.Equal(t, "completed", stored)
+	require.Equal(t, "completed", projected)
+
+	// 4. 后续维护与读取保持完成，不被缓存里的旧中断记录覆盖。
+	require.NoError(t, recreated.Maintain(ctx, time.Now()))
+	got, err = recreated.Get(ctx, task.ID)
+	require.NoError(t, err)
+	require.Equal(t, "completed", got.Status)
 }
 
 // 幂等键由唯一索引裁决：同键只能落一个任务，可按键取回；过期任务不再占用幂等键。

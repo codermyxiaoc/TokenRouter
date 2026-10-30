@@ -262,3 +262,22 @@ func TestVideoReferenceServiceAssetTickets(t *testing.T) {
 	_, err = svc.OpenAsset(context.Background(), "ABC", http.MethodGet)
 	require.ErrorIs(t, err, ErrVideoReferenceNotFound)
 }
+
+// 提示词恰好等于旧的固定样例链接时，第二阶段整段替换也不能把它改成签发链接；样例链接每次都带随机标记。
+func TestCreativeVideoReferencePreparerKeepsPromptMatchingSampleURL(t *testing.T) {
+	videoID := "55555555-5555-4555-8555-555555555555"
+	placeholder := creativeVideoAssetPlaceholder("exec-sample", videoID)
+	assets := []VideoReferenceAsset{{AssetID: videoID, MIMEType: "video/mp4", Size: 2048, Placeholder: placeholder}}
+	target := videoPresetTarget(t, "kemei-minimax", "m")
+	prompt := "https://reference.example/video-0.mp4"
+	body := []byte(`{"model":"m","prompt":"` + prompt + `","duration":6,"resolution":"768p","aspect_ratio":"16:9","videos":[{"url":"` + placeholder + `","role":"reference_video"}]}`)
+	out, err := newCreativeVideoReferencePreparer(&internalVideoReferenceStub{}, 5, assets...)(context.Background(), target, body)
+	require.NoError(t, err)
+	require.Equal(t, prompt, gjson.GetBytes(out, "prompt").String())
+	require.Contains(t, string(out), "https://canvas.example.com/api/v1/video-references/video-"+videoID)
+	_, first, err := replaceCreativeVideoAssetURLs(body, assets)
+	require.NoError(t, err)
+	_, second, err := replaceCreativeVideoAssetURLs(body, assets)
+	require.NoError(t, err)
+	require.NotEqual(t, first[0], second[0], "样例链接每次随机，外部无法预测")
+}

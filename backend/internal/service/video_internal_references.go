@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -81,6 +82,12 @@ func replaceCreativeVideoAssetURLs(body []byte, videos []VideoReferenceAsset) ([
 	if len(videos) == 0 {
 		return body, nil, nil
 	}
+	// 样例链接带每次随机的标记：第二阶段按整段正文替换为签发链接，提示词不可能恰好等于该样例而被误改。
+	var nonce [12]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, nil, ErrVideoReferenceUnavailable
+	}
+	sample := "https://reference.example/video-" + hex.EncodeToString(nonce[:]) + "-"
 	out := body
 	placeholders := make([][]byte, 0, len(videos))
 	for i, video := range videos {
@@ -91,7 +98,7 @@ func replaceCreativeVideoAssetURLs(body []byte, videos []VideoReferenceAsset) ([
 		if !bytes.Contains(out, token) {
 			return nil, nil, ErrVideoReferenceInvalid
 		}
-		placeholder := creativeVideoJSONString("https://reference.example/video-" + strconv.Itoa(i) + ".mp4")
+		placeholder := creativeVideoJSONString(sample + strconv.Itoa(i) + ".mp4")
 		out = bytes.ReplaceAll(out, token, placeholder)
 		placeholders = append(placeholders, placeholder)
 	}

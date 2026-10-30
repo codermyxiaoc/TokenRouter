@@ -143,11 +143,74 @@ func TestImageTaskSettleErrorChecksLedger(t *testing.T) {
 	})
 
 	t.Run("ledger_unknown", func(t *testing.T) {
-		got, delivered, err := run(t, &imageTaskChargeRecorderStub{err: errors.New("ledger down")})
+		// 账本无法确认时不判失败：任务保持 processing 并保留待交付结果，由维护器按账本补交或判为中断。
+		svc := NewImageTaskServiceWithOptions(&imageTaskMemoryStore{}, time.Hour, time.Minute)
+		svc.chargeRecorder = &imageTaskChargeRecorderStub{err: errors.New("ledger down")}
+		created, err := svc.Create(context.Background(), owner)
+		require.NoError(t, err)
+		delivered, err := svc.CompleteDeliveredWithBilling(context.Background(), created.ID, http.StatusOK, result, nil, "client:req", func(context.Context) error {
+			return errors.New("commit acknowledgement lost")
+		})
 		require.ErrorIs(t, err, ErrImageTaskBillingUnavailable)
 		require.False(t, delivered)
-		require.Equal(t, ImageTaskStatusFailed, got.Status)
-		require.NotContains(t, string(got.Error), "no charge was applied", "无法确认账本时不能断言未扣费")
-		require.Contains(t, string(got.Error), "could not be confirmed")
+		record, err := svc.store.Get(context.Background(), created.ID)
+		require.NoError(t, err)
+		require.Equal(t, ImageTaskStatusProcessing, record.Status)
+		require.JSONEq(t, string(result), string(record.PendingResult), "待交付结果必须保留供维护器补交")
+		require.Equal(t, "client:req", record.BillingRequestID)
+		public, err := svc.Get(context.Background(), owner, created.ID)
+		require.NoError(t, err)
+		require.Empty(t, public.ImageURL, "未确认扣费前不对外返回结果")
 	})
+
+	t.Run("ledger_unknown_without_staging", func(t *testing.T) {
+		// 没有扣费请求 ID（未落库待交付结果）时沿用旧流程：判失败，且不能断言未扣费。
+		svc := NewImageTaskServiceWithOptions(&imageTaskMemoryStore{}, time.Hour, time.Minute)
+		svc.chargeRecorder = &imageTaskChargeRecorderStub{err: errors.New("ledger down")}
+		created, err := svc.Create(context.Background(), owner)
+		require.NoError(t, err)
+		_, err = svc.CompleteDeliveredWithBilling(context.Background(), created.ID, http.StatusOK, result, nil, "", func(context.Context) error {
+			return errors.New("ledger unavailable")
+		})
+		require.ErrorIs(t, err, ErrImageTaskBillingUnavailable)
+		got, err := svc.Get(context.Background(), owner, created.ID)
+		require.NoError(t, err)
+		require.Equal(t, ImageTaskStatusFailed, got.Status)
+	})
+}
+
+// 滚动升级期间旧版本重写记录会丢掉请求指纹：指纹为空时按原任务重放，不误报 409；指纹不同仍判冲突。
+func TestImageTaskReplayToleratesMissingPayloadHash(t *testing.T) {
+	owner := ImageTaskOwner{UserID: 1, APIKeyID: 2}
+	store := &idempotentMemoryStore{}
+	svc := NewImageTaskServiceWithOptions(store, time.Hour, time.Minute)
+	task, _, err := svc.CreateObservedIdempotent(context.Background(), owner, nil, ImageTaskIdempotency{Key: "k", PayloadHash: "hash-a"})
+	require.NoError(t, err)
+	_, _, err = svc.ReplayIdempotent(context.Background(), owner, ImageTaskIdempotency{Key: "k", PayloadHash: "hash-b"})
+	require.ErrorIs(t, err, ErrImageTaskIdempotencyConflict)
+	record, err := store.Get(context.Background(), task.ID)
+	require.NoError(t, err)
+	record.PayloadHash = ""
+	require.NoError(t, store.Save(context.Background(), record, time.Hour))
+	replay, found, err := svc.ReplayIdempotent(context.Background(), owner, ImageTaskIdempotency{Key: "k", PayloadHash: "hash-a"})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, task.ID, replay.ID)
+	_, found, err = svc.ReplayIdempotent(context.Background(), ImageTaskOwner{UserID: 1, APIKeyID: 3}, ImageTaskIdempotency{Key: "k", PayloadHash: "hash-a"})
+	require.NoError(t, err)
+	require.False(t, found, "其它 Key 查不到该任务")
+}
+
+// idempotentMemoryStore 在内存存储上按 API Key 与幂等键查找任务。
+type idempotentMemoryStore struct {
+	imageTaskMemoryStore
+}
+
+func (s *idempotentMemoryStore) FindIdempotent(ctx context.Context, apiKeyID int64, key string) (*ImageTaskRecord, error) {
+	// 内存存储只保存一个任务，按 API Key 与幂等键比对即可。
+	task, err := s.imageTaskMemoryStore.Get(ctx, "")
+	if err == nil && task.APIKeyID == apiKeyID && task.IdempotencyKey == key {
+		return task, nil
+	}
+	return nil, ErrImageTaskNotFound
 }

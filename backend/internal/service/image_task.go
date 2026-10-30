@@ -250,7 +250,8 @@ func (s *ImageTaskService) ReplayIdempotent(ctx context.Context, owner ImageTask
 	if err != nil {
 		return nil, false, ErrImageTaskUnavailable.WithCause(err)
 	}
-	if task.UserID != owner.UserID || task.APIKeyID != owner.APIKeyID || task.PayloadHash != idem.PayloadHash {
+	// 滚动升级期间旧版本重写记录会丢掉指纹；指纹为空时该幂等键仍只属于这一个任务，按重放处理而不误报冲突。
+	if task.UserID != owner.UserID || task.APIKeyID != owner.APIKeyID || (task.PayloadHash != "" && task.PayloadHash != idem.PayloadHash) {
 		return nil, false, ErrImageTaskIdempotencyConflict
 	}
 	return imageTaskToPublic(task), true, nil
@@ -451,6 +452,12 @@ func (s *ImageTaskService) CompleteDeliveredWithBilling(ctx context.Context, id 
 			if charged {
 				logger.L().Warn("image_task.billing_settle_error_but_captured", zap.String("task_id", id))
 				return s.persistDeliveredResult(ctx, id, statusCode, result)
+			}
+			if checkErr != nil && billingRequestID != "" {
+				// 账本暂时无法确认且待交付结果已落库：不判失败，任务保持 processing，由租约到期后的维护器
+				// 按账本决定交付或中断。若此处判失败会清掉待交付结果，扣费已提交时用户将再也拿不到图片。
+				logger.L().Error("image_task.billing_settle_unconfirmed", zap.String("task_id", id), zap.Error(checkErr))
+				return false, ErrImageTaskBillingUnavailable
 			}
 			message := "image was generated but billing could not be completed; the result was not delivered and no charge was applied"
 			if checkErr != nil {

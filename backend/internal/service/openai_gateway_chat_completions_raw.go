@@ -178,6 +178,12 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if err != nil {
 		return nil, err
 	}
+	// OpenCode 转发 DeepSeek 时把 developer 角色改为 system，避免上游 422；其它账号与模型保持原样。
+	upstreamBody, err = normalizeOpenCodeDeepSeekDeveloperRoles(account, targetURL, upstreamBody)
+	if err != nil {
+		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
 	SetActualOpenAIUpstreamEndpoint(c, grokChatRawEndpoint)
 	customUA := account.GetOpenAIUserAgent()
 	if customUA == "" && account.IsGrokOAuth() {

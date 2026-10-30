@@ -137,6 +137,9 @@ Responses 转 Messages 按输出项和内容索引记录已发文本；done 只�
 
 仅 Responses 转 Chat 合并开头的 system/developer 指令，并把会话中途的 system/developer 转为原位置的 user，以适配 Chat 上游；保留其图片等多模态内容和工具顺序。这会改变该兼容路径的指令权重与缓存前缀，原生 Chat 请求不执行此规范化。Codex `agent_message` 的 input_text 和客户端携带的 encrypted_content 字符串作为正文保留，不执行解密或记录密文；任务边界清理旧 reasoning，避免跨轮附着。
 
+<a id="opencode_deepseek_roles"></a>
+原生 Chat 的唯一例外是 OpenCode 转发 DeepSeek：账号为 API Key 类型，且是 OpenCode 平台或目标地址为官方 HTTPS `opencode.ai`，映射后的出站模型（去掉 `opencode-go/` 等前缀）以 `deepseek` 开头时，选定账号与目标地址后把 `messages` 中的 `developer` 角色改为 `system`，避免 DeepSeek 返回 422。只改角色字段，不合并、不重排消息，也不降级为 user，未知字段与数字精度保留；没有 developer 时正文字节不变。改写只作用于本次出站正文，换号重试的其它账号仍收到原始 developer。同步自上游 Sub2API 18bfa4bf2/ba5b21879 的 OpenCode 分支；上游对 DeepSeek、Kimi、智谱平台及其官方域名的整体规范化未引入，这些通道和 OpenCode 的其它模型保持原样。
+
 Chat 转 Responses 保留 `developer` 角色；指定函数的 `tool_choice` 转为 Responses 顶层名称。旧版 `function_call` 与 `role=function` 按函数名和历史顺序配对成稳定、无冲突的调用 ID，未知调用结果继续按原函数名兼容。Responses 转 Chat 会保留拒绝正文和流式拒绝增量，非流式聚合也能从增量恢复；思考块始终带 `signature`，尚无签名时使用空字符串。所有缓冲 Anthropic 聚合器忽略负数内容块索引，避免异常上游帧导致进程崩溃。
 
 OpenAI OAuth 重放包含 `web_search_call` 的历史且没有声明搜索工具时，仅补充 `external_web_access=false` 的历史工具声明。普通 Responses 放在顶层 `tools`，Responses Lite 放入输入的 `additional_tools`，并保持末尾压缩触发项位置。原请求没有工具且选择为缺省、auto 或 none 时固定 `tool_choice=none`，保留调用方的禁用工具意图；已存在工具或强制选择不被覆盖。API Key、其它平台和旧 `/responses/compact` 报文不执行该修复。

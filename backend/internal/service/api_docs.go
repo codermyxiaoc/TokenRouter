@@ -30,6 +30,12 @@ var builtinAPIDocCategoryParents = map[string]string{
 	"video-openai": "video", "video-grok": "video",
 }
 
+// IsBuiltinAPIDocCategory 报告分类是否为内置分类：内置分类始终存在（删除只恢复默认），没有叠加行时也可作上级。
+func IsBuiltinAPIDocCategory(id string) bool {
+	_, ok := builtinAPIDocCategoryParents[id]
+	return ok
+}
+
 // effectiveAPIDocParent 返回分类实际生效的上级：内置分类层级固定，自定义分类取叠加行的 parent_id。
 func effectiveAPIDocParent(id string, overlay *APIDocCategory) string {
 	if parent, builtin := builtinAPIDocCategoryParents[id]; builtin {

@@ -138,12 +138,15 @@ func (r *apiDocRepository) SaveCategory(ctx context.Context, id string, in servi
 		// 锁内按最新数据复核：上级必须仍存在且自身没有上级，自身不能已有子分类（否则形成环或第三级）。
 		// 服务层按同一规则提前拒绝，这里防的是校验与写入之间被并发删除或改挂。
 		var parentMissing, invalid bool
-		if err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM api_doc_categories WHERE id=$1)`,
-			*in.ParentID).Scan(&parentMissing); err != nil {
-			return nil, err
-		}
-		if parentMissing {
-			return nil, service.ErrAPIDocCategoryHierarchy
+		// 内置分类始终存在（删除只恢复默认），可能没有叠加行；只有自定义上级需要按行确认仍存在。
+		if !service.IsBuiltinAPIDocCategory(*in.ParentID) {
+			if err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM api_doc_categories WHERE id=$1)`,
+				*in.ParentID).Scan(&parentMissing); err != nil {
+				return nil, err
+			}
+			if parentMissing {
+				return nil, service.ErrAPIDocCategoryHierarchy
+			}
 		}
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM api_doc_categories WHERE id=$1 AND parent_id IS NOT NULL)
  OR EXISTS(SELECT 1 FROM api_doc_categories WHERE parent_id=$2)`, *in.ParentID, id).Scan(&invalid); err != nil {

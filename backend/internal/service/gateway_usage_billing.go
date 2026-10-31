@@ -71,6 +71,25 @@ type usageLogBestEffortWriter interface {
 	CreateBestEffort(ctx context.Context, log *UsageLog) error
 }
 
+// usageLogSettlementRepairer 修复先前结算失败写入的零金额用量记录，只改金额与分配字段。
+type usageLogSettlementRepairer interface {
+	RepairUnsettledUsageLog(ctx context.Context, log *UsageLog) error
+}
+
+// repairUnsettledUsageLog 在扣费成功后修复同请求的零金额占位记录；仓储不支持时跳过。
+// 失败只记录日志：资金已正确结算，统计修复不能反过来让请求失败。
+func repairUnsettledUsageLog(ctx context.Context, repo UsageLogRepository, usageLog *UsageLog, logKey string) {
+	repairer, ok := repo.(usageLogSettlementRepairer)
+	if !ok || usageLog == nil || usageLog.ActualCost <= 0 {
+		return
+	}
+	repairCtx, cancel := detachedBillingContext(ctx)
+	defer cancel()
+	if err := repairer.RepairUnsettledUsageLog(repairCtx, usageLog); err != nil {
+		logger.LegacyPrintf(logKey, "Repair unsettled usage log failed: %v", err)
+	}
+}
+
 // PlatformFromAPIKey 从 APIKey 关联的 Group 推导 platform 名称。
 // apiKey 为 nil 或 Group 信息缺失时返回空串（调用方据此 short-circuit quota 累加）。
 // 导出供 handler 层调用。

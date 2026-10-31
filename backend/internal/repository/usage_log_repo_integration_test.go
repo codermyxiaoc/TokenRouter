@@ -1937,3 +1937,51 @@ func (s *UsageLogRepoSuite) TestListWithFilters_CombinedFilters() {
 	s.Require().Len(logs, 2)
 	s.Require().Equal(int64(2), page.Total)
 }
+
+// 异步图片首次扣费失败写入零金额占位，重试扣费成功后同请求记录被唯一键跳过：
+// 修复只更新零金额且无资金分配的占位行，正常记录不被改动，重复调用幂等。
+func TestUsageLogRepositoryRepairUnsettledUsageLog(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("usage-repair-%d@example.com", time.Now().UnixNano())})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-usage-repair-" + uuid.NewString(), Name: "k"})
+	account := mustCreateAccount(t, client, &service.Account{Name: "acc-usage-repair-" + uuid.NewString()})
+	newLog := func(requestID string, actual, balance float64) *service.UsageLog {
+		return &service.UsageLog{UserID: user.ID, APIKeyID: apiKey.ID, AccountID: account.ID, RequestID: requestID, Model: "gpt-image-2",
+			TotalCost: 0.01, ActualCost: actual, BalanceAmountUSD: balance, RateMultiplier: 1, ImageCount: 1, CreatedAt: time.Now().UTC()}
+	}
+	read := func(requestID string) (float64, float64) {
+		var actual, balance float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT actual_cost, balance_amount_usd FROM usage_logs WHERE request_id=$1 AND api_key_id=$2`, requestID, apiKey.ID).Scan(&actual, &balance))
+		return actual, balance
+	}
+
+	// 1. 首次结算失败写入零金额占位；重试成功的同请求记录因唯一键被跳过。
+	placeholder := "client:" + uuid.NewString()
+	_, err := repo.Create(ctx, newLog(placeholder, 0, 0))
+	require.NoError(t, err)
+	inserted, err := repo.Create(ctx, newLog(placeholder, 0.01, 0.01))
+	require.NoError(t, err)
+	require.False(t, inserted)
+	actual, _ := read(placeholder)
+	require.Zero(t, actual, "未修复前统计仍为 0")
+	// 修复后按账本实际分配更新，重复调用不变。
+	require.NoError(t, repo.RepairUnsettledUsageLog(ctx, newLog(placeholder, 0.01, 0.01)))
+	require.NoError(t, repo.RepairUnsettledUsageLog(ctx, newLog(placeholder, 0.01, 0.01)))
+	actual, balance := read(placeholder)
+	require.InDelta(t, 0.01, actual, 1e-9)
+	require.InDelta(t, 0.01, balance, 1e-9)
+
+	// 2. 已正常结算的记录不会被改写。
+	settled := "client:" + uuid.NewString()
+	_, err = repo.Create(ctx, newLog(settled, 0.02, 0.02))
+	require.NoError(t, err)
+	require.NoError(t, repo.RepairUnsettledUsageLog(ctx, newLog(settled, 0.05, 0.05)))
+	actual, _ = read(settled)
+	require.InDelta(t, 0.02, actual, 1e-9)
+
+	// 3. 金额非正或缺少请求 ID 时不做任何更新。
+	require.NoError(t, repo.RepairUnsettledUsageLog(ctx, newLog(placeholder, 0, 0)))
+	require.NoError(t, repo.RepairUnsettledUsageLog(ctx, newLog("", 0.01, 0.01)))
+}

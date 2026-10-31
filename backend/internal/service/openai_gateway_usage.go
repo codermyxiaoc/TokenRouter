@@ -620,6 +620,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		return billingErr
 	}
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
+	if input.ImageReservation != nil {
+		// 异步图片捕获会重试：首次失败已写入零金额占位，重试成功的同请求记录被唯一键跳过，这里按账本实际分配修复。
+		repairUnsettledUsageLog(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
+	}
 	return nil
 }
 

@@ -220,6 +220,30 @@ func (r *usageLogRepository) CreateBestEffort(ctx context.Context, log *service.
 	}
 }
 
+// RepairUnsettledUsageLog 把同一请求先前因结算失败写入的零金额占位记录更新为账本实际分配。
+// 只匹配 actual_cost、余额与订阅金额均为 0 的行：正常写入的记录和已修复的记录不会被改动，重复调用幂等。
+// 用量写入使用 ON CONFLICT DO NOTHING，重试扣费成功后的新记录会被跳过，因此需要显式修复占位行。
+func (r *usageLogRepository) RepairUnsettledUsageLog(ctx context.Context, log *service.UsageLog) error {
+	if r == nil || r.sql == nil || log == nil || strings.TrimSpace(log.RequestID) == "" || log.ActualCost <= 0 {
+		return nil
+	}
+	allocations, err := json.Marshal(log.BillingAllocations)
+	if err != nil {
+		return err
+	}
+	if string(allocations) == "null" {
+		allocations = []byte("[]")
+	}
+	_, err = r.sql.ExecContext(ctx, `UPDATE usage_logs SET
+		actual_cost=$3, subscription_amount_usd=$4, balance_amount_usd=$5,
+		billing_allocations=$6::jsonb, rate_multiplier=$7, billing_type=$8, subscription_id=$9
+		WHERE request_id=$1 AND api_key_id=$2
+		AND actual_cost=0 AND subscription_amount_usd=0 AND balance_amount_usd=0`,
+		strings.TrimSpace(log.RequestID), log.APIKeyID, log.ActualCost, log.SubscriptionAmountUSD, log.BalanceAmountUSD,
+		string(allocations), log.RateMultiplier, log.BillingType, log.SubscriptionID)
+	return err
+}
+
 // applyClientModel 仅覆盖展示用请求模型，不改变实际模型与计费模型。
 func applyClientModel(ctx context.Context, log *service.UsageLog) {
 	if ctx == nil || log == nil {

@@ -467,10 +467,15 @@ func (s *durableImageTaskStore) savePostgres(ctx context.Context, next *service.
 		if imageTaskLeaseExpired(current, now) {
 			completed := now.Unix()
 			chosen.CompletedAt = &completed
-			chosen.ExpiresAt = now.Add(imageTaskResultTTL).Unix()
+			// 查询记录已过期（查询按 404 处理）时不复活：保持原到期时间、不交付待交付结果，由到期清理删除；
+			// 与晚到补交同一规则，此时出现的扣费按任务 ID 走人工核对。
+			expired := current.ExpiresAt <= now.Unix()
+			if !expired {
+				chosen.ExpiresAt = now.Add(imageTaskResultTTL).Unix()
+			}
 			// 执行者已落库待交付结果：账本确认已扣费就交付该结果，否则说明扣费未发生，按中断处理。
 			charged := false
-			if len(current.PendingResult) > 0 && current.BillingRequestID != "" {
+			if !expired && len(current.PendingResult) > 0 && current.BillingRequestID != "" {
 				if charged, err = imageTaskChargeRecorded(ctx, tx, current.BillingRequestID, current.APIKeyID); err != nil {
 					return nil, err
 				}

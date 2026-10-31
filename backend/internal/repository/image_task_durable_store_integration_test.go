@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -634,4 +635,41 @@ func TestDurableImageTaskIntegrationIdempotencyKey(t *testing.T) {
 	found, err = s.FindIdempotent(ctx, task.APIKeyID, task.IdempotencyKey)
 	require.NoError(t, err)
 	require.Equal(t, reused.ID, found.ID)
+}
+
+// 已过期（查询 404）的 processing 任务保留待交付结果且账本已扣费：维护器不能把它改为 completed，
+// 也不能延长查询期；记录按原到期时间判为中断并由到期清理删除。
+func TestDurableImageTaskIntegrationExpiredProcessingNotRevived(t *testing.T) {
+	s, task, _ := durableImageFixture(t)
+	ctx := context.Background()
+	requestID := "client:expired-" + task.ID
+	task.PendingResult = json.RawMessage(`{"data":[{"url":"https://images.example.test/expired.png"}]}`)
+	task.PendingHTTPStatus, task.BillingRequestID = 200, requestID
+	require.NoError(t, s.Save(ctx, task, 24*time.Hour))
+	past := time.Now().Add(-time.Minute).Unix()
+	_, err := integrationDB.ExecContext(ctx, `UPDATE image_tasks SET expires_at=$2, lease_expires_at=$2, execution_deadline=$2,
+ record=record || jsonb_build_object('expires_at',$2::bigint,'lease_expires_at',$2::bigint,'execution_deadline',$2::bigint) WHERE id=$1`, task.ID, past)
+	require.NoError(t, err)
+	// 真实环境中 Redis 镜像随 TTL 同时过期；这里同步删除，避免旧镜像把未过期的期限回写数据库。
+	require.NoError(t, s.rdb.Del(ctx, imageTaskKey(task.ID)).Err())
+	_, err = s.Get(ctx, task.ID)
+	require.ErrorIs(t, err, service.ErrImageTaskNotFound, "前提：记录已过期不可查询")
+	_, err = integrationDB.ExecContext(ctx, `INSERT INTO usage_billing_dedup(request_id,api_key_id,request_fingerprint) VALUES($1,$2,'fp')`, requestID, task.APIKeyID)
+	require.NoError(t, err)
+
+	recreated := NewDurableImageTaskStore(integrationDB, s.rdb).(service.ImageTaskDurableStore)
+	for range 2 {
+		require.NoError(t, recreated.Maintain(ctx, time.Now()))
+	}
+	_, err = recreated.Get(ctx, task.ID)
+	require.ErrorIs(t, err, service.ErrImageTaskNotFound, "过期记录不能因晚到扣费重新可查")
+	var status string
+	var expiresAt int64
+	err = integrationDB.QueryRowContext(ctx, `SELECT status, expires_at FROM image_tasks WHERE id=$1`, task.ID).Scan(&status, &expiresAt)
+	if err == nil {
+		require.NotEqual(t, "completed", status)
+		require.LessOrEqual(t, expiresAt, past, "不能延长查询期")
+	} else {
+		require.ErrorIs(t, err, sql.ErrNoRows, "或已被到期清理删除")
+	}
 }

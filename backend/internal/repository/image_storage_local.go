@@ -297,6 +297,29 @@ func directorySize(root string) (int64, error) {
 }
 
 // Delete 只删除确切文件；文件已不存在视为成功。
+// SignObjectURL 为本地目录中的已存在对象重新签发链接；对象已删除时返回错误，调用方保留原链接。
+func (s *LocalImageStorage) SignObjectURL(_ context.Context, key string, expiresAt time.Time) (string, error) {
+	if s.baseURL == "" {
+		return "", errors.New("local image storage requires a base URL to build download links")
+	}
+	full, err := s.resolve(key)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(full); err != nil {
+		return "", err
+	}
+	if s.expiry > 0 {
+		if configuredDeadline := time.Now().Add(s.expiry); configuredDeadline.Before(expiresAt) {
+			expiresAt = configuredDeadline
+		}
+	}
+	if !expiresAt.After(time.Now()) {
+		return "", errors.New("image object signing deadline has passed")
+	}
+	return service.SignLocalImageURL(s.baseURL, s.secret, key, expiresAt), nil
+}
+
 func (s *LocalImageStorage) Delete(_ context.Context, key string) error {
 	full, err := s.resolve(key)
 	if err != nil {

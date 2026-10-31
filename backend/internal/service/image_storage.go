@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,12 @@ type ImageStorage interface {
 	// Save 把 data 以 key 存入对象存储，返回可下载的 URL（公开直链或 presigned 临时链接）。
 	// contentType 为图片 MIME 类型，如 "image/png"。
 	Save(ctx context.Context, key, contentType string, data []byte) (url string, err error)
+}
+
+// ImageObjectURLSigner 为已上传对象重新签发下载链接；只接受本服务生成的对象键，签名期限不超过 expiresAt。
+// 公开直链存储直接返回公开地址。用于结果保存后签名先于对象过期的情况（例如维护器较晚补交结果）。
+type ImageObjectURLSigner interface {
+	SignObjectURL(ctx context.Context, key string, expiresAt time.Time) (string, error)
 }
 
 // ImageResultUploader 是 ImageStorage 的上层编排器（与具体厂商无关）：
@@ -431,6 +438,84 @@ func (u *ImageResultUploader) downloadOnce(ctx context.Context, rawURL string) (
 		}
 	}
 	return data, contentType, nil
+}
+
+// RefreshExpiredURLs 只为已过期的签名链接重签，返回新的结果副本，不修改调用方保存的记录。
+// 对象键按转存规则（前缀 + 任务 ID + 序号 + 扩展名）推导，且必须与原链接路径完全一致，
+// 存储位置或前缀已变化时保留原链接；未过期或公开直链原样返回。签名期限不超过 deadline。
+// @project-doc docs/domains/media_tasks.md#async_image_object_retention
+func (u *ImageResultUploader) RefreshExpiredURLs(ctx context.Context, taskID string, result json.RawMessage, deadline time.Time) json.RawMessage {
+	if u == nil || len(result) == 0 || taskID == "" || !deadline.After(time.Now()) {
+		return result
+	}
+	signer, ok := u.storage.(ImageObjectURLSigner)
+	if !ok {
+		return result
+	}
+	var root map[string]json.RawMessage
+	if json.Unmarshal(result, &root) != nil {
+		return result
+	}
+	var items []map[string]json.RawMessage
+	if json.Unmarshal(root["data"], &items) != nil {
+		return result
+	}
+	changed := false
+	for i, item := range items {
+		var rawURL string
+		if json.Unmarshal(item["url"], &rawURL) != nil || !imageSignedURLExpired(rawURL, time.Now()) {
+			continue
+		}
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			continue
+		}
+		key := u.prefix + taskID + "-" + strconv.Itoa(i) + path.Ext(parsed.Path)
+		if !strings.HasSuffix(parsed.Path, "/"+key) && !strings.HasSuffix(parsed.EscapedPath(), "/"+key) {
+			continue
+		}
+		signed, err := signer.SignObjectURL(ctx, key, deadline)
+		if err != nil {
+			continue
+		}
+		encoded, err := json.Marshal(signed)
+		if err != nil {
+			continue
+		}
+		item["url"] = encoded
+		changed = true
+	}
+	if !changed {
+		return result
+	}
+	data, err := json.Marshal(items)
+	if err != nil {
+		return result
+	}
+	root["data"] = data
+	out, err := json.Marshal(root)
+	if err != nil {
+		return result
+	}
+	return out
+}
+
+// imageSignedURLExpired 识别 S3 预签名（X-Amz-Date + X-Amz-Expires）与本地签名（exp）链接是否已过期；
+// 无签名参数的公开直链视为不过期。
+func imageSignedURLExpired(rawURL string, now time.Time) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	query := parsed.Query()
+	if signedAt, err := time.Parse("20060102T150405Z", query.Get("X-Amz-Date")); err == nil {
+		seconds, err := strconv.ParseInt(query.Get("X-Amz-Expires"), 10, 64)
+		return err == nil && !signedAt.Add(time.Duration(seconds)*time.Second).After(now)
+	}
+	if exp, err := strconv.ParseInt(query.Get("exp"), 10, 64); err == nil && query.Get("sig") != "" {
+		return exp <= now.Unix()
+	}
+	return false
 }
 
 func (u *ImageResultUploader) buildKey(taskID string, index int, contentType string) string {

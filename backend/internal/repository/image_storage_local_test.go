@@ -195,3 +195,28 @@ func TestLocalImageLockOwnershipAfterTakeover(t *testing.T) {
 	_, statErr = os.Stat(lock)
 	require.True(t, os.IsNotExist(statErr))
 }
+
+// 本地目录重签：对象仍在时签发可下载的新链接，期限不超过请求截止；对象已删除或截止已过时报错，调用方保留原链接。
+func TestLocalImageStorageSignObjectURL(t *testing.T) {
+	storage, _ := newLocalImageStorageForTest(t, 0)
+	ctx := context.Background()
+	key := "images/imgtask_0123456789abcdef0123456789abcdef-0.png"
+	_, err := storage.SaveUntil(ctx, key, "image/png", imageStorageProbePNG, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	deadline := time.Now().Add(30 * time.Minute)
+	link, err := storage.SignObjectURL(ctx, key, deadline)
+	require.NoError(t, err)
+	gotKey, expires, sig := parseLocalImageURL(t, link)
+	require.Equal(t, key, gotKey)
+	require.LessOrEqual(t, expires, deadline.Unix())
+	file, _, err := storage.OpenLocalImage(gotKey, expires, sig)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	_, err = storage.SignObjectURL(ctx, key, time.Now().Add(-time.Second))
+	require.Error(t, err, "截止已过不签发")
+	require.NoError(t, storage.Delete(ctx, key))
+	_, err = storage.SignObjectURL(ctx, key, deadline)
+	require.Error(t, err, "对象已删除不签发")
+}

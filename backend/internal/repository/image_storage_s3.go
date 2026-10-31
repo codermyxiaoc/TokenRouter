@@ -267,6 +267,26 @@ func imageStorageSignedURLWithinDeadline(rawURL string, expiresAt time.Time) boo
 	return deadline.After(time.Now()) && !deadline.After(expiresAt)
 }
 
+// SignObjectURL 为已上传对象重新签发下载链接，期限取配置签名期与 expiresAt 的较小值；公开直链直接返回。
+func (s *S3ImageStorage) SignObjectURL(ctx context.Context, key string, expiresAt time.Time) (string, error) {
+	if s.publicBaseURL != "" {
+		return s.publicBaseURL + "/" + strings.TrimLeft(key, "/"), nil
+	}
+	now := time.Now()
+	if configuredDeadline := now.Add(s.presignExpiry); configuredDeadline.Before(expiresAt) {
+		expiresAt = configuredDeadline
+	}
+	expiry := time.Until(expiresAt)
+	if expiry < time.Second {
+		return "", errors.New("image object signing deadline has passed")
+	}
+	result, err := s3.NewPresignClient(s.client).PresignGetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key}, s3.WithPresignExpires(expiry))
+	if err != nil {
+		return "", fmt.Errorf("presign url: %w", err)
+	}
+	return result.URL, nil
+}
+
 // Delete 只删除已登记的完整对象键，不补前缀、不枚举桶，也不把目录当作删除范围。
 // 存储端确认对象已不存在时视为成功；权限、服务故障和网络异常交由持久清理队列重试。
 func (s *S3ImageStorage) Delete(ctx context.Context, key string) error {

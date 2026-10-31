@@ -158,6 +158,18 @@ func (s *retainedImageStorage) Save(ctx context.Context, key, contentType string
 	return "", errors.New("image storage does not support an absolute retention deadline")
 }
 
+// SignObjectURL 只为本服务生成的对象键委托底层存储重签；底层不支持时返回错误，调用方保留原链接。
+func (s *retainedImageStorage) SignObjectURL(ctx context.Context, key string, expiresAt time.Time) (string, error) {
+	if !validGeneratedImageObjectKey(s.config.Prefix, key) {
+		return "", errors.New("image signing rejected an unowned object key")
+	}
+	signer, ok := s.ImageStorage.(ImageObjectURLSigner)
+	if !ok {
+		return "", errors.New("image storage does not support re-signing")
+	}
+	return signer.SignObjectURL(ctx, key, expiresAt)
+}
+
 // validGeneratedImageObjectKey 限定本服务生成的单个文件，拒绝任意目录、备份或手工上传对象。
 func validGeneratedImageObjectKey(prefix, key string) bool {
 	if !strings.HasPrefix(key, prefix) {

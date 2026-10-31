@@ -329,6 +329,12 @@ func (s *ImageTaskService) Get(ctx context.Context, owner ImageTaskOwner, id str
 	if task.UserID != owner.UserID || task.APIKeyID != owner.APIKeyID {
 		return nil, ErrImageTaskNotFound
 	}
+	// 维护器较晚补交时，结果中的签名链接可能已先于对象过期；按当前存储重签，期限不超过任务记录有效期。
+	if task.Status == ImageTaskStatusCompleted && len(task.Result) > 0 {
+		if uploader, _ := s.current(); uploader != nil {
+			task.Result = uploader.RefreshExpiredURLs(ctx, task.ID, task.Result, time.Unix(task.ExpiresAt, 0))
+		}
+	}
 	return imageTaskToPublic(task), nil
 }
 

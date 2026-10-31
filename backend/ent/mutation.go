@@ -17038,6 +17038,8 @@ type CreativeRunMutation struct {
 	balance_rate_multiplier             *float64
 	addbalance_rate_multiplier          *float64
 	plan_group_rate_multiplier_enabled  *bool
+	billing_mode                        *string
+	provider_usage                      **domain.CreativeProviderUsage
 	error_code                          *string
 	error_message                       *string
 	release_target_status               *string
@@ -18531,6 +18533,91 @@ func (m *CreativeRunMutation) ResetPlanGroupRateMultiplierEnabled() {
 	m.plan_group_rate_multiplier_enabled = nil
 }
 
+// SetBillingMode sets the "billing_mode" field.
+func (m *CreativeRunMutation) SetBillingMode(s string) {
+	m.billing_mode = &s
+}
+
+// BillingMode returns the value of the "billing_mode" field in the mutation.
+func (m *CreativeRunMutation) BillingMode() (r string, exists bool) {
+	v := m.billing_mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBillingMode returns the old "billing_mode" field's value of the CreativeRun entity.
+// If the CreativeRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CreativeRunMutation) OldBillingMode(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBillingMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBillingMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBillingMode: %w", err)
+	}
+	return oldValue.BillingMode, nil
+}
+
+// ResetBillingMode resets all changes to the "billing_mode" field.
+func (m *CreativeRunMutation) ResetBillingMode() {
+	m.billing_mode = nil
+}
+
+// SetProviderUsage sets the "provider_usage" field.
+func (m *CreativeRunMutation) SetProviderUsage(dpu *domain.CreativeProviderUsage) {
+	m.provider_usage = &dpu
+}
+
+// ProviderUsage returns the value of the "provider_usage" field in the mutation.
+func (m *CreativeRunMutation) ProviderUsage() (r *domain.CreativeProviderUsage, exists bool) {
+	v := m.provider_usage
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProviderUsage returns the old "provider_usage" field's value of the CreativeRun entity.
+// If the CreativeRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CreativeRunMutation) OldProviderUsage(ctx context.Context) (v *domain.CreativeProviderUsage, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProviderUsage is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProviderUsage requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProviderUsage: %w", err)
+	}
+	return oldValue.ProviderUsage, nil
+}
+
+// ClearProviderUsage clears the value of the "provider_usage" field.
+func (m *CreativeRunMutation) ClearProviderUsage() {
+	m.provider_usage = nil
+	m.clearedFields[creativerun.FieldProviderUsage] = struct{}{}
+}
+
+// ProviderUsageCleared returns if the "provider_usage" field was cleared in this mutation.
+func (m *CreativeRunMutation) ProviderUsageCleared() bool {
+	_, ok := m.clearedFields[creativerun.FieldProviderUsage]
+	return ok
+}
+
+// ResetProviderUsage resets all changes to the "provider_usage" field.
+func (m *CreativeRunMutation) ResetProviderUsage() {
+	m.provider_usage = nil
+	delete(m.clearedFields, creativerun.FieldProviderUsage)
+}
+
 // SetErrorCode sets the "error_code" field.
 func (m *CreativeRunMutation) SetErrorCode(s string) {
 	m.error_code = &s
@@ -19389,7 +19476,7 @@ func (m *CreativeRunMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *CreativeRunMutation) Fields() []string {
-	fields := make([]string, 0, 46)
+	fields := make([]string, 0, 48)
 	if m.created_at != nil {
 		fields = append(fields, creativerun.FieldCreatedAt)
 	}
@@ -19476,6 +19563,12 @@ func (m *CreativeRunMutation) Fields() []string {
 	}
 	if m.plan_group_rate_multiplier_enabled != nil {
 		fields = append(fields, creativerun.FieldPlanGroupRateMultiplierEnabled)
+	}
+	if m.billing_mode != nil {
+		fields = append(fields, creativerun.FieldBillingMode)
+	}
+	if m.provider_usage != nil {
+		fields = append(fields, creativerun.FieldProviderUsage)
 	}
 	if m.error_code != nil {
 		fields = append(fields, creativerun.FieldErrorCode)
@@ -19594,6 +19687,10 @@ func (m *CreativeRunMutation) Field(name string) (ent.Value, bool) {
 		return m.BalanceRateMultiplier()
 	case creativerun.FieldPlanGroupRateMultiplierEnabled:
 		return m.PlanGroupRateMultiplierEnabled()
+	case creativerun.FieldBillingMode:
+		return m.BillingMode()
+	case creativerun.FieldProviderUsage:
+		return m.ProviderUsage()
 	case creativerun.FieldErrorCode:
 		return m.ErrorCode()
 	case creativerun.FieldErrorMessage:
@@ -19695,6 +19792,10 @@ func (m *CreativeRunMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldBalanceRateMultiplier(ctx)
 	case creativerun.FieldPlanGroupRateMultiplierEnabled:
 		return m.OldPlanGroupRateMultiplierEnabled(ctx)
+	case creativerun.FieldBillingMode:
+		return m.OldBillingMode(ctx)
+	case creativerun.FieldProviderUsage:
+		return m.OldProviderUsage(ctx)
 	case creativerun.FieldErrorCode:
 		return m.OldErrorCode(ctx)
 	case creativerun.FieldErrorMessage:
@@ -19940,6 +20041,20 @@ func (m *CreativeRunMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetPlanGroupRateMultiplierEnabled(v)
+		return nil
+	case creativerun.FieldBillingMode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBillingMode(v)
+		return nil
+	case creativerun.FieldProviderUsage:
+		v, ok := value.(*domain.CreativeProviderUsage)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProviderUsage(v)
 		return nil
 	case creativerun.FieldErrorCode:
 		v, ok := value.(string)
@@ -20300,6 +20415,9 @@ func (m *CreativeRunMutation) ClearedFields() []string {
 	if m.FieldCleared(creativerun.FieldActualCost) {
 		fields = append(fields, creativerun.FieldActualCost)
 	}
+	if m.FieldCleared(creativerun.FieldProviderUsage) {
+		fields = append(fields, creativerun.FieldProviderUsage)
+	}
 	if m.FieldCleared(creativerun.FieldErrorCode) {
 		fields = append(fields, creativerun.FieldErrorCode)
 	}
@@ -20355,6 +20473,9 @@ func (m *CreativeRunMutation) ClearField(name string) error {
 		return nil
 	case creativerun.FieldActualCost:
 		m.ClearActualCost()
+		return nil
+	case creativerun.FieldProviderUsage:
+		m.ClearProviderUsage()
 		return nil
 	case creativerun.FieldErrorCode:
 		m.ClearErrorCode()
@@ -20477,6 +20598,12 @@ func (m *CreativeRunMutation) ResetField(name string) error {
 		return nil
 	case creativerun.FieldPlanGroupRateMultiplierEnabled:
 		m.ResetPlanGroupRateMultiplierEnabled()
+		return nil
+	case creativerun.FieldBillingMode:
+		m.ResetBillingMode()
+		return nil
+	case creativerun.FieldProviderUsage:
+		m.ResetProviderUsage()
 		return nil
 	case creativerun.FieldErrorCode:
 		m.ResetErrorCode()

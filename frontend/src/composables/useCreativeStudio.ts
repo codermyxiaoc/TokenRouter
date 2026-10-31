@@ -183,6 +183,9 @@ export function useCreativeStudio() {
     return unitPrice * outputCount.value
   })
 
+  // token 计费的模型显示“最多预扣”，实际按上游 token 用量扣费，多冻结部分自动退回。
+  const tokenBilling = computed(() => selectedOption.value?.billing_mode === 'token')
+
   const canGenerate = computed(() => {
     if (!selectedOption.value || busy.value) return false
     if (!operationOptions.value.includes(operation.value)) return false
@@ -896,6 +899,7 @@ export function useCreativeStudio() {
     maxReferenceImages,
     outputCount,
     estimatedCost,
+    tokenBilling,
     canGenerate,
     // 方法
     loadModels,

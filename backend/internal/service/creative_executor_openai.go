@@ -106,6 +106,9 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 	if err != nil {
 		return nil, creativeImageOutputFailure(ctx, resp.StatusCode, respBody, err)
 	}
+	if usage, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
+		recordCreativeProviderTokens(ctx, creativeTokensFromOpenAIUsage(usage))
+	}
 	return outputs, nil
 }
 

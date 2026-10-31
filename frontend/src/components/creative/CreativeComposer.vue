@@ -221,7 +221,7 @@
           {{ t('creative.panel.outputCount', { count: studio.outputCount.value }) }}
         </span>
         <span v-if="studio.estimatedCost.value !== null" class="max-sm:hidden whitespace-nowrap text-sm text-black dark:text-white">
-          {{ t('creative.panel.estimatedCost', { cost: formatBalanceAmount(studio.estimatedCost.value, { fractionDigits: 3 }) }) }}
+          {{ t(studio.tokenBilling.value ? 'creative.panel.tokenEstimatedCost' : 'creative.panel.estimatedCost', { cost: formatBalanceAmount(studio.estimatedCost.value, { fractionDigits: 3 }) }) }}
         </span>
         <button
           ref="sendButtonRef"

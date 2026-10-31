@@ -140,7 +140,8 @@ func captureCreativeBalanceHold(ctx context.Context, repo UsageBillingRepository
 	if run == nil || successCount < 0 || successCount > run.RequestedOutputCount {
 		return nil, ErrCreativeSettlementBillingFail.WithCause(errors.New("creative output count exceeds its reservation"))
 	}
-	actualBase := math.Max(run.BaseUnitPrice, 0) * float64(max(successCount, 0))
+	// token 模式按执行时算定的 token 费用扣（不超过预扣上限），按张模式按单价 × 成功张数。
+	actualBase := creativeCaptureBase(run, successCount)
 	cmd, err := buildCreativeHoldCommand(run, CreativeCaptureRequestID(run.RunID), actualBase)
 	if err != nil {
 		return nil, err

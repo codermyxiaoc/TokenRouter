@@ -17,6 +17,7 @@ export default {
       background: 'Background',
       thinkingLevel: 'Thinking level',
       estimatedCost: '{cost}',
+      tokenEstimatedCost: 'Billed by tokens, up to {cost} held',
       outputCount: '{count} images per run, billed per image',
       uploadSource: 'Upload image',
       promptPlaceholder: 'Describe the image you want to create...',

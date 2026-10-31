@@ -23,6 +23,8 @@ type CreativeExecuteResult struct {
 	Outputs      []CreativeOutput
 	AccountID    int64
 	ProviderCost float64
+	// Usage 是上游返回的 token 用量；未返回时为 nil（token 模式据此按预扣上限兜底并标记待核对）。
+	Usage *UsageTokens
 }
 
 // CreativeExecution 是一次已经完成账号调度与账号槽位预占的执行上下文。
@@ -532,6 +534,7 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 		if err == nil && result != nil && len(result.Outputs) > 0 {
 			// 租约已丢失但成品已到手：先把结果落库交给新的租约持有者结算，不能丢弃用户的成品。
 			persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			w.persistCreativeTokenUsage(persistCtx, current, result)
 			if _, persistErr := w.service.SucceedRun(persistCtx, runID, result.AccountID, creativeOutputResults(result.Outputs)); persistErr != nil {
 				logger.L().Warn("creative.worker_lease_lost_persist_failed",
 					zap.String("run_id", runID),
@@ -561,6 +564,8 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 	if result == nil || len(result.Outputs) == 0 {
 		return w.releaseUnavailableExecution(ctx, runID)
 	}
+	// token 模式先固定上游用量与扣费金额，再落库输出；之后的结算与恢复都读取这份金额。
+	w.persistCreativeTokenUsage(ctx, current, result)
 	if _, err := w.service.SucceedRun(ctx, runID, result.AccountID, creativeOutputResults(result.Outputs)); err != nil {
 		// provider 已成功：只统计持久化/结算重试，执行栅栏防止再次调用上游。
 		_, incErr := w.repo.IncrementCreativeRunSettlementAttempt(ctx, runID)
@@ -575,6 +580,19 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 		return CreativeProcessResult{}, err
 	}
 	return CreativeProcessResult{Terminal: true}, nil
+}
+
+// persistCreativeTokenUsage 为 token 模式任务保存上游用量与扣费金额；写入失败只记录日志，
+// 结算时缺少记录会按预扣上限扣费并标记待核对，不会因此重新调用上游。
+func (w *CreativeRunWorker) persistCreativeTokenUsage(ctx context.Context, run *CreativeRun, result *CreativeExecuteResult) {
+	if w == nil || w.service == nil || run == nil || result == nil {
+		return
+	}
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if err := w.service.recordCreativeTokenUsage(persistCtx, run, result.Usage); err != nil {
+		logger.L().Warn("creative.token_usage_persist_failed", zap.String("run_id", run.RunID), zap.Error(err))
+	}
 }
 
 // deferUnconfirmedExecution 处理启动时发现的执行栅栏：原执行者可能仍在运行，

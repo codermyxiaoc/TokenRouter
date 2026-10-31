@@ -77,6 +77,10 @@ type CreativeRun struct {
 	BalanceRateMultiplier float64 `json:"balance_rate_multiplier,omitempty"`
 	// PlanGroupRateMultiplierEnabled holds the value of the "plan_group_rate_multiplier_enabled" field.
 	PlanGroupRateMultiplierEnabled bool `json:"plan_group_rate_multiplier_enabled,omitempty"`
+	// BillingMode holds the value of the "billing_mode" field.
+	BillingMode string `json:"billing_mode,omitempty"`
+	// ProviderUsage holds the value of the "provider_usage" field.
+	ProviderUsage *domain.CreativeProviderUsage `json:"provider_usage,omitempty"`
 	// ErrorCode holds the value of the "error_code" field.
 	ErrorCode *string `json:"error_code,omitempty"`
 	// ErrorMessage holds the value of the "error_message" field.
@@ -119,7 +123,7 @@ func (*CreativeRun) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case creativerun.FieldSubscriptionHoldAllocations, creativerun.FieldImageAttemptAccountIds:
+		case creativerun.FieldSubscriptionHoldAllocations, creativerun.FieldProviderUsage, creativerun.FieldImageAttemptAccountIds:
 			values[i] = new([]byte)
 		case creativerun.FieldPlanGroupRateMultiplierEnabled, creativerun.FieldAllowanceReserved:
 			values[i] = new(sql.NullBool)
@@ -127,7 +131,7 @@ func (*CreativeRun) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case creativerun.FieldID, creativerun.FieldUserID, creativerun.FieldGroupID, creativerun.FieldAPIKeyID, creativerun.FieldAccountID, creativerun.FieldRequestedOutputCount, creativerun.FieldAttemptCount, creativerun.FieldSettlementAttemptCount, creativerun.FieldReleaseAttemptCount, creativerun.FieldVersion:
 			values[i] = new(sql.NullInt64)
-		case creativerun.FieldRunID, creativerun.FieldWorkspaceID, creativerun.FieldQuotaPlatform, creativerun.FieldModel, creativerun.FieldRequestedModel, creativerun.FieldOperation, creativerun.FieldImageSize, creativerun.FieldAspectRatio, creativerun.FieldResponseMimeType, creativerun.FieldPromptHash, creativerun.FieldRequestFingerprint, creativerun.FieldIdempotencyKey, creativerun.FieldStatus, creativerun.FieldErrorCode, creativerun.FieldErrorMessage, creativerun.FieldReleaseTargetStatus, creativerun.FieldProvisioningPhase, creativerun.FieldLastReconcileError:
+		case creativerun.FieldRunID, creativerun.FieldWorkspaceID, creativerun.FieldQuotaPlatform, creativerun.FieldModel, creativerun.FieldRequestedModel, creativerun.FieldOperation, creativerun.FieldImageSize, creativerun.FieldAspectRatio, creativerun.FieldResponseMimeType, creativerun.FieldPromptHash, creativerun.FieldRequestFingerprint, creativerun.FieldIdempotencyKey, creativerun.FieldStatus, creativerun.FieldBillingMode, creativerun.FieldErrorCode, creativerun.FieldErrorMessage, creativerun.FieldReleaseTargetStatus, creativerun.FieldProvisioningPhase, creativerun.FieldLastReconcileError:
 			values[i] = new(sql.NullString)
 		case creativerun.FieldCreatedAt, creativerun.FieldUpdatedAt, creativerun.FieldImageExecutionDeadlineAt, creativerun.FieldProviderResultRecordedAt, creativerun.FieldNextReconcileAt, creativerun.FieldStartedAt, creativerun.FieldCompletedAt, creativerun.FieldCancelledAt:
 			values[i] = new(sql.NullTime)
@@ -332,6 +336,20 @@ func (_m *CreativeRun) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field plan_group_rate_multiplier_enabled", values[i])
 			} else if value.Valid {
 				_m.PlanGroupRateMultiplierEnabled = value.Bool
+			}
+		case creativerun.FieldBillingMode:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field billing_mode", values[i])
+			} else if value.Valid {
+				_m.BillingMode = value.String
+			}
+		case creativerun.FieldProviderUsage:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field provider_usage", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.ProviderUsage); err != nil {
+					return fmt.Errorf("unmarshal field provider_usage: %w", err)
+				}
 			}
 		case creativerun.FieldErrorCode:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -578,6 +596,12 @@ func (_m *CreativeRun) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("plan_group_rate_multiplier_enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.PlanGroupRateMultiplierEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("billing_mode=")
+	builder.WriteString(_m.BillingMode)
+	builder.WriteString(", ")
+	builder.WriteString("provider_usage=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ProviderUsage))
 	builder.WriteString(", ")
 	if v := _m.ErrorCode; v != nil {
 		builder.WriteString("error_code=")

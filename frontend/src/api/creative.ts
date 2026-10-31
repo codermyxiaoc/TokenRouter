@@ -39,6 +39,15 @@ export interface CreativeModelOption {
   price_1k: number
   price_2k: number
   price_4k: number
+  // 渠道/分组为 token 价时与 API 一致按实际 token 用量扣费，price_* 为各尺寸的最多预扣金额。
+  billing_mode?: 'token'
+  // token 模式的每百万 token 单价（已乘分组倍率），仅用于展示。
+  token_prices?: {
+    input_per_million: number
+    output_per_million: number
+    image_input_per_million?: number
+    image_output_per_million?: number
+  }
 }
 
 // run 终态集合，轮询遇到这些状态即停止

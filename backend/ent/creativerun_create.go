@@ -357,6 +357,26 @@ func (_c *CreativeRunCreate) SetNillablePlanGroupRateMultiplierEnabled(v *bool) 
 	return _c
 }
 
+// SetBillingMode sets the "billing_mode" field.
+func (_c *CreativeRunCreate) SetBillingMode(v string) *CreativeRunCreate {
+	_c.mutation.SetBillingMode(v)
+	return _c
+}
+
+// SetNillableBillingMode sets the "billing_mode" field if the given value is not nil.
+func (_c *CreativeRunCreate) SetNillableBillingMode(v *string) *CreativeRunCreate {
+	if v != nil {
+		_c.SetBillingMode(*v)
+	}
+	return _c
+}
+
+// SetProviderUsage sets the "provider_usage" field.
+func (_c *CreativeRunCreate) SetProviderUsage(v *domain.CreativeProviderUsage) *CreativeRunCreate {
+	_c.mutation.SetProviderUsage(v)
+	return _c
+}
+
 // SetErrorCode sets the "error_code" field.
 func (_c *CreativeRunCreate) SetErrorCode(v string) *CreativeRunCreate {
 	_c.mutation.SetErrorCode(v)
@@ -686,6 +706,10 @@ func (_c *CreativeRunCreate) defaults() {
 		v := creativerun.DefaultPlanGroupRateMultiplierEnabled
 		_c.mutation.SetPlanGroupRateMultiplierEnabled(v)
 	}
+	if _, ok := _c.mutation.BillingMode(); !ok {
+		v := creativerun.DefaultBillingMode
+		_c.mutation.SetBillingMode(v)
+	}
 	if _, ok := _c.mutation.ReleaseTargetStatus(); !ok {
 		v := creativerun.DefaultReleaseTargetStatus
 		_c.mutation.SetReleaseTargetStatus(v)
@@ -858,6 +882,14 @@ func (_c *CreativeRunCreate) check() error {
 	}
 	if _, ok := _c.mutation.PlanGroupRateMultiplierEnabled(); !ok {
 		return &ValidationError{Name: "plan_group_rate_multiplier_enabled", err: errors.New(`ent: missing required field "CreativeRun.plan_group_rate_multiplier_enabled"`)}
+	}
+	if _, ok := _c.mutation.BillingMode(); !ok {
+		return &ValidationError{Name: "billing_mode", err: errors.New(`ent: missing required field "CreativeRun.billing_mode"`)}
+	}
+	if v, ok := _c.mutation.BillingMode(); ok {
+		if err := creativerun.BillingModeValidator(v); err != nil {
+			return &ValidationError{Name: "billing_mode", err: fmt.Errorf(`ent: validator failed for field "CreativeRun.billing_mode": %w`, err)}
+		}
 	}
 	if v, ok := _c.mutation.ErrorCode(); ok {
 		if err := creativerun.ErrorCodeValidator(v); err != nil {
@@ -1040,6 +1072,14 @@ func (_c *CreativeRunCreate) createSpec() (*CreativeRun, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.PlanGroupRateMultiplierEnabled(); ok {
 		_spec.SetField(creativerun.FieldPlanGroupRateMultiplierEnabled, field.TypeBool, value)
 		_node.PlanGroupRateMultiplierEnabled = value
+	}
+	if value, ok := _c.mutation.BillingMode(); ok {
+		_spec.SetField(creativerun.FieldBillingMode, field.TypeString, value)
+		_node.BillingMode = value
+	}
+	if value, ok := _c.mutation.ProviderUsage(); ok {
+		_spec.SetField(creativerun.FieldProviderUsage, field.TypeJSON, value)
+		_node.ProviderUsage = value
 	}
 	if value, ok := _c.mutation.ErrorCode(); ok {
 		_spec.SetField(creativerun.FieldErrorCode, field.TypeString, value)
@@ -1572,6 +1612,36 @@ func (u *CreativeRunUpsert) SetPlanGroupRateMultiplierEnabled(v bool) *CreativeR
 // UpdatePlanGroupRateMultiplierEnabled sets the "plan_group_rate_multiplier_enabled" field to the value that was provided on create.
 func (u *CreativeRunUpsert) UpdatePlanGroupRateMultiplierEnabled() *CreativeRunUpsert {
 	u.SetExcluded(creativerun.FieldPlanGroupRateMultiplierEnabled)
+	return u
+}
+
+// SetBillingMode sets the "billing_mode" field.
+func (u *CreativeRunUpsert) SetBillingMode(v string) *CreativeRunUpsert {
+	u.Set(creativerun.FieldBillingMode, v)
+	return u
+}
+
+// UpdateBillingMode sets the "billing_mode" field to the value that was provided on create.
+func (u *CreativeRunUpsert) UpdateBillingMode() *CreativeRunUpsert {
+	u.SetExcluded(creativerun.FieldBillingMode)
+	return u
+}
+
+// SetProviderUsage sets the "provider_usage" field.
+func (u *CreativeRunUpsert) SetProviderUsage(v *domain.CreativeProviderUsage) *CreativeRunUpsert {
+	u.Set(creativerun.FieldProviderUsage, v)
+	return u
+}
+
+// UpdateProviderUsage sets the "provider_usage" field to the value that was provided on create.
+func (u *CreativeRunUpsert) UpdateProviderUsage() *CreativeRunUpsert {
+	u.SetExcluded(creativerun.FieldProviderUsage)
+	return u
+}
+
+// ClearProviderUsage clears the value of the "provider_usage" field.
+func (u *CreativeRunUpsert) ClearProviderUsage() *CreativeRunUpsert {
+	u.SetNull(creativerun.FieldProviderUsage)
 	return u
 }
 
@@ -2388,6 +2458,41 @@ func (u *CreativeRunUpsertOne) SetPlanGroupRateMultiplierEnabled(v bool) *Creati
 func (u *CreativeRunUpsertOne) UpdatePlanGroupRateMultiplierEnabled() *CreativeRunUpsertOne {
 	return u.Update(func(s *CreativeRunUpsert) {
 		s.UpdatePlanGroupRateMultiplierEnabled()
+	})
+}
+
+// SetBillingMode sets the "billing_mode" field.
+func (u *CreativeRunUpsertOne) SetBillingMode(v string) *CreativeRunUpsertOne {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.SetBillingMode(v)
+	})
+}
+
+// UpdateBillingMode sets the "billing_mode" field to the value that was provided on create.
+func (u *CreativeRunUpsertOne) UpdateBillingMode() *CreativeRunUpsertOne {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.UpdateBillingMode()
+	})
+}
+
+// SetProviderUsage sets the "provider_usage" field.
+func (u *CreativeRunUpsertOne) SetProviderUsage(v *domain.CreativeProviderUsage) *CreativeRunUpsertOne {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.SetProviderUsage(v)
+	})
+}
+
+// UpdateProviderUsage sets the "provider_usage" field to the value that was provided on create.
+func (u *CreativeRunUpsertOne) UpdateProviderUsage() *CreativeRunUpsertOne {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.UpdateProviderUsage()
+	})
+}
+
+// ClearProviderUsage clears the value of the "provider_usage" field.
+func (u *CreativeRunUpsertOne) ClearProviderUsage() *CreativeRunUpsertOne {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.ClearProviderUsage()
 	})
 }
 
@@ -3417,6 +3522,41 @@ func (u *CreativeRunUpsertBulk) SetPlanGroupRateMultiplierEnabled(v bool) *Creat
 func (u *CreativeRunUpsertBulk) UpdatePlanGroupRateMultiplierEnabled() *CreativeRunUpsertBulk {
 	return u.Update(func(s *CreativeRunUpsert) {
 		s.UpdatePlanGroupRateMultiplierEnabled()
+	})
+}
+
+// SetBillingMode sets the "billing_mode" field.
+func (u *CreativeRunUpsertBulk) SetBillingMode(v string) *CreativeRunUpsertBulk {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.SetBillingMode(v)
+	})
+}
+
+// UpdateBillingMode sets the "billing_mode" field to the value that was provided on create.
+func (u *CreativeRunUpsertBulk) UpdateBillingMode() *CreativeRunUpsertBulk {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.UpdateBillingMode()
+	})
+}
+
+// SetProviderUsage sets the "provider_usage" field.
+func (u *CreativeRunUpsertBulk) SetProviderUsage(v *domain.CreativeProviderUsage) *CreativeRunUpsertBulk {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.SetProviderUsage(v)
+	})
+}
+
+// UpdateProviderUsage sets the "provider_usage" field to the value that was provided on create.
+func (u *CreativeRunUpsertBulk) UpdateProviderUsage() *CreativeRunUpsertBulk {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.UpdateProviderUsage()
+	})
+}
+
+// ClearProviderUsage clears the value of the "provider_usage" field.
+func (u *CreativeRunUpsertBulk) ClearProviderUsage() *CreativeRunUpsertBulk {
+	return u.Update(func(s *CreativeRunUpsert) {
+		s.ClearProviderUsage()
 	})
 }
 

@@ -72,6 +72,10 @@ const (
 	FieldBalanceRateMultiplier = "balance_rate_multiplier"
 	// FieldPlanGroupRateMultiplierEnabled holds the string denoting the plan_group_rate_multiplier_enabled field in the database.
 	FieldPlanGroupRateMultiplierEnabled = "plan_group_rate_multiplier_enabled"
+	// FieldBillingMode holds the string denoting the billing_mode field in the database.
+	FieldBillingMode = "billing_mode"
+	// FieldProviderUsage holds the string denoting the provider_usage field in the database.
+	FieldProviderUsage = "provider_usage"
 	// FieldErrorCode holds the string denoting the error_code field in the database.
 	FieldErrorCode = "error_code"
 	// FieldErrorMessage holds the string denoting the error_message field in the database.
@@ -142,6 +146,8 @@ var Columns = []string{
 	FieldSubscriptionRateMultiplier,
 	FieldBalanceRateMultiplier,
 	FieldPlanGroupRateMultiplierEnabled,
+	FieldBillingMode,
+	FieldProviderUsage,
 	FieldErrorCode,
 	FieldErrorMessage,
 	FieldReleaseTargetStatus,
@@ -232,6 +238,10 @@ var (
 	DefaultBalanceRateMultiplier float64
 	// DefaultPlanGroupRateMultiplierEnabled holds the default value on creation for the "plan_group_rate_multiplier_enabled" field.
 	DefaultPlanGroupRateMultiplierEnabled bool
+	// DefaultBillingMode holds the default value on creation for the "billing_mode" field.
+	DefaultBillingMode string
+	// BillingModeValidator is a validator for the "billing_mode" field. It is called by the builders before save.
+	BillingModeValidator func(string) error
 	// ErrorCodeValidator is a validator for the "error_code" field. It is called by the builders before save.
 	ErrorCodeValidator func(string) error
 	// DefaultReleaseTargetStatus holds the default value on creation for the "release_target_status" field.
@@ -402,6 +412,11 @@ func ByBalanceRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
 // ByPlanGroupRateMultiplierEnabled orders the results by the plan_group_rate_multiplier_enabled field.
 func ByPlanGroupRateMultiplierEnabled(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPlanGroupRateMultiplierEnabled, opts...).ToFunc()
+}
+
+// ByBillingMode orders the results by the billing_mode field.
+func ByBillingMode(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBillingMode, opts...).ToFunc()
 }
 
 // ByErrorCode orders the results by the error_code field.

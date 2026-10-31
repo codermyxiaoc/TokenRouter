@@ -297,6 +297,21 @@ describe('useCreativeStudio', () => {
 		studio.imageSize.value = '2K'
 		expect(studio.estimatedCost.value).toBe(3)
     })
+
+    // token 计费模型：价格字段为最多预扣金额，界面据 billing_mode 显示“按 token 计费，最多预扣”。
+    it('token 计费模型标记最多预扣，按张模型不标记', async () => {
+      mockedApi.getCreativeModels.mockResolvedValue([
+        { ...MODEL, model: 'gpt-image-2.5-sunburst', billing_mode: 'token', price_1k: 0.5, price_2k: 1.2, price_4k: 2.5 },
+        { ...MODEL },
+      ])
+      const { studio } = await setupStudio()
+      studio.selectOption(creativeOptionKey(studio.models.value[0]))
+      expect(studio.tokenBilling.value).toBe(true)
+      studio.imageSize.value = '2K'
+      expect(studio.estimatedCost.value).toBe(1.2)
+      studio.selectOption(creativeOptionKey(studio.models.value[1]))
+      expect(studio.tokenBilling.value).toBe(false)
+    })
   })
 
   describe('createRun 提交', () => {

@@ -296,6 +296,8 @@ func (s *CreativePublicService) ListModels(ctx context.Context, userID int64) (*
 				Price2K:            s.creativePrice(ctx, group, finalModel, "2K"),
 				Price4K:            s.creativePrice(ctx, group, finalModel, "4K"),
 			})
+			// token 价模型与 API 一致按 token 计费：展示 token 单价，各尺寸价格改为预扣上限。
+			s.applyCreativeTokenDisplay(ctx, group, finalModel, &out.Data[len(out.Data)-1])
 		}
 	}
 	return out, nil
@@ -1107,6 +1109,7 @@ func (s *CreativePublicService) CreateRun(ctx context.Context, scope CreativeRun
 		SubscriptionRateMultiplier: pricing.SubscriptionRateMultiplier,
 		BalanceRateMultiplier:      pricing.BalanceRateMultiplier,
 		PlanGroupRateEnabled:       pricing.PlanGroupRateEnabled,
+		BillingMode:                pricing.BillingMode,
 	})
 	if err != nil {
 		return nil, err
@@ -1694,6 +1697,8 @@ type CreativePricingSnapshot struct {
 	BalanceRateMultiplier      float64
 	PlanGroupRateEnabled       bool
 	EstimatedCost              float64
+	// BillingMode 为 token 时 BaseUnitPrice 是按 token 估算的每张预扣上限，成功后按实际用量结算。
+	BillingMode string
 }
 
 // resolveCreativePricing 计算基础单价与有效倍率（订阅倍率 + 用户倍率），与批量图片同口径。
@@ -1746,6 +1751,38 @@ func (s *CreativePublicService) resolveCreativePricing(ctx context.Context, user
 			return nil, err
 		}
 		return &CreativePricingSnapshot{BaseUnitPrice: base, SubscriptionRateMultiplier: subscriptionRate, BalanceRateMultiplier: balanceRate, PlanGroupRateEnabled: planGroupRateEnabled, EstimatedCost: base * effective}, nil
+	}
+	// 渠道/分组把该模型定为 token 价时与 API 一致按 token 结算：先按估算上限预扣，成功后按实际用量扣费。
+	if resolved := s.creativeTokenPricing(ctx, group, pricingModel); resolved != nil {
+		referenceImages := len(validated.sources)
+		if validated.mask != nil {
+			referenceImages++
+		}
+		holdTokens := creativeTokenHoldUsage(validated.prompt, referenceImages, validated.imageSize)
+		cost, err := s.creativeTokenCost(ctx, group, pricingModel, resolved, holdTokens, time.Now())
+		if err != nil || cost == nil || math.IsNaN(cost.TotalCost) || math.IsInf(cost.TotalCost, 0) || cost.TotalCost <= 0 {
+			// token 价缺失或无法计算时不能按零元预扣，也不能退回按张价。
+			return nil, ErrCreativeInvalidModel
+		}
+		tokenBalanceRate := groupDefault
+		if s.UserGroupRateRepo != nil {
+			if userRate, err := s.UserGroupRateRepo.GetByUserAndGroup(ctx, userID, group.ID); err == nil && userRate != nil {
+				tokenBalanceRate = *userRate
+			}
+		}
+		tokenEffective := tokenBalanceRate
+		if subscription != nil {
+			tokenEffective = resolveUsageRateMultiplier(ctx, userID, &groupID, group, groupDefault, subscription, nil)
+		}
+		subRate, balRate, effRate := creativeTokenRateMultipliers(group, groupDefault, tokenBalanceRate, tokenEffective, time.Now())
+		return &CreativePricingSnapshot{
+			BaseUnitPrice:              cost.TotalCost,
+			SubscriptionRateMultiplier: subRate,
+			BalanceRateMultiplier:      balRate,
+			PlanGroupRateEnabled:       true,
+			EstimatedCost:              cost.TotalCost * float64(validated.outputCount) * effRate,
+			BillingMode:                domain.CreativeBillingModeToken,
+		}, nil
 	}
 	if IsMidjourneyImageGenerationModel(pricingModel) {
 		// 单次解析得到的显式单价直接写入快照，不能在并发配置更新后回退到 GPT 默认价。
@@ -2599,6 +2636,23 @@ func (s *CreativePublicService) recordCreativeUsageLog(ctx context.Context, run 
 		BillingMode:           &billingMode,
 		ImageSize:             &imageSize,
 		CreatedAt:             createdAt,
+	}
+	if run.BillingMode == domain.CreativeBillingModeToken {
+		// token 模式与 API 一致记录上游 token 用量与分项费用，计费模式标为 token；
+		// 实扣金额以资金回执为准，基础金额为实际计入的 token 费用。
+		billingMode = string(BillingModeToken)
+		usageLog.ImageOutputCost = 0
+		usageLog.TotalCost = creativeCaptureBase(run, successCount)
+		if usage := run.ProviderUsage; usage != nil && usage.Reported {
+			usageLog.InputTokens, usageLog.ImageInputTokens = usage.InputTokens, usage.ImageInputTokens
+			usageLog.OutputTokens, usageLog.ImageOutputTokens = usage.OutputTokens, usage.ImageOutputTokens
+			usageLog.CacheCreationTokens, usageLog.CacheReadTokens = usage.CacheCreationTokens, usage.CacheReadTokens
+			usageLog.InputCost, usageLog.ImageInputCost, usageLog.OutputCost = usage.InputCost, usage.ImageInputCost, usage.OutputCost
+			usageLog.ImageOutputCost, usageLog.CacheCreationCost, usageLog.CacheReadCost = usage.ImageOutputCost, usage.CacheCreationCost, usage.CacheReadCost
+		}
+		if usageLog.TotalCost > 0 {
+			usageLog.RateMultiplier = actualCost / usageLog.TotalCost
+		}
 	}
 	if run.Operation == CreativeOperationTTS {
 		// 音频沿用冻结费用与实际资金回执，不伪装成一张图片或重新报价。

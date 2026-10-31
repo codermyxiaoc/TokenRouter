@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"math"
 	"time"
 
 	"go.uber.org/zap"
@@ -47,7 +46,7 @@ func (s *CreativePublicService) finishCapturedRun(ctx context.Context, run *Crea
 		if count == 0 || count != run.RequestedOutputCount {
 			return errors.New("creative run was captured without a receipt and its charged amount cannot be confirmed; settlement requires reconciliation")
 		}
-		command, err := buildCreativeHoldCommand(run, CreativeCaptureRequestID(run.RunID), math.Max(run.BaseUnitPrice, 0)*float64(count))
+		command, err := buildCreativeHoldCommand(run, CreativeCaptureRequestID(run.RunID), creativeCaptureBase(run, count))
 		if err != nil {
 			return err
 		}

@@ -1047,15 +1047,11 @@ func isCNProviderClaudeFallbackCandidate(model string) bool {
 }
 
 func (s *OpenAIGatewayService) resolveOpenAIChannelPricing(ctx context.Context, billingModel string, apiKey *APIKey) *ResolvedPricing {
-	if s.resolver == nil || apiKey == nil || apiKey.Group == nil {
+	if apiKey == nil {
 		return nil
 	}
-	gid := apiKey.Group.ID
-	resolved := s.resolver.Resolve(ctx, PricingInput{Model: billingModel, GroupID: &gid, Group: apiKey.Group})
-	if resolved.Source == PricingSourceGroup || resolved.Source == PricingSourceChannel {
-		return resolved
-	}
-	return nil
+	// 与创作台共用同一判定，避免同一分组同一模型在两条路径上的计价方式不一致。
+	return resolveGroupChannelPricing(ctx, s.resolver, billingModel, apiKey.Group)
 }
 
 // ParseCodexRateLimitHeaders extracts Codex usage limits from response headers.

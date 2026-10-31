@@ -73,6 +73,10 @@ func (CreativeRun) Fields() []ent.Field {
 		field.Float("subscription_rate_multiplier").SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}).Default(1),
 		field.Float("balance_rate_multiplier").SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}).Default(1),
 		field.Bool("plan_group_rate_multiplier_enabled").Default(true),
+		// billing_mode 为 token 时按上游 token 用量结算（与 API 渠道 token 定价一致），空值为按张。
+		field.String("billing_mode").MaxLen(16).Default(""),
+		// provider_usage 保存执行成功时一次算定的上游用量与费用，结算和恢复都读取它。
+		field.JSON("provider_usage", &domain.CreativeProviderUsage{}).Optional().SchemaType(map[string]string{dialect.Postgres: "jsonb"}),
 		field.String("error_code").Optional().Nillable().MaxLen(128),
 		field.String("error_message").Optional().Nillable().SchemaType(map[string]string{dialect.Postgres: "text"}),
 		// release_target_status 记录 release_pending 完成后应落入的终态。

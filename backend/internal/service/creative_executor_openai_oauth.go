@@ -110,6 +110,7 @@ func (e *CreativeExecutor) executeOpenAIOAuth(ctx context.Context, run CreativeR
 						zap.String("error_class", errorClass), zap.Bool("stream_interrupted", readErr != nil),
 						zap.Int("image_count", 1))
 				}
+				e.recordCreativeOAuthImageUsage(ctx, responseBody, direct)
 				return []CreativeOutput{{Index: 0, Bytes: decoded.Bytes, Mime: decoded.Mime}}, nil
 			}
 		}
@@ -125,6 +126,24 @@ func (e *CreativeExecutor) executeOpenAIOAuth(ctx context.Context, run CreativeR
 		return nil, creativeImageOutputFailure(ctx, resp.StatusCode, responseBody, err)
 	}
 	return nil, creativeNonRetryableError("creative image endpoint unavailable")
+}
+
+// recordCreativeOAuthImageUsage 用与 API 相同的解析函数读取 OAuth 图片响应的用量。
+func (e *CreativeExecutor) recordCreativeOAuthImageUsage(ctx context.Context, body []byte, direct bool) {
+	if direct {
+		if usage, ok := codexDirectImagesUsage(body); ok {
+			recordCreativeProviderTokens(ctx, creativeTokensFromOpenAIUsage(usage))
+		}
+		return
+	}
+	if e == nil || e.gateway == nil {
+		return
+	}
+	var usage OpenAIUsage
+	forEachOpenAISSEDataPayload(string(body), func(data []byte) {
+		e.gateway.parseOpenAIImagesSSEUsageBytes(data, &usage)
+	})
+	recordCreativeProviderTokens(ctx, creativeTokensFromOpenAIUsage(usage))
 }
 
 // 只有单独的明确拒绝帧可以换号；任务身份、用量、处理中或任何其它内容都已越过受理边界。

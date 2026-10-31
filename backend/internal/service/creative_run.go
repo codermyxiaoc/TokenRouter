@@ -177,6 +177,10 @@ type CreativeRun struct {
 	SubscriptionRateMultiplier float64
 	BalanceRateMultiplier      float64
 	PlanGroupRateEnabled       bool
+	// BillingMode 为 token 时按上游 token 用量结算，BaseUnitPrice 是每张的预扣上限；空值按张。
+	BillingMode string
+	// ProviderUsage 是执行成功时算定的上游用量与费用（仅 token 模式）。
+	ProviderUsage *domain.CreativeProviderUsage
 
 	ErrorCode           *string
 	ErrorMessage        *string
@@ -243,6 +247,7 @@ type CreateCreativeRunParams struct {
 	SubscriptionRateMultiplier float64
 	BalanceRateMultiplier      float64
 	PlanGroupRateEnabled       bool
+	BillingMode                string
 }
 
 // CreativeRunTransitionOptions 携带状态转换的可选上下文。
@@ -308,9 +313,23 @@ type CreativeRunOutputBatchReader interface {
 	ListCreativeRunOutputsForRuns(ctx context.Context, runIDs []string) (map[string][]*CreativeRunOutput, error)
 }
 
+// CreativeTokenPrices 是每百万 token 的展示单价（美元，已乘分组倍率）。
+type CreativeTokenPrices struct {
+	InputPerMillion       float64 `json:"input_per_million"`
+	OutputPerMillion      float64 `json:"output_per_million"`
+	ImageInputPerMillion  float64 `json:"image_input_per_million,omitempty"`
+	ImageOutputPerMillion float64 `json:"image_output_per_million,omitempty"`
+}
+
 // CreativeRunAllowanceMarker 持久化余额/额度预占事实，供补偿流程重启后判断是否需要释放。
 type CreativeRunAllowanceMarker interface {
 	SetCreativeRunAllowanceReserved(ctx context.Context, runID string, reserved bool) error
+}
+
+// CreativeProviderUsageRecorder 保存 token 模式任务执行成功时算定的上游用量与费用；只写入一次，
+// 已有记录时保留原值，保证重复执行或重试结算时扣费金额不变。
+type CreativeProviderUsageRecorder interface {
+	SetCreativeRunProviderUsage(ctx context.Context, runID string, usage *domain.CreativeProviderUsage) error
 }
 
 // CreativeImageAttemptRepository 原子取得图片执行栅栏并保存安全换号预算。
@@ -487,6 +506,10 @@ type CreativeModelPublic struct {
 	Price1K            float64                    `json:"price_1k"`
 	Price2K            float64                    `json:"price_2k"`
 	Price4K            float64                    `json:"price_4k"`
+	// BillingMode 为 token 时与 API 一致按上游 token 用量扣费，Price* 表示各尺寸的预扣上限。
+	BillingMode string `json:"billing_mode,omitempty"`
+	// TokenPrices 是 token 模式下已乘分组倍率的每百万 token 单价，供界面展示。
+	TokenPrices *CreativeTokenPrices `json:"token_prices,omitempty"`
 }
 
 // CreativeNumericRange 描述创作台数值参数的闭区间和步长。

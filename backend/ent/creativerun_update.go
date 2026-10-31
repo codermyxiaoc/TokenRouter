@@ -498,6 +498,32 @@ func (_u *CreativeRunUpdate) SetNillablePlanGroupRateMultiplierEnabled(v *bool) 
 	return _u
 }
 
+// SetBillingMode sets the "billing_mode" field.
+func (_u *CreativeRunUpdate) SetBillingMode(v string) *CreativeRunUpdate {
+	_u.mutation.SetBillingMode(v)
+	return _u
+}
+
+// SetNillableBillingMode sets the "billing_mode" field if the given value is not nil.
+func (_u *CreativeRunUpdate) SetNillableBillingMode(v *string) *CreativeRunUpdate {
+	if v != nil {
+		_u.SetBillingMode(*v)
+	}
+	return _u
+}
+
+// SetProviderUsage sets the "provider_usage" field.
+func (_u *CreativeRunUpdate) SetProviderUsage(v *domain.CreativeProviderUsage) *CreativeRunUpdate {
+	_u.mutation.SetProviderUsage(v)
+	return _u
+}
+
+// ClearProviderUsage clears the value of the "provider_usage" field.
+func (_u *CreativeRunUpdate) ClearProviderUsage() *CreativeRunUpdate {
+	_u.mutation.ClearProviderUsage()
+	return _u
+}
+
 // SetErrorCode sets the "error_code" field.
 func (_u *CreativeRunUpdate) SetErrorCode(v string) *CreativeRunUpdate {
 	_u.mutation.SetErrorCode(v)
@@ -914,6 +940,11 @@ func (_u *CreativeRunUpdate) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "CreativeRun.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.BillingMode(); ok {
+		if err := creativerun.BillingModeValidator(v); err != nil {
+			return &ValidationError{Name: "billing_mode", err: fmt.Errorf(`ent: validator failed for field "CreativeRun.billing_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.ErrorCode(); ok {
 		if err := creativerun.ErrorCodeValidator(v); err != nil {
 			return &ValidationError{Name: "error_code", err: fmt.Errorf(`ent: validator failed for field "CreativeRun.error_code": %w`, err)}
@@ -1077,6 +1108,15 @@ func (_u *CreativeRunUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if value, ok := _u.mutation.PlanGroupRateMultiplierEnabled(); ok {
 		_spec.SetField(creativerun.FieldPlanGroupRateMultiplierEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.BillingMode(); ok {
+		_spec.SetField(creativerun.FieldBillingMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ProviderUsage(); ok {
+		_spec.SetField(creativerun.FieldProviderUsage, field.TypeJSON, value)
+	}
+	if _u.mutation.ProviderUsageCleared() {
+		_spec.ClearField(creativerun.FieldProviderUsage, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.ErrorCode(); ok {
 		_spec.SetField(creativerun.FieldErrorCode, field.TypeString, value)
@@ -1661,6 +1701,32 @@ func (_u *CreativeRunUpdateOne) SetNillablePlanGroupRateMultiplierEnabled(v *boo
 	return _u
 }
 
+// SetBillingMode sets the "billing_mode" field.
+func (_u *CreativeRunUpdateOne) SetBillingMode(v string) *CreativeRunUpdateOne {
+	_u.mutation.SetBillingMode(v)
+	return _u
+}
+
+// SetNillableBillingMode sets the "billing_mode" field if the given value is not nil.
+func (_u *CreativeRunUpdateOne) SetNillableBillingMode(v *string) *CreativeRunUpdateOne {
+	if v != nil {
+		_u.SetBillingMode(*v)
+	}
+	return _u
+}
+
+// SetProviderUsage sets the "provider_usage" field.
+func (_u *CreativeRunUpdateOne) SetProviderUsage(v *domain.CreativeProviderUsage) *CreativeRunUpdateOne {
+	_u.mutation.SetProviderUsage(v)
+	return _u
+}
+
+// ClearProviderUsage clears the value of the "provider_usage" field.
+func (_u *CreativeRunUpdateOne) ClearProviderUsage() *CreativeRunUpdateOne {
+	_u.mutation.ClearProviderUsage()
+	return _u
+}
+
 // SetErrorCode sets the "error_code" field.
 func (_u *CreativeRunUpdateOne) SetErrorCode(v string) *CreativeRunUpdateOne {
 	_u.mutation.SetErrorCode(v)
@@ -2090,6 +2156,11 @@ func (_u *CreativeRunUpdateOne) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "CreativeRun.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.BillingMode(); ok {
+		if err := creativerun.BillingModeValidator(v); err != nil {
+			return &ValidationError{Name: "billing_mode", err: fmt.Errorf(`ent: validator failed for field "CreativeRun.billing_mode": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.ErrorCode(); ok {
 		if err := creativerun.ErrorCodeValidator(v); err != nil {
 			return &ValidationError{Name: "error_code", err: fmt.Errorf(`ent: validator failed for field "CreativeRun.error_code": %w`, err)}
@@ -2270,6 +2341,15 @@ func (_u *CreativeRunUpdateOne) sqlSave(ctx context.Context) (_node *CreativeRun
 	}
 	if value, ok := _u.mutation.PlanGroupRateMultiplierEnabled(); ok {
 		_spec.SetField(creativerun.FieldPlanGroupRateMultiplierEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.BillingMode(); ok {
+		_spec.SetField(creativerun.FieldBillingMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ProviderUsage(); ok {
+		_spec.SetField(creativerun.FieldProviderUsage, field.TypeJSON, value)
+	}
+	if _u.mutation.ProviderUsageCleared() {
+		_spec.ClearField(creativerun.FieldProviderUsage, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.ErrorCode(); ok {
 		_spec.SetField(creativerun.FieldErrorCode, field.TypeString, value)

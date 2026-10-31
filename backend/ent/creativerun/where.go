@@ -194,6 +194,11 @@ func PlanGroupRateMultiplierEnabled(v bool) predicate.CreativeRun {
 	return predicate.CreativeRun(sql.FieldEQ(FieldPlanGroupRateMultiplierEnabled, v))
 }
 
+// BillingMode applies equality check predicate on the "billing_mode" field. It's identical to BillingModeEQ.
+func BillingMode(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldEQ(FieldBillingMode, v))
+}
+
 // ErrorCode applies equality check predicate on the "error_code" field. It's identical to ErrorCodeEQ.
 func ErrorCode(v string) predicate.CreativeRun {
 	return predicate.CreativeRun(sql.FieldEQ(FieldErrorCode, v))
@@ -1737,6 +1742,81 @@ func PlanGroupRateMultiplierEnabledEQ(v bool) predicate.CreativeRun {
 // PlanGroupRateMultiplierEnabledNEQ applies the NEQ predicate on the "plan_group_rate_multiplier_enabled" field.
 func PlanGroupRateMultiplierEnabledNEQ(v bool) predicate.CreativeRun {
 	return predicate.CreativeRun(sql.FieldNEQ(FieldPlanGroupRateMultiplierEnabled, v))
+}
+
+// BillingModeEQ applies the EQ predicate on the "billing_mode" field.
+func BillingModeEQ(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldEQ(FieldBillingMode, v))
+}
+
+// BillingModeNEQ applies the NEQ predicate on the "billing_mode" field.
+func BillingModeNEQ(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldNEQ(FieldBillingMode, v))
+}
+
+// BillingModeIn applies the In predicate on the "billing_mode" field.
+func BillingModeIn(vs ...string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldIn(FieldBillingMode, vs...))
+}
+
+// BillingModeNotIn applies the NotIn predicate on the "billing_mode" field.
+func BillingModeNotIn(vs ...string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldNotIn(FieldBillingMode, vs...))
+}
+
+// BillingModeGT applies the GT predicate on the "billing_mode" field.
+func BillingModeGT(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldGT(FieldBillingMode, v))
+}
+
+// BillingModeGTE applies the GTE predicate on the "billing_mode" field.
+func BillingModeGTE(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldGTE(FieldBillingMode, v))
+}
+
+// BillingModeLT applies the LT predicate on the "billing_mode" field.
+func BillingModeLT(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldLT(FieldBillingMode, v))
+}
+
+// BillingModeLTE applies the LTE predicate on the "billing_mode" field.
+func BillingModeLTE(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldLTE(FieldBillingMode, v))
+}
+
+// BillingModeContains applies the Contains predicate on the "billing_mode" field.
+func BillingModeContains(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldContains(FieldBillingMode, v))
+}
+
+// BillingModeHasPrefix applies the HasPrefix predicate on the "billing_mode" field.
+func BillingModeHasPrefix(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldHasPrefix(FieldBillingMode, v))
+}
+
+// BillingModeHasSuffix applies the HasSuffix predicate on the "billing_mode" field.
+func BillingModeHasSuffix(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldHasSuffix(FieldBillingMode, v))
+}
+
+// BillingModeEqualFold applies the EqualFold predicate on the "billing_mode" field.
+func BillingModeEqualFold(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldEqualFold(FieldBillingMode, v))
+}
+
+// BillingModeContainsFold applies the ContainsFold predicate on the "billing_mode" field.
+func BillingModeContainsFold(v string) predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldContainsFold(FieldBillingMode, v))
+}
+
+// ProviderUsageIsNil applies the IsNil predicate on the "provider_usage" field.
+func ProviderUsageIsNil() predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldIsNull(FieldProviderUsage))
+}
+
+// ProviderUsageNotNil applies the NotNil predicate on the "provider_usage" field.
+func ProviderUsageNotNil() predicate.CreativeRun {
+	return predicate.CreativeRun(sql.FieldNotNull(FieldProviderUsage))
 }
 
 // ErrorCodeEQ applies the EQ predicate on the "error_code" field.

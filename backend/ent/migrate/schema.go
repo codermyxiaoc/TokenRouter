@@ -738,6 +738,8 @@ var (
 		{Name: "subscription_rate_multiplier", Type: field.TypeFloat64, Default: 1, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
 		{Name: "balance_rate_multiplier", Type: field.TypeFloat64, Default: 1, SchemaType: map[string]string{"postgres": "decimal(20,10)"}},
 		{Name: "plan_group_rate_multiplier_enabled", Type: field.TypeBool, Default: true},
+		{Name: "billing_mode", Type: field.TypeString, Size: 16, Default: ""},
+		{Name: "provider_usage", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
 		{Name: "error_code", Type: field.TypeString, Nullable: true, Size: 128},
 		{Name: "error_message", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "release_target_status", Type: field.TypeString, Size: 20, Default: "failed"},

@@ -391,6 +391,8 @@ func (e *CreativeExecutor) Execute(ctx context.Context, run CreativeRun, payload
 	defer cancel()
 	execCtx, policyCancel := WithImageAttemptPolicy(execCtx, time.Until(deadline))
 	defer policyCancel()
+	// 执行器把成功解析出的上游 token 用量写入收集器，token 模式据此按 API 同一公式结算。
+	execCtx, usageCollector := withCreativeUsageCollector(execCtx)
 
 	var outputs []CreativeOutput
 	var err error
@@ -434,6 +436,7 @@ func (e *CreativeExecutor) Execute(ctx context.Context, run CreativeRun, payload
 	return &CreativeExecuteResult{
 		Outputs:   outputs,
 		AccountID: account.ID,
+		Usage:     usageCollector.result(),
 	}, nil
 }
 

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"github.com/TokenFlux/TokenRouter/internal/domain"
 	"strings"
 	"time"
 
@@ -58,6 +59,7 @@ func (r *creativeRunRepository) CreateCreativeRun(ctx context.Context, params se
 		SetSubscriptionRateMultiplier(params.SubscriptionRateMultiplier).
 		SetBalanceRateMultiplier(params.BalanceRateMultiplier).
 		SetPlanGroupRateMultiplierEnabled(params.PlanGroupRateEnabled).
+		SetBillingMode(params.BillingMode).
 		SetProvisioningPhase(service.CreativeProvisioningPhaseCreated)
 	if params.WorkspaceID != "" {
 		builder.SetWorkspaceID(params.WorkspaceID)
@@ -368,6 +370,19 @@ func (r *creativeRunRepository) markCreativeRunSettled(ctx context.Context, runI
 		return service.ErrCreativeInvalidTransition
 	}
 	return nil
+}
+
+// SetCreativeRunProviderUsage 只在尚未记录时写入 token 用量与费用；已有记录保留原值，
+// 重复执行或重试时扣费金额保持不变。
+func (r *creativeRunRepository) SetCreativeRunProviderUsage(ctx context.Context, runID string, usage *domain.CreativeProviderUsage) error {
+	if usage == nil {
+		return nil
+	}
+	_, err := r.client.CreativeRun.Update().
+		Where(creativerun.RunIDEQ(runID), creativerun.ProviderUsageIsNil()).
+		SetProviderUsage(usage).
+		Save(ctx)
+	return err
 }
 
 // MarkCreativeRunProviderSucceeded 在输出已经写入 Redis 后记录 provider 成功，
@@ -829,6 +844,8 @@ func creativeRunEntityToService(entity *dbent.CreativeRun) *service.CreativeRun 
 		SubscriptionRateMultiplier:  entity.SubscriptionRateMultiplier,
 		BalanceRateMultiplier:       entity.BalanceRateMultiplier,
 		PlanGroupRateEnabled:        entity.PlanGroupRateMultiplierEnabled,
+		BillingMode:                 entity.BillingMode,
+		ProviderUsage:               entity.ProviderUsage,
 		ErrorCode:                   entity.ErrorCode,
 		ErrorMessage:                entity.ErrorMessage,
 		ReleaseTargetStatus:         entity.ReleaseTargetStatus,

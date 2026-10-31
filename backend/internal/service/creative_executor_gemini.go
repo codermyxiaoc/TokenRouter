@@ -144,6 +144,9 @@ func (e *CreativeExecutor) executeGemini(ctx context.Context, run CreativeRun, p
 	if parseErr != nil {
 		return nil, creativeImageOutputFailure(ctx, resp.StatusCode, respBody, parseErr)
 	}
+	if usage := extractGeminiUsage(respBody); usage != nil {
+		recordCreativeProviderTokens(ctx, creativeTokensFromGeminiUsage(usage))
+	}
 	return outputs, nil
 }
 

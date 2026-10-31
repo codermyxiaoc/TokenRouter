@@ -79,6 +79,9 @@ func (e *CreativeExecutor) executeGrok(ctx context.Context, run CreativeRun, pay
 	if parseErr != nil {
 		return nil, creativeImageOutputFailure(ctx, resp.StatusCode, respBody, parseErr)
 	}
+	if usage, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
+		recordCreativeProviderTokens(ctx, creativeTokensFromOpenAIUsage(usage))
+	}
 	return outputs, nil
 }
 

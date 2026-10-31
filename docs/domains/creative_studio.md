@@ -22,6 +22,7 @@ TokenRouter 创作台（Creative Studio）提供面向个人用户的图片生�
 - [幂等](#幂等)：说明 Idempotency-Key、请求指纹和部分唯一索引。
 - [隐藏执行 Key](#隐藏执行-key)：说明托管 Key 的供应、可见性与级联。
 - [计费](#计费)：说明预占、捕获、释放和结算幂等。
+- [按 token 计费](#creative_token_billing)：说明渠道/分组定为 token 价的图片模型如何与 API 一致按实际用量扣费。
 - [Redis 临时数据](#redis-临时数据)：说明临时键、TTL、ack 即删和队列协调。
 - [审核无留存](#审核无留存)：说明创作台送审的无媒体留存模式。
 - [提供商说明](#提供商说明)：说明 openai/grok/gemini 三个平台的执行契约。
@@ -179,6 +180,19 @@ creative_settle:{run_id}    写 usage_logs 的结算记录 ID
 结算与退款 outbox 在取得与执行 worker 相同的任务锁后直接调用幂等结算或释放；结算须资金与日志都成功，退款须释放成功并推进终态，才能确认 outbox 完成。因此 Redis 队列条目丢失也不会丢失尚未处理的结算或退款意图；锁竞争、数据库故障仍保留持久重试。账号执行仍由原 worker 负责，outbox 不重新生成图片，迟到的退款事件也不释放已成功结算任务。后台另以主键分页、每轮最多 50 条核对启动前 24 小时以来的已结算终态记录：必须存在 `creative_capture:` 捕获账本，保留真实成本、完整输出元数据和首次预占快照，且还原金额与保存金额一致，才补写日志。该补偿不会再次调用资金捕获/释放；证据不足只报告待核对。投递标记持久保留，正常清理过的日志不会反复补回。
 
 生产准确价格由分组图片定价配置解析，本文不定义价格数值。
+
+<a id="creative_token_billing"></a>
+### 按 token 计费
+
+图片模型的计费方式与 API 一致，由同一个函数 `resolveGroupChannelPricing` 判定：分组或渠道把该模型定为 token 价时按 token 结算，否则按张（分组/渠道按张价 → 分组图片价 → 默认图片价）。默认目录价不参与判定，与 API 的 OpenAI、Gemini 图片计费分支一致。MJ 只接受按张价。文本画布、视频（统一视频与 Grok）和 TTS 本身走网关或复用 API 计价，不经过此判定。
+
+- **预扣上限**：报价时按“提示词字符数 × 2 + 1000 固定开销 + 每张参考图（含遮罩）6000 图片输入 token”和“各尺寸单张图片输出上限（512：2000、1K：8000、2K：20000、4K：48000）+ 1000 文本输出”估算用量，用与 API 相同的 `CalculateCostUnified` 计算基础金额，作为每张的预扣上限（`base_unit_price`）。倍率与 API 的 token 路径一致：用户/订阅倍率叠加分组高峰因子，不使用图片独立倍率。token 价缺失或无法计算时拒绝生成，不按零元预扣，也不退回按张价。
+- **用量**：执行器用 API 同一解析函数读取上游用量（API Key Images 用 `extractOpenAIUsageFromJSONBytes`，OAuth 直连用 `codexDirectImagesUsage`，OAuth Responses 逐个 SSE 事件用 `parseOpenAIImagesSSEUsageBytes`，Gemini 用 `extractGeminiUsage`，Grok 按 OpenAI 兼容 JSON 解析），并按 API `RecordUsage` 的规则拆成互斥计费桶。全零用量视为未返回。
+- **算定与持久化**：执行成功、输出落库之前，按 API 同一公式算出 token 费用，连同用量写入 `creative_runs.provider_usage`（迁移 `327_creative_run_token_billing.sql`，`billing_mode='token'`）。只写一次，已有记录保留原值；结算、重试和崩溃恢复都读取这份金额，不随之后的价格变化重算，保证同一捕获请求 ID 的金额一致。
+- **扣费**：成功交付后按算定的 token 费用捕获，多冻结部分退回。token 费用超过预扣上限时只扣到上限，`review_reason=token_cost_exceeds_hold`；上游没有返回用量、或执行后定价已改为非 token 时按预扣上限扣费，`review_reason=token_usage_missing`。两种情况都记录告警日志，需管理员核对，不当作免费。缺少 `provider_usage` 记录（写入失败）时同样按预扣上限并视为缺少用量。
+- **用量日志**：`BillingMode` 记为 `token`，记录上游 token 数和分项费用，`TotalCost` 为实际计入的 token 基础金额，`ActualCost` 以资金回执为准。
+- **展示**：模型目录返回 `billing_mode=token` 和已乘分组倍率的每百万 token 单价（`token_prices`），`price_*` 为各尺寸不含参考图的预扣上限；创作台显示“按 token 计费，最多预扣 X”。
+- **历史任务**：`billing_mode` 为空的任务保持按张结算，不受影响。
 
 ## Redis 临时数据
 

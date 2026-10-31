@@ -18,6 +18,7 @@ export default {
       background: '背景',
       thinkingLevel: '思考强度',
       estimatedCost: '{cost}',
+      tokenEstimatedCost: '按 token 计费，最多预扣 {cost}',
       outputCount: '每次 {count} 张，按张计费',
       uploadSource: '上传图片',
       promptPlaceholder: '描述想要生成的画面...',

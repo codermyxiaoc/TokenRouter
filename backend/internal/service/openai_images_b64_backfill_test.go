@@ -439,3 +439,32 @@ func TestBackfillOpenAIImagesB64JSON_PreservesBillingMetadata(t *testing.T) {
 	require.Empty(t, sizes)
 	require.Equal(t, base64.StdEncoding.EncodeToString(img.Bytes()), gjson.Get(rec.Body.String(), "data.0.b64_json").String())
 }
+
+// MJ 客户端要 b64_json：转发改为要 url，上游返回 url 后即使账号未开回填也必须下载回填 b64，客户端拿到的仍是 b64。
+func TestForwardImagesMidjourneyB64RequestBackfillsFromURL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"MJ-v8.2","prompt":"draw a cat","n":1,"response_format":"b64_json"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("api_key", &APIKey{ID: 42})
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"created":1,"data":[{"url":"https://cdn.example.com/mj.png"}]}`))},
+		b64BackfillImageResponse(http.StatusOK, "image/png", b64BackfillPNGBytes),
+	}}
+	svc.httpUpstream = upstream
+	result, err := svc.ForwardImages(context.Background(), c, b64BackfillAccount(false), body, parsed, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.ImageCount)
+	require.Len(t, upstream.requests, 2)
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "response_format").Exists(), "MJ 不向上游请求 b64_json")
+	require.Equal(t, "https://cdn.example.com/mj.png", upstream.requests[1].URL.String())
+	require.True(t, HTTPUpstreamPublicHostsOnly(upstream.requests[1].Context()))
+	require.Equal(t, base64.StdEncoding.EncodeToString(b64BackfillPNGBytes), gjson.Get(rec.Body.String(), "data.0.b64_json").String())
+}

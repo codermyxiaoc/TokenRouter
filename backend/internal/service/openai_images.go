@@ -63,35 +63,37 @@ type OpenAIImagesUpload struct {
 }
 
 type OpenAIImagesRequest struct {
-	Endpoint           string
-	ContentType        string
-	Multipart          bool
-	Model              string
-	ExplicitModel      bool
-	Prompt             string
-	Stream             bool
-	N                  int
-	Size               string
-	ExplicitSize       bool
-	SizeTier           string
-	ResponseFormat     string
-	Quality            string
-	Background         string
-	OutputFormat       string
-	Moderation         string
-	InputFidelity      string
-	Style              string
-	OutputCompression  *int
-	PartialImages      *int
-	HasMask            bool
-	HasNativeOptions   bool
-	RequiredCapability OpenAIImagesCapability
-	InputImageURLs     []string
-	MaskImageURL       string
-	Uploads            []OpenAIImagesUpload
-	MaskUpload         *OpenAIImagesUpload
-	Body               []byte
-	bodyHash           string
+	Endpoint       string
+	ContentType    string
+	Multipart      bool
+	Model          string
+	ExplicitModel  bool
+	Prompt         string
+	Stream         bool
+	N              int
+	Size           string
+	ExplicitSize   bool
+	SizeTier       string
+	ResponseFormat string
+	// forwardUpstreamModel 是本次转发实际使用的上游模型，仅供响应阶段内部判断，不来自客户端。
+	forwardUpstreamModel string
+	Quality              string
+	Background           string
+	OutputFormat         string
+	Moderation           string
+	InputFidelity        string
+	Style                string
+	OutputCompression    *int
+	PartialImages        *int
+	HasMask              bool
+	HasNativeOptions     bool
+	RequiredCapability   OpenAIImagesCapability
+	InputImageURLs       []string
+	MaskImageURL         string
+	Uploads              []OpenAIImagesUpload
+	MaskUpload           *OpenAIImagesUpload
+	Body                 []byte
+	bodyHash             string
 }
 
 func (r *OpenAIImagesRequest) ModerationBody() []byte {
@@ -730,6 +732,15 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	if err != nil {
 		return nil, err
 	}
+	midjourney := IsMidjourneyImageGenerationModel(upstreamModel)
+	// 记录本次实际转发的上游模型，供响应阶段判断（每次换号重新写入）。
+	parsed.forwardUpstreamModel = upstreamModel
+	if midjourney {
+		// MJ 一律向上游请求 url：b64 任务转为异步后无法取回图片；需要 b64 时由本站下载后回填。
+		if forwardBody, err = rewriteMidjourneyImagesBodyToURL(forwardBody); err != nil {
+			return nil, err
+		}
+	}
 	// 生图是长耗时、上游侧已产生实际成本的操作：客户端中途断开不应连带取消上游请求。
 	// detachStreamUpstreamContext 在非流式时原样返回请求 context，于是客户端一断开
 	// 就把已经在出图的上游调用打断成 context canceled，网关记 502、不扣费，而上游那边
@@ -891,6 +902,12 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 			ImageOutputSizes: imageOutputSizes,
 		}, nil
 	} else {
+		if midjourney {
+			// 上游超时转为异步任务时只返回任务 ID：按 ID 轮询到完成，用最终结果替换响应体，绝不重新提交生成。
+			if err := s.resolveMidjourneyAsyncResponse(upstreamCtx, c, account, resp, upstreamReq, token, tlsRouterMatch...); err != nil {
+				return nil, err
+			}
+		}
 		nonStreamUsage, nonStreamCount, nonStreamSizes, err := s.handleOpenAIImagesNonStreamingResponse(upstreamCtx, resp, c, account, parsed)
 		if err != nil {
 			return nil, err

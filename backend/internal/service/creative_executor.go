@@ -383,7 +383,7 @@ func (e *CreativeExecutor) Execute(ctx context.Context, run CreativeRun, payload
 		// 其它模型保持原有单张输出合同，不受 MJ 固定四张影响。
 		run.RequestedOutputCount = 1
 	}
-	deadline := time.Now().Add(e.executeTimeout())
+	deadline := time.Now().Add(creativeImageBudgetForModel(e.executeTimeout(), upstreamModel))
 	if run.ImageExecutionDeadlineAt != nil {
 		deadline = *run.ImageExecutionDeadlineAt
 	}

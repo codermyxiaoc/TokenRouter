@@ -47,7 +47,8 @@ func TestCreativeMidjourneyRequestContract(t *testing.T) {
 		require.Equal(t, "application/json", contentType)
 		var got map[string]any
 		require.NoError(t, json.Unmarshal(body, &got))
-		require.Equal(t, map[string]any{"model": model, "prompt": "a teapot", "n": float64(1), "size": "1024x1024", "response_format": "b64_json"}, got)
+		// 不请求 b64_json：上游转为异步后 b64 任务无法取回图片，统一要 url 由本站下载。
+		require.Equal(t, map[string]any{"model": model, "prompt": "a teapot", "n": float64(1), "size": "1024x1024"}, got)
 	}
 	for _, mutate := range []func(*CreativeRun, *CreativeRunPayload){
 		func(r *CreativeRun, p *CreativeRunPayload) { r.RequestedOutputCount = 1 },
@@ -291,6 +292,10 @@ func TestCreativeImageExecutionAlwaysHasBoundedRequestContext(t *testing.T) {
 				budget := defaultCreativeExecuteTimeout
 				if seconds > 0 {
 					budget = time.Duration(seconds) * time.Second
+				}
+				// MJ 异步生成至少保留十五分钟；其它模型仍使用原有执行配置。
+				if model == "MJ-v8.1" && budget < 15*time.Minute {
+					budget = 15 * time.Minute
 				}
 				require.WithinDuration(t, start.Add(budget), deadline, time.Second)
 			})

@@ -519,7 +519,7 @@ func (w *CreativeRunWorker) process(ctx context.Context, runID string) (Creative
 		if !ok {
 			return CreativeProcessResult{}, errors.New("creative image attempt persistence is unavailable")
 		}
-		claimed, claimErr := attempts.BeginCreativeImageAttempt(ctx, runID, execution.Account.ID, w.creativeImageExecutionBudget(), time.Now())
+		claimed, claimErr := attempts.BeginCreativeImageAttempt(ctx, runID, execution.Account.ID, w.creativeImageExecutionBudgetFor(execution.UpstreamModel), time.Now())
 		if errors.Is(claimErr, ErrCreativeImageBudgetExhausted) {
 			return w.failCreativeImageRun(ctx, runID, claimErr)
 		}
@@ -623,7 +623,7 @@ func (w *CreativeRunWorker) creativeUnconfirmedDeadline(run *CreativeRun) time.T
 	if run.StartedAt != nil {
 		start = *run.StartedAt
 	}
-	return start.Add(w.creativeImageExecutionBudget() + defaultCreativeUnconfirmedGrace)
+	return start.Add(w.creativeImageExecutionBudgetFor(run.Model) + defaultCreativeUnconfirmedGrace)
 }
 
 // releaseUnavailableExecution 用户没有拿到任何成品时不扣费：先确认没有已落库结果，再失败并释放冻结。

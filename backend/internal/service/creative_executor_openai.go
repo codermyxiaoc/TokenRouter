@@ -89,6 +89,19 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 		return nil, creativeImageHTTPFailure(ctx, resp.StatusCode, respBody)
 	}
 	if midjourney {
+		// 上游超时转为异步任务时只返回任务 ID：按 ID 轮询到完成再解析，绝不重新提交生成。
+		if taskID, async := midjourneyAsyncTaskID(respBody); async {
+			polled, pollErr := e.pollCreativeMidjourneyTask(ctx, run, account, targetURL, token, taskID)
+			if pollErr != nil {
+				logCreativeImageUnconfirmed(ctx, run.RunID, account.ID, "midjourney_async_poll", resp.StatusCode)
+				if errors.Is(pollErr, errMidjourneyTaskFailed) {
+					// 上游明确失败、没有产出：不扣费。
+					return nil, WrapImageAttemptError(creativeNonRetryableError("Midjourney task failed upstream"), ImageAttemptDecision{Outcome: ImageAttemptAccepted, Reason: "midjourney_task_failed"})
+				}
+				return nil, creativeResultUnconfirmedError()
+			}
+			respBody = polled
+		}
 		outputs, parseErr := parseCreativeMidjourneyImageOutputs(ctx, respBody, creativeMidjourneyImageDownloader)
 		if parseErr != nil {
 			logCreativeImageUnconfirmed(ctx, run.RunID, account.ID, "response_parse", resp.StatusCode)
@@ -110,6 +123,32 @@ func (e *CreativeExecutor) executeOpenAI(ctx context.Context, run CreativeRun, p
 		recordCreativeProviderTokens(ctx, creativeTokensFromOpenAIUsage(usage))
 	}
 	return outputs, nil
+}
+
+// pollCreativeMidjourneyTask 用与生成相同的账号凭据和代理查询异步任务，截止时间沿用本次执行预算。
+func (e *CreativeExecutor) pollCreativeMidjourneyTask(ctx context.Context, run CreativeRun, account *Account, generationsURL, token, taskID string) ([]byte, error) {
+	taskURL, err := midjourneyTaskURL(generationsURL, taskID)
+	if err != nil {
+		return nil, errMidjourneyTaskUnconfirmed
+	}
+	logger.L().Info("creative.midjourney_async_task", zap.String("run_id", run.RunID), zap.Int64("account_id", account.ID))
+	return pollMidjourneyTask(ctx, taskURL, midjourneyPollDeadline(ctx), func(reqCtx context.Context, target string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(WithHTTPUpstreamProfile(reqCtx, HTTPUpstreamProfileOpenAI), http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		headers, err := e.gateway.buildOpenAIAuthenticationHeaders(reqCtx, account, token)
+		if err != nil {
+			return nil, err
+		}
+		for key, values := range headers {
+			for _, value := range values {
+				req.Header.Add(key, value)
+			}
+		}
+		account.ApplyHeaderOverrides(req.Header)
+		return e.gateway.httpUpstream.DoWithTLS(req, accountProxyURL(account), account.ID, account.Concurrency, e.gateway.resolveOpenAITLSProfile(account))
+	})
 }
 
 // 未知结果不会抛出 worker 错误；独立记录固定阶段，供管理员用任务编号核对，

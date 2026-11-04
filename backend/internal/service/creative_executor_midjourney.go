@@ -62,9 +62,10 @@ func buildCreativeMidjourneyRequestBody(run CreativeRun, payload CreativeRunPayl
 	if err != nil {
 		return nil, "", err
 	}
+	// 不请求 b64_json：上游超时转为异步任务后，b64 任务完成查询不再返回图片；url 结果可由本站下载。
 	request := map[string]any{
 		"model": model, "prompt": payload.Prompt, "n": 1,
-		"size": size, "response_format": "b64_json",
+		"size": size,
 	}
 	if ratio != "1:1" {
 		// 非正方形同时声明精确比例；不发送与 size 互斥的 resolution，旧正方形请求保持原状。

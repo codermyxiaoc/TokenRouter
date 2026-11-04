@@ -36,7 +36,10 @@ func (s *OpenAIGatewayService) backfillOpenAIImagesB64JSON(
 	parsed *OpenAIImagesRequest,
 	body []byte,
 ) []byte {
-	if !ImagesURLToB64JSONEnabled(account) || !gjson.ValidBytes(body) || (parsed != nil && (parsed.Stream || strings.EqualFold(strings.TrimSpace(parsed.ResponseFormat), "url"))) {
+	// MJ 的 b64_json 请求改为向上游要 url；客户端明确要 b64_json 时必须回填，未指定格式保持原透传行为。
+	midjourney := parsed != nil && IsMidjourneyImageGenerationModel(parsed.forwardUpstreamModel) &&
+		strings.EqualFold(strings.TrimSpace(parsed.ResponseFormat), "b64_json")
+	if (!ImagesURLToB64JSONEnabled(account) && !midjourney) || !gjson.ValidBytes(body) || (parsed != nil && (parsed.Stream || strings.EqualFold(strings.TrimSpace(parsed.ResponseFormat), "url"))) {
 		return body
 	}
 	items := gjson.GetBytes(body, "data")

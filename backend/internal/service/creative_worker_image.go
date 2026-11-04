@@ -16,6 +16,19 @@ func (w *CreativeRunWorker) creativeImageExecutionBudget() time.Duration {
 	return defaultCreativeExecuteTimeout
 }
 
+// creativeImageExecutionBudgetFor 按上游模型返回图片执行预算：MJ 生成常超过 4 分钟并可能转为异步任务，
+// 使用不低于 MidjourneyImageExecutionBudget 的预算；其它模型保持原配置。
+func (w *CreativeRunWorker) creativeImageExecutionBudgetFor(model string) time.Duration {
+	return creativeImageBudgetForModel(w.creativeImageExecutionBudget(), model)
+}
+
+func creativeImageBudgetForModel(base time.Duration, model string) time.Duration {
+	if IsMidjourneyImageGenerationModel(model) && base < MidjourneyImageExecutionBudget {
+		return MidjourneyImageExecutionBudget
+	}
+	return base
+}
+
 func (w *CreativeRunWorker) failCreativeImageRun(ctx context.Context, runID string, err error) (CreativeProcessResult, error) {
 	code, message := creativeExecuteErrorParts(err)
 	if errors.Is(err, ErrCreativeImageBudgetExhausted) {

@@ -134,7 +134,7 @@ func (x *creativeCanvasImageExecutor) Poll(ctx context.Context, e *CreativeCanva
 		case CreativeRunStatusReleasePending:
 			out.ErrorCode, out.ErrorMessage = "CREATIVE_IMAGE_RELEASE_PENDING", "图片任务正在释放预扣，请等待处理完成"
 		default:
-			now, timeout := time.Now(), creativeCanvasImageExecutionTimeout(x.creative)
+			now, timeout := time.Now(), creativeImageBudgetForModel(creativeCanvasImageExecutionTimeout(x.creative), run.Model)
 			if creativeImageProviderReconciliationDue(run, now, timeout) {
 				out.ErrorCode, out.ErrorMessage = "CREATIVE_IMAGE_SUBMISSION_UNCONFIRMED", creativeImageUnconfirmedMessage(run, now, timeout)
 			}

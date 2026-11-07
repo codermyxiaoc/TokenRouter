@@ -27,7 +27,7 @@ TokenRouter 支持长时间运行的 SSE 和 WebSocket 请求。入口保护不�
 
 ## 可信客户端 IP
 
-为兼容升级，`security.trust_forwarded_ip_for_api_key_acl` 默认开启。开启后，原始转发请求头接管日志与安全敏感路径的客户端 IP 解析。`security.forwarded_client_ip_headers` 中的自定义请求头按配置顺序检查，优先于内置的 `CF-Connecting-IP`、`X-Real-IP` 和 `X-Forwarded-For` 回退。请求头名称不区分大小写，加载时会规范化并去重，最多允许 16 个唯一且有效的 HTTP 字段名。请求头值必须包含 IP 字面量；支持逗号分隔，跳过无效项，并优先选择公网地址而不是私网回退地址。
+为兼容升级，`security.trust_forwarded_ip_for_api_key_acl` 默认开启。开启后，原始转发请求头接管日志与安全敏感路径的客户端 IP 解析。`security.forwarded_client_ip_headers` 中的自定义请求头按配置顺序检查，优先于内置的 `CF-Connecting-IP`、`X-Real-IP` 和 `X-Forwarded-For` 回退。请求头名称不区分大小写，加载时会规范化并去重，最多允许 16 个唯一且有效的 HTTP 字段名。请求头值必须包含 IP 字面量；支持逗号分隔，跳过无效项，并优先选择公网地址而不是私网回退地址。内置的 `CF-Connecting-IP` 只在上一跳是 Cloudflare 公布的回源网段时采用（直连对端，或代理写入的 `X-Real-IP` / `X-Forwarded-For` 最后一跳）；常见反向代理不会清除客户端自带的该请求头，否则任何人都能借它伪造 IP 绕过登录限流与 API Key IP 白名单。显式配置在 `forwarded_client_ip_headers` 中的同名头不受此限制，由部署方保证只有 CDN 写入。
 
 该列表可以通过 YAML 或逗号分隔的 `SECURITY_FORWARDED_CLIENT_IP_HEADERS` 环境变量提供；显式空环境变量会清除 YAML 值。管理后台安全设置也可以编辑它，并在无需重启的情况下更新运行状态。每个请求会同时快照开关与请求头列表，不能在同一次请求中混用新旧设置。开关关闭时完全忽略自定义请求头，此时以 Gin 的 `server.trusted_proxies` 链为准，只能配置直接连接 TokenRouter 的准确 CIDR 或 IP。显式空列表表示不信任任何转发客户端 IP。
 

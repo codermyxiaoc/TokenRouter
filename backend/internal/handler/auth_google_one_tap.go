@@ -22,6 +22,8 @@ const (
 	googleOneTapRequestMaxBytes     = 24 * 1024
 	googleOneTapStatusAuthenticated = "authenticated"
 	googleOneTapStatusRegistration  = "registration_required"
+	// googleOneTapStatusTotpRequired 表示账号已开启两步验证，需要提交验证码后才签发凭证。
+	googleOneTapStatusTotpRequired = "totp_required"
 )
 
 type googleOneTapRequest struct {
@@ -38,6 +40,9 @@ type googleOneTapResponse struct {
 	ExpiresIn    int    `json:"expires_in,omitempty"`
 	TokenType    string `json:"token_type,omitempty"`
 	Redirect     string `json:"redirect,omitempty"`
+	// 两步验证挑战：Status 为 totp_required 时返回。
+	TempToken       string `json:"temp_token,omitempty"`
+	UserEmailMasked string `json:"user_email_masked,omitempty"`
 }
 
 type googleIDTokenClaims struct {
@@ -242,6 +247,18 @@ func (h *AuthHandler) GoogleOneTap(c *gin.Context) {
 		return
 	}
 	servermiddleware.SetAuditActor(c, user.ID, user.Email)
+	if challenge, err := h.oauthLoginTotpChallenge(c.Request.Context(), user, tokenPair); err != nil {
+		response.InternalError(c, "Failed to create 2FA session")
+		return
+	} else if challenge != nil {
+		writeGoogleOneTapResponse(c, googleOneTapResponse{
+			Status:          googleOneTapStatusTotpRequired,
+			TempToken:       challenge.TempToken,
+			UserEmailMasked: challenge.UserEmailMasked,
+			Redirect:        redirectTo,
+		})
+		return
+	}
 	writeGoogleOneTapResponse(c, googleOneTapResponse{
 		Status:       googleOneTapStatusAuthenticated,
 		AccessToken:  tokenPair.AccessToken,

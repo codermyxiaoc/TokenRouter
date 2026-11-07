@@ -357,9 +357,17 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 				redirectOAuthError(c, frontendCallback, "session_error", "failed to bind oauth identity", "")
 				return
 			}
-			h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 			clearOAuthPendingSessionCookie(c, secureCookie)
 			clearOAuthPendingBrowserCookie(c, secureCookie)
+			// 已开启两步验证的账号不能仅凭第三方身份登录。
+			if challenge, err := h.oauthLoginTotpChallenge(c.Request.Context(), user, tokenPair); err != nil {
+				redirectOAuthError(c, frontendCallback, "session_error", "failed to create 2FA session", "")
+				return
+			} else if challenge != nil {
+				redirectOAuthTotpChallenge(c, frontendCallback, challenge, redirectTo)
+				return
+			}
+			h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 			redirectOAuthTokenPair(c, frontendCallback, tokenPair, redirectTo)
 			return
 		}
@@ -588,9 +596,16 @@ func (h *AuthHandler) CompleteLinuxDoOAuthRegistration(c *gin.Context) {
 		respondPendingOAuthBindingApplyError(c, err)
 		return
 	}
-	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
+	if challenge, err := h.oauthLoginTotpChallenge(c.Request.Context(), user, tokenPair); err != nil {
+		response.InternalError(c, "Failed to create 2FA session")
+		return
+	} else if challenge != nil {
+		writeOAuthTotpChallenge(c, challenge)
+		return
+	}
+	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 
 	c.JSON(http.StatusOK, gin.H{
 		"access_token":  tokenPair.AccessToken,

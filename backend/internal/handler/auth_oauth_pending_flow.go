@@ -2049,6 +2049,19 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 	}
 
 	if canIssueTokenPair {
+		// 已开启两步验证的账号先完成 TOTP，再通过 /auth/login/2fa 领取凭证。
+		if challenge, err := h.oauthLoginTotpChallenge(c.Request.Context(), loginUser, nil); err != nil {
+			clearCookies()
+			response.InternalError(c, "Failed to create 2FA session")
+			return
+		} else if challenge != nil {
+			payload["requires_2fa"] = true
+			payload["temp_token"] = challenge.TempToken
+			payload["user_email_masked"] = challenge.UserEmailMasked
+			clearCookies()
+			response.Success(c, payload)
+			return
+		}
 		tokenPair, err := h.authService.GenerateTokenPair(c.Request.Context(), loginUser, "")
 		if err != nil {
 			clearCookies()

@@ -71,7 +71,8 @@ Google One Tap 是现有 Google 登录的浏览器凭据入口，不创建新的
 
 以下事件需要撤销一个 token、一个会话族或用户的全部会话，具体范围由业务意图决定：
 
-- 主动登出删除提交的 refresh token；安全登出或检测到绑定异常可撤销整个 `sid`。
+- 主动登出删除提交的 refresh token；请求带有 access token 时同时吊销其 `sid`。安全登出或检测到绑定异常可撤销整个 `sid`。
+- access token 无状态，吊销通过 Redis 记录实现（refresh 存储的可选扩展，无数据库迁移）：会话族撤销同时写入 `revoked_access_session:<sid>`；“撤销全部会话”、解绑登录方式等调用 `RevokeAllUserTokens` 时写入用户级吊销时间点，早于该时间签发的 access token 立即失效，之后重新登录的新 token 不受影响。记录 TTL 覆盖 access token 最长有效期；读取失败时放行，与 refresh 存储故障时已登录请求的既有行为一致。用户与管理员鉴权、换发 access token 都会检查吊销记录。
 - 用户停用、密码重置以及需要强制重新认证的身份变更会通过 token version 或会话索引淘汰既有凭据。
 - 刷新时发现用户失效、版本不一致或客户端绑定不一致，会删除对应会话族而不是继续签发。
 
@@ -93,6 +94,7 @@ LinuxDo、微信和邮件等外部身份最终都映射到 `AuthIdentity`，而�
 - 浏览器会话键、完成码摘要、有效期和 verified 状态共同约束后续完成请求。
 - 身份绑定、创建用户或接纳既有用户要在事务中再次检查外部主体唯一性，并原子写入决定与消费状态。
 - 已消费、过期或浏览器不匹配的 session 不能重放；只有完成目标用户解析并确认身份归属后才能签发 token 对。
+- 用户已开启 TOTP 时，所有第三方登录出口（OAuth 回调片段、待定会话完成、各平台补全注册、OIDC 已验证邮箱快速路径、Google One Tap）都不交付凭证：作废已签发的 token 对，返回 `requires_2fa` 与 `temp_token`（One Tap 为 `status=totp_required`），客户端提交验证码后经 `/auth/login/2fa` 领取凭证。未开启 TOTP 的用户流程不变。
 
 邮箱可作为注册或接纳决策的输入，但 provider subject 的唯一关系才是外部登录归属的持久证据。增加提供方时，应复用待处理会话和身份唯一性边界，不要在 handler 中直接按未经验证的 profile 字段合并用户。
 

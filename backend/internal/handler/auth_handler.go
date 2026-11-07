@@ -731,6 +731,10 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 			// 不影响登出流程
 		}
 	}
+	// 登出接口是公开的：携带 access token 时吊销其会话，使被窃取的 token 不能继续使用。
+	if parts := strings.SplitN(c.GetHeader("Authorization"), " ", 2); len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+		h.authService.RevokeAccessToken(c.Request.Context(), parts[1])
+	}
 	h.consumePendingOAuthSessionOnLogout(c)
 	clearOAuthLogoutCookies(c)
 

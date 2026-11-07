@@ -1,6 +1,14 @@
 <template>
   <div class="min-h-screen bg-gray-50 px-4 py-10 dark:bg-dark-900">
     <div class="mx-auto max-w-2xl">
+      <TotpLoginModal
+        v-if="totpTempToken"
+        ref="totpModalRef"
+        :temp-token="totpTempToken"
+        :user-email-masked="totpUserEmailMasked"
+        @verify="handleTotpVerify"
+        @cancel="handleTotpCancel"
+      />
       <div v-if="isProcessing" class="card p-6 text-center">
         <div class="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent"></div>
         <h1 class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">
@@ -152,6 +160,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useClipboard } from '@/composables/useClipboard'
 import { useAppStore, useAuthStore } from '@/stores'
 import { apiClient, buildApiUrl } from '@/api/client'
+import TotpLoginModal from '@/components/auth/TotpLoginModal.vue'
 import {
   exchangePendingOAuthCompletion,
   persistOAuthTokenContext,
@@ -182,6 +191,11 @@ const registrationError = ref('')
 const pendingProvider = ref<'github' | 'google'>('github')
 const redirectTo = ref('/dashboard')
 const invalidCallback = ref(false)
+// 账号开启两步验证时由后端返回的 2FA 临时会话。
+const totpTempToken = ref('')
+const totpUserEmailMasked = ref('')
+const totpRedirect = ref('/dashboard')
+const totpModalRef = ref<InstanceType<typeof TotpLoginModal> | null>(null)
 const EMAIL_OAUTH_PENDING_PROVIDER_KEY = 'email_oauth_pending_provider'
 
 type EmailOAuthPendingCompletion = Partial<OAuthTokenResponse> & {
@@ -191,6 +205,10 @@ type EmailOAuthPendingCompletion = Partial<OAuthTokenResponse> & {
   email?: string
   resolved_email?: string
   invitation_required?: boolean
+  // 账号开启两步验证时返回的 2FA 临时会话。
+  requires_2fa?: boolean
+  temp_token?: string
+  user_email_masked?: string
 }
 
 const code = computed(() => (route.query.code as string) || '')
@@ -291,6 +309,12 @@ async function resumePendingEmailOAuth() {
   try {
     const completion = await exchangePendingOAuthCompletion() as EmailOAuthPendingCompletion
     const completionRedirect = completion.redirect || '/dashboard'
+    if (completion.requires_2fa === true && completion.temp_token) {
+      totpUserEmailMasked.value = completion.user_email_masked || ''
+      totpRedirect.value = completionRedirect
+      totpTempToken.value = completion.temp_token
+      return
+    }
     if (hasOAuthTokenResponse(completion)) {
       await finalizeTokenResponse(completion, completionRedirect)
       return
@@ -318,7 +342,8 @@ async function resumePendingEmailOAuth() {
     appStore.showError(message)
     invalidCallback.value = true
   } finally {
-    if (!needsRegistrationCompletion.value) {
+    // 显示两步验证弹窗时保持处理中卡片，避免露出授权码调试页。
+    if (!needsRegistrationCompletion.value && !totpTempToken.value) {
       isProcessing.value = false
     }
   }
@@ -364,8 +389,40 @@ async function handleSubmitRegistration() {
   }
 }
 
+// 提交验证码换取凭证，成功后与普通第三方登录一样跳转。
+async function handleTotpVerify(code: string) {
+  totpModalRef.value?.setVerifying(true)
+  try {
+    await authStore.login2FA(totpTempToken.value, code)
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.removeItem(EMAIL_OAUTH_PENDING_PROVIDER_KEY)
+    }
+    totpTempToken.value = ''
+    clearAllAffiliateCodes()
+    appStore.showSuccess(t('auth.loginSuccess'))
+    await router.replace(sanitizeRedirectPath(totpRedirect.value))
+  } catch (e: unknown) {
+    const err = e as { message?: string; response?: { data?: { message?: string } } }
+    totpModalRef.value?.setError(err.response?.data?.message || err.message || t('auth.loginFailed'))
+  } finally {
+    totpModalRef.value?.setVerifying(false)
+  }
+}
+
+function handleTotpCancel() {
+  totpTempToken.value = ''
+  router.replace('/login')
+}
+
 onMounted(async () => {
   const params = parseFragmentParams()
+  if (params.get('requires_2fa') === '1' && params.get('temp_token')) {
+    totpUserEmailMasked.value = params.get('user_email_masked') || ''
+    totpRedirect.value = params.get('redirect') || '/dashboard'
+    totpTempToken.value = params.get('temp_token') || ''
+    isProcessing.value = true
+    return
+  }
   const tokenResponse = readTokenResponse(params)
   const fragmentError = params.get('error') || ''
   const fragmentErrorDescription =

@@ -778,6 +778,10 @@ onMounted(async () => {
 
   const params = parseFragmentParams()
   const legacyLogin = readLegacyFragmentLogin(params)
+  // 账号已开启两步验证时，后端以片段返回 2FA 临时会话而不是凭证。
+  const fragmentTotp = params.get('requires_2fa') === '1'
+    ? { requires_2fa: true, temp_token: params.get('temp_token') || '', user_email_masked: params.get('user_email_masked') || '' } as PendingOidcCompletion
+    : null
   const legacyPendingToken = params.get('pending_oauth_token')?.trim() || ''
   const error = params.get('error')
   const errorDesc = params.get('error_description') || params.get('error_message') || ''
@@ -786,6 +790,10 @@ onMounted(async () => {
   )
 
   try {
+    if (fragmentTotp) {
+      redirectTo.value = redirect
+      if (applyTotpChallenge(fragmentTotp)) return
+    }
     if (legacyLogin) {
       persistOAuthTokenContext(legacyLogin)
       await authStore.setToken(legacyLogin.access_token)

@@ -294,3 +294,40 @@ func TestGoogleOneTapRejectsOversizedRequestBeforeBinding(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), "Invalid request")
 	require.NotContains(t, recorder.Body.String(), "AUTH_SERVICE_NOT_READY")
 }
+
+// 已开启两步验证的账号经 Google One Tap 登录时只拿到 2FA 临时会话，不能直接拿到凭证。
+func TestGoogleOneTapRequiresTotpWhenEnabled(t *testing.T) {
+	settings := googleOneTapTestSettings()
+	settings[service.SettingKeyTotpEnabled] = "true"
+	totpCache := &oauthPendingFlowTotpCacheStub{}
+	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
+		settingValues: settings,
+		totpCache:     totpCache,
+		totpEncryptor: oauthPendingFlowTotpEncryptorStub{},
+	})
+	ctx := context.Background()
+	_, err := client.User.Create().
+		SetEmail("admin@example.com").
+		SetUsername("admin").
+		SetPasswordHash("hash").
+		SetRole(service.RoleAdmin).
+		SetStatus(service.StatusActive).
+		SetTotpEnabled(true).
+		SetTotpSecretEncrypted("JBSWY3DPEHPK3PXP").
+		SetTotpEnabledAt(time.Now().Add(-time.Hour)).
+		Save(ctx)
+	require.NoError(t, err)
+	handler.googleIDTokenVerifier = &googleIDTokenVerifierStub{claims: &googleIDTokenClaims{
+		Subject: "google-admin", Email: "admin@example.com", EmailVerified: true,
+	}}
+
+	recorder := performGoogleOneTapRequest(t, handler, `{"credential":"valid-token","redirect":"/admin"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	payload := decodeJSONResponseData(t, recorder)
+	require.Equal(t, googleOneTapStatusTotpRequired, payload["status"])
+	require.NotEmpty(t, payload["temp_token"])
+	require.Empty(t, payload["access_token"])
+	require.Empty(t, payload["refresh_token"])
+	require.Len(t, totpCache.loginSessions, 1)
+}

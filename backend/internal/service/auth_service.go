@@ -1620,6 +1620,9 @@ func (s *AuthService) RefreshToken(ctx context.Context, oldTokenString string) (
 	if claims.TokenVersion != resolvedTokenVersion(user) {
 		return "", ErrTokenRevoked
 	}
+	if s.IsAccessTokenRevoked(ctx, claims) {
+		return "", ErrTokenRevoked
+	}
 
 	// 会话绑定检查：指纹变化的旧 token 不允许换发新 token。
 	if s.settingService != nil && s.settingService.IsSessionBindingEnabled(ctx) && claims.BindingHash != "" {
@@ -1998,6 +2001,8 @@ func (s *AuthService) RevokeSessionFamily(ctx context.Context, familyID string) 
 	if s.refreshTokenCache == nil || familyID == "" {
 		return nil
 	}
+	// 会话家族与 access token 的 sid 相同，一并吊销该会话已签发的 access token。
+	s.revokeAccessSession(ctx, familyID)
 	return s.refreshTokenCache.DeleteTokenFamily(ctx, familyID)
 }
 
@@ -2024,6 +2029,11 @@ func (s *AuthService) RevokeAllUserTokens(ctx context.Context, userID int64) err
 
 	if err := s.RevokeAllUserSessions(ctx, userID); err != nil {
 		logger.LegacyPrintf("service.auth", "[Auth] Failed to revoke refresh sessions after token invalidation for user %d: %v", userID, err)
+	}
+	// access token 无状态：写入用户级吊销时间点，使此前签发的 access token 立即失效。
+	if err := s.revokeUserAccessTokens(ctx, userID); err != nil {
+		logger.LegacyPrintf("service.auth", "[Auth] Failed to revoke access tokens for user %d: %v", userID, err)
+		return fmt.Errorf("revoke access tokens: %w", err)
 	}
 	return nil
 }

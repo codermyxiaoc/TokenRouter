@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -53,6 +54,19 @@ func (s *OpenAIGatewayService) ForwardGrokVoice(ctx context.Context, c *gin.Cont
 		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, "?#\\") {
 			return nil, fmt.Errorf("invalid grok voice endpoint path")
 		}
+	}
+	// 自定义声音归属校验在请求上游前完成，非创建者统一按不存在处理。
+	if err := s.authorizeGrokCustomVoice(ctx, c, parts, body); err != nil {
+		var accessErr *grokCustomVoiceAccessError
+		if errors.As(err, &accessErr) && c != nil {
+			message := "Custom voice not found"
+			errType := "not_found_error"
+			if accessErr.status == http.StatusServiceUnavailable {
+				message, errType = "Custom voice ownership is temporarily unavailable", "api_error"
+			}
+			c.JSON(accessErr.status, gin.H{"error": gin.H{"type": errType, "message": message}})
+		}
+		return nil, err
 	}
 	token, _, err := s.getRequestCredential(ctx, c, account)
 	if err != nil {
@@ -104,6 +118,7 @@ func (s *OpenAIGatewayService) ForwardGrokVoice(ctx context.Context, c *gin.Cont
 	if err != nil {
 		return nil, err
 	}
+	data = s.applyGrokCustomVoiceOwnership(ctx, c, parts, data)
 	writeGrokMediaResponse(c, resp, data, s.responseHeaderFilter)
 	audioUsage := estimateGrokVoiceAudioUsage(baseEndpoint, body, contentType, data, time.Since(started))
 	upstreamID := firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id"))

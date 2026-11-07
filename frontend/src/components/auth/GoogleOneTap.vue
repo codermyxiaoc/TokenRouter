@@ -1,9 +1,18 @@
 <template>
   <span class="hidden" aria-hidden="true"></span>
+  <TotpLoginModal
+    v-if="totpTempToken"
+    ref="totpModalRef"
+    :temp-token="totpTempToken"
+    :user-email-masked="totpUserEmailMasked"
+    @verify="handleTotpVerify"
+    @cancel="totpTempToken = ''"
+  />
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import TotpLoginModal from '@/components/auth/TotpLoginModal.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { exchangeGoogleOneTap, persistOAuthTokenContext } from '@/api/auth'
@@ -32,6 +41,26 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
 let processingCredential = false
+// 账号开启两步验证时的 2FA 临时会话与登录后跳转地址。
+const totpTempToken = ref('')
+const totpUserEmailMasked = ref('')
+const totpModalRef = ref<InstanceType<typeof TotpLoginModal> | null>(null)
+let totpRedirect = '/dashboard'
+
+async function handleTotpVerify(code: string) {
+  totpModalRef.value?.setVerifying(true)
+  try {
+    await authStore.login2FA(totpTempToken.value, code)
+    totpTempToken.value = ''
+    clearAllAffiliateCodes()
+    appStore.showSuccess(t('auth.loginSuccess'))
+    await router.push(totpRedirect)
+  } catch (error: unknown) {
+    totpModalRef.value?.setError(extractI18nErrorMessage(error, t, 'auth.errors', t('auth.loginFailed')))
+  } finally {
+    totpModalRef.value?.setVerifying(false)
+  }
+}
 
 const canPrompt = computed(
   () =>
@@ -76,6 +105,12 @@ async function handleCredential(response: GoogleCredentialResponse): Promise<voi
     if (result.status === 'registration_required') {
       window.sessionStorage.setItem('email_oauth_pending_provider', 'google')
       await router.push('/auth/oauth/callback')
+      return
+    }
+    if (result.status === 'totp_required') {
+      totpRedirect = redirect
+      totpUserEmailMasked.value = result.user_email_masked || ''
+      totpTempToken.value = result.temp_token
       return
     }
 

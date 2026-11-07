@@ -80,6 +80,8 @@ Voice HTTP 入口包括 TTS、STT 和自定义 Voice 的创建、读取、修改
 
 语音地址与其他 xAI API 共用 Base URL 规范化：只填写主机和端口时补齐 `/v1`，已有 `/v1` 不重复追加，自定义反向代理路径（例如 `/proxy/xai/v1`）保留；官方主机仍只接受官方版本路径。随后追加 `tts`、`stt`、`realtime` 或已逐段编码的 `custom-voices/...`。画布 TTS、账号测试和正式 Voice 入口必须使用同一构造函数，不能直接对裸主机拼接 `/tts`。默认或官方 CLI 代理地址继续按既有规则使用官方 Voice 服务，出站安全策略不变；404 不触发自动切换生成端点或重发。
 
+**自定义声音归属。** 同一分组的用户共用上游账号，上游不区分本站用户，因此本站在 Redis 记录 `grok_custom_voice_owner:<voice_id>` → 创建者用户 ID（创建成功时写入，删除成功时清理，不设过期）。查询、修改、删除、下载单个声音，以及在 TTS 中通过 `voice_id`/`voice` 引用声音时，非创建者统一返回 404（不泄露声音是否存在）；归属存储故障时返回 503 而不是放行。声音列表只保留当前用户创建的声音。无归属记录的声音（内置声音、本功能上线前创建的声音）保持原透传行为。
+
 云端画布另提供管理员启用的 `grok-voice-tts` 目录项，它是站内虚拟名称，上游仍发送无 `model` 字段的 `/tts` 请求。首期限定五种内置声音、MP3/WAV、0.7–1.5 倍语速、自动语言和最多 15000 Unicode 字符；不套用 OpenAI `/audio/speech` 参数。该入口使用 CreativeRun 的持久预扣与恢复，正式 Voice API 仍保持原成功后扣费流程。详见[画布接口](cloud_canvas.md)及[生成与计费](../domains/cloud_canvas.md#execution)。
 
 公开模型广场中明确识别的 Grok Voice 型号按同一语音价格解析显示分组实际单价：TTS 每百万字符、STT 每小时、Realtime 每分钟；详见[语音价格展示](model_catalog_and_marketplace.md#marketplace_audio_pricing)。分组设置已经生效的价格无需为了展示重新录入渠道，展示逻辑不参与扣费。

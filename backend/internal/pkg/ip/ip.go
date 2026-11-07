@@ -108,7 +108,9 @@ func resolveCustomForwardedClientIP(c *gin.Context, headers []string) (string, s
 
 func resolveLegacyForwardedHeaderIP(c *gin.Context) (string, string) {
 	var fallback string
-	if forwarded := normalizeValidIP(c.GetHeader("CF-Connecting-IP")); forwarded != "" {
+	// CF-Connecting-IP 只能由 Cloudflare 写入；上一跳不是 Cloudflare 时它来自客户端本身
+	// （常见反向代理不会清除该头），必须忽略，避免伪造真实 IP。
+	if forwarded := normalizeValidIP(c.GetHeader("CF-Connecting-IP")); forwarded != "" && requestCameThroughCloudflare(c) {
 		fallback = forwarded
 		if !isPrivateIP(forwarded) {
 			return forwarded, fallback
@@ -140,6 +142,24 @@ func resolveLegacyForwardedHeaderIP(c *gin.Context) (string, string) {
 		}
 	}
 	return "", fallback
+}
+
+// requestCameThroughCloudflare 判断上一跳是否为 Cloudflare：直连对端，或代理写入的 X-Real-IP / XFF 最后一跳。
+func requestCameThroughCloudflare(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	if isCloudflareIP(normalizeValidIP(c.RemoteIP())) {
+		return true
+	}
+	if isCloudflareIP(normalizeValidIP(c.GetHeader("X-Real-IP"))) {
+		return true
+	}
+	if xff := c.GetHeader("X-Forwarded-For"); xff != "" {
+		hops := strings.Split(xff, ",")
+		return isCloudflareIP(normalizeValidIP(hops[len(hops)-1]))
+	}
+	return false
 }
 
 // GetTrustedClientIP 从 Gin 的可信代理解析链提取客户端 IP。
@@ -259,6 +279,38 @@ func matchesCompiledRules(parsedIP net.IP, rules *CompiledIPRules) bool {
 	}
 	return false
 }
+
+// cloudflareNets 是 Cloudflare 公布的回源网段（https://www.cloudflare.com/ips/，2026-11 核对）。
+var cloudflareNets []*net.IPNet
+
+func init() {
+	for _, cidr := range []string{
+		"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+		"141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+		"197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+		"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+		"2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+		"2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+	} {
+		_, block, _ := net.ParseCIDR(cidr)
+		cloudflareNets = append(cloudflareNets, block)
+	}
+}
+
+func ipInNets(ipStr string, nets []*net.IPNet) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	for _, block := range nets {
+		if block.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCloudflareIP(ipStr string) bool { return ipInNets(ipStr, cloudflareNets) }
 
 func isPrivateIP(ipStr string) bool {
 	ip := net.ParseIP(ipStr)

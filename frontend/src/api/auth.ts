@@ -51,6 +51,7 @@ export interface GoogleOneTapRequest {
 export type GoogleOneTapResponse =
   | (OAuthTokenResponse & { status: 'authenticated' })
   | { status: 'registration_required'; redirect: string }
+  | { status: 'totp_required'; temp_token: string; user_email_masked?: string; redirect?: string }
 
 export function buildOAuthLoginStartURL(request: OAuthLoginStart): string {
   const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1'

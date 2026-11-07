@@ -195,6 +195,14 @@ func (h *AuthHandler) emailOAuthCallbackWithProfile(
 		redirectOAuthError(c, frontendCallback, "login_blocked", infraerrors.Reason(err), infraerrors.Message(err))
 		return
 	}
+	// 已开启两步验证的账号不能仅凭第三方身份登录。
+	if challenge, err := h.oauthLoginTotpChallenge(c.Request.Context(), user, tokenPair); err != nil {
+		redirectOAuthError(c, frontendCallback, "session_error", "failed to create 2FA session", "")
+		return
+	} else if challenge != nil {
+		redirectOAuthTotpChallenge(c, frontendCallback, challenge, redirectTo)
+		return
+	}
 
 	fragment := url.Values{}
 	fragment.Set("access_token", tokenPair.AccessToken)

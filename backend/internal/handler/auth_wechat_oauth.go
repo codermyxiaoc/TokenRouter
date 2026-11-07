@@ -579,6 +579,13 @@ func (h *AuthHandler) CompleteWeChatOAuthRegistration(c *gin.Context) {
 	}
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
+	if challenge, err := h.oauthLoginTotpChallenge(c.Request.Context(), user, tokenPair); err != nil {
+		response.InternalError(c, "Failed to create 2FA session")
+		return
+	} else if challenge != nil {
+		writeOAuthTotpChallenge(c, challenge)
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"access_token":  tokenPair.AccessToken,

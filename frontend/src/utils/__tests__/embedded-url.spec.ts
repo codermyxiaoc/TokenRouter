@@ -37,12 +37,18 @@ describe('embedded-url', () => {
     const url = new URL(result)
     expect(url.searchParams.get('plan')).toBe('pro')
     expect(url.searchParams.get('user_id')).toBe('42')
-    expect(url.searchParams.get('token')).toBe('token-123')
+    // 外部站点不接收登录凭证。
+    expect(url.searchParams.has('token')).toBe(false)
     expect(url.searchParams.get('theme')).toBe('dark')
     expect(url.searchParams.get('lang')).toBe('zh-CN')
     expect(url.searchParams.get('ui_mode')).toBe('embedded')
     expect(url.searchParams.get('src_host')).toBe('https://app.example.com')
     expect(url.searchParams.get('src_url')).toBe('https://app.example.com/user/purchase')
+  })
+
+  it('passes the auth token only to same-origin embedded pages', () => {
+    const url = new URL(buildEmbeddedUrl('https://app.example.com/embedded/plan', 42, 'token-123'))
+    expect(url.searchParams.get('token')).toBe('token-123')
   })
 
   it('omits optional params when they are empty', () => {

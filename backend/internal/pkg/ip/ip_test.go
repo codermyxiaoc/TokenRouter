@@ -148,8 +148,8 @@ func TestGetSecurityClientIPCustomHeaderPrecedenceAndFallback(t *testing.T) {
 			trustForward: true,
 			headers:      []string{"X-CDN-IP"},
 			requestHeaders: map[string]string{
-				"X-CDN-IP":         "1.2.3.4:443",
-				"CF-Connecting-IP": "4.4.4.4",
+				"X-CDN-IP":  "1.2.3.4:443",
+				"X-Real-IP": "4.4.4.4",
 			},
 			want: "4.4.4.4",
 		},
@@ -290,6 +290,39 @@ func TestGetSecurityClientIPRequestSnapshotOverridesLiveFallback(t *testing.T) {
 			req.Header.Set("X-Real-IP", "1.2.3.4")
 			r.ServeHTTP(w, req)
 
+			require.Equal(t, test.want, w.Body.String())
+		})
+	}
+}
+
+// CF-Connecting-IP 只在上一跳是 Cloudflare 时采用；客户端自带的同名头不能伪造真实 IP。
+func TestGetClientIPOnlyTrustsCFConnectingIPFromCloudflare(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name       string
+		remoteAddr string
+		headers    map[string]string
+		want       string
+	}{
+		{"客户端直连伪造的 CF 头被忽略", "203.0.113.7:5000", map[string]string{"CF-Connecting-IP": "1.2.3.4"}, "203.0.113.7"},
+		{"经反代但上一跳不是 Cloudflare 时忽略 CF 头", "172.18.0.2:5000",
+			map[string]string{"CF-Connecting-IP": "1.2.3.4", "X-Real-IP": "203.0.113.7", "X-Forwarded-For": "203.0.113.7"}, "203.0.113.7"},
+		{"Cloudflare 直连源站时采用 CF 头", "162.158.1.10:5000", map[string]string{"CF-Connecting-IP": "1.2.3.4"}, "1.2.3.4"},
+		{"Cloudflare 经反代回源时采用 CF 头", "172.18.0.2:5000",
+			map[string]string{"CF-Connecting-IP": "1.2.3.4", "X-Real-IP": "162.158.1.10", "X-Forwarded-For": "162.158.1.10"}, "1.2.3.4"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r := gin.New()
+			require.NoError(t, r.SetTrustedProxies(nil))
+			r.GET("/t", func(c *gin.Context) { c.String(200, GetSecurityClientIP(c, true)) })
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", "/t", nil)
+			req.RemoteAddr = test.remoteAddr
+			for name, value := range test.headers {
+				req.Header.Set(name, value)
+			}
+			r.ServeHTTP(w, req)
 			require.Equal(t, test.want, w.Body.String())
 		})
 	}

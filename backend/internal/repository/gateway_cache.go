@@ -179,6 +179,8 @@ var _ service.OpenAIWSSessionPreemptionCache = (*gatewayCache)(nil)
 const (
 	grokVideoPendingBillingPrefix = "grok_video_pending:"
 	grokVideoBilledPrefix         = "grok_video_billed:"
+	// grokCustomVoiceOwnerPrefix 记录自定义声音的本站创建者，声音长期存在因此不设过期。
+	grokCustomVoiceOwnerPrefix = "grok_custom_voice_owner:"
 )
 
 func (c *gatewayCache) GetSessionOwnerGroupID(ctx context.Context, userID int64, source, sessionHash string) (int64, error) {
@@ -193,6 +195,36 @@ func (c *gatewayCache) RefreshSessionOwnerTTL(ctx context.Context, userID int64,
 }
 
 var _ service.GrokVideoBillingCache = (*gatewayCache)(nil)
+var _ service.GrokCustomVoiceOwnerCache = (*gatewayCache)(nil)
+
+// SetGrokCustomVoiceOwner 记录自定义声音的创建者。
+func (c *gatewayCache) SetGrokCustomVoiceOwner(ctx context.Context, voiceID string, userID int64) error {
+	if c == nil || c.rdb == nil {
+		return errors.New("gateway cache unavailable")
+	}
+	return c.rdb.Set(ctx, grokCustomVoiceOwnerPrefix+strings.TrimSpace(voiceID), userID, 0).Err()
+}
+
+// GetGrokCustomVoiceOwner 读取创建者，没有记录时返回 0。
+func (c *gatewayCache) GetGrokCustomVoiceOwner(ctx context.Context, voiceID string) (int64, error) {
+	if c == nil || c.rdb == nil {
+		return 0, errors.New("gateway cache unavailable")
+	}
+	owner, err := c.rdb.Get(ctx, grokCustomVoiceOwnerPrefix+strings.TrimSpace(voiceID)).Int64()
+	if errors.Is(err, redis.Nil) {
+		return 0, nil
+	}
+	return owner, err
+}
+
+// DeleteGrokCustomVoiceOwner 删除声音后清理归属记录。
+func (c *gatewayCache) DeleteGrokCustomVoiceOwner(ctx context.Context, voiceID string) error {
+	if c == nil || c.rdb == nil {
+		return errors.New("gateway cache unavailable")
+	}
+	return c.rdb.Del(ctx, grokCustomVoiceOwnerPrefix+strings.TrimSpace(voiceID)).Err()
+}
+
 var _ service.ReasoningContentCache = (*gatewayCache)(nil)
 
 // SetGrokVideoPendingBilling 保存视频创建成功时的计费快照，供后续状态轮询使用。

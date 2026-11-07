@@ -703,6 +703,14 @@ func (h *AuthHandler) CompleteOIDCOAuthRegistration(c *gin.Context) {
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
 
+	if challenge, err := h.oauthLoginTotpChallenge(c.Request.Context(), user, tokenPair); err != nil {
+		response.InternalError(c, "Failed to create 2FA session")
+		return
+	} else if challenge != nil {
+		writeOAuthTotpChallenge(c, challenge)
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"access_token":  tokenPair.AccessToken,
 		"refresh_token": tokenPair.RefreshToken,
@@ -1264,10 +1272,20 @@ func (h *AuthHandler) tryOIDCVerifiedEmailFastPath(
 		AvatarURL:        pendingSessionStringValue(upstreamClaims, "suggested_avatar_url"),
 		UpstreamMetadata: upstreamMetadata,
 	}
-	tokenPair, _, err := h.authService.LoginOrRegisterVerifiedEmailOAuthWithSignupCodes(ctx, input, "", "", readOAuthPromoCode(c))
+	tokenPair, user, err := h.authService.LoginOrRegisterVerifiedEmailOAuthWithSignupCodes(ctx, input, "", "", readOAuthPromoCode(c))
 	if err != nil {
 		log.Printf("[OIDC OAuth] verified-email fast path skipped: reason=%s", infraerrors.Reason(err))
 		return false
+	}
+	// 已开启两步验证的账号不能仅凭第三方身份登录。
+	if challenge, err := h.oauthLoginTotpChallenge(ctx, user, tokenPair); err != nil {
+		redirectOAuthError(c, frontendCallback, "session_error", "failed to create 2FA session", "")
+		return true
+	} else if challenge != nil {
+		clearOAuthPendingSessionCookie(c, isRequestHTTPS(c))
+		clearOAuthPendingBrowserCookie(c, isRequestHTTPS(c))
+		redirectOAuthTotpChallenge(c, frontendCallback, challenge, redirectTo)
+		return true
 	}
 
 	fragment := url.Values{}

@@ -14,6 +14,9 @@ const (
 	refreshTokenKeyPrefix   = "refresh_token:"
 	userRefreshTokensPrefix = "user_refresh_tokens:"
 	tokenFamilyPrefix       = "token_family:"
+	// 已吊销的 access token 会话与用户级吊销时间点。
+	revokedAccessSessionPrefix = "revoked_access_session:"
+	userAccessRevokedPrefix    = "user_access_revoked_before:"
 )
 
 // refreshTokenKey generates the Redis key for a refresh token.
@@ -150,6 +153,34 @@ func (c *refreshTokenCache) GetUserTokenHashes(ctx context.Context, userID int64
 func (c *refreshTokenCache) GetFamilyTokenHashes(ctx context.Context, familyID string) ([]string, error) {
 	key := tokenFamilyKey(familyID)
 	return c.rdb.SMembers(ctx, key).Result()
+}
+
+// RevokeAccessSession 记录被吊销的会话，TTL 覆盖 access token 剩余有效期。
+func (c *refreshTokenCache) RevokeAccessSession(ctx context.Context, sessionID string, ttl time.Duration) error {
+	return c.rdb.Set(ctx, revokedAccessSessionPrefix+sessionID, "1", ttl).Err()
+}
+
+// IsAccessSessionRevoked 判断会话是否已被吊销。
+func (c *refreshTokenCache) IsAccessSessionRevoked(ctx context.Context, sessionID string) (bool, error) {
+	n, err := c.rdb.Exists(ctx, revokedAccessSessionPrefix+sessionID).Result()
+	return n > 0, err
+}
+
+// RevokeUserAccessTokensBefore 记录用户级吊销时间点（Unix 纳秒）。
+func (c *refreshTokenCache) RevokeUserAccessTokensBefore(ctx context.Context, userID int64, at time.Time, ttl time.Duration) error {
+	return c.rdb.Set(ctx, fmt.Sprintf("%s%d", userAccessRevokedPrefix, userID), at.UnixNano(), ttl).Err()
+}
+
+// UserAccessTokensRevokedBefore 读取用户级吊销时间点，未设置时返回零值。
+func (c *refreshTokenCache) UserAccessTokensRevokedBefore(ctx context.Context, userID int64) (time.Time, error) {
+	nanos, err := c.rdb.Get(ctx, fmt.Sprintf("%s%d", userAccessRevokedPrefix, userID)).Int64()
+	if err == redis.Nil {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(0, nanos), nil
 }
 
 func (c *refreshTokenCache) IsTokenInFamily(ctx context.Context, familyID string, tokenHash string) (bool, error) {

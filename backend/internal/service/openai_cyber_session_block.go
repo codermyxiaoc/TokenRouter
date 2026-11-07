@@ -15,9 +15,19 @@ import (
 // CyberSessionBlockStore 是 cyber 会话屏蔽表的存取接口。
 // repository 层 gatewayCache 通过类型断言接入，测试桩未实现时自动降级为关闭。
 type CyberSessionBlockStore interface {
-	SetCyberSessionBlocked(ctx context.Context, scopeKey string, keys []string, ttl time.Duration) error
-	IsCyberSessionScopeActive(ctx context.Context, scopeKey string) (bool, error)
+	SetCyberSessionBlocked(ctx context.Context, block CyberSessionBlock, ttl time.Duration) error
+	// CyberSessionTranscriptLengths 返回该 API Key 已记录的 transcript 屏蔽长度；来源 scope 未激活时返回空。
+	CyberSessionTranscriptLengths(ctx context.Context, apiKeyID int64, scopeKey string) ([]int, error)
 	FindCyberSessionBlocked(ctx context.Context, keys []string) (string, error)
+}
+
+// CyberSessionBlock 描述一次需要持久化的 cyber 命中。Keys 是精确屏蔽 key；
+// TranscriptLengths 记录其中各 transcript key 覆盖的历史长度，与 ScopeKey 一样只用于 transcript 匹配。
+type CyberSessionBlock struct {
+	APIKeyID          int64
+	ScopeKey          string
+	Keys              []string
+	TranscriptLengths []int
 }
 
 // legacyCyberSessionBlockStore 兼容迁移前缓存接口，避免旧部署在升级后静默失去会话屏蔽。
@@ -28,10 +38,10 @@ type legacyCyberSessionBlockStore interface {
 
 type legacyCyberSessionBlockStoreAdapter struct{ legacy legacyCyberSessionBlockStore }
 
-func (a legacyCyberSessionBlockStoreAdapter) SetCyberSessionBlocked(ctx context.Context, scopeKey string, keys []string, ttl time.Duration) error {
-	key := strings.TrimSpace(scopeKey)
-	if key == "" && len(keys) > 0 {
-		key = strings.TrimSpace(keys[0])
+func (a legacyCyberSessionBlockStoreAdapter) SetCyberSessionBlocked(ctx context.Context, block CyberSessionBlock, ttl time.Duration) error {
+	key := strings.TrimSpace(block.ScopeKey)
+	if key == "" && len(block.Keys) > 0 {
+		key = strings.TrimSpace(block.Keys[0])
 	}
 	if key == "" {
 		return nil
@@ -39,11 +49,10 @@ func (a legacyCyberSessionBlockStoreAdapter) SetCyberSessionBlocked(ctx context.
 	return a.legacy.SetCyberSessionBlocked(ctx, key, ttl)
 }
 
-func (a legacyCyberSessionBlockStoreAdapter) IsCyberSessionScopeActive(ctx context.Context, scopeKey string) (bool, error) {
-	if strings.TrimSpace(scopeKey) == "" {
-		return false, nil
-	}
-	return a.legacy.IsCyberSessionBlocked(ctx, scopeKey)
+// CyberSessionTranscriptLengths 旧缓存接口无法记录 transcript 屏蔽长度，因此不参与 transcript 前缀匹配。
+// 旧接口写入时只持久化单个 key（scope 或首个 key），从未保存 transcript key，返回空不会削弱原有拦截。
+func (a legacyCyberSessionBlockStoreAdapter) CyberSessionTranscriptLengths(context.Context, int64, string) ([]int, error) {
+	return nil, nil
 }
 
 func (a legacyCyberSessionBlockStoreAdapter) FindCyberSessionBlocked(ctx context.Context, keys []string) (string, error) {
@@ -63,31 +72,10 @@ func (a legacyCyberSessionBlockStoreAdapter) FindCyberSessionBlocked(ctx context
 	return "", nil
 }
 
-const cyberSessionTranscriptLookupOverflowBlockKey = "transcript_lookup_limit_exceeded"
-
 // CyberSessionExplicitBlockKey returns an inexpensive exact key when the
 // client supplies a stable session signal.
 func CyberSessionExplicitBlockKey(apiKeyID int64, c *gin.Context, body []byte) string {
 	return hashCyberSessionBlockKey(apiKeyID, explicitOpenAISessionID(c, body))
-}
-
-// CyberSessionTranscriptBlockKeys returns the exact full-request key followed
-// by an optional rewrite-tolerant context key. The latter is emitted only after
-// model-generated history has been observed.
-func CyberSessionTranscriptBlockKeys(apiKeyID int64, body []byte) []string {
-	derived := deriveOpenAICyberTranscriptBlockKeys(apiKeyID, body)
-	if len(derived.lookupKeys) == 0 {
-		return nil
-	}
-	keys := []string{derived.lookupKeys[len(derived.lookupKeys)-1]}
-	if derived.preLatestUserKey != "" && derived.preLatestUserKey != keys[0] {
-		keys = append(keys, derived.preLatestUserKey)
-	}
-	return keys
-}
-
-func CyberSessionTranscriptLookupKeys(apiKeyID int64, body []byte) []string {
-	return deriveOpenAICyberTranscriptBlockKeys(apiKeyID, body).lookupKeys
 }
 
 // CyberSessionScopeKey is a coarse, non-blocking fingerprint used only to
@@ -136,8 +124,8 @@ func (s *OpenAIGatewayService) CyberSessionBlockRuntime(ctx context.Context) (bo
 
 // MarkCyberSessionBlocked 把会话写入屏蔽表（写入点：cyber 命中后）。
 // 开关关闭、key 为空或存储不可用时静默跳过。
-func (s *OpenAIGatewayService) MarkCyberSessionBlocked(ctx context.Context, scopeKey string, keys []string) {
-	if s == nil || len(keys) == 0 {
+func (s *OpenAIGatewayService) MarkCyberSessionBlocked(ctx context.Context, block CyberSessionBlock) {
+	if s == nil || len(block.Keys) == 0 {
 		return
 	}
 	enabled, ttl := s.CyberSessionBlockRuntime(ctx)
@@ -148,7 +136,7 @@ func (s *OpenAIGatewayService) MarkCyberSessionBlocked(ctx context.Context, scop
 	if store == nil {
 		return
 	}
-	if err := store.SetCyberSessionBlocked(ctx, scopeKey, keys, ttl); err != nil {
+	if err := store.SetCyberSessionBlocked(ctx, block, ttl); err != nil {
 		logger.LegacyPrintf("service.openai_gateway", "cyber session block write failed: err=%v", err)
 	}
 }
@@ -174,22 +162,14 @@ func (s *OpenAIGatewayService) FindCyberSessionBlockedForRequest(ctx context.Con
 			return key
 		}
 	}
-	scopeKey := CyberSessionScopeKey(apiKeyID, clientIP, userAgent)
-	active, err := store.IsCyberSessionScopeActive(ctx, scopeKey)
+	lengths, err := store.CyberSessionTranscriptLengths(ctx, apiKeyID, CyberSessionScopeKey(apiKeyID, clientIP, userAgent))
 	if err != nil {
 		logger.LegacyPrintf("service.openai_gateway", "cyber session scope read failed: err=%v", err)
 		return ""
 	}
-	if !active {
-		return ""
-	}
-	transcript := deriveOpenAICyberTranscriptBlockKeys(apiKeyID, body)
-	if transcript.lookupKeysTruncated {
-		// Once the coarse scope is active, silently dropping old candidates would
-		// let a blocked client evade prefix matching by appending dummy items.
-		return cyberSessionTranscriptLookupOverflowBlockKey
-	}
-	keys := transcript.lookupKeys
+	// 只在已记录的屏蔽长度处重算前缀 key：追加任意数量 item 仍能命中被屏蔽前缀，
+	// 而历史长度本身不再决定是否屏蔽，避免无关长会话被误拦。
+	keys := cyberSessionTranscriptKeysAt(apiKeyID, body, lengths)
 	if len(keys) == 0 {
 		return ""
 	}

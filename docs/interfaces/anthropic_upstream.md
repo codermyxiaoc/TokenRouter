@@ -29,6 +29,10 @@ Claude 浏览器 OAuth 固定从 `https://claude.com/cai/oauth/authorize` 发起
 
 `upstream` 和其它历史类型即使能被通用导入器保存，也没有 Anthropic 平台的正式 token provider 契约。完整分类见[上游账号能力矩阵](upstream_account_matrix.md)。所有 base URL、代理和自定义 Header 仍受[上游传输安全](../operations/upstream_transport_security.md)约束。
 
+API Key 账号的 Messages 地址由 `buildAnthropicMessagesURL` 统一构造，正式转发、透传与管理员账号测试共用：默认追加 `/v1/messages?beta=true`；只有 base URL 精确是 Cloudflare 账号级 REST 端点（`https://api.cloudflare.com/client/v4/accounts/<id>/ai`）时省略 `?beta=true`，因为该端点会拒绝 beta 查询参数。Cloudflare 原生 AI Gateway 等其它地址保持原样。
+
+Bedrock EventStream 解码在分配内存前校验帧长度：头部不超过 128 KiB、负载不超过 16 MiB，且头部长度不能超过帧总长。伪造的帧头不能让单个连接申请约 4 GiB 内存。
+
 <a id="anthropic_protocol_dispatch"></a>
 ## 协议分派
 

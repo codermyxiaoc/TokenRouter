@@ -69,3 +69,35 @@ func TestGPT61TerraPricing(t *testing.T) {
 	_, err = billing.GetModelPricing("gpt-6.1-terra-pro")
 	require.Error(t, err, "未知变体不能按 Terra 或其它型号计价")
 }
+
+// TestGPT61TerraRejectsMinimalEffort 验证 Terra 拒绝 minimal 推理强度（含 -minimal 模型后缀），
+// none 等官方档位继续放行，且不影响共享的 Terra 定价/归一边界。
+func TestGPT61TerraRejectsMinimalEffort(t *testing.T) {
+	require.True(t, isOpenAIGPT61TerraModelSpelling("openai/GPT-6.1-Terra-minimal"))
+	require.False(t, isOpenAIGPT61TerraModel("gpt-6.1-terra-minimal"), "共享归一规则不把 -minimal 归入 Terra 定价")
+	require.False(t, isOpenAIGPT61TerraModelSpelling("gpt-6.1-terra-preview"))
+
+	for _, tc := range []struct {
+		body  string
+		model string
+	}{
+		{body: `{"reasoning":{"effort":"minimal"}}`, model: "gpt-6.1-terra"},
+		{body: `{"reasoning_effort":"MINIMAL"}`, model: "gpt-6.1-terra"},
+		{body: `{"output_config":{"effort":"minimal"}}`, model: "gpt-6.1-terra"},
+		{body: `{}`, model: "gpt-6.1-terra-minimal"},
+		{body: `{"model":"gpt-6.1-terra-minimal"}`, model: "alias"},
+		{body: `{"reasoning":{"effort":"minimal"}}`, model: "alias"},
+	} {
+		mapped := "gpt-6.1-terra"
+		err := validateOpenAIReasoningEffort([]byte(tc.body), tc.model, mapped)
+		require.ErrorContains(t, err, "gpt-6.1-terra does not support reasoning effort", tc.body)
+	}
+	for _, body := range []string{`{"reasoning":{"effort":"none"}}`, `{"reasoning_effort":"max"}`, `{}`} {
+		require.NoError(t, validateOpenAIReasoningEffort([]byte(body), "gpt-6.1-terra"), body)
+	}
+	require.NoError(t, validateOpenAIReasoningEffort([]byte(`{}`), "gpt-6.1-terra-none"))
+	// Sol 仍保持更严格的档位
+	require.Error(t, validateOpenAIReasoningEffort([]byte(`{"reasoning":{"effort":"none"}}`), "gpt-6.1-sol"))
+	// 非 Terra 模型的 minimal 不受影响
+	require.NoError(t, validateOpenAIReasoningEffort([]byte(`{"reasoning":{"effort":"minimal"}}`), "gpt-5.4"))
+}

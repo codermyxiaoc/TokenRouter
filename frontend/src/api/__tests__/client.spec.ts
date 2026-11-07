@@ -266,6 +266,28 @@ describe('API Client', () => {
 
   // --- 401 Token 刷新 ---
 
+  describe('限流错误', () => {
+    // 429 结构化错误携带整数秒的 Retry-After，供导出等批量操作按服务端建议重试。
+    it.each([
+      ['17', 17],
+      ['Wed, 21 Oct 2026 07:28:00 GMT', undefined],
+      [undefined, undefined],
+    ])('429 结构化错误携带 Retry-After 秒数（%s）', async (retryAfter, expected) => {
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce({
+        response: {
+          status: 429,
+          data: { code: 'RATE_LIMITED', message: 'Too many requests' },
+          headers: retryAfter === undefined ? {} : { 'retry-after': retryAfter },
+        },
+        config: { url: '/usage', headers: {} },
+      })
+
+      const error = await apiClient.get('/usage').catch((err) => err)
+      expect(error).toMatchObject({ status: 429, code: 'RATE_LIMITED', message: 'Too many requests' })
+      expect(error.retry_after_seconds).toBe(expected)
+    })
+  })
+
   describe('401 Token 刷新', () => {
     it('无 refresh_token 时 401 清除 localStorage', async () => {
       localStorage.setItem('auth_token', 'expired-token')

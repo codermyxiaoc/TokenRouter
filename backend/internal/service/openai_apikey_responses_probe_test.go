@@ -161,3 +161,56 @@ func TestSelectResponsesProbeModel(t *testing.T) {
 	}}
 	require.Equal(t, openai.DefaultTestModel, selectResponsesProbeModel(acctAllWild))
 }
+
+// TestProbeOpenAIAPIKeyResponsesSupportSkipsForcedModes 验证强制文本路由模式下跳过 Responses 探测，
+// 跟随客户端（含缺省、非法值）时照常探测。
+func TestProbeOpenAIAPIKeyResponsesSupportSkipsForcedModes(t *testing.T) {
+	cases := []struct {
+		name      string
+		mode      any
+		wantProbe bool
+	}{
+		{name: "force_responses 跳过探测", mode: string(openai_compat.TextRouteModeForceResponses), wantProbe: false},
+		{name: "force_chat_completions 跳过探测", mode: string(openai_compat.TextRouteModeForceChatCompletions), wantProbe: false},
+		{name: "跟随客户端照常探测", mode: string(openai_compat.TextRouteModePreserveClientProtocol), wantProbe: true},
+		{name: "非法值回退跟随客户端并探测", mode: "bogus", wantProbe: true},
+		{name: "非字符串值回退跟随客户端并探测", mode: nil, wantProbe: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			updateCalls := make(chan map[string]any, 1)
+			account := Account{
+				ID:          301,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeAPIKey,
+				Concurrency: 1,
+				Credentials: map[string]any{"api_key": "sk-test", "base_url": "https://compat-upstream.example/v1"},
+				Extra:       map[string]any{openai_compat.ExtraKeyTextRouteMode: tc.mode},
+			}
+			repo := &snapshotUpdateAccountRepo{
+				stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}},
+				updateExtraCalls:      updateCalls,
+			}
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"output":[{"type":"function_call","name":"probe_ping"}]}`)),
+			}}
+			svc := &AccountTestService{
+				accountRepo:  repo,
+				httpUpstream: upstream,
+				cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+			}
+
+			svc.ProbeOpenAIAPIKeyResponsesSupport(context.Background(), account.ID)
+
+			if !tc.wantProbe {
+				require.Nil(t, upstream.lastReq)
+				require.Empty(t, updateCalls)
+				return
+			}
+			require.NotNil(t, upstream.lastReq)
+			require.Equal(t, string(openai_compat.ResponsesProbeStatusSupported), (<-updateCalls)[openai_compat.ExtraKeyResponsesProbeStatus])
+		})
+	}
+}

@@ -77,7 +77,7 @@ func TestAsyncRecoveryUpgradePreservesPendingAndSettledFinancialState(t *testing
 		"groups": "{image_subscription_rate_priority,video_subscription_rate_priority}", "usage_billing_dedup": "{}",
 		"image_billing_reservations": "{settlement_evidence,settlement_retry_at,settlement_attempts,settlement_completed_at}",
 		// 后续迁移新增的可空列不属于旧记录内容，单独断言保持 NULL，而不是让整行比较误报。
-		"creative_runs": "{usage_recorded_at,quota_platform,image_attempt_account_ids,image_execution_deadline_at,capture_result}",
+		"creative_runs": "{usage_recorded_at,quota_platform,image_attempt_account_ids,image_execution_deadline_at,capture_result,billing_mode,provider_usage}",
 	}
 	queries, before := map[string]string{}, map[string]string{}
 	for table, columns := range excluded {
@@ -107,6 +107,9 @@ func TestAsyncRecoveryUpgradePreservesPendingAndSettledFinancialState(t *testing
 	// 升级不能为历史任务伪造扣款回执；恢复路径按预占快照核对后才处理。
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM creative_runs WHERE capture_result IS NOT NULL`).Scan(&count))
 	require.Zero(t, count, "迁移不能为历史任务伪造扣款回执")
+	// 迁移 327 新增的 token 计费列：历史任务必须保持按张计费，且没有伪造的上游用量。
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM creative_runs WHERE billing_mode<>'' OR provider_usage IS NOT NULL`).Scan(&count))
+	require.Zero(t, count, "历史创作任务升级后必须保持按张计费且没有上游用量")
 	require.Zero(t, count, "历史任务平台未冻结时应保留兼容回退，不能由迁移猜测归属")
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM creative_runs
 		WHERE image_execution_deadline_at IS NOT NULL OR jsonb_array_length(image_attempt_account_ids)<>0`).Scan(&count))

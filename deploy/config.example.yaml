@@ -236,6 +236,12 @@ gateway:
   # OpenAI/Codex upstream response header timeout (seconds, 0=disabled)
   # OpenAI/Codex 等待上游响应头超时时间（秒，0=禁用本地响应头超时）
   openai_response_header_timeout: 0
+  # Opt out of the fixed 10-minute account cooldown for persistent OpenAI transport failures (DNS/proxy/network).
+  # 关闭 OpenAI 持久传输层故障（DNS/代理/网络）触发的固定 10 分钟账号冷却；默认 false 保留保护。
+  # 环境变量：GATEWAY_DISABLE_OPENAI_TRANSPORT_ERROR_COOLDOWN=true。
+  # 错误/Ops 记录与请求内有界 failover 保持不变；HTTP 401/403/429、额度/模型限制、流超时和 token 刷新冷却不变，
+  # 已有冷却和管理员暂停不会被清除。共享出口仍故障时后续请求会继续重试，该开关不修复 DNS/代理。
+  disable_openai_transport_error_cooldown: false
   # OpenAI 原生 HTTP Responses 首个语义输出超时（秒，0=禁用）
   # 包含等待响应头的时间；不适用于 passthrough 或 WebSocket 传输。
   # Grok text Responses first-byte timeout (seconds, 0=disabled; default 120)

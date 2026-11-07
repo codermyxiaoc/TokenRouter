@@ -206,7 +206,16 @@ func messageContentWire(parts []ResponsesContentPart) []map[string]any {
 		if typ == "" {
 			typ = "output_text"
 		}
-		out = append(out, map[string]any{"type": typ, "text": p.Text})
+		switch typ {
+		case "output_text":
+			// 与流式 content_part 形态保持一致，补齐 annotations/logprobs 空数组。
+			out = append(out, outputTextPartWire(&p))
+		case "refusal":
+			// 拒绝内容使用独立的 refusal 字段，不能写成 text。
+			out = append(out, map[string]any{"type": typ, "refusal": p.Refusal})
+		default:
+			out = append(out, map[string]any{"type": typ, "text": p.Text})
+		}
 	}
 	return out
 }

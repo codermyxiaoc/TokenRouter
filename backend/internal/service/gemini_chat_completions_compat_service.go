@@ -803,11 +803,11 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 	nextBlockIndex := 0
 	openBlockIndex := -1
 	openBlockType := ""
-	seenText := ""
-	seenThinking := ""
+	var seenText geminiTextDelta
+	var seenThinking geminiTextDelta
 	openToolIndex := -1
 	openToolName := ""
-	seenToolJSON := ""
+	var seenToolJSON geminiTextDelta
 
 	closeOpenBlock := func() bool {
 		if openBlockIndex < 0 {
@@ -825,7 +825,7 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 		disconnected := emitAnthropicEvent(&apicompat.AnthropicStreamEvent{Type: "content_block_stop"})
 		openToolIndex = -1
 		openToolName = ""
-		seenToolJSON = ""
+		seenToolJSON.reset()
 		return disconnected
 	}
 
@@ -869,18 +869,13 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 								thought, _ := part["thought"].(bool)
 								blockType := "text"
 								deltaType := "text_delta"
-								seen := seenText
+								seen := &seenText
 								if thought {
 									blockType = "thinking"
 									deltaType = "thinking_delta"
-									seen = seenThinking
+									seen = &seenThinking
 								}
-								delta, newSeen := computeGeminiTextDelta(seen, text)
-								if thought {
-									seenThinking = newSeen
-								} else {
-									seenText = newSeen
-								}
+								delta := seen.next(text)
 								if delta == "" {
 									continue
 								}
@@ -963,8 +958,7 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 										argsJSONText = string(b)
 									}
 								}
-								delta, newSeen := computeGeminiTextDelta(seenToolJSON, argsJSONText)
-								seenToolJSON = newSeen
+								delta := seenToolJSON.next(argsJSONText)
 								if delta != "" {
 									if emitAnthropicEvent(&apicompat.AnthropicStreamEvent{
 										Type: "content_block_delta",

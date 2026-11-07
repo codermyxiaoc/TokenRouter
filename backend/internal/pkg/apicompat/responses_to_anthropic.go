@@ -27,18 +27,13 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "reasoning":
-			summaryText := ""
-			for _, s := range item.Summary {
-				if s.Type == "summary_text" && s.Text != "" {
-					summaryText += s.Text
-				}
-			}
+			reasoningText := responsesReasoningText(item)
 			// 始终将 encrypted_content 暴露为 thinking.signature，让 Claude Code
 			// 等多轮客户端可以回传。模型未生成可见摘要时，仅含签名的 thinking 块也有效。
-			if summaryText != "" || strings.TrimSpace(item.EncryptedContent) != "" {
+			if reasoningText != "" || strings.TrimSpace(item.EncryptedContent) != "" {
 				blocks = append(blocks, AnthropicContentBlock{
 					Type:      "thinking",
-					Thinking:  summaryText,
+					Thinking:  reasoningText,
 					Signature: item.EncryptedContent,
 				})
 			}

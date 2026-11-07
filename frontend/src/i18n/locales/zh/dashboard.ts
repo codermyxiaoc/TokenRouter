@@ -429,6 +429,7 @@ export default {
     exportCancelled: '导出已取消',
     exporting: '导出中...',
     preparingExport: '正在准备导出...',
+    exportRateLimited: '查询过于频繁，{seconds} 秒后自动继续导出...',
     model: '模型',
     requestedModel: '请求',
     upstreamModel: '上游',

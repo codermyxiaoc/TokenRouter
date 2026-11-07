@@ -1646,6 +1646,18 @@ func validateOpenAIReasoningEffort(body []byte, requestedModel string, mappedMod
 				}
 			}
 		}
+		if isOpenAIGPT61TerraModelSpelling(model) {
+			// Terra 接受 none 到 max，唯独不支持 minimal（含 -minimal 模型后缀）。
+			terraEfforts := efforts
+			if strings.HasSuffix(strings.TrimSuffix(canonicalizeOpenAIModelAliasSpelling(model), "-openai-compact"), "-minimal") {
+				terraEfforts = append(append([]string(nil), efforts...), "minimal")
+			}
+			for _, effort := range terraEfforts {
+				if value := strings.ToLower(strings.TrimSpace(effort)); value == "minimal" {
+					return fmt.Errorf("gpt-6.1-terra does not support reasoning effort %q; use none, low, medium, high, xhigh or max", value)
+				}
+			}
+		}
 		if hasOpenAIUltraReasoningSuffix(model) {
 			return errors.New(`model reasoning suffix "ultra" is not supported; use "max"`)
 		}

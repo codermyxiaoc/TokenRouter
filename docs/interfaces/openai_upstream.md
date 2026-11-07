@@ -111,7 +111,7 @@ OpenAI API Key 的普通文本配置把四个概念分开持久化：
 
 - `credentials.openai_workload_capabilities` 是工作负载集合，允许 `text_generation`、`embeddings` 与显式开启的 `seedance`。缺失时仍只写入前两项默认值，显式空数组表示不承接这些工作负载。Seedance 还要求 API Key 与自定义 Base URL，其原生异步任务及计费见 [Seedance 上游](seedance_upstream.md)。
 - `extra.openai_text_route_mode` 是管理员拥有的路由策略，只允许 `preserve_client_protocol`、`force_responses`、`force_chat_completions`。
-- `extra.openai_responses_probe_status` 是探测服务拥有的只读事实，只允许 `supported`、`unsupported`、`unknown`。探测更新不得改写管理员路由策略。
+- `extra.openai_responses_probe_status` 是探测服务拥有的只读事实，只允许 `supported`、`unsupported`、`unknown`。探测更新不得改写管理员路由策略。管理员已设为 `force_responses` 或 `force_chat_completions` 时探测结果不参与路由，OpenAI API Key 账号直接跳过探测、不发上游请求也不写状态；国产供应商按协议配置写入的分支不受影响。
 - `extra.openai_responses_continuation_supported` 是管理员拥有的 HTTP continuation 能力开关，取值为布尔值，缺失时按 `false` 处理。只有显式为 `true` 时，Messages 转 Responses 的兼容桥才会发送和缓存 `previous_response_id`；它不改变协议路由，也不覆盖探测状态。
 
 普通文本协议按下表解析：
@@ -243,7 +243,7 @@ OpenAI OAuth、Setup Token 和订阅影子账号不再调度最终上游目标�
 
 `gpt-6.1-sol` 保持独立模型身份，支持 `low/medium/high/xhigh/max`，在 HTTP 与 WS 现有参数校验路径拒绝显式 `none/minimal`（包括模型后缀及账号映射目标），不自动降低或提高档位。普通目录、价卡和客户端配置接入沿用 fork 现有架构；未引入上游 Codex manifest、远程目录或专属 descriptor。价格及长上下文阈值见[模型目录与市场](model_catalog_and_marketplace.md)。
 
-`gpt-6.1-terra` 同样保持独立身份，推理档位与 6 Sol/Luna 一致：支持 `none/low/medium/high/xhigh/max`，`none` 按原生语义保留（兼容后缀、Claude 桥接与 OpenAI API Key 上游均不改成默认档位），`minimal`、`pro` 等未公布后缀不归入 Terra 也不按其它型号计价。与 6.1 Sol 一样不引入上游“工具调用必须改走 Responses”的拦截，Chat 回退路径的协议选择仍由管理员策略决定、不静默改协议；OAuth 订阅长上下文成本豁免目前只适用于 6.1 Sol。
+`gpt-6.1-terra` 同样保持独立身份，推理档位与 6 Sol/Luna 一致：支持 `none/low/medium/high/xhigh/max`，`none` 按原生语义保留（兼容后缀、Claude 桥接与 OpenAI API Key 上游均不改成默认档位），`pro` 等未公布后缀不归入 Terra 也不按其它型号计价。`minimal` 不在 Terra 档位内：显式 `minimal`（`reasoning.effort`、`reasoning_effort`、`output_config.effort`）或 `-minimal` 模型后缀在 HTTP 与 WS 现有参数校验路径返回 400，不降级为其它档位，`-minimal` 也不进入 Terra 定价归一。与 6.1 Sol 一样不引入上游“工具调用必须改走 Responses”的拦截，Chat 回退路径的协议选择仍由管理员策略决定、不静默改协议；OAuth 订阅长上下文成本豁免目前只适用于 6.1 Sol。
 
 Astra 的 Ultrafast 为独立服务档，对最终普通 token 价按 6 倍结算，不使用普通 Fast 渠道倍率。上游权威声明降为 Fast/priority/default/Flex 时按更低档计费；OAuth/Codex 的 default 回显仍遵守现有非权威规则，不因此误降档。
 

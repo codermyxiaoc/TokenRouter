@@ -63,7 +63,9 @@ Chat Completions / Responses
   -> original OpenAI protocol
 ```
 
-管理员显式图片测试支持原生 Antigravity 账号，按实际映射后的图片模型发送 TEXT/IMAGE 输出配置，并以现有图片事件展示内联结果。成功响应使用全局有界正文限额，不用错误摘要上限截断 base64；超过正文上限明确失败。文本测试及自定义提示词保持原合同，不因新功能自动触发图片生成。
+管理员显式图片测试支持原生 Antigravity 账号，按实际映射后的图片模型发送 TEXT/IMAGE 输出配置，并以现有图片事件展示内联结果。成功响应使用全局有界正文限额，不用错误摘要上限截断 base64；超过正文上限明确失败。文本测试及自定义提示词保持原合同，不因新功能自动触发图片生成。文本与 Claude 形状的连接测试输出上限为 256 token（原为 1），使 gemini-4-argon、gemini-3.8-flash 等思考模型在思考之后仍能返回回答，而不是空文本。
+
+Gemini 原生请求的结构化输出：Antigravity 上游接受 `generationConfig.responseJsonSchema`（含 snake_case 写法）但静默忽略，只有 `responseSchema` 生效；@ai-sdk/google 等客户端只发送前者。清理请求时把它改写为经过 Schema 清洗的 `responseSchema`，已有 `responseSchema` 时以其为准，未携带任何 Schema 的请求原样转发。
 
 工具结果中的 base64 图片/文档保留为函数响应之后的多模态 parts。Gemini 非流聚合保留每一类 part，包括 functionCall 和 thoughtSignature；末尾空文本不能覆盖已有工具调用或签名。函数后续轮次补齐所需签名时仍保留函数响应中的图片。
 

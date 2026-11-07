@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"net/http"
 	"strings"
 
@@ -25,6 +26,9 @@ func MarkOpenAINativeCompactionV2(c *gin.Context) {
 // the final Responses input item, as required by the upstream v2 wire format.
 func NormalizeCompactionTriggerInputOrder(body []byte) ([]byte, bool, error) {
 	if len(body) == 0 {
+		return body, false, nil
+	}
+	if !compactionTriggerNeedsDecode(body) {
 		return body, false, nil
 	}
 	var payload map[string]any
@@ -60,6 +64,17 @@ func NormalizeCompactionTriggerInputOrder(body []byte) ([]byte, bool, error) {
 		return body, false, err
 	}
 	return encoded, true, nil
+}
+
+// compactionTriggerNeedsDecode 让不可能包含 trigger 的请求体跳过整包解码：
+// type 字符串除非用 \u 转义拼写，否则必然字面出现。跳过解码的请求体仍须是合法 JSON 对象，
+// 保证非法请求体继续从原解码路径报错。
+func compactionTriggerNeedsDecode(body []byte) bool {
+	if bytes.Contains(body, []byte("compaction_trigger")) || bytes.Contains(body, []byte(`\u`)) {
+		return true
+	}
+	trimmed := bytes.TrimLeft(body, " \t\r\n")
+	return len(trimmed) == 0 || trimmed[0] != '{' || !gjson.ValidBytes(body)
 }
 
 func isOpenAINativeCompactionV2(c *gin.Context) bool {

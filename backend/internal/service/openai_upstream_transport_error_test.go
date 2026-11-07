@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -239,4 +240,60 @@ func TestHandleOpenAIAccountUpstreamError_RecordsOllamaActivityOnly(t *testing.T
 	require.True(t, ok, "Ollama Cloud non-2xx must schedule last_used activity")
 	_, ok = deferred.lastUsedUpdates.Load(int64(505))
 	require.False(t, ok, "non-Ollama non-2xx must not schedule Ollama activity")
+}
+
+// TestHandleOpenAIUpstreamTransportError_CooldownConfig 验证关闭传输错误冷却后持久故障仍 failover，
+// 但不写内存阻断也不落库临时不可调度；默认配置保持原有冷却。
+func TestHandleOpenAIUpstreamTransportError_CooldownConfig(t *testing.T) {
+	transportErr := &net.DNSError{Err: "no such host", Name: "chatgpt.com", IsNotFound: true}
+	require.True(t, classifyUpstreamTransportError(transportErr).Persistent)
+	for _, testCase := range []struct {
+		name     string
+		cfg      *config.Config
+		disabled bool
+	}{
+		{name: "nil"},
+		{name: "zero", cfg: &config.Config{}},
+		{name: "disabled", cfg: &config.Config{Gateway: config.GatewayConfig{DisableOpenAITransportErrorCooldown: true}}, disabled: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			repo := &openAITransportAccountRepoStub{}
+			svc := &OpenAIGatewayService{accountRepo: repo, cfg: testCase.cfg}
+			account := &Account{ID: 8541, Name: "shared-egress", Platform: PlatformOpenAI}
+			c, rec := newOpenAITransportErrTestContext()
+
+			retErr := svc.handleOpenAIUpstreamTransportError(context.Background(), c, account, transportErr, false)
+
+			var failover *UpstreamFailoverError
+			require.ErrorAs(t, retErr, &failover)
+			require.Equal(t, http.StatusBadGateway, failover.StatusCode)
+			require.Equal(t, 0, rec.Body.Len())
+			require.Equal(t, !testCase.disabled, svc.isOpenAIAccountRuntimeBlocked(account))
+			if testCase.disabled {
+				require.Empty(t, repo.tempUnschedCalls)
+			} else {
+				require.Len(t, repo.tempUnschedCalls, 1)
+				require.Contains(t, repo.tempUnschedCalls[0].reason, "no such host")
+			}
+		})
+	}
+}
+
+// TestTempUnscheduleOpenAITransportError_DisabledPreservesExistingState 验证关闭开关后不会覆盖已有冷却状态。
+func TestTempUnscheduleOpenAITransportError_DisabledPreservesExistingState(t *testing.T) {
+	repo := &openAITransportAccountRepoStub{}
+	svc := &OpenAIGatewayService{accountRepo: repo, cfg: &config.Config{}}
+	account := &Account{ID: 8542, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true}
+	svc.tempUnscheduleOpenAITransportError(context.Background(), account, "previous failure")
+	require.Len(t, repo.tempUnschedCalls, 1)
+	previousCall := repo.tempUnschedCalls[0]
+	previousAccount := *account
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+
+	svc.cfg.Gateway.DisableOpenAITransportErrorCooldown = true
+	svc.tempUnscheduleOpenAITransportError(context.Background(), account, "new failure")
+
+	require.Equal(t, []tempUnschedCall{previousCall}, repo.tempUnschedCalls)
+	require.Equal(t, previousAccount, *account)
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }

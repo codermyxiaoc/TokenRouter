@@ -786,7 +786,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		if err != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
 		}
-		apiURL = strings.TrimSuffix(normalizedBaseURL, "/") + "/v1/messages?beta=true"
+		apiURL = buildAnthropicMessagesURL(normalizedBaseURL)
 	} else {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported account type: %s", account.Type))
 	}
@@ -2773,10 +2773,13 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: modelID})
 
 	payload := map[string]any{
-		"model":           modelID,
-		"prompt":          prompt,
-		"n":               1,
-		"response_format": "b64_json",
+		"model":  modelID,
+		"prompt": prompt,
+		"n":      1,
+	}
+	// GPT Image 模型默认返回 base64 且会拒绝 response_format；dall-e 等旧模型仍显式请求 b64_json。
+	if !IsGPTImageGenerationModel(modelID) {
+		payload["response_format"] = "b64_json"
 	}
 	payloadBytes, _ := json.Marshal(payload)
 
@@ -2813,10 +2816,12 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
 	}
 
-	// Parse {"data": [{"b64_json": "...", "revised_prompt": "..."}]}
+	// 解析 {"data": [{"b64_json": "...", "url": "...", "revised_prompt": "..."}]}；
+	// 不发 response_format 时部分兼容上游可能返回 url，因此同时兼容两种形态。
 	var result struct {
 		Data []struct {
 			B64JSON       string `json:"b64_json"`
+			URL           string `json:"url"`
 			RevisedPrompt string `json:"revised_prompt"`
 		} `json:"data"`
 	}
@@ -2838,6 +2843,8 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 				ImageURL: "data:image/png;base64," + item.B64JSON,
 				MimeType: "image/png",
 			})
+		} else if imageURL := strings.TrimSpace(item.URL); imageURL != "" {
+			s.sendEvent(c, TestEvent{Type: "image", ImageURL: imageURL})
 		}
 	}
 

@@ -264,6 +264,15 @@ func isOpenAIGPT61TerraModel(model string) bool {
 	return normalizeOpenAIGPT6SolLunaModel(model) == "gpt-6.1-terra"
 }
 
+// isOpenAIGPT61TerraModelSpelling 在受支持别名之外额外识别 -minimal 拼写，仅用于推理强度校验：
+// Terra 官方档位为 none 到 max，不包含 minimal，需要识别出来后返回 400，而不是当作未知模型放行。
+func isOpenAIGPT61TerraModelSpelling(model string) bool {
+	if isOpenAIGPT61TerraModel(model) {
+		return true
+	}
+	return strings.TrimSuffix(canonicalizeOpenAIModelAliasSpelling(model), "-openai-compact") == "gpt-6.1-terra-minimal"
+}
+
 // isOpenAIGPT6LunaModel 不接受未公布的其它 Luna 变体。
 func isOpenAIGPT6LunaModel(model string) bool {
 	return normalizeOpenAIGPT6SolLunaModel(model) == "gpt-6-luna"

@@ -146,6 +146,12 @@ func (s *AccountTestService) ProbeOpenAIAPIKeyResponsesSupport(ctx context.Conte
 		return
 	}
 
+	// 管理员已强制文本路由模式（force_responses / force_chat_completions）时，路由决策优先读取该模式，
+	// 探测结果不会生效，探测只会白跑一次上游调用，直接跳过。
+	if openai_compat.ResolveTextRouteMode(account.Extra) != openai_compat.TextRouteModePreserveClientProtocol {
+		return
+	}
+
 	apiKey := account.GetOpenAIApiKey()
 	if apiKey == "" {
 		logger.LegacyPrintf("service.openai_probe", "probe_skip_no_apikey: account_id=%d", accountID)

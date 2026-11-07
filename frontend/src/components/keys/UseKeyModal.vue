@@ -1115,6 +1115,7 @@ function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const configContent = `model_provider = "OpenAI"
 model = "${OPENAI_CODEX_DEFAULT_MODEL}"
 review_model = "${OPENAI_CODEX_DEFAULT_MODEL}"
+web_search = "live"
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
 network_access = "enabled"

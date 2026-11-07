@@ -517,7 +517,7 @@ func (s *AntigravityGatewayService) buildGeminiTestRequestWithPrompt(projectID, 
 			},
 		},
 		"generationConfig": map[string]any{
-			"maxOutputTokens": 1,
+			"maxOutputTokens": antigravityTestMaxOutputTokens,
 		},
 		"toolConfig": map[string]any{
 			"functionCallingConfig": map[string]any{
@@ -530,7 +530,7 @@ func (s *AntigravityGatewayService) buildGeminiTestRequestWithPrompt(projectID, 
 }
 
 // buildClaudeTestRequest 构建 Claude 格式测试请求并转换为 Gemini 格式
-// 使用最小 token 消耗：使用调用方提示词并限制 MaxTokens 为 1。
+// 使用调用方提示词，并留出足够的输出 token 让模型作答。
 func (s *AntigravityGatewayService) buildClaudeTestRequest(projectID, mappedModel string, prompts ...string) ([]byte, error) {
 	prompt := "."
 	if len(prompts) > 0 && strings.TrimSpace(prompts[0]) != "" {
@@ -545,11 +545,15 @@ func (s *AntigravityGatewayService) buildClaudeTestRequest(projectID, mappedMode
 				Content: json.RawMessage(promptJSON),
 			},
 		},
-		MaxTokens: 1,
+		MaxTokens: antigravityTestMaxOutputTokens,
 		Stream:    false,
 	}
 	return antigravity.TransformClaudeToGemini(claudeReq, projectID, mappedModel)
 }
+
+// antigravityTestMaxOutputTokens 给思考模型留出思考后仍能回答简短测试提示词的空间；
+// 原先为 1，gemini-4-argon、gemini-3.8-flash 等思考模型会返回空文本。
+const antigravityTestMaxOutputTokens = 256
 
 func (s *AntigravityGatewayService) getClaudeTransformOptions(ctx context.Context) antigravity.TransformOptions {
 	opts := antigravity.DefaultTransformOptions()

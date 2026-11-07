@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -206,4 +207,73 @@ func TestAccountTestService_OpenAIExplicitTextTypeDoesNotInspectModelName(t *tes
 	require.NoError(t, err)
 	require.Equal(t, "gpt-image-2", gjson.GetBytes(body, "model").String())
 	require.Equal(t, "reply briefly", gjson.GetBytes(body, "input.0.content.0.text").String())
+}
+
+// runOpenAIImageAPIKeyAccountTest 以给定模型和上游响应执行 APIKey 生图测试，返回上游请求体与 SSE 输出。
+func runOpenAIImageAPIKeyAccountTest(t *testing.T, model, upstreamBody string) (map[string]any, string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/1/test", nil)
+
+	upstream := &httpUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+		},
+	}
+	svc := &AccountTestService{httpUpstream: upstream, cfg: &config.Config{}}
+	account := &Account{
+		ID: 54, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "test-api-key"},
+	}
+
+	err := svc.testOpenAIImageAPIKey(c, context.Background(), account, model, "draw a cat")
+	require.NoError(t, err)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "https://api.openai.com/v1/images/generations", upstream.lastReq.URL.String())
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(upstream.lastBody, &payload))
+	require.Equal(t, model, payload["model"])
+	require.Equal(t, "draw a cat", payload["prompt"])
+	require.Equal(t, float64(1), payload["n"])
+	return payload, rec.Body.String()
+}
+
+// TestAccountTestService_OpenAIImageAPIKeyOmitsUnsupportedResponseFormat 验证 GPT Image 模型测试不发送 response_format。
+func TestAccountTestService_OpenAIImageAPIKeyOmitsUnsupportedResponseFormat(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, model := range []string{
+		"gpt-image-1",
+		"gpt-image-1-mini",
+		"gpt-image-1.5",
+		"gpt-image-2",
+		"gpt-image-2-2026-04-21",
+		"gpt-image-2.5-flare",
+	} {
+		t.Run(model, func(t *testing.T) {
+			payload, body := runOpenAIImageAPIKeyAccountTest(t, model, `{"data":[{"b64_json":"aGVsbG8="}]}`)
+			// GPT Image 模型始终返回 base64，并拒绝该旧参数。
+			require.NotContains(t, payload, "response_format")
+			require.Contains(t, body, "data:image/png;base64,aGVsbG8=")
+			require.Contains(t, body, `"success":true`)
+		})
+	}
+}
+
+// TestAccountTestService_OpenAIImageAPIKeyDallEKeepsResponseFormat 验证 dall-e 模型仍显式请求 b64_json。
+func TestAccountTestService_OpenAIImageAPIKeyDallEKeepsResponseFormat(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	payload, body := runOpenAIImageAPIKeyAccountTest(t, "dall-e-3", `{"data":[{"b64_json":"aGVsbG8="}]}`)
+	require.Equal(t, "b64_json", payload["response_format"])
+	require.Contains(t, body, "data:image/png;base64,aGVsbG8=")
+}
+
+// TestAccountTestService_OpenAIImageAPIKeyAcceptsURLResponse 验证上游返回 url 形态时测试仍展示图片并判定成功。
+func TestAccountTestService_OpenAIImageAPIKeyAcceptsURLResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	_, body := runOpenAIImageAPIKeyAccountTest(t, "gpt-image-2", `{"data":[{"url":"https://cdn.example/cat.png"}]}`)
+	require.Contains(t, body, "https://cdn.example/cat.png")
+	require.Contains(t, body, `"success":true`)
 }

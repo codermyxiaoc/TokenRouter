@@ -35,6 +35,8 @@ Compose 的 `.env` 还包含只供部署工具插值的变量：`SUB2API_IMAGE` 
 
 `gateway.video_max_processing_minutes`（环境变量 `GATEWAY_VIDEO_MAX_PROCESSING_MINUTES`）是独立 Video 任务从创建起的最长排队与生成时间，默认 180 分钟，0 沿用默认，负数或大于 10080 拒绝启动；声明式模板的 `poll.max_processing_minutes` 优先。超时仍未交付成品的任务失败并释放预扣，详见[未交付即释放](../domains/video_tasks.md#video_task_delivery_release)。
 
+`gateway.disable_openai_transport_error_cooldown`（环境变量 `GATEWAY_DISABLE_OPENAI_TRANSPORT_ERROR_COOLDOWN`）默认 `false`；设为 `true` 只关闭 OpenAI 持久 DNS/代理/网络故障触发的固定 10 分钟账号冷却，错误记录与请求内 failover 不变，也不清除已有冷却、管理员暂停或其它类型冷却。共享出口仍故障时后续请求会继续尝试该账号。修改需要重启。
+
 `gateway.min_output_tokens`（环境变量 `GATEWAY_MIN_OUTPUT_TOKENS`）默认 128，最小允许 16，低于 16 拒绝启动；修改后需要重启。它只约束协议兼容转换中的显式正数输出预算，省略预算继续由上游决定。原生透传和无需转换的请求不强行改写；不改变费用计算、模型上下文上限或账户授权。
 
 `config.load` 使用 Viper，最终优先级为：

@@ -512,6 +512,7 @@ describe('UseKeyModal', () => {
     expect(configToml).toBeDefined()
     expect(configToml).toContain('model = "gpt-5.6-sol"')
     expect(configToml).toContain('review_model = "gpt-5.6-sol"')
+    expect(configToml).toContain('web_search = "live"')
     expect(configToml).not.toContain('model = "gpt-5.4"')
     expect(configToml).not.toContain('model_context_window')
     expect(configToml).not.toContain('model_auto_compact_token_limit')

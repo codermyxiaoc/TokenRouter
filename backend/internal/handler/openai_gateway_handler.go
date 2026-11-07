@@ -1770,6 +1770,9 @@ const (
 )
 
 func normalizeCodexDelegationBootstrap(body []byte) ([]byte, bool) {
+	if !mayContainCodexCallOutputCandidate(body, "create_thread", "send_message_to_thread") {
+		return body, false
+	}
 	// 已有任务通过 send_message_to_thread 唤醒时会携带 previous_response_id；
 	// 完整历史回放还会带有已配对的调用项。delegation 仍是客户端注入的用户输入，
 	// 不属于这些历史调用的结果，因此允许它与可明确配对的历史上下文共存。
@@ -1777,7 +1780,28 @@ func normalizeCodexDelegationBootstrap(body []byte) ([]byte, bool) {
 }
 
 func normalizeCodexAutomationBootstrap(body []byte) ([]byte, bool) {
+	if !mayContainCodexCallOutputCandidate(body, "automation_update") {
+		return body, false
+	}
 	return normalizeCodexCallOutputBootstrap(body, isCodexAutomationCandidate, false)
+}
+
+// mayContainCodexCallOutputCandidate 是 bootstrap 候选项的必要条件，在完整唯一性扫描和解码前检查。
+// 候选项的 type 与工具名都是 JSON 字符串，除非用 \u 转义拼写，否则必然字面出现；
+// 两者都不满足时归一化不可能改变请求体，可直接跳过整包解码。
+func mayContainCodexCallOutputCandidate(body []byte, toolNames ...string) bool {
+	if bytes.Contains(body, []byte(`\u`)) {
+		return true
+	}
+	if !bytes.Contains(body, []byte("function_call_output")) {
+		return false
+	}
+	for _, name := range toolNames {
+		if bytes.Contains(body, []byte(name)) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeCodexCallOutputBootstrap(body []byte, isCandidate func(map[string]any) bool, allowHistoricalContext bool) ([]byte, bool) {
@@ -3352,6 +3376,12 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	if failoverErr.IsOpenAIRequestBodyTooLarge() {
 		// 保留账号间体积限制恢复，但耗尽后按请求终态交给智能路由。
 		service.MarkOpsRequestScopedError(c, "invalid_request_error")
+		// 运维配置的错误透传规则优先于下方内置的 413 映射。账号间切换仍然保留（不同账号的代理
+		// 体积限制可能不同），规则只决定切换耗尽后返回给客户端的响应；否则 413 规则在原生
+		// /responses 路径上永远无法命中，因为本分支会先于通用规则查找返回。
+		if h.applyOpenAIFailoverPassthroughRule(c, failoverErr.StatusCode, failoverErr.ResponseBody, streamStarted) {
+			return
+		}
 		service.SetOpsUpstreamError(c, http.StatusRequestEntityTooLarge, service.OpenAIRequestBodyTooLargeClientMessage, "")
 		h.handleStreamingAwareError(
 			c,
@@ -3403,27 +3433,8 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	}
 
 	// 先检查透传规则
-	if h.errorPassthroughService != nil && len(responseBody) > 0 {
-		if rule := h.errorPassthroughService.MatchRule("openai", statusCode, responseBody); rule != nil {
-			// 确定响应状态码
-			respCode := statusCode
-			if !rule.PassthroughCode && rule.ResponseCode != nil {
-				respCode = *rule.ResponseCode
-			}
-
-			// 确定响应消息
-			msg := service.ExtractUpstreamErrorMessage(responseBody)
-			if !rule.PassthroughBody && rule.CustomMessage != nil {
-				msg = *rule.CustomMessage
-			}
-
-			if rule.SkipMonitoring {
-				c.Set(service.OpsSkipPassthroughKey, true)
-			}
-
-			h.handleStreamingAwareError(c, respCode, "upstream_error", msg, streamStarted)
-			return
-		}
+	if h.applyOpenAIFailoverPassthroughRule(c, statusCode, responseBody, streamStarted) {
+		return
 	}
 
 	// 保留显式透传规则的优先级；切换耗尽后再呈现图片余额不足原因。
@@ -3487,6 +3498,43 @@ func isSafeRetryAfter(value string) bool {
 }
 
 // handleFailoverExhaustedSimple 简化版本，用于没有响应体的情况
+// applyOpenAIFailoverPassthroughRule 对已耗尽的 OpenAI failover 应用错误透传规则。
+// 返回 true 表示规则已命中且客户端响应已写出，调用方必须立即返回。
+// 规则是运维显式配置的覆盖项，因此优先于同一上游状态码的内置映射，包括固定返回 413 的请求体过大分支。
+func (h *OpenAIGatewayHandler) applyOpenAIFailoverPassthroughRule(
+	c *gin.Context,
+	statusCode int,
+	responseBody []byte,
+	streamStarted bool,
+) bool {
+	if h.errorPassthroughService == nil || statusCode <= 0 || len(responseBody) == 0 {
+		return false
+	}
+	rule := h.errorPassthroughService.MatchRule("openai", statusCode, responseBody)
+	if rule == nil {
+		return false
+	}
+
+	// 确定响应状态码
+	respCode := statusCode
+	if !rule.PassthroughCode && rule.ResponseCode != nil {
+		respCode = *rule.ResponseCode
+	}
+
+	// 确定响应消息
+	msg := service.ExtractUpstreamErrorMessage(responseBody)
+	if !rule.PassthroughBody && rule.CustomMessage != nil {
+		msg = *rule.CustomMessage
+	}
+
+	if rule.SkipMonitoring {
+		c.Set(service.OpsSkipPassthroughKey, true)
+	}
+
+	h.handleStreamingAwareError(c, respCode, "upstream_error", msg, streamStarted)
+	return true
+}
+
 func (h *OpenAIGatewayHandler) handleFailoverExhaustedSimple(c *gin.Context, statusCode int, streamStarted bool) {
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
 	service.SetOpsUpstreamError(c, statusCode, errMsg, "")
@@ -3873,11 +3921,11 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		cyberBlockKey = strings.TrimSpace(value)
 	case []byte:
 		if apiKey != nil {
-			plan := buildCyberSessionBlockWritePlan(apiKey.ID, c, value)
-			cyberBlockKey = plan.scopeKey
-			if !cyberLogOnly && len(plan.keys) > 0 && h.gatewayService != nil {
+			block := buildCyberSessionBlock(apiKey.ID, c, value)
+			cyberBlockKey = block.ScopeKey
+			if !cyberLogOnly && len(block.Keys) > 0 && h.gatewayService != nil {
 				blockCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-				h.gatewayService.MarkCyberSessionBlocked(blockCtx, plan.scopeKey, plan.keys)
+				h.gatewayService.MarkCyberSessionBlocked(blockCtx, block)
 				cancel()
 			}
 		}
@@ -3940,7 +3988,12 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 			})
 		}
 		if !cyberLogOnly && h.gatewayService != nil && cyberBlockKey != "" {
-			h.gatewayService.MarkCyberSessionBlocked(ctx, "", []string{cyberBlockKey})
+			// 兼容既有语义：把来源 key 单独写入为精确屏蔽 key（不携带 transcript 长度）。
+			blockAPIKeyID := int64(0)
+			if apiKey != nil {
+				blockAPIKeyID = apiKey.ID
+			}
+			h.gatewayService.MarkCyberSessionBlocked(ctx, service.CyberSessionBlock{APIKeyID: blockAPIKeyID, Keys: []string{cyberBlockKey}})
 		}
 		if h.opsService != nil {
 			enqueueOpsErrorLog(h.opsService, buildCyberPolicyOpsErrorEntry(meta, mark))
@@ -4211,26 +4264,22 @@ func writeContentModerationWSError(ctx context.Context, conn *coderws.Conn, deci
 	_ = conn.Write(writeCtx, coderws.MessageText, payload)
 }
 
-type cyberSessionBlockWritePlan struct {
-	scopeKey string
-	keys     []string
-}
-
-func buildCyberSessionBlockWritePlan(apiKeyID int64, c *gin.Context, body []byte) cyberSessionBlockWritePlan {
-	plan := cyberSessionBlockWritePlan{}
+// buildCyberSessionBlock 汇总一次 cyber 命中需要持久化的屏蔽信息：显式会话 key、
+// transcript 前缀 key 及其覆盖的历史长度；存在 transcript key 时才激活来源 scope。
+func buildCyberSessionBlock(apiKeyID int64, c *gin.Context, body []byte) service.CyberSessionBlock {
+	block := service.CyberSessionBlock{APIKeyID: apiKeyID}
 	if key := service.CyberSessionExplicitBlockKey(apiKeyID, c, body); key != "" {
-		plan.keys = append(plan.keys, key)
+		block.Keys = append(block.Keys, key)
 	}
-	transcriptKeys := service.CyberSessionTranscriptBlockKeys(apiKeyID, body)
-	for _, key := range transcriptKeys {
-		if len(plan.keys) == 0 || key != plan.keys[0] {
-			plan.keys = append(plan.keys, key)
-		}
+	transcriptBlocks := service.CyberSessionTranscriptBlocks(apiKeyID, body)
+	for _, transcript := range transcriptBlocks {
+		block.Keys = append(block.Keys, transcript.Key)
+		block.TranscriptLengths = append(block.TranscriptLengths, transcript.Length)
 	}
-	if len(transcriptKeys) > 0 {
-		plan.scopeKey = cyberSessionScopeKey(apiKeyID, c)
+	if len(transcriptBlocks) > 0 {
+		block.ScopeKey = cyberSessionScopeKey(apiKeyID, c)
 	}
-	return plan
+	return block
 }
 
 func findBlockedCyberSessionKey(ctx context.Context, gatewayService *service.OpenAIGatewayService, apiKeyID int64, c *gin.Context, body []byte) string {

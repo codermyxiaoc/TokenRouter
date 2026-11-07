@@ -2234,12 +2234,12 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	nextBlockIndex := 0
 	openBlockIndex := -1
 	openBlockType := ""
-	seenText := ""
-	seenThought := ""
+	var seenText geminiTextDelta
+	var seenThought geminiTextDelta
 	openToolIndex := -1
 	openToolID := ""
 	openToolName := ""
-	seenToolJSON := ""
+	var seenToolJSON geminiTextDelta
 
 	reader := bufio.NewReader(resp.Body)
 	for {
@@ -2289,8 +2289,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 		parts := extractGeminiParts(geminiResp)
 		for _, part := range parts {
 			if text, ok := part["text"].(string); ok && isGeminiThoughtPart(part) {
-				delta, newSeen := computeGeminiTextDelta(seenThought, text)
-				seenThought = newSeen
+				delta := seenThought.next(text)
 				if delta == "" {
 					continue
 				}
@@ -2301,7 +2300,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 					})
 					openToolIndex = -1
 					openToolName = ""
-					seenToolJSON = ""
+					seenToolJSON.reset()
 				}
 				if openBlockType != "thinking" {
 					if openBlockIndex >= 0 {
@@ -2349,11 +2348,10 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 					})
 					openToolIndex = -1
 					openToolName = ""
-					seenToolJSON = ""
+					seenToolJSON.reset()
 				}
 
-				delta, newSeen := computeGeminiTextDelta(seenText, text)
-				seenText = newSeen
+				delta := seenText.next(text)
 				if delta == "" {
 					continue
 				}
@@ -2419,7 +2417,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 					})
 					openToolIndex = -1
 					openToolName = ""
-					seenToolJSON = ""
+					seenToolJSON.reset()
 				}
 
 				if openToolIndex < 0 {
@@ -2455,8 +2453,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 					}
 				}
 
-				delta, newSeen := computeGeminiTextDelta(seenToolJSON, argsJSONText)
-				seenToolJSON = newSeen
+				delta := seenToolJSON.next(argsJSONText)
 				if delta != "" {
 					writeAnthropicStreamEvent("content_block_delta", map[string]any{
 						"type":  "content_block_delta",
@@ -3524,22 +3521,46 @@ func extractGeminiParts(geminiResp map[string]any) []map[string]any {
 	return nil
 }
 
-func computeGeminiTextDelta(seen, incoming string) (delta, newSeen string) {
+// geminiTextDelta 记录一个流式块已输出的文本。与原先的字符串拼接相比只改变存储方式：
+// 追加是均摊的，增量模式的长流不再每个 chunk 都复制整段已输出前缀（原先为平方级）。
+type geminiTextDelta struct {
+	seen strings.Builder
+}
+
+// next 返回 incoming 中尚未输出的部分；累积、重复/回退与增量三种判定与原实现一致。
+func (d *geminiTextDelta) next(incoming string) string {
 	incoming = strings.TrimSuffix(incoming, "\u0000")
 	if incoming == "" {
-		return "", seen
+		return ""
 	}
+	seen := d.seen.String()
 
-	// Cumulative mode: incoming contains full text so far.
+	// 累积模式：incoming 包含到目前为止的完整文本。
 	if strings.HasPrefix(incoming, seen) {
-		return strings.TrimPrefix(incoming, seen), incoming
+		delta := incoming[len(seen):]
+		_, _ = d.seen.WriteString(delta)
+		return delta
 	}
-	// Duplicate/rewind: ignore.
+	// 重复或回退：忽略。
 	if strings.HasPrefix(seen, incoming) {
-		return "", seen
+		return ""
 	}
-	// Delta mode: treat incoming as incremental chunk.
-	return incoming, seen + incoming
+	// 增量模式：incoming 是新增片段。
+	_, _ = d.seen.WriteString(incoming)
+	return incoming
+}
+
+// reset 在块结束时清空已输出文本。
+func (d *geminiTextDelta) reset() {
+	d.seen.Reset()
+}
+
+// computeGeminiTextDelta 保留原有纯函数接口（测试与对照使用），语义与 geminiTextDelta.next 相同。
+func computeGeminiTextDelta(seen, incoming string) (delta, newSeen string) {
+	var d geminiTextDelta
+	_, _ = d.seen.WriteString(seen)
+	delta = d.next(incoming)
+	return delta, d.seen.String()
 }
 
 func mapGeminiFinishReasonToClaudeStopReason(finishReason string) string {

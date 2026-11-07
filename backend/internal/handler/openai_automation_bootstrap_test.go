@@ -184,3 +184,29 @@ func TestNormalizeCodexAutomationBootstrapPreservesOrderAndIsIdempotent(t *testi
 	require.False(t, changedAgain)
 	require.Equal(t, got, again)
 }
+
+// TestNormalizeCodexBootstrapPrecheck 验证字节预检始终是必要条件：转义的 type 或工具名仍视为候选，
+// 两者都不含的请求体原样返回且不触发扫描与解码。
+func TestNormalizeCodexBootstrapPrecheck(t *testing.T) {
+	output := codexAutomationBootstrap("wiki-maintenance", "never", automationBootstrapPrompt)
+	escaped := []byte(strings.Replace(string(codexAutomationBootstrapBody(t, output, "")), `"automation_update"`, `"\u0061utomation_update"`, 1))
+	got, changed := normalizeCodexAutomationBootstrap(escaped)
+	require.True(t, changed)
+	require.Equal(t, output, gjson.GetBytes(got, "input.0.content.0.text").String())
+
+	plain := []byte(`{"model":"gpt-5","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"` + strings.Repeat("x", 4096) + `"}]},{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`)
+	for name, normalize := range map[string]func([]byte) ([]byte, bool){
+		"automation": normalizeCodexAutomationBootstrap,
+		"delegation": normalizeCodexDelegationBootstrap,
+	} {
+		t.Run(name, func(t *testing.T) {
+			allocs := testing.AllocsPerRun(10, func() {
+				got, changed := normalize(plain)
+				if changed || &got[0] != &plain[0] {
+					t.Fatal("non-candidate body must be returned unchanged")
+				}
+			})
+			require.Zero(t, allocs)
+		})
+	}
+}

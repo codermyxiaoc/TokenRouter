@@ -424,6 +424,7 @@ export default {
     exportCancelled: 'Export cancelled',
     exporting: 'Exporting...',
     preparingExport: 'Preparing export...',
+    exportRateLimited: 'Too many requests. Export resumes in {seconds}s...',
     model: 'Model',
     requestedModel: 'Requested',
     upstreamModel: 'Upstream',

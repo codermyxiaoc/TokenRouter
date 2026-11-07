@@ -191,6 +191,10 @@ func (s *CreativeCanvasService) UploadAsset(ctx context.Context, u int64, canvas
 	if err != nil {
 		return nil, err
 	}
+	// GIF 只作为模型生成的成品归档；用户上传的参考素材保持原有格式白名单。
+	if mime == "image/gif" {
+		return nil, ErrCanvasInvalid
+	}
 	if kind == "image" && limit > 32<<20 {
 		limit = 32 << 20
 	}

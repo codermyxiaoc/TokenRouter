@@ -15,6 +15,7 @@ export default {
       aspectRatio: 'Aspect ratio',
       quality: 'Quality',
       background: 'Background',
+      outputFormat: 'Output format',
       thinkingLevel: 'Thinking level',
       estimatedCost: '{cost}',
       tokenEstimatedCost: 'Billed by tokens, up to {cost} held',
@@ -61,6 +62,10 @@ export default {
       auto: 'Auto',
       opaque: 'Opaque',
       transparent: 'Transparent',
+    },
+    outputFormats: {
+      png: 'PNG image',
+      gif: 'Animated GIF',
     },
     thinkingLevels: {
       minimal: 'Minimal',

@@ -55,7 +55,7 @@ func buildCreativeMidjourneyRequestBody(run CreativeRun, payload CreativeRunPayl
 	if run.Operation != CreativeOperationGenerate || run.RequestedOutputCount != 4 || len(payload.Sources) != 0 || payload.Mask != nil {
 		return nil, "", creativeNonRetryableError("Midjourney requires a four-image text generation reservation")
 	}
-	if strings.TrimSpace(payload.Prompt) == "" || strings.TrimSpace(payload.Quality) != "" || strings.TrimSpace(payload.Background) != "" || strings.TrimSpace(payload.ThinkingLevel) != "" {
+	if strings.TrimSpace(payload.Prompt) == "" || strings.TrimSpace(payload.Quality) != "" || strings.TrimSpace(payload.Background) != "" || strings.TrimSpace(payload.ThinkingLevel) != "" || strings.TrimSpace(payload.OutputFormat) != "" {
 		return nil, "", creativeNonRetryableError("unsupported Midjourney generation parameters")
 	}
 	size, ratio, err := creativeMidjourneyImageSize(run.ImageSize, run.AspectRatio)

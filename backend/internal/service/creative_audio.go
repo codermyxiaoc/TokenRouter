@@ -23,7 +23,7 @@ func (s *CreativePublicService) validateCreativeAudioParams(ctx context.Context,
 	if !eligible {
 		return nil, ErrCreativeInvalidModel
 	}
-	if len(p.SourceImages) != 0 || p.Mask != nil || p.ImageSize != "" || p.AspectRatio != "" || p.Quality != "" || p.Background != "" || p.ThinkingLevel != "" || p.OutputCount < 0 || p.OutputCount > 1 || p.ExpectedOutputCount > 1 {
+	if len(p.SourceImages) != 0 || p.Mask != nil || p.ImageSize != "" || p.AspectRatio != "" || p.Quality != "" || p.Background != "" || p.ThinkingLevel != "" || p.OutputFormat != "" || p.OutputCount < 0 || p.OutputCount > 1 || p.ExpectedOutputCount > 1 {
 		return nil, ErrCreativeInvalidParams
 	}
 	prompt, voice, format, speed, err := normalizeCreativeAudioParams(p.Prompt, p.Voice, p.AudioFormat, p.Speed)
@@ -75,6 +75,9 @@ func creativeValidatedResponseMIME(p *validatedCreativeParams) string {
 			return "audio/wav"
 		}
 		return "audio/mpeg"
+	}
+	if p != nil {
+		return creativeImageResponseMIME(p.outputFormat)
 	}
 	return defaultCreativeResponseMime
 }

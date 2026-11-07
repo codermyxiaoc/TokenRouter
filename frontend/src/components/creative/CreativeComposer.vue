@@ -155,6 +155,21 @@
                   </button>
                 </div>
               </div>
+              <div v-if="studio.outputFormatOptions.value.length">
+                <p class="param-label">{{ t('creative.panel.outputFormat') }}</p>
+                <div class="flex flex-wrap gap-1.5">
+                  <button
+                    v-for="option in studio.outputFormatOptions.value"
+                    :key="option"
+                    type="button"
+                    class="param-chip"
+                    :class="studio.outputFormat.value === option && 'param-chip-active'"
+                    @click="setOutputFormat(option)"
+                  >
+                    {{ t(`creative.outputFormats.${option}`, option.toUpperCase()) }}
+                  </button>
+                </div>
+              </div>
               <div v-if="studio.thinkingLevelOptions.value.length">
                 <p class="param-label">{{ t('creative.panel.thinkingLevel') }}</p>
                 <div class="flex flex-wrap gap-1.5">
@@ -400,6 +415,11 @@ function setQuality(option: string): void {
 
 function setBackground(value: string): void {
   studio.background.value = value
+}
+
+// 输出格式选择（gif 为动图，仅部分模型开放）
+function setOutputFormat(value: string): void {
+  studio.outputFormat.value = value
 }
 
 function setThinkingLevel(value: string): void {

@@ -24,7 +24,7 @@ func normalizeCreativeTextParams(p *CreativeCanvasExecutionParams) error {
 	if p == nil || p.GroupID <= 0 || strings.TrimSpace(p.Model) == "" || p.Operation != "" && p.Operation != CreativeOperationGenerate {
 		return ErrCanvasInvalid
 	}
-	if len(p.References) != 0 || p.MaskAssetID != "" || p.ImageSize != "" || p.AspectRatio != "" || p.Quality != "" || p.Background != "" || p.ThinkingLevel != "" || p.Endpoint != "" || p.Duration != 0 || p.Resolution != "" || p.GenerateAudio != nil || p.Watermark != nil || p.Voice != "" || p.AudioFormat != "" || p.Speed != 0 {
+	if len(p.References) != 0 || p.MaskAssetID != "" || p.ImageSize != "" || p.AspectRatio != "" || p.Quality != "" || p.Background != "" || p.ThinkingLevel != "" || p.OutputFormat != "" || p.Endpoint != "" || p.Duration != 0 || p.Resolution != "" || p.GenerateAudio != nil || p.Watermark != nil || p.Voice != "" || p.AudioFormat != "" || p.Speed != 0 {
 		return ErrCanvasInvalid
 	}
 	p.Prompt = strings.TrimSpace(p.Prompt)

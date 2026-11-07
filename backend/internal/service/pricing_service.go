@@ -1712,7 +1712,9 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 	// 同产品目录价（包括日期快照对应的基名）优先于静态价，显式零价也必须保留。
 	// 仅登记的 2.5 型号使用固定兜底价；未知未来快照沿用既有价格解析规则。
 	switch model {
-	case "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08":
+	case "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08",
+		// 2.6 与 2.5 官方 token 费率相同，远端价格表缺失时同样兜底。
+		"gpt-image-2.6-flare", "gpt-image-2.6-sunburst":
 		return openAIGPTImage25FallbackPricing
 	}
 	// 裸 GPT-5.6 不注册为内置型号，缺少显式目录时不得借用 Sol 或默认 GPT 价格。

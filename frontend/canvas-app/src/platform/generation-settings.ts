@@ -11,12 +11,15 @@ export type ResolvedGenerationSettings = {
   aspectRatio: string | undefined;
   quality: string | undefined;
   background: string | undefined;
+  // 输出格式：模型开放多个格式时可选（如 GPT Image 2.6 的 gif），否则为空。
+  outputFormat: string | undefined;
   duration: number | undefined;
   resolution: string | undefined;
   imageSizes: string[];
   aspectRatios: string[];
   qualities: string[];
   backgroundOptions: string[];
+  outputFormats: string[];
   durations: number[];
   resolutions: string[];
   outputCounts: number[];
@@ -85,6 +88,9 @@ export function resolveGenerationSettings(model: Model | undefined, metadata: Ca
   const ratios = kind === 'audio' || kind === 'text' ? [] : strings(kind === 'image' ? model?.aspect_ratios : video?.aspect_ratios ?? model?.video_aspect_ratios ?? model?.aspect_ratios);
   const qualities = kind === 'image' ? strings(model?.qualities) : [];
   const backgrounds = kind === 'image' ? strings(model?.background_options) : [];
+  // 只有一个格式时没有选择意义，不展示也不提交。
+  const formatValues = kind === 'image' ? strings(model?.output_formats) : [];
+  const outputFormats = formatValues.length > 1 ? formatValues : [];
   const durationValues = kind === 'video' ? video?.durations ?? model?.video_durations : undefined;
   const durations = Array.isArray(durationValues)
     ? [...new Set(durationValues.filter(value => Number.isInteger(value) && value > 0 && value <= 60))].sort((a, b) => a - b)
@@ -100,12 +106,14 @@ export function resolveGenerationSettings(model: Model | undefined, metadata: Ca
     aspectRatio: resolveString(metadata?.aspect_ratio, ratios, video?.default_aspect_ratio),
     quality: resolveString(metadata?.quality, qualities),
     background: resolveString(metadata?.background, backgrounds),
+    outputFormat: resolveString(metadata?.output_format, outputFormats, 'png'),
     duration: durations.includes(storedDuration) ? storedDuration : video?.default_duration !== undefined && durations.includes(video.default_duration) ? video.default_duration : durations[0],
     resolution: customResolution || resolveString(metadata?.resolution, resolutions, video?.default_resolution),
     imageSizes: sizes,
     aspectRatios: ratios,
     qualities,
     backgroundOptions: backgrounds,
+    outputFormats,
     durations,
     resolutions,
     outputCounts,
@@ -132,7 +140,8 @@ export function generationSettingsSummary(model: Model | undefined, metadata: Ca
   if (kind === 'audio') return `${settings.voice ? settings.voice[0].toUpperCase() + settings.voice.slice(1) : '声音'} · ${settings.audioFormat?.toUpperCase() || '格式'} · ${settings.speed ?? '—'}x`;
   if (kind === 'video') return `${settings.resolution || '自动'} · ${ratio} · ${settings.duration || '—'}s`;
   const quality = settings.quality || 'auto';
-  return `${({ auto: '自动', low: '低', medium: '中', high: '高' } as Record<string, string>)[quality] || quality} · ${settings.imageSize || '自动'} · ${ratio} · ${settings.outputCount || 1} 张`;
+  const format = settings.outputFormat === 'gif' ? ' · GIF' : '';
+  return `${({ auto: '自动', low: '低', medium: '中', high: '高' } as Record<string, string>)[quality] || quality} · ${settings.imageSize || '自动'} · ${ratio} · ${settings.outputCount || 1} 张${format}`;
 }
 
 function resolveString(stored: string | undefined, allowed: string[], preferred?: string): string | undefined {

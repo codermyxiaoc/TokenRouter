@@ -223,6 +223,8 @@ export function Editor(){
     const maxReferences=kind==='video'?(videoCaps?.max_reference_images||0):selectedModel.max_reference_images;
     if(imageInputs.length>maxReferences)throw new Error(`当前模型最多支持 ${maxReferences} 张参考图`);
     if(imageInputs.some(n=>n.metadata?.expires_at&&Date.parse(n.metadata.expires_at)<=Date.now()))throw new Error('参考图已过期，请重新上传');
+    // GIF 动图只是生成成品，参考图仍只接受 PNG/JPEG/WebP（服务端同样拒绝）。
+    if(imageInputs.some(n=>n.metadata?.mimeType==='image/gif'))throw new Error('GIF 动图不能作为参考图，请改用静态图片');
     // 参考视频数量来自服务端目录（协议能力与管理员配置的较小值）；音频参考尚无协议承载，图片生成也不接受视频。
     const videoInputs=inputs.filter(n=>n.type==='video'&&n.metadata?.asset_id);
     if(inputs.some(n=>n.type==='audio'&&n.metadata?.asset_id))throw new Error('创作台暂不支持音频参考素材，请移除音频连线');
@@ -238,6 +240,8 @@ export function Editor(){
     if(kind==='image'){
       if(!settings.imageSize)throw new Error('当前模型没有可用的尺寸档位');
       params.image_size=settings.imageSize;params.aspect_ratio=settings.aspectRatio;params.quality=settings.quality;params.background=settings.background;
+      // 默认 png 不提交，保持旧画布执行指纹不变。
+      if(settings.outputFormat&&settings.outputFormat!=='png')params.output_format=settings.outputFormat;
       if(mask)params.mask_asset_id=mask.assetId;
     }else if(kind==='text'){
       if(!settings.maxOutputTokens)throw new Error('当前模型没有可用的文本输出上限');

@@ -164,7 +164,7 @@ func validateCanvasValue(value any, key string, assets map[string]bool, depth in
 func CreativeCanvasMediaType(prefix []byte) (string, string, error) {
 	mime := http.DetectContentType(prefix)
 	switch mime {
-	case "image/png", "image/jpeg", "image/webp":
+	case "image/png", "image/jpeg", "image/webp", "image/gif":
 		return "image", mime, nil
 	case "video/webm":
 		return "video", mime, nil

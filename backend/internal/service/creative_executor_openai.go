@@ -180,7 +180,7 @@ func (e *CreativeExecutor) creativeOpenAIURL(account *Account, endpoint string) 
 
 // buildCreativeOpenAIRequestBody 构造 OpenAI images 请求体：
 // generate 为 JSON；edit/inpaint 为 multipart（image 多文件、mask、model、prompt）。
-// 输出格式固定为 PNG；其余可选参数已经过模型能力校验，生成与编辑请求保持同一语义。
+// 输出格式默认 PNG，模型开放时可为 gif；其余可选参数已经过模型能力校验，生成与编辑请求保持同一语义。
 func buildCreativeOpenAIRequestBody(run CreativeRun, payload CreativeRunPayload, upstreamModel string) ([]byte, string, error) {
 	if IsMidjourneyImageGenerationModel(upstreamModel) {
 		return buildCreativeMidjourneyRequestBody(run, payload, upstreamModel)
@@ -190,7 +190,7 @@ func buildCreativeOpenAIRequestBody(run CreativeRun, payload CreativeRunPayload,
 			"model":         upstreamModel,
 			"prompt":        payload.Prompt,
 			"n":             1,
-			"output_format": "png",
+			"output_format": creativeOpenAIOutputFormat(payload),
 			"size":          creativeOpenAIImageSize(run.ImageSize, run.AspectRatio),
 		}
 		if creativeOpenAIUsesResponseFormat(upstreamModel) {
@@ -232,7 +232,7 @@ func buildCreativeOpenAIRequestBody(run CreativeRun, payload CreativeRunPayload,
 			return nil, "", err
 		}
 	}
-	if err := writer.WriteField("output_format", "png"); err != nil {
+	if err := writer.WriteField("output_format", creativeOpenAIOutputFormat(payload)); err != nil {
 		return nil, "", err
 	}
 	if err := writer.WriteField("size", creativeOpenAIImageSize(run.ImageSize, run.AspectRatio)); err != nil {
@@ -275,6 +275,14 @@ func writeCreativeOpenAIImagePart(writer *multipart.Writer, field, filename stri
 	}
 	_, err = part.Write(image.Bytes)
 	return err
+}
+
+// creativeOpenAIOutputFormat 返回已校验的输出格式；未选择时保持 PNG。
+func creativeOpenAIOutputFormat(payload CreativeRunPayload) string {
+	if format := strings.TrimSpace(payload.OutputFormat); format != "" {
+		return format
+	}
+	return "png"
 }
 
 // creativeOpenAIUsesResponseFormat 仅对 DALL-E 保留旧版参数；兼容上游返回的 base64 或 URL 由结果解析器处理。

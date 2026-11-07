@@ -10,6 +10,8 @@ const openaiModels = [
   // 与后端已登记图片型号一致，未知后缀不自动纳入白名单。
   'gpt-image-2.5-flare',
   'gpt-image-2.5-sunburst',
+  'gpt-image-2.6-flare',
+  'gpt-image-2.6-sunburst',
 	'gpt-5.2',
 	'gpt-5.3',
 	'gpt-5.3-spark',

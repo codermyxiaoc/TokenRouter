@@ -83,6 +83,7 @@ type CreativeCanvasExecutionParams struct {
 	Quality          string                    `json:"quality,omitempty"`
 	Background       string                    `json:"background,omitempty"`
 	ThinkingLevel    string                    `json:"thinking_level,omitempty"`
+	OutputFormat     string                    `json:"output_format,omitempty"`
 	Endpoint         string                    `json:"endpoint,omitempty"`
 	Duration         float64                   `json:"duration,omitempty"`
 	Resolution       string                    `json:"resolution,omitempty"`

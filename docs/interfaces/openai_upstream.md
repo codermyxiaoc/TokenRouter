@@ -59,7 +59,9 @@ OpenAI API Key 的 Messages 入口可启用搜索模拟，复用现有全局搜�
 
 第三方 API Key 客户端可使用 `/v1/images/generations/async`、`/v1/images/edits/async` 提交任务，以 `/v1/images/tasks/:task_id` 轮询。后台仍执行完整同步网关链路和当前 Token/图片结算规则，结果转存 S3 后返回链接；功能默认关闭，不隐式改变同步 SDK 行为。配置、归属、重启与账务边界见[异步图片与任务记录](../domains/media_tasks.md)。
 
-OAuth/Codex 凭据的 Images 请求在最终账号模型映射之后选择通道。精确登记的 `gpt-image-1.5`、`gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst` 以及后两者的 `2026-09-08` 快照使用 `/backend-api/codex/images/generations|edits`；其它已有图片型号保留 Responses 兼容通道，不根据前缀放行未来未知型号。API Key 的 Images 路径保持既有行为。生成/编辑 JSON、multipart 图片与 mask 统一经现有输入校验构造原生载荷，复用 Codex 认证、代理和当前 TLS 路由。
+OAuth/Codex 凭据的 Images 请求在最终账号模型映射之后选择通道。精确登记的 `gpt-image-1.5`、`gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`、后两者的 `2026-09-08` 快照以及 `gpt-image-2.6-flare`、`gpt-image-2.6-sunburst` 使用 `/backend-api/codex/images/generations|edits`；其它已有图片型号保留 Responses 兼容通道，不根据前缀放行未来未知型号。API Key 的 Images 路径保持既有行为。生成/编辑 JSON、multipart 图片与 mask 统一经现有输入校验构造原生载荷，复用 Codex 认证、代理和当前 TLS 路由。
+
+GPT Image 2.6（同步上游 v0.2.20）：原生端点遇到 404/405 时**不回退** Responses，因为桥接层会把 `image_generation` 绑定到内部模型、无法保留 2.6。解析并原样转发显式 `complexity`（`low`/`medium`/`high`，省略时不注入默认值）、GIF 帧参数 `frame_count`/`frame_duration_ms`、SVG 作者参数 `svg`（`model`、`reasoning.effort`），以及编辑端点的 `markup` 标注图（JSON `markup.image_url` 或 multipart `markup` 文件，与 mask 一样送内容审核）。这些原生参数出现在 Responses 桥接请求中时直接拒绝而不是静默丢弃。`output_format=gif|svg` 的 url 结果使用对应 MIME；GIF/SVG 能否产出由上游账号权限决定。编辑端点对 `stream=true` 返回完整 JSON 时，网关将其转换为完成事件（保留 usage）再判定成功，既不丢弃已付费图片也不换号重发。2.6 内置与 2.5 相同的官方 token 兜底价（远端价格表缺失或动态价格服务不可用时使用），实际按张或按 token 仍由分组/渠道配置决定；已有显式账号映射或分组白名单需要手动加入 2.6 模型。
 
 公开 Images 同步及异步后台执行共用图片尝试策略：一个逻辑请求仅在同组最多向两个不同账号各发送一次，禁止叠加池模式同号重试、OAuth 原生到 Responses 回退及其它隐式重发。首次执行固定 900 秒总截止，已有更短截止优先，换号不延长；异步任务原 30 分钟受理/执行外层预算及独立存储预算保留。管理员指定账号测试未挂载此策略，仍只验证被选中的账号，保留其已有明确端点兼容边界。
 
@@ -80,7 +82,7 @@ OpenAI API Key 账号可通过 `extra.images_url_to_b64_json=true` 启用图片�
 
 ### 创作台 Images 契约
 
-创作台异步执行器的 `generate` 使用 `/v1/images/generations` JSON，`edit`/`inpaint` 使用 `/v1/images/edits` multipart；GPT Image 固定发送 PNG、单张 `n=1`，并按最终模型能力透传尺寸、质量和背景。GPT Image 模型不发送 `response_format`（其响应固定包含 base64），DALL-E 保留 `response_format=b64_json`。第三方 MJ 也使用该响应格式，但一次 `n=1` 返回最多四张，分别计费并完整展示；其参数、四张预占和安全下载契约见 [Midjourney 创作台](../domains/creative_studio.md#midjourney_images)。inpaint 的 mask 必须是与源图同尺寸、4 MiB 以内的 PNG，透明像素表示需要重绘区域。
+创作台异步执行器的 `generate` 使用 `/v1/images/generations` JSON，`edit`/`inpaint` 使用 `/v1/images/edits` multipart；GPT Image 默认发送 PNG（模型目录开放 gif 且用户选择时发送 `output_format=gif`）、单张 `n=1`，并按最终模型能力透传尺寸、质量和背景。GPT Image 模型不发送 `response_format`（其响应固定包含 base64），DALL-E 保留 `response_format=b64_json`。第三方 MJ 也使用该响应格式，但一次 `n=1` 返回最多四张，分别计费并完整展示；其参数、四张预占和安全下载契约见 [Midjourney 创作台](../domains/creative_studio.md#midjourney_images)。inpaint 的 mask 必须是与源图同尺寸、4 MiB 以内的 PNG，透明像素表示需要重绘区域。
 
 编辑 multipart 中的每个 `image` 与 `mask` 文件部分使用已经校验的 `image/png`、`image/jpeg` 或 `image/webp` 类型与对应扩展名，不以通用 `application/octet-stream` 替代。该媒体头修正不修改原图字节、文件字段名、生成参数或失败重试策略。
 

@@ -7,6 +7,14 @@ const video: Model = { ...image, media_type: 'video', model: 'video-model', vide
 const audio: Model = { ...image, media_type: 'audio', model: 'grok-voice-tts', audio_capabilities: { voices: ['eve', 'ara', 'rex', 'sal', 'leo'], formats: ['mp3', 'wav'], speed_min: .7, speed_max: 1.5, default_voice: 'eve', default_format: 'mp3', default_speed: 1, max_input_chars: 15000 } };
 
 describe('画布生成参数的共享白名单解析', () => {
+  it('模型开放 png/gif 时默认 png，可选 gif；只有一种格式或非图片时不展示', () => {
+    const gifModel = { ...image, model: 'gpt-image-2.6-flare', output_formats: ['png', 'gif'] };
+    expect(resolveGenerationSettings(gifModel, undefined, 'image')).toMatchObject({ outputFormat: 'png', outputFormats: ['png', 'gif'] });
+    expect(resolveGenerationSettings(gifModel, { output_format: 'gif' }, 'image').outputFormat).toBe('gif');
+    expect(resolveGenerationSettings(gifModel, { output_format: 'webp' }, 'image').outputFormat).toBe('png');
+    expect(resolveGenerationSettings({ ...image, output_formats: ['png'] }, { output_format: 'gif' }, 'image')).toMatchObject({ outputFormat: undefined, outputFormats: [] });
+    expect(resolveGenerationSettings(gifModel, { output_format: 'gif' }, 'video').outputFormat).toBeUndefined();
+  });
   it('音频只使用当前目录的声音、格式、连续语速，不继承图像参数或旧插件设置', () => {
     expect(resolveGenerationSettings(audio, { voice: 'ara', audio_format: 'wav', speed: .88, image_size: '4K', aspect_ratio: '16:9' }, 'audio')).toMatchObject({ voice: 'ara', audioFormat: 'wav', speed: .88, maxInputChars: 15000, imageSize: undefined, aspectRatio: undefined, duration: undefined, outputCount: 1 });
     const defaults = { voice: 'eve', audioFormat: 'mp3', speed: 1 };

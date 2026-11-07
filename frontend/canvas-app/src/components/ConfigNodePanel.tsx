@@ -11,7 +11,7 @@ import './config-node.css';
 
 const modes = [{ value: 'image', label: '生图', icon: Image }, { value: 'text', label: '文本', icon: MessageSquare }, { value: 'video', label: '视频', icon: Video }, { value: 'audio', label: '音频', icon: Music }] as const;
 export const configKind = (node: CanvasNodeData): GenerationKind => modes.some(mode => mode.value === node.metadata?.generationMode) ? node.metadata!.generationMode as GenerationKind : 'image';
-const clearModelParameters = { model: undefined, image_size: undefined, aspect_ratio: undefined, quality: undefined, background: undefined, count: undefined, seconds: undefined, resolution: undefined, voice: undefined, audio_format: undefined, speed: undefined, max_output_tokens: undefined };
+const clearModelParameters = { model: undefined, image_size: undefined, aspect_ratio: undefined, quality: undefined, background: undefined, output_format: undefined, count: undefined, seconds: undefined, resolution: undefined, voice: undefined, audio_format: undefined, speed: undefined, max_output_tokens: undefined };
 
 // 结构与 Infinite Canvas 的配置节点一致，模型和能力只取本站目录，不携带浏览器渠道配置。
 export function ConfigNodePanel({ node, inputs, models, selected, busy, pending, running, reconciling, composerOpen, onChange, onComposerToggle, onGenerate }: {

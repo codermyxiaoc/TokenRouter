@@ -23,6 +23,7 @@ type GenerationSettingsProps = {
 type PopupPosition = { left: number; top: number; width: number; maxHeight: number };
 const qualityLabels: Record<string, string> = { auto: '自动', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' };
 const backgroundLabels: Record<string, string> = { auto: '自动', opaque: '不透明', transparent: '透明' };
+const outputFormatLabels: Record<string, string> = { png: 'PNG 图片', gif: 'GIF 动图' };
 const imageEdges: Record<string, number> = { '512': 512, '1K': 1024, '2K': 2048, '4K': 4096 };
 const labelFor = (value: string) => value === 'auto' || value === 'adaptive' ? '自动' : value;
 
@@ -34,8 +35,8 @@ export function GenerationSettings({ open, onClose, anchor, kind, node, model, o
   const [position, setPosition] = useState<PopupPosition | null>(null);
   const ownerDocument = anchor?.ownerDocument;
   const {
-    imageSizes, resolutions, aspectRatios: ratios, qualities, backgroundOptions: backgrounds, durations,
-    imageSize = '', resolution = '', aspectRatio: ratio = '', quality = '', background = '', duration: seconds, outputCount, outputCounts, allowCustomResolution,
+    imageSizes, resolutions, aspectRatios: ratios, qualities, backgroundOptions: backgrounds, outputFormats, durations,
+    imageSize = '', resolution = '', aspectRatio: ratio = '', quality = '', background = '', outputFormat = '', duration: seconds, outputCount, outputCounts, allowCustomResolution,
     maxOutputTokens, maxOutputTokensLimit, voices, audioFormats, voice = '', audioFormat = '', speed, speedMin, speedMax, maxInputChars,
   } = resolveGenerationSettings(model, node.metadata, kind);
   const dimensions = kind === 'audio' || kind === 'text' ? undefined : deriveDimensions(kind, kind === 'image' ? imageSize : resolution, ratio);
@@ -147,6 +148,7 @@ export function GenerationSettings({ open, onClose, anchor, kind, node, model, o
       {(kind === 'image' || kind === 'video') && <SettingGroup title={kind === 'image' ? '宽高比' : '比例'}>{ratios.length ? <div className="generation-settings-options generation-settings-ratios">{ratios.map(value => <button key={value} type="button" aria-pressed={ratio === value} className="generation-settings-ratio" onClick={() => onChange({ aspect_ratio: value })}><AspectIcon value={value}/><span>{labelFor(value)}</span></button>)}</div> : <p className="generation-settings-hint">此模型未开放比例设置。</p>}</SettingGroup>}
       {kind === 'video' && <SettingGroup title="秒数"><DurationControl value={seconds} allowed={durations} onChange={value => onChange({ seconds: String(value) })}/></SettingGroup>}
       {kind === 'image' && <>
+        {!!outputFormats.length && <SettingGroup title="输出格式"><Options values={outputFormats} selected={outputFormat} columns={2} labels={outputFormatLabels} onChange={value => onChange({ output_format: value })}/></SettingGroup>}
         {!!backgrounds.length && <SettingGroup title="背景"><Options values={backgrounds} selected={background} columns={3} labels={backgroundLabels} onChange={value => onChange({ background: value })}/></SettingGroup>}
         <SettingGroup title="生成张数"><Options values={outputCounts.map(String)} selected={outputCount ? String(outputCount) : ''} columns={4} labels={Object.fromEntries(outputCounts.map(value => [value, `${value} 张`]))} onChange={value => onChange({ count: Number(value) })} empty="此模型没有可用的生成张数。"/>{!!outputCounts.length && <p className="generation-settings-hint">{outputCounts.length === 1 ? `当前模型每次固定生成 ${outputCounts[0]} 张，按实际成功张数计费。` : '按所选张数预扣，生成完成后按实际成功张数计费。'}</p>}</SettingGroup>
       </>}

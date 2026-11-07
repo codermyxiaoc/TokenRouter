@@ -79,12 +79,12 @@ func creativeCanvasImageParams(e *CreativeCanvasExecution, assets []CreativeCanv
 	p := e.Params
 	if e.Kind == "audio" {
 		// 音频只朗读文字，不把引用图片/视频偷偷转换成未支持的语音输入。
-		if len(assets) != 0 || len(p.References) != 0 || p.MaskAssetID != "" || p.BatchID != "" || p.BatchIndex != 0 || p.BatchSize != 0 || p.BatchOutputCount != 0 || p.Operation != "" && p.Operation != CreativeOperationGenerate || p.ImageSize != "" || p.AspectRatio != "" || p.Quality != "" || p.Background != "" || p.ThinkingLevel != "" || p.Endpoint != "" || p.Duration != 0 || p.Resolution != "" || p.GenerateAudio != nil || p.Watermark != nil {
+		if len(assets) != 0 || len(p.References) != 0 || p.MaskAssetID != "" || p.BatchID != "" || p.BatchIndex != 0 || p.BatchSize != 0 || p.BatchOutputCount != 0 || p.Operation != "" && p.Operation != CreativeOperationGenerate || p.ImageSize != "" || p.AspectRatio != "" || p.Quality != "" || p.Background != "" || p.ThinkingLevel != "" || p.OutputFormat != "" || p.Endpoint != "" || p.Duration != 0 || p.Resolution != "" || p.GenerateAudio != nil || p.Watermark != nil {
 			return CreateCreativeRunParamsPublic{}, ErrCreativeInvalidParams
 		}
 		return CreateCreativeRunParamsPublic{GroupID: p.GroupID, Model: p.Model, Operation: CreativeOperationTTS, Prompt: p.Prompt, Voice: p.Voice, AudioFormat: p.AudioFormat, Speed: p.Speed, OutputCount: 1, canvasAudio: true}, nil
 	}
-	params := CreateCreativeRunParamsPublic{GroupID: p.GroupID, Model: p.Model, Operation: p.Operation, Prompt: p.Prompt, ImageSize: p.ImageSize, AspectRatio: p.AspectRatio, Quality: p.Quality, Background: p.Background, ThinkingLevel: p.ThinkingLevel}
+	params := CreateCreativeRunParamsPublic{GroupID: p.GroupID, Model: p.Model, Operation: p.Operation, Prompt: p.Prompt, ImageSize: p.ImageSize, AspectRatio: p.AspectRatio, Quality: p.Quality, Background: p.Background, ThinkingLevel: p.ThinkingLevel, OutputFormat: p.OutputFormat}
 	if p.BatchID != "" {
 		if p.BatchSize < 1 || p.BatchOutputCount < 1 || p.BatchOutputCount%p.BatchSize != 0 {
 			return params, ErrCreativeInvalidParams

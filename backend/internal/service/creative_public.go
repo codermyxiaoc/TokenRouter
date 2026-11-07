@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 	"math"
@@ -563,6 +564,10 @@ func creativeCapabilitiesForModel(platform, model string) creativeModelCapabilit
 			capabilities.backgroundOptions = append(capabilities.backgroundOptions, "transparent")
 		}
 		capabilities.maxReferenceImages = 16
+		if isCreativeGIFImageModel(normalizedModel) {
+			// GPT Image 2.6 原生端点支持动图；默认仍为 PNG，用户显式选择 gif 才改变输出。
+			capabilities.outputFormats = []string{"png", "gif"}
+		}
 	case PlatformGrok:
 		if !isGrokImageGenerationModel(normalizedModel) {
 			return capabilities
@@ -704,6 +709,19 @@ func isCreativeGemini1KOnlyModel(model string) bool {
 	}
 }
 
+// isCreativeGIFImageModel 标记可输出 GIF 的图片模型（GPT Image 2.6 系列）。
+func isCreativeGIFImageModel(model string) bool {
+	return strings.HasPrefix(creativeNormalizedModelID(model), "gpt-image-2.6")
+}
+
+// creativeImageResponseMIME 把已校验的输出格式映射为成品 MIME。
+func creativeImageResponseMIME(outputFormat string) string {
+	if outputFormat == "gif" {
+		return "image/gif"
+	}
+	return defaultCreativeResponseMime
+}
+
 func isCreativeGPTImage2Model(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-image-2")
 }
@@ -750,6 +768,8 @@ func creativeOutputFormatFromMIME(mime string) string {
 		return "jpeg"
 	case "image/webp":
 		return "webp"
+	case "image/gif":
+		return "gif"
 	default:
 		return "png"
 	}
@@ -1018,6 +1038,7 @@ type validatedCreativeParams struct {
 	quality       string
 	background    string
 	thinkingLevel string
+	outputFormat  string
 	outputCount   int
 	sources       []CreativeInputImage
 	mask          *CreativeInputImage
@@ -1239,6 +1260,7 @@ func (s *CreativePublicService) saveRunTransient(ctx context.Context, run *Creat
 		Background:         validated.background,
 		ThinkingLevel:      validated.thinkingLevel,
 		Quality:            validated.quality,
+		OutputFormat:       validated.outputFormat,
 		Voice:              validated.voice,
 		AudioFormat:        validated.audioFormat,
 		Speed:              validated.speed,
@@ -1402,6 +1424,14 @@ func (s *CreativePublicService) validateCreateParams(ctx context.Context, userID
 	} else if background != "" {
 		return nil, ErrCreativeInvalidParams
 	}
+	// 输出格式只在模型显式开放时可选；png 是默认值，规范化为空以保持旧任务的请求指纹不变。
+	outputFormat := strings.ToLower(strings.TrimSpace(params.OutputFormat))
+	if outputFormat != "" && !creativeContainsOption(capabilities.outputFormats, outputFormat) {
+		return nil, ErrCreativeInvalidParams
+	}
+	if outputFormat == "png" {
+		outputFormat = ""
+	}
 	thinkingLevel := strings.ToLower(strings.TrimSpace(params.ThinkingLevel))
 	if len(capabilities.thinkingLevels) > 0 {
 		if thinkingLevel == "" {
@@ -1493,6 +1523,7 @@ func (s *CreativePublicService) validateCreateParams(ctx context.Context, userID
 		Quality:       quality,
 		Background:    background,
 		ThinkingLevel: thinkingLevel,
+		OutputFormat:  outputFormat,
 		OutputCount:   outputCount,
 	})
 	return &validatedCreativeParams{
@@ -1507,6 +1538,7 @@ func (s *CreativePublicService) validateCreateParams(ctx context.Context, userID
 		quality:       quality,
 		background:    background,
 		thinkingLevel: thinkingLevel,
+		outputFormat:  outputFormat,
 		outputCount:   outputCount,
 		sources:       sources,
 		mask:          mask,
@@ -1536,9 +1568,9 @@ func normalizeCreativeImageInput(input CreativeInputImage, maxBytes int64) (Crea
 	if mime == "image/jpg" {
 		mime = "image/jpeg"
 	}
-	// 始终复核文件魔数，避免仅凭 multipart MIME 头把不支持文件送到 provider。
+	// 始终复核文件魔数，避免仅凭 multipart MIME 头把不支持文件送到 provider；参考图不接受 GIF。
 	detectedMIME := sniffCreativeImageMime(input.Bytes)
-	if detectedMIME == "" || detectedMIME != mime {
+	if detectedMIME == "" || detectedMIME == "image/gif" || detectedMIME != mime {
 		return input, ErrCreativeInvalidMime
 	}
 	return CreativeInputImage{Bytes: input.Bytes, Mime: mime}, nil
@@ -1555,6 +1587,9 @@ func sniffCreativeImageMime(data []byte) string {
 	if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
 		return "image/webp"
 	}
+	if len(data) >= 6 && (string(data[0:6]) == "GIF87a" || string(data[0:6]) == "GIF89a") {
+		return "image/gif"
+	}
 	return ""
 }
 
@@ -1568,8 +1603,8 @@ func creativeImageDimensions(data []byte, mime string) (int, int, error) {
 		return cfg.Width, cfg.Height, nil
 	}
 	switch mime {
-	case "image/png", "image/jpeg":
-		// image/jpeg 与 image/png 的解码器已通过 side-effect import 注册。
+	case "image/png", "image/jpeg", "image/gif":
+		// png/jpeg/gif 解码器已通过 side-effect import 注册。
 		cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 		if err != nil {
 			return 0, 0, err
@@ -1593,6 +1628,7 @@ type creativeFingerprintPayload struct {
 	Quality       string   `json:"quality,omitempty"`
 	Background    string   `json:"background,omitempty"`
 	ThinkingLevel string   `json:"thinking_level,omitempty"`
+	OutputFormat  string   `json:"output_format,omitempty"`
 	OutputCount   int      `json:"output_count"`
 	Voice         string   `json:"voice,omitempty"`
 	AudioFormat   string   `json:"audio_format,omitempty"`

@@ -315,6 +315,22 @@ describe('useCreativeStudio', () => {
   })
 
   describe('createRun 提交', () => {
+    // GPT Image 2.6 开放 png/gif：默认 png 不发送参数，选择 gif 后才提交 output_format。
+    it('模型开放多个输出格式时可选 gif，默认 png 不发送', async () => {
+      mockedApi.getCreativeModels.mockResolvedValue([{ ...MODEL, model: 'gpt-image-2.6-flare', output_formats: ['png', 'gif'] }])
+      const { studio } = await setupStudio()
+      studio.selectOption(creativeOptionKey(studio.models.value[0]))
+      expect(studio.outputFormatOptions.value).toEqual(['png', 'gif'])
+      expect(studio.outputFormat.value).toBe('png')
+      studio.prompt.value = '跳舞的猫'
+      await studio.createRun({ sourceBlobs: [], maskBlob: null })
+      expect((mockedApi.createCreativeRun.mock.calls[0][0] as FormData).get('output_format')).toBeNull()
+
+      studio.outputFormat.value = 'gif'
+      await studio.createRun({ sourceBlobs: [], maskBlob: null })
+      expect((mockedApi.createCreativeRun.mock.calls[1][0] as FormData).get('output_format')).toBe('gif')
+    })
+
     it('成功路径：FormData 字段齐全并启动轮询', async () => {
       const { studio } = await setupStudio()
 		studio.prompt.value = '一只猫'

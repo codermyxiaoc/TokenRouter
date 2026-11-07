@@ -398,6 +398,7 @@ type CreativeRunPayload struct {
 	Background         string  `json:"background,omitempty"`
 	ThinkingLevel      string  `json:"thinking_level,omitempty"`
 	Quality            string  `json:"quality,omitempty"`
+	OutputFormat       string  `json:"output_format,omitempty"` // 仅模型开放多种格式时写入（如 2.6 的 gif），默认 PNG 为空
 	Voice              string  `json:"voice,omitempty"`
 	AudioFormat        string  `json:"audio_format,omitempty"`
 	Speed              float64 `json:"speed,omitempty"`
@@ -429,7 +430,9 @@ type CreateCreativeRunParamsPublic struct {
 	Quality       string
 	Background    string
 	ThinkingLevel string
-	OutputCount   int
+	// OutputFormat 只接受模型能力中开放的格式；空值表示默认 PNG。
+	OutputFormat string
+	OutputCount  int
 	// 音频参数仅供显式 TTS 操作使用，不改变已有图片请求指纹。
 	Voice       string
 	AudioFormat string

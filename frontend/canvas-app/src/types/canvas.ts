@@ -82,6 +82,8 @@ export type CanvasNodeMetadata = {
     size?: string;
     quality?: string;
     background?: string;
+    // 图片输出格式（png/gif），仅模型开放时写入。
+    output_format?: string;
     count?: number;
     textCount?: number;
     texts?: CanvasNodeText[];

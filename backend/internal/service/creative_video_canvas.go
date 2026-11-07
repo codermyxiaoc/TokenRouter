@@ -236,7 +236,7 @@ func creativeVideoKeyMatches(key *APIKey, userID, groupID int64) bool {
 func creativeVideoCanvasRequest(e *CreativeCanvasExecution, model *CreativeModelPublic, assets []CreativeCanvasInputAsset, maxPrompt int) ([]byte, *VideoCanonicalRequest, []map[string]string, error) {
 	p := e.Params
 	caps := model.VideoCapabilities
-	if caps == nil || p.Operation != CreativeOperationGenerate || p.Prompt == "" || strings.TrimSpace(p.Prompt) == "" || utf8.RuneCountInString(p.Prompt) > maxPrompt || math.IsNaN(p.Duration) || math.IsInf(p.Duration, 0) || p.ImageSize != "" || p.Quality != "" || p.Background != "" || p.ThinkingLevel != "" || p.MaskAssetID != "" {
+	if caps == nil || p.Operation != CreativeOperationGenerate || p.Prompt == "" || strings.TrimSpace(p.Prompt) == "" || utf8.RuneCountInString(p.Prompt) > maxPrompt || math.IsNaN(p.Duration) || math.IsInf(p.Duration, 0) || p.ImageSize != "" || p.Quality != "" || p.Background != "" || p.ThinkingLevel != "" || p.OutputFormat != "" || p.MaskAssetID != "" {
 		return nil, nil, nil, ErrCanvasInvalid
 	}
 	durationAllowed := false

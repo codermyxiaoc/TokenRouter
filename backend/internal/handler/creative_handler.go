@@ -82,6 +82,7 @@ type creativeCreateRunRequest struct {
 	Quality       string
 	Background    string
 	ThinkingLevel string
+	OutputFormat  string
 }
 
 // CreateRun 解析 multipart/form-data 并创建创作台任务。
@@ -128,6 +129,7 @@ func (h *CreativeHandler) CreateRun(c *gin.Context) {
 		Quality:       req.Quality,
 		Background:    req.Background,
 		ThinkingLevel: req.ThinkingLevel,
+		OutputFormat:  req.OutputFormat,
 	}, c.GetHeader("Idempotency-Key"))
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -237,8 +239,11 @@ func parseCreativeCreateRunMultipart(c *gin.Context, partLimit, totalInputLimit 
 			req.AspectRatio = value
 		case "quality":
 			req.Quality = value
-		case "output_format", "output_compression", "response_mime_type":
-			// 创作台统一输出 PNG，旧格式参数不再兼容。
+		case "output_format":
+			// 是否允许由服务层按模型能力校验，默认 PNG。
+			req.OutputFormat = strings.ToLower(value)
+		case "output_compression", "response_mime_type":
+			// 压缩率和旧版 MIME 参数不再兼容。
 			return nil, service.ErrCreativeInvalidParams
 		case "background":
 			req.Background = strings.ToLower(value)

@@ -1016,6 +1016,15 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 		return s.fallbackPrices["jev-latest"]
 	}
 	modelLower := normalizeAntigravityClaudeTierAlias(strings.ToLower(model))
+	// GPT Image 2.6 与 2.5 官方 token 费率相同；动态价格服务不可用时也不能借用旧图片模型价格。
+	if modelLower == "gpt-image-2.6-flare" || modelLower == "gpt-image-2.6-sunburst" {
+		p := openAIGPTImage25FallbackPricing
+		return &ModelPricing{
+			InputPricePerToken: p.InputCostPerToken, CacheReadPricePerToken: p.CacheReadInputTokenCost,
+			ImageInputPricePerToken: p.InputCostPerImageToken, ImageCacheReadPricePerToken: p.CacheReadInputImageTokenCost,
+			ImageOutputPricePerToken: p.OutputCostPerImageToken,
+		}
+	}
 	if claude.IsSonnet55Model(modelLower) {
 		return &ModelPricing{InputPricePerToken: 2e-6, OutputPricePerToken: 10e-6, CacheCreationPricePerToken: 2.5e-6, CacheReadPricePerToken: 0.2e-6, CacheCreation5mPrice: 2.5e-6, CacheCreation1hPrice: 4e-6, SupportsCacheBreakdown: true}
 	}

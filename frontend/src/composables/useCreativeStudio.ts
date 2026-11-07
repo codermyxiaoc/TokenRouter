@@ -50,6 +50,8 @@ interface CreativeSelectionSettings {
   aspectRatio: string
   quality: string
   background: string
+  // 输出格式（如 GPT Image 2.6 的 gif），旧存档缺失时回落到默认 png。
+  outputFormat?: string
   thinkingLevel: string
   prompt: string
 }
@@ -101,6 +103,8 @@ export function useCreativeStudio() {
   // 模型级画质档位，支持时默认使用 medium。
   const quality = ref('medium')
   const background = ref('auto')
+  // 输出格式：仅模型开放多个格式时可选，默认 png。
+  const outputFormat = ref('png')
   const thinkingLevel = ref('minimal')
   const currentRun = ref<CreativeRun | null>(null)
   const runHistory = ref<CreativeRun[]>([])
@@ -154,6 +158,12 @@ export function useCreativeStudio() {
   const qualityOptions = computed(() => selectedOption.value?.qualities ?? [])
 
   const backgroundOptions = computed(() => selectedOption.value?.background_options ?? [])
+
+  // 只有一个格式时没有选择意义，面板隐藏该行。
+  const outputFormatOptions = computed(() => {
+    const formats = selectedOption.value?.output_formats ?? []
+    return formats.length > 1 ? formats : []
+  })
 
   const thinkingLevelOptions = computed(() => selectedOption.value?.thinking_levels ?? [])
 
@@ -232,6 +242,7 @@ export function useCreativeStudio() {
       if (saved.aspectRatio) aspectRatio.value = saved.aspectRatio
       if (typeof saved.quality === 'string') quality.value = saved.quality
       if (typeof saved.background === 'string') background.value = saved.background
+      if (typeof saved.outputFormat === 'string') outputFormat.value = saved.outputFormat
       if (typeof saved.thinkingLevel === 'string') thinkingLevel.value = saved.thinkingLevel
       if (typeof saved.prompt === 'string') prompt.value = truncatePrompt(saved.prompt, capabilities.value.max_prompt_chars)
       normalizeSelection()
@@ -269,6 +280,10 @@ export function useCreativeStudio() {
     } else if (!backgrounds.includes(background.value)) {
       background.value = backgrounds.includes('auto') ? 'auto' : (backgrounds[0] ?? '')
     }
+    const formats = outputFormatOptions.value
+    if (!formats.includes(outputFormat.value)) {
+      outputFormat.value = formats.includes('png') ? 'png' : (formats[0] ?? 'png')
+    }
     const thinkingLevels = option.thinking_levels ?? []
     if (thinkingLevels.length === 0) {
       thinkingLevel.value = ''
@@ -290,6 +305,7 @@ export function useCreativeStudio() {
       aspectRatio: aspectRatio.value,
       quality: quality.value,
       background: background.value,
+      outputFormat: outputFormat.value,
       thinkingLevel: thinkingLevel.value,
       prompt: truncatePrompt(prompt.value, capabilities.value.max_prompt_chars),
     }
@@ -331,7 +347,7 @@ export function useCreativeStudio() {
 
   // 参数变化持久化，下次进入恢复
   watch(
-    [selectedOptionKey, operation, imageSize, aspectRatio, quality, background, thinkingLevel, prompt],
+    [selectedOptionKey, operation, imageSize, aspectRatio, quality, background, outputFormat, thinkingLevel, prompt],
     scheduleSelectionSettingsSave,
     // 使用同步 watcher 先记录脏状态，确保 pagehide 触发时能拿到最新提示词。
     { flush: 'sync' },
@@ -474,6 +490,10 @@ export function useCreativeStudio() {
       }
       if (background.value) {
         form.append('background', background.value)
+      }
+      // 默认 png 不发送，保持旧请求不变；只有模型开放时才会选到其它格式。
+      if (outputFormat.value && outputFormat.value !== 'png' && outputFormatOptions.value.includes(outputFormat.value)) {
+        form.append('output_format', outputFormat.value)
       }
       if (thinkingLevel.value) {
         form.append('thinking_level', thinkingLevel.value)
@@ -880,6 +900,7 @@ export function useCreativeStudio() {
     aspectRatio,
     quality,
     background,
+    outputFormat,
     thinkingLevel,
     currentRun,
     runHistory,
@@ -895,6 +916,7 @@ export function useCreativeStudio() {
     aspectRatioOptions,
     qualityOptions,
     backgroundOptions,
+    outputFormatOptions,
     thinkingLevelOptions,
     maxReferenceImages,
     outputCount,

@@ -78,6 +78,7 @@ type OpenAIImagesRequest struct {
 	// forwardUpstreamModel 是本次转发实际使用的上游模型，仅供响应阶段内部判断，不来自客户端。
 	forwardUpstreamModel string
 	Quality              string
+	Complexity           string
 	Background           string
 	OutputFormat         string
 	Moderation           string
@@ -85,6 +86,9 @@ type OpenAIImagesRequest struct {
 	Style                string
 	OutputCompression    *int
 	PartialImages        *int
+	FrameCount           *int
+	FrameDurationMS      *int
+	SVG                  *OpenAIImagesSVGOptions
 	HasMask              bool
 	HasNativeOptions     bool
 	RequiredCapability   OpenAIImagesCapability
@@ -92,8 +96,18 @@ type OpenAIImagesRequest struct {
 	MaskImageURL         string
 	Uploads              []OpenAIImagesUpload
 	MaskUpload           *OpenAIImagesUpload
+	MarkupImageURL       string
+	MarkupUpload         *OpenAIImagesUpload
 	Body                 []byte
 	bodyHash             string
+}
+
+// OpenAIImagesSVGOptions 是 SVG 作者参数，与图片模型及 complexity 分开保存。
+type OpenAIImagesSVGOptions struct {
+	Model     string `json:"model"`
+	Reasoning *struct {
+		Effort string `json:"effort,omitempty"`
+	} `json:"reasoning,omitempty"`
 }
 
 func (r *OpenAIImagesRequest) ModerationBody() []byte {
@@ -139,6 +153,15 @@ func (r *OpenAIImagesRequest) moderationImages() []map[string]string {
 	}
 	if r.MaskUpload != nil {
 		if dataURL := r.MaskUpload.ModerationDataURL(); dataURL != "" {
+			images = append(images, map[string]string{"image_url": dataURL})
+		}
+	}
+	// markup 标注图同样是用户输入图片，需要一并送审。
+	if markupURL := strings.TrimSpace(r.MarkupImageURL); markupURL != "" {
+		images = append(images, map[string]string{"image_url": markupURL})
+	}
+	if r.MarkupUpload != nil {
+		if dataURL := r.MarkupUpload.ModerationDataURL(); dataURL != "" {
 			images = append(images, map[string]string{"image_url": dataURL})
 		}
 	}
@@ -347,6 +370,7 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 	}
 	req.ResponseFormat = strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "response_format").String()))
 	req.Quality = strings.TrimSpace(gjson.GetBytes(body, "quality").String())
+	req.Complexity = strings.TrimSpace(gjson.GetBytes(body, "complexity").String())
 	req.Background = strings.TrimSpace(gjson.GetBytes(body, "background").String())
 	req.OutputFormat = strings.TrimSpace(gjson.GetBytes(body, "output_format").String())
 	req.Moderation = strings.TrimSpace(gjson.GetBytes(body, "moderation").String())
@@ -366,6 +390,21 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 		}
 		v := int(partialImages.Int())
 		req.PartialImages = &v
+	}
+	// GIF 帧参数与 SVG 作者参数（GPT Image 2.6 原生端点）。
+	for _, field := range []struct {
+		name string
+		dest any
+	}{
+		{"frame_count", &req.FrameCount},
+		{"frame_duration_ms", &req.FrameDurationMS},
+		{"svg", &req.SVG},
+	} {
+		if value := gjson.GetBytes(body, field.name); value.Exists() {
+			if err := json.Unmarshal([]byte(value.Raw), field.dest); err != nil {
+				return fmt.Errorf("invalid %s field: %w", field.name, err)
+			}
+		}
 	}
 	if req.IsEdits() {
 		images := gjson.GetBytes(body, "images")
@@ -389,6 +428,19 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 		}
 		if gjson.GetBytes(body, "mask.file_id").Exists() {
 			return fmt.Errorf("mask.file_id is not supported (use mask.image_url instead)")
+		}
+		// markup 是编辑端点的标注图，仅支持 image_url。
+		if markup := gjson.GetBytes(body, "markup"); markup.Exists() && markup.Type != gjson.Null {
+			if !markup.IsObject() {
+				return fmt.Errorf("invalid markup field type")
+			}
+			if markup.Get("file_id").Exists() {
+				return fmt.Errorf("markup.file_id is not supported (use markup.image_url instead)")
+			}
+			req.MarkupImageURL = strings.TrimSpace(markup.Get("image_url").String())
+			if req.MarkupImageURL == "" {
+				return fmt.Errorf("markup.image_url is required")
+			}
 		}
 		if len(req.InputImageURLs) == 0 {
 			return fmt.Errorf("images[].image_url is required")
@@ -438,10 +490,9 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 		fileName := strings.TrimSpace(part.FileName())
 		if fileName != "" {
 			partContentType := strings.TrimSpace(part.Header.Get("Content-Type"))
-			if name == "mask" && len(data) > 0 {
-				req.HasMask = true
+			if (name == "mask" || name == "markup") && len(data) > 0 {
 				width, height := parseOpenAIImageDimensions(part.Header)
-				maskUpload := OpenAIImagesUpload{
+				upload := OpenAIImagesUpload{
 					FieldName:   name,
 					FileName:    fileName,
 					ContentType: partContentType,
@@ -449,7 +500,13 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 					Width:       width,
 					Height:      height,
 				}
-				req.MaskUpload = &maskUpload
+				if name == "mask" {
+					req.HasMask = true
+					req.MaskUpload = &upload
+				} else {
+					req.HasNativeOptions = true
+					req.MarkupUpload = &upload
+				}
 			}
 			if name == "image" || strings.HasPrefix(name, "image[") {
 				width, height := parseOpenAIImageDimensions(part.Header)
@@ -492,6 +549,9 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 		case "quality":
 			req.Quality = value
 			req.HasNativeOptions = true
+		case "complexity":
+			req.Complexity = value
+			req.HasNativeOptions = true
 		case "background":
 			req.Background = value
 			req.HasNativeOptions = true
@@ -520,6 +580,22 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 				return fmt.Errorf("invalid partial_images field value")
 			}
 			req.PartialImages = &n
+			req.HasNativeOptions = true
+		case "frame_count", "frame_duration_ms":
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				return fmt.Errorf("invalid %s field value", name)
+			}
+			if name == "frame_count" {
+				req.FrameCount = &n
+			} else {
+				req.FrameDurationMS = &n
+			}
+			req.HasNativeOptions = true
+		case "svg":
+			if err := json.Unmarshal(data, &req.SVG); err != nil {
+				return fmt.Errorf("invalid svg field: %w", err)
+			}
 			req.HasNativeOptions = true
 		default:
 			if isOpenAINativeImageOption(name) && value != "" {
@@ -644,12 +720,17 @@ func hasOpenAINativeImageOptions(exists func(path string) bool) bool {
 	for _, path := range []string{
 		"background",
 		"quality",
+		"complexity",
 		"style",
 		"output_format",
 		"output_compression",
 		"moderation",
 		"input_fidelity",
 		"partial_images",
+		"frame_count",
+		"frame_duration_ms",
+		"svg",
+		"markup",
 	} {
 		if exists(path) {
 			return true
@@ -660,7 +741,7 @@ func hasOpenAINativeImageOptions(exists func(path string) bool) bool {
 
 func isOpenAINativeImageOption(name string) bool {
 	switch strings.TrimSpace(strings.ToLower(name)) {
-	case "background", "quality", "style", "output_format", "output_compression", "moderation", "input_fidelity", "partial_images":
+	case "background", "quality", "complexity", "style", "output_format", "output_compression", "moderation", "input_fidelity", "partial_images", "frame_count", "frame_duration_ms", "svg", "markup":
 		return true
 	default:
 		return false
@@ -1132,7 +1213,8 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
-	if contentType == "" {
+	if direct != nil || contentType == "" {
+		// 原生端点对外始终是 SSE：即使上游以 JSON 返回，也会在下方转换为完成事件。
 		contentType = "text/event-stream"
 	}
 	c.Status(resp.StatusCode)
@@ -1274,14 +1356,30 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	}
 
 	finalizeFallbackBody := func() {
-		if direct != nil {
-			return
-		}
 		if seenSSEData || fallbackBody.Len() == 0 {
 			return
 		}
 		body := bytes.TrimSpace(fallbackBody.Bytes())
 		if len(body) == 0 {
+			return
+		}
+		if direct != nil {
+			// Codex 编辑端点在 stream=true 时也可能返回完整 JSON：先转成完成事件再判定成功，
+			// 既不丢弃已付费的图片，也不会换号重试。
+			results, err := parseCodexDirectImagesResponse(body)
+			if err != nil {
+				streamErr = err
+				return
+			}
+			createdAt := gjson.GetBytes(body, "created").Int()
+			usageRaw := []byte(gjson.GetBytes(body, "usage").Raw)
+			for i, result := range results {
+				var eventUsage []byte
+				if i == len(results)-1 {
+					eventUsage = usageRaw
+				}
+				processSSEData(buildOpenAIImagesStreamCompletedPayload(openAIImagesStreamPrefix(direct)+".completed", result, direct.ResponseFormat, createdAt, eventUsage))
+			}
 			return
 		}
 		mergeOpenAIUsage(&usage, body)

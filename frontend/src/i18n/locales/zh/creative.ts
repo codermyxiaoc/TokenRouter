@@ -16,6 +16,7 @@ export default {
       aspectRatio: '画面比例',
       quality: '画质',
       background: '背景',
+      outputFormat: '输出格式',
       thinkingLevel: '思考强度',
       estimatedCost: '{cost}',
       tokenEstimatedCost: '按 token 计费，最多预扣 {cost}',
@@ -62,6 +63,10 @@ export default {
       auto: '自动',
       opaque: '不透明',
       transparent: '透明',
+    },
+    outputFormats: {
+      png: 'PNG 图片',
+      gif: 'GIF 动图',
     },
     thinkingLevels: {
       minimal: '最少',

@@ -2833,19 +2833,27 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 		return s.sendErrorAndEnd(c, "No images returned from API")
 	}
 
+	imageCount := 0
 	for _, item := range result.Data {
 		if item.RevisedPrompt != "" {
 			s.sendEvent(c, TestEvent{Type: "content", Text: item.RevisedPrompt})
 		}
-		if item.B64JSON != "" {
+		if b64 := strings.TrimSpace(item.B64JSON); b64 != "" {
+			imageCount++
 			s.sendEvent(c, TestEvent{
 				Type:     "image",
-				ImageURL: "data:image/png;base64," + item.B64JSON,
+				ImageURL: "data:image/png;base64," + b64,
 				MimeType: "image/png",
 			})
 		} else if imageURL := strings.TrimSpace(item.URL); imageURL != "" {
+			imageCount++
 			s.sendEvent(c, TestEvent{Type: "image", ImageURL: imageURL})
 		}
+	}
+	// 至少拿到一张可用图片（非空 base64 或非空 URL）才算成功：空对象、空白 URL 或只有 revised_prompt
+	// 都说明账号没有实际产出，不能把异常账号标记为可用。
+	if imageCount == 0 {
+		return s.sendErrorAndEnd(c, "No images returned from API")
 	}
 
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})

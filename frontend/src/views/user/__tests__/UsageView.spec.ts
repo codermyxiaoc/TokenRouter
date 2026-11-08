@@ -571,4 +571,32 @@ describe('user UsageView', () => {
       wrapper.unmount()
     }
   })
+
+  // 连续筛选失败记录时，迟到的旧响应不能覆盖新筛选的列表与总数。
+  it('keeps the latest error filter result when an older response arrives late', async () => {
+    const wrapper = mountUsageView()
+    await flushPromises()
+    await wrapper.findAll('button').find((x) => x.text() === 'usage.tabs.errors')!.trigger('click')
+    await flushPromises()
+    const vm = wrapper.vm as any
+    let oldFinish!: (value: any) => void
+    let newFinish!: (value: any) => void
+    listMyErrorRequests
+      .mockImplementationOnce(() => new Promise((resolve) => { oldFinish = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve) => { newFinish = resolve }))
+    vm.errorFilter.model = 'old'
+    const older = vm.loadErrors()
+    vm.errorFilter.model = 'new'
+    const newer = vm.loadErrors()
+    newFinish({ items: [{ id: 2, model: 'new' }], total: 1 })
+    await newer
+    oldFinish({ items: [{ id: 1, model: 'old' }], total: 7 })
+    await older
+    await flushPromises()
+    const received = JSON.parse(JSON.stringify(vm.errorRows))
+    const total = vm.errorTotal
+    wrapper.unmount()
+    expect(received).toEqual([{ id: 2, model: 'new' }])
+    expect(total).toBe(1)
+  })
 })

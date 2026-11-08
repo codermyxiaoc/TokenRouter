@@ -3,8 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -24,6 +27,55 @@ type GrokCustomVoiceOwnerCache interface {
 type grokCustomVoiceAccessError struct{ status int }
 
 func (e *grokCustomVoiceAccessError) Error() string { return "custom voice not found" }
+
+// grokVoiceOwnerPending 保存归属写入失败、尚未持久化的新声音（声音 ID → 创建者）。
+// 没有记录会被视为历史声音并放行，因此写入失败时必须在本进程内继续拒绝他人，并在后台重试持久化。
+var grokVoiceOwnerPending sync.Map
+
+// grokVoiceOwnerWriteAttempts 是同步写入归属的尝试次数；写入使用独立上下文，客户端断开不会中断。
+const grokVoiceOwnerWriteAttempts = 3
+
+// grokVoiceOwnerRetryDelays 是同步失败后后台持久化归属的退避间隔。
+var grokVoiceOwnerRetryDelays = []time.Duration{2 * time.Second, 10 * time.Second, 30 * time.Second, time.Minute, 5 * time.Minute}
+
+// recordGrokCustomVoiceOwner 可靠记录新声音的创建者：先用独立上下文同步重试，仍失败时登记为本进程待持久化，
+// 期间他人访问一律拒绝，并在后台继续写入 Redis。
+func recordGrokCustomVoiceOwner(ctx context.Context, cache GrokCustomVoiceOwnerCache, voiceID string, userID int64) {
+	write := func() error {
+		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		return cache.SetGrokCustomVoiceOwner(writeCtx, voiceID, userID)
+	}
+	var err error
+	for attempt := 0; attempt < grokVoiceOwnerWriteAttempts; attempt++ {
+		if err = write(); err == nil {
+			grokVoiceOwnerPending.Delete(voiceID)
+			return
+		}
+	}
+	grokVoiceOwnerPending.Store(voiceID, userID)
+	slog.Error("grok_custom_voice_owner_write_failed", "voice_id", voiceID, "user_id", userID, "error", err)
+	go func() {
+		for _, delay := range grokVoiceOwnerRetryDelays {
+			time.Sleep(delay)
+			if write() == nil {
+				grokVoiceOwnerPending.Delete(voiceID)
+				slog.Info("grok_custom_voice_owner_write_recovered", "voice_id", voiceID, "user_id", userID)
+				return
+			}
+		}
+		slog.Error("grok_custom_voice_owner_write_abandoned", "voice_id", voiceID, "user_id", userID)
+	}()
+}
+
+// pendingGrokCustomVoiceOwner 返回本进程内尚未持久化的创建者。
+func pendingGrokCustomVoiceOwner(voiceID string) int64 {
+	if v, ok := grokVoiceOwnerPending.Load(voiceID); ok {
+		owner, _ := v.(int64)
+		return owner
+	}
+	return 0
+}
 
 func (s *OpenAIGatewayService) grokCustomVoiceOwnerCache() GrokCustomVoiceOwnerCache {
 	if s == nil || s.cache == nil {
@@ -66,6 +118,13 @@ func (s *OpenAIGatewayService) authorizeGrokCustomVoice(ctx context.Context, c *
 	if voiceID == "" {
 		return nil
 	}
+	// 归属写入失败、尚未持久化的新声音先按本进程记录判断，不能落入“无记录即历史声音”的放行分支。
+	if owner := pendingGrokCustomVoiceOwner(voiceID); owner > 0 {
+		if owner != userID {
+			return &grokCustomVoiceAccessError{status: http.StatusNotFound}
+		}
+		return nil
+	}
 	owner, err := cache.GetGrokCustomVoiceOwner(ctx, voiceID)
 	if err != nil {
 		// 归属无法确认时拒绝，避免存储故障期间放开他人声音。
@@ -88,9 +147,10 @@ func (s *OpenAIGatewayService) applyGrokCustomVoiceOwnership(ctx context.Context
 	switch {
 	case len(parts) == 1 && method == http.MethodPost:
 		if voiceID := strings.TrimSpace(gjson.GetBytes(data, "voice_id").String()); voiceID != "" {
-			_ = cache.SetGrokCustomVoiceOwner(ctx, voiceID, userID)
+			recordGrokCustomVoiceOwner(ctx, cache, voiceID, userID)
 		}
 	case len(parts) == 2 && method == http.MethodDelete:
+		grokVoiceOwnerPending.Delete(parts[1])
 		_ = cache.DeleteGrokCustomVoiceOwner(ctx, parts[1])
 	case len(parts) == 1 && method == http.MethodGet:
 		return filterGrokCustomVoiceList(ctx, cache, userID, data)
@@ -106,7 +166,12 @@ func filterGrokCustomVoiceList(ctx context.Context, cache GrokCustomVoiceOwnerCa
 	}
 	kept := make([]json.RawMessage, 0, len(voices.Array()))
 	for _, voice := range voices.Array() {
-		owner, err := cache.GetGrokCustomVoiceOwner(ctx, strings.TrimSpace(voice.Get("voice_id").String()))
+		voiceID := strings.TrimSpace(voice.Get("voice_id").String())
+		if pendingGrokCustomVoiceOwner(voiceID) == userID {
+			kept = append(kept, json.RawMessage(voice.Raw))
+			continue
+		}
+		owner, err := cache.GetGrokCustomVoiceOwner(ctx, voiceID)
 		if err == nil && owner == userID {
 			kept = append(kept, json.RawMessage(voice.Raw))
 		}

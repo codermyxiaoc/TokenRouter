@@ -90,9 +90,17 @@ func (s *AuthService) IsAccessTokenRevoked(ctx context.Context, claims *JWTClaim
 		}
 	}
 	before, err := store.UserAccessTokensRevokedBefore(ctx, claims.UserID)
-	if err != nil || before.IsZero() || claims.IssuedAt == nil {
+	if err != nil || before.IsZero() {
 		return false
 	}
-	// 签发时间精度为秒：同一秒内撤销后立即重新登录的新 token 不能被误判吊销。
-	return claims.IssuedAt.Time.Before(before.Truncate(time.Second))
+	// 新 token 携带纳秒签发时间，可与吊销时间点精确比较：吊销之前（含同一秒内）签发的一律失效，
+	// 吊销之后重新登录的新 token 不受影响。
+	if claims.IssuedAtNano > 0 {
+		return claims.IssuedAtNano <= before.UnixNano()
+	}
+	// 旧 token 只有秒精度的 iat：同一秒无法区分先后，按吊销处理（宁可让同秒内重新登录的旧格式 token 再登录一次）。
+	if claims.IssuedAt == nil {
+		return true
+	}
+	return !claims.IssuedAt.Time.After(before.Truncate(time.Second))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,10 @@ import (
 
 // CyberSessionBlockStore 是 cyber 会话屏蔽表的存取接口。
 // repository 层 gatewayCache 通过类型断言接入，测试桩未实现时自动降级为关闭。
+// ErrCyberSessionLegacyScope 表示来源 scope 激活但没有长度索引（升级前写入的屏蔽）。
+// 调用方应回退到逐长度计算前缀 key，保证升级前仍有效的屏蔽不被静默放行。
+var ErrCyberSessionLegacyScope = errors.New("cyber session scope has no transcript length index")
+
 type CyberSessionBlockStore interface {
 	SetCyberSessionBlocked(ctx context.Context, block CyberSessionBlock, ttl time.Duration) error
 	// CyberSessionTranscriptLengths 返回该 API Key 已记录的 transcript 屏蔽长度；来源 scope 未激活时返回空。
@@ -163,13 +168,19 @@ func (s *OpenAIGatewayService) FindCyberSessionBlockedForRequest(ctx context.Con
 		}
 	}
 	lengths, err := store.CyberSessionTranscriptLengths(ctx, apiKeyID, CyberSessionScopeKey(apiKeyID, clientIP, userAgent))
-	if err != nil {
+	var keys []string
+	switch {
+	case errors.Is(err, ErrCyberSessionLegacyScope):
+		// 升级前的屏蔽没有长度索引：按旧版规则查询最近的有界前缀，精确 key 的哈希算法未变，仍能命中。
+		keys = cyberSessionRecentTranscriptKeys(apiKeyID, body, cyberSessionLegacyLookupKeys)
+	case err != nil:
 		logger.LegacyPrintf("service.openai_gateway", "cyber session scope read failed: err=%v", err)
 		return ""
+	default:
+		// 只在已记录的屏蔽长度处重算前缀 key：追加任意数量 item 仍能命中被屏蔽前缀，
+		// 而历史长度本身不再决定是否屏蔽，避免无关长会话被误拦。
+		keys = cyberSessionTranscriptKeysAt(apiKeyID, body, lengths)
 	}
-	// 只在已记录的屏蔽长度处重算前缀 key：追加任意数量 item 仍能命中被屏蔽前缀，
-	// 而历史长度本身不再决定是否屏蔽，避免无关长会话被误拦。
-	keys := cyberSessionTranscriptKeysAt(apiKeyID, body, lengths)
 	if len(keys) == 0 {
 		return ""
 	}

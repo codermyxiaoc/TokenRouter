@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
 )
 
@@ -74,13 +75,23 @@ func TestAccessTokensRevokedForUserBeforeCutoff(t *testing.T) {
 	oldClaims, err := svc.ValidateToken(old)
 	require.NoError(t, err)
 
-	// 模拟一秒后撤销，避免与签发落在同一秒。
-	cache.before[user.ID] = time.Now().Add(time.Second)
+	// 撤销时间点晚于签发：旧 token 失效。
+	cutoff := time.Now().Add(time.Second)
+	cache.before[user.ID] = cutoff
 	require.True(t, svc.IsAccessTokenRevoked(context.Background(), oldClaims))
 
+	// 撤销之后重新签发的新 token（纳秒签发时间晚于撤销点）不受影响，即使与撤销落在同一秒。
 	fresh := *oldClaims
-	fresh.IssuedAt.Time = time.Now().Add(2 * time.Second)
+	fresh.IssuedAtNano = cutoff.Add(time.Millisecond).UnixNano()
 	require.False(t, svc.IsAccessTokenRevoked(context.Background(), &fresh))
+
+	// 旧格式 token 没有纳秒签发时间：与撤销点同一秒按已吊销处理，之后的秒数不受影响。
+	legacy := *oldClaims
+	legacy.IssuedAtNano = 0
+	legacy.IssuedAt = jwt.NewNumericDate(cutoff.Truncate(time.Second))
+	require.True(t, svc.IsAccessTokenRevoked(context.Background(), &legacy))
+	legacy.IssuedAt = jwt.NewNumericDate(cutoff.Truncate(time.Second).Add(time.Second))
+	require.False(t, svc.IsAccessTokenRevoked(context.Background(), &legacy))
 }
 
 // 吊销会话家族（会话绑定不匹配等）同时吊销该会话的 access token。

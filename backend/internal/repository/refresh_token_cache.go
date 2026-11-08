@@ -166,9 +166,28 @@ func (c *refreshTokenCache) IsAccessSessionRevoked(ctx context.Context, sessionI
 	return n > 0, err
 }
 
-// RevokeUserAccessTokensBefore 记录用户级吊销时间点（Unix 纳秒）。
+// revokeUserAccessBeforeScript 原子地只向前推进吊销时间点：并发撤销乱序写入时，较旧的时间点不能覆盖较新的；
+// TTL 只延长不缩短，避免较短的写入让较新的吊销记录提前过期。
+// 纳秒时间戳约 1.8e18，超出 Lua 双精度的整数精度，因此用定长十进制字符串比较而不是 tonumber。
+var revokeUserAccessBeforeScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+local incoming = ARGV[1]
+local ttl = tonumber(ARGV[2])
+local newer = (not current) or (#incoming > #current) or (#incoming == #current and incoming > current)
+if newer then
+  redis.call('SET', KEYS[1], incoming)
+end
+local remaining = redis.call('PTTL', KEYS[1])
+if remaining < ttl then
+  redis.call('PEXPIRE', KEYS[1], ttl)
+end
+return 1
+`)
+
+// RevokeUserAccessTokensBefore 记录用户级吊销时间点（Unix 纳秒），只前进不后退。
 func (c *refreshTokenCache) RevokeUserAccessTokensBefore(ctx context.Context, userID int64, at time.Time, ttl time.Duration) error {
-	return c.rdb.Set(ctx, fmt.Sprintf("%s%d", userAccessRevokedPrefix, userID), at.UnixNano(), ttl).Err()
+	key := fmt.Sprintf("%s%d", userAccessRevokedPrefix, userID)
+	return revokeUserAccessBeforeScript.Run(ctx, c.rdb, []string{key}, at.UnixNano(), ttl.Milliseconds()).Err()
 }
 
 // UserAccessTokensRevokedBefore 读取用户级吊销时间点，未设置时返回零值。

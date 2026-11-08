@@ -67,6 +67,9 @@ type JWTClaims struct {
 	SessionID string `json:"sid,omitempty"`
 	// BindingHash 会话指纹哈希（IP+UA），会话绑定开启时校验；空值表示旧 token（平滑升级）。
 	BindingHash string `json:"bnd,omitempty"`
+	// IssuedAtNano 是纳秒精度的签发时间，用于与用户级吊销时间点精确比较（iat 只有秒精度）；
+	// 旧 token 缺失时回退到 iat。
+	IssuedAtNano int64 `json:"iatn,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -1552,6 +1555,7 @@ func (s *AuthService) generateAccessToken(user *User, sessionID, bindingHash str
 		TokenVersion: resolvedTokenVersion(user),
 		SessionID:    sessionID,
 		BindingHash:  bindingHash,
+		IssuedAtNano: now.UnixNano(),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(now),

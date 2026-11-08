@@ -73,9 +73,10 @@ func TestGatewayCacheCyberBlockWritesScopeLengthsAndExactKeysTogether(t *testing
 	lengths, err = store.CyberSessionTranscriptLengths(ctx, 7, "inactive-scope")
 	require.NoError(t, err)
 	require.Empty(t, lengths)
-	lengths, err = store.CyberSessionTranscriptLengths(ctx, 8, "scope-1")
-	require.NoError(t, err)
-	require.Empty(t, lengths)
+	// 生产中 scope key 已包含 API Key ID，不会跨 Key 共享；这里若某 Key 没有长度索引而 scope 激活，
+	// 按升级前的旧屏蔽处理，由服务层回退到有界前缀查询。
+	_, err = store.CyberSessionTranscriptLengths(ctx, 8, "scope-1")
+	require.ErrorIs(t, err, service.ErrCyberSessionLegacyScope)
 
 	matched, err := store.FindCyberSessionBlocked(ctx, []string{"missing", "block-1", "block-2"})
 	require.NoError(t, err)

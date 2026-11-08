@@ -532,8 +532,14 @@ func isDecodableStoredImage(data []byte) bool {
 	if int64(cfg.Width)*int64(cfg.Height) > maxStoredImagePixels {
 		return false
 	}
-	_, _, err = image.Decode(bytes.NewReader(data))
-	return err == nil
+	if _, _, err = image.Decode(bytes.NewReader(data)); err != nil {
+		return false
+	}
+	// image.Decode 只解码 GIF 首帧，动图需完整校验全部帧。
+	if isGIFData(data) {
+		return validGIFAllFrames(data)
+	}
+	return true
 }
 
 // maxStoredImagePixels 限制完整解码的像素数（约 1 亿像素，覆盖 8K 以上分辨率）。

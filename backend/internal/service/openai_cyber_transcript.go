@@ -67,6 +67,31 @@ func cyberSessionTranscriptKeysAt(apiKeyID int64, body []byte, lengths []int) []
 	return keys
 }
 
+// cyberSessionLegacyLookupKeys 是升级前屏蔽回退查询的前缀数量上限，与旧版查询规则一致。
+const cyberSessionLegacyLookupKeys = 256
+
+// cyberSessionRecentTranscriptKeys 返回最近 limit 个历史前缀 key（按长度升序），用于没有长度索引的旧屏蔽。
+func cyberSessionRecentTranscriptKeys(apiKeyID int64, body []byte, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	ring := make([]string, 0, limit)
+	next := 0
+	walkOpenAICyberTranscript(apiKeyID, body, func(_ gjson.Result, _ int, prefixKey func() string) bool {
+		if len(ring) < limit {
+			ring = append(ring, prefixKey())
+		} else {
+			ring[next] = prefixKey()
+			next = (next + 1) % limit
+		}
+		return true
+	})
+	if len(ring) < limit || next == 0 {
+		return ring
+	}
+	return append(append(make([]string, 0, limit), ring[next:]...), ring[:next]...)
+}
+
 // walkOpenAICyberTranscript 累计哈希模型可见历史，每处理一个 item 后以从 1 开始的前缀长度调用 visit。
 // prefixKey 返回截止该 item 的前缀 key，仅在本次回调期间有效；visit 返回 false 时停止遍历。
 func walkOpenAICyberTranscript(apiKeyID int64, body []byte, visit func(item gjson.Result, length int, prefixKey func() string) bool) {

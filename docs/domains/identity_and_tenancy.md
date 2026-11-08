@@ -72,7 +72,7 @@ Google One Tap 是现有 Google 登录的浏览器凭据入口，不创建新的
 以下事件需要撤销一个 token、一个会话族或用户的全部会话，具体范围由业务意图决定：
 
 - 主动登出删除提交的 refresh token；请求带有 access token 时同时吊销其 `sid`。安全登出或检测到绑定异常可撤销整个 `sid`。
-- access token 无状态，吊销通过 Redis 记录实现（refresh 存储的可选扩展，无数据库迁移）：会话族撤销同时写入 `revoked_access_session:<sid>`；“撤销全部会话”、解绑登录方式等调用 `RevokeAllUserTokens` 时写入用户级吊销时间点，早于该时间签发的 access token 立即失效，之后重新登录的新 token 不受影响。记录 TTL 覆盖 access token 最长有效期；读取失败时放行，与 refresh 存储故障时已登录请求的既有行为一致。用户与管理员鉴权、换发 access token 都会检查吊销记录。
+- access token 无状态，吊销通过 Redis 记录实现（refresh 存储的可选扩展，无数据库迁移）：会话族撤销同时写入 `revoked_access_session:<sid>`；“撤销全部会话”、解绑登录方式等调用 `RevokeAllUserTokens` 时写入用户级吊销时间点，早于或等于该时间签发的 access token 立即失效，之后重新登录的新 token 不受影响。新 token 携带纳秒签发时间 `iatn` 精确比较，同一秒内先签发再撤销的 token 也会失效；只有秒级 `iat` 的旧 token 与撤销点同一秒时按已吊销处理。用户级吊销时间点用 Redis 脚本原子更新：只前进不后退（并发撤销乱序写入不会让时间点倒退），TTL 只延长不缩短。记录 TTL 覆盖 access token 最长有效期；读取失败时放行，与 refresh 存储故障时已登录请求的既有行为一致。用户与管理员鉴权、换发 access token 都会检查吊销记录。
 - 用户停用、密码重置以及需要强制重新认证的身份变更会通过 token version 或会话索引淘汰既有凭据。
 - 刷新时发现用户失效、版本不一致或客户端绑定不一致，会删除对应会话族而不是继续签发。
 

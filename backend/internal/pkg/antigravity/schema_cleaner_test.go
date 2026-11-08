@@ -1,6 +1,7 @@
 package antigravity
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -239,4 +240,69 @@ func TestCleanJSONSchema_EmptyPrefixItems(t *testing.T) {
 	emptyTupleItems, ok := emptyTuple["items"].(map[string]any)
 	require.True(t, ok, "empty_tuple.items must be an object")
 	assert.Equal(t, "string", emptyTupleItems["type"])
+}
+
+// 自引用的定义（链表 Node.next）展开到循环处收敛为对象占位，不会无限递归。
+func TestCleanJSONSchema_SelfReferenceTerminates(t *testing.T) {
+	schema := map[string]any{
+		"$defs": map[string]any{
+			"Node": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"value": map[string]any{"type": "string"}, "next": map[string]any{"$ref": "#/$defs/Node"}},
+			},
+		},
+		"$ref": "#/$defs/Node",
+	}
+	cleaned := CleanJSONSchema(schema)
+	require.NotNil(t, cleaned)
+	props := cleaned["properties"].(map[string]any)
+	require.Equal(t, "string", props["value"].(map[string]any)["type"])
+	next := props["next"].(map[string]any)
+	require.Equal(t, "object", next["type"])
+	_, hasRef := next["$ref"]
+	require.False(t, hasRef)
+}
+
+// 两个定义互相引用（A→B→A）同样在循环处收敛。
+func TestCleanJSONSchema_MutualReferenceTerminates(t *testing.T) {
+	schema := map[string]any{
+		"$defs": map[string]any{
+			"A": map[string]any{"type": "object", "properties": map[string]any{"b": map[string]any{"$ref": "#/$defs/B"}}},
+			"B": map[string]any{"type": "object", "properties": map[string]any{"a": map[string]any{"$ref": "#/$defs/A"}}},
+		},
+		"$ref": "#/$defs/A",
+	}
+	require.NotNil(t, CleanJSONSchema(schema))
+}
+
+// 非递归的复用定义（同一定义在兄弟节点出现多次）仍完整展开，保持原有兼容。
+func TestCleanJSONSchema_SiblingReuseStillExpands(t *testing.T) {
+	schema := map[string]any{
+		"$defs": map[string]any{"Addr": map[string]any{"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}}}},
+		"type":  "object",
+		"properties": map[string]any{
+			"home": map[string]any{"$ref": "#/$defs/Addr"},
+			"work": map[string]any{"$ref": "#/$defs/Addr"},
+		},
+	}
+	cleaned := CleanJSONSchema(schema)
+	props := cleaned["properties"].(map[string]any)
+	for _, key := range []string{"home", "work"} {
+		city := props[key].(map[string]any)["properties"].(map[string]any)["city"].(map[string]any)
+		require.Equal(t, "string", city["type"], key)
+	}
+}
+
+// 宽而深的引用组合（每层两个分支互相引用不同定义）受节点预算约束，有界完成。
+func TestCleanJSONSchema_WideReferenceGraphIsBounded(t *testing.T) {
+	defs := map[string]any{}
+	for i := 0; i < 30; i++ {
+		next := fmt.Sprintf("#/$defs/D%d", i+1)
+		defs[fmt.Sprintf("D%d", i)] = map[string]any{"type": "object", "properties": map[string]any{
+			"left": map[string]any{"$ref": next}, "right": map[string]any{"$ref": next},
+		}}
+	}
+	defs["D30"] = map[string]any{"type": "string"}
+	schema := map[string]any{"$defs": defs, "$ref": "#/$defs/D0"}
+	require.NotNil(t, CleanJSONSchema(schema))
 }

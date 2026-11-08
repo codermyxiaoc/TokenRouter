@@ -122,8 +122,9 @@ func (s *OpenAIGatewayService) tempUnscheduleOpenAITransportError(ctx context.Co
 	if s == nil || account == nil {
 		return
 	}
-	// 运维显式关闭传输错误冷却时直接跳过：不写内存阻断、不落库，也不改动已有冷却状态。
-	if s.cfg != nil && s.cfg.Gateway.DisableOpenAITransportErrorCooldown {
+	// 运维显式关闭 OpenAI 传输错误冷却时直接跳过：不写内存阻断、不落库，也不改动已有冷却状态。
+	// 该开关只作用于 OpenAI 账号；共用此处理器的 Grok 等平台仍保留网络故障保护。
+	if s.cfg != nil && s.cfg.Gateway.DisableOpenAITransportErrorCooldown && account.Platform == PlatformOpenAI {
 		return
 	}
 	until := time.Now().Add(openAITransportErrorTempUnschedDuration)

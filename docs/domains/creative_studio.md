@@ -140,7 +140,7 @@ Redis 队列不是唯一恢复依据：恢复循环每轮还按 `updated_at` 从
 
 - 客户端可对 `POST /creative/runs` 携带 `Idempotency-Key` 头；同一用户同一工作区同一键重放时，若请求指纹一致则直接返回原任务（`idempotent_replay=true`），不重复建单、不重复计费。
 - 同一用户同一工作区同一键但请求体不同（指纹不一致）返回 `409 CREATIVE_IDEMPOTENCY_CONFLICT`；不同工作区即使使用相同键也会创建独立任务。
-- 请求指纹是规范化 JSON（分组、模型、操作、prompt sha256、各源图 sha256、mask sha256、尺寸、比例、质量、背景、思考强度和规范化输出张数）的 sha256；输出格式不是用户输入，不参与指纹，实际输出 MIME 由供应商决定并写入输出 metadata；`creative_runs.request_fingerprint` 只用于比较同一幂等键的请求体，不设置全局唯一约束。
+- 请求指纹是规范化 JSON（分组、模型、操作、prompt sha256、各源图 sha256、mask sha256、尺寸、比例、质量、背景、思考强度、输出格式和规范化输出张数）的 sha256；输出格式只在模型开放多种格式时可选（目前为 GPT Image 2.6 的 gif），`png` 规范化为空，因此默认 PNG 的旧任务指纹不变，选择 gif 的请求指纹与默认请求不同；实际成品 MIME 写入输出 metadata；`creative_runs.request_fingerprint` 只用于比较同一幂等键的请求体，不设置全局唯一约束。
 - `(user_id, workspace_id, idempotency_key)` 部分唯一索引只约束带工作区的非空键；迁移前 `workspace_id IS NULL` 的旧任务不参与新的幂等查询，键本身最长 255 字符。
 - 计费与结算请求 ID 全部经由 `usage_billing_dedup` 幂等表去重，worker 重试、重复回调不会产生重复资金动作。
 
@@ -154,7 +154,7 @@ Redis 队列不是唯一恢复依据：恢复循环每轮还按 `updated_at` 从
 
 ## 计费
 
-创作台复用批量图片的 UsageBillingRepository hold/capture/release 路径（`ReserveBatchImageBalance`/`CaptureBatchImageBalance`/`ReleaseBatchImageBalance`），按所选尺寸基础单价估价，快照订阅/余额倍率；没有批量折扣与账号倍率。质量、背景和思考强度不参与创作台价格计算，输出格式不参与价格计算且不由客户端指定，实际 MIME 以供应商返回为准。MJ 每次按四张单价预占、按实际成功交付张数捕获，未使用的差额释放；其余模型仍为单张。资金动作的请求 ID 前缀固定，全部经 `usage_billing_dedup` 幂等：
+创作台复用批量图片的 UsageBillingRepository hold/capture/release 路径（`ReserveBatchImageBalance`/`CaptureBatchImageBalance`/`ReleaseBatchImageBalance`），按所选尺寸基础单价估价，快照订阅/余额倍率；没有批量折扣与账号倍率。质量、背景、思考强度和输出格式都不参与创作台价格计算；输出格式只能在模型开放的范围内由客户端选择，成品 MIME 以完整校验后的实际文件为准。动图成品必须全部帧完整解码（有帧数与累计像素上限）才算可交付，首帧完整、后续帧截断的 GIF 按结果不可用处理并释放预占。MJ 每次按四张单价预占、按实际成功交付张数捕获，未使用的差额释放；其余模型仍为单张。资金动作的请求 ID 前缀固定，全部经 `usage_billing_dedup` 幂等：
 
 ```text
 creative_hold:{run_id}      创建任务时预占

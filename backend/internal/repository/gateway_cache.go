@@ -385,7 +385,10 @@ func (c *gatewayCache) SetCyberSessionBlocked(ctx context.Context, block service
 			members[i] = length
 		}
 		pipe.SAdd(ctx, lengthsKey, members...)
-		pipe.Expire(ctx, lengthsKey, ttl)
+		// 长度索引由同一 API Key 的所有屏蔽共享：TTL 只延长不缩短，避免较短 TTL 的新屏蔽
+		// 让仍有效的旧屏蔽提前失去索引（GT 仅在新过期时间更晚时生效，NX 处理无过期的新键）。
+		pipe.ExpireNX(ctx, lengthsKey, ttl)
+		pipe.ExpireGT(ctx, lengthsKey, ttl)
 	}
 	pipe.Set(ctx, cyberSessionScopePrefix+block.ScopeKey, "1", ttl)
 	_, err := pipe.Exec(ctx)
@@ -393,10 +396,14 @@ func (c *gatewayCache) SetCyberSessionBlocked(ctx context.Context, block service
 }
 
 // cyberSessionTranscriptLengthsScript 仅在来源 scope 激活时读取 API Key 的长度索引，
-// 未激活来源只消耗一次 EXISTS。
+// 未激活来源只消耗一次 EXISTS。scope 激活但索引不存在时返回 {"legacy"}：
+// 这是升级前写入的屏蔽（只有 scope 与精确 key），由调用方回退到逐长度查询。
 var cyberSessionTranscriptLengthsScript = redis.NewScript(`
 	if redis.call('EXISTS', KEYS[1]) == 0 then
 		return {}
+	end
+	if redis.call('EXISTS', KEYS[2]) == 0 then
+		return {'legacy'}
 	end
 	return redis.call('SMEMBERS', KEYS[2])
 `)
@@ -412,6 +419,9 @@ func (c *gatewayCache) CyberSessionTranscriptLengths(ctx context.Context, apiKey
 	}).StringSlice()
 	if err != nil {
 		return nil, err
+	}
+	if len(members) == 1 && members[0] == "legacy" {
+		return nil, service.ErrCyberSessionLegacyScope
 	}
 	lengths := make([]int, 0, len(members))
 	for _, member := range members {

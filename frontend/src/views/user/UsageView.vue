@@ -955,7 +955,11 @@ const resetErrorRows = () => {
   }
 }
 
+// 失败记录请求序号：快速切换筛选时只采纳最后一次请求的结果，迟到的旧响应不能覆盖新列表与总数。
+let errorRequestSeq = 0
+
 const loadErrors = async () => {
+  const seq = ++errorRequestSeq
   errorLoading.value = true
   try {
     const resp = await usageAPI.listMyErrorRequests({
@@ -972,13 +976,15 @@ const loadErrors = async () => {
       sort_by: errorSortBy.value,
       sort_order: errorSortOrder.value,
     })
+    if (seq !== errorRequestSeq) return
     errorRows.value = resp.items
     errorTotal.value = resp.total
   } catch (error) {
+    if (seq !== errorRequestSeq) return
     console.error('[UsageView] loadErrors failed:', error)
     appStore.showError(t('usage.errors.failedToLoad'))
   } finally {
-    errorLoading.value = false
+    if (seq === errorRequestSeq) errorLoading.value = false
   }
 }
 

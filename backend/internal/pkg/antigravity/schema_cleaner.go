@@ -14,7 +14,7 @@ func CleanJSONSchema(schema map[string]any) map[string]any {
 	}
 	// 0. 预处理：展开 $ref (Schema Flattening)
 	// (Go map 是引用的，直接修改 schema)
-	flattenRefs(schema, extractDefs(schema))
+	flattenRefs(schema, extractDefs(schema), &schemaFlattenState{active: map[string]int{}})
 
 	// 递归清理
 	cleaned := cleanJSONSchemaRecursive(schema)
@@ -44,11 +44,45 @@ func extractDefs(schema map[string]any) map[string]any {
 	return defs
 }
 
-// flattenRefs 递归展开 $ref
-func flattenRefs(schema map[string]any, defs map[string]any) {
+// 展开预算：递归 Schema（如链表 Node.next 引用自身）不能无限展开，否则会耗尽栈并直接终止进程，
+// Gin 的 recovery 无法拦截这种 fatal error。
+const (
+	// maxSchemaFlattenDepth 限制展开后的嵌套深度。
+	maxSchemaFlattenDepth = 64
+	// maxSchemaFlattenNodes 限制一次展开访问的节点总数，防止宽而深的引用组合指数膨胀。
+	maxSchemaFlattenNodes = 20000
+)
+
+// schemaFlattenState 记录当前展开路径上的引用与已访问节点数。
+type schemaFlattenState struct {
+	active map[string]int // 当前递归路径上正在展开的引用名
+	depth  int
+	nodes  int
+}
+
+// recursiveSchemaPlaceholder 替代在当前路径上再次出现的引用：保留“对象”语义而不继续展开。
+func recursiveSchemaPlaceholder(schema map[string]any) {
+	if _, has := schema["type"]; !has {
+		schema["type"] = "object"
+	}
+}
+
+// flattenRefs 递归展开 $ref；循环引用、过深或过大的结构在边界处收敛为占位类型。
+func flattenRefs(schema map[string]any, defs map[string]any, state *schemaFlattenState) {
 	if len(defs) == 0 {
 		return // 无需展开
 	}
+	state.nodes++
+	if state.depth >= maxSchemaFlattenDepth || state.nodes > maxSchemaFlattenNodes {
+		// 超出预算：丢弃未展开的引用，避免继续递归。
+		if _, ok := schema["$ref"]; ok {
+			delete(schema, "$ref")
+			recursiveSchemaPlaceholder(schema)
+		}
+		return
+	}
+	state.depth++
+	defer func() { state.depth-- }()
 
 	// 检查并替换 $ref
 	if ref, ok := schema["$ref"].(string); ok {
@@ -57,7 +91,10 @@ func flattenRefs(schema map[string]any, defs map[string]any) {
 		parts := strings.Split(ref, "/")
 		refName := parts[len(parts)-1]
 
-		if defSchema, exists := defs[refName]; exists {
+		if state.active[refName] > 0 {
+			// 当前路径上已在展开同一定义：这是递归引用，到此为止。
+			recursiveSchemaPlaceholder(schema)
+		} else if defSchema, exists := defs[refName]; exists {
 			if defMap, ok := defSchema.(map[string]any); ok {
 				// 合并定义内容 (不覆盖现有 key)
 				for k, v := range defMap {
@@ -65,8 +102,11 @@ func flattenRefs(schema map[string]any, defs map[string]any) {
 						schema[k] = deepCopy(v) // 需深拷贝避免共享引用
 					}
 				}
-				// 递归处理刚刚合并进来的内容
-				flattenRefs(schema, defs)
+				// 递归处理刚刚合并进来的内容；展开期间把该引用标记为活动，子树中再次出现即视为循环。
+				state.active[refName]++
+				flattenRefs(schema, defs, state)
+				state.active[refName]--
+				return
 			}
 		}
 	}
@@ -74,11 +114,11 @@ func flattenRefs(schema map[string]any, defs map[string]any) {
 	// 遍历子节点
 	for _, v := range schema {
 		if subMap, ok := v.(map[string]any); ok {
-			flattenRefs(subMap, defs)
+			flattenRefs(subMap, defs, state)
 		} else if subArr, ok := v.([]any); ok {
 			for _, item := range subArr {
 				if itemMap, ok := item.(map[string]any); ok {
-					flattenRefs(itemMap, defs)
+					flattenRefs(itemMap, defs, state)
 				}
 			}
 		}

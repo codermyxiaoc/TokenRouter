@@ -137,6 +137,10 @@ func (f *fakeCyberBlockStore) CyberSessionTranscriptLengths(_ context.Context, a
 	if !f.scopes[scopeKey] {
 		return nil, nil
 	}
+	// 与 Redis 实现一致：scope 激活但该 Key 没有长度索引视为升级前的旧屏蔽。
+	if _, ok := f.lengths[apiKeyID]; !ok {
+		return nil, ErrCyberSessionLegacyScope
+	}
 	return f.lengths[apiKeyID], nil
 }
 

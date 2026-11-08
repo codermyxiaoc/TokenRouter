@@ -23,6 +23,7 @@ import (
 	middleware2 "github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -314,6 +315,11 @@ func (h *AsyncImageHandler) validateRequest(c *gin.Context, platform string, bod
 	if err := validateAsyncImagePrompt(c.GetHeader("Content-Type"), body); err != nil {
 		return err
 	}
+	// 异步任务的结果必须转存为位图（存储出于安全拒绝 SVG 等非位图内容）：在预占和调用上游之前拒绝，
+	// 避免先付费生成、最后才因无法交付而失败。同步接口仍可直接返回 SVG。
+	if asyncImageRequestsSVG(c.GetHeader("Content-Type"), body) {
+		return errors.New("output_format svg is not supported for asynchronous image tasks; use the synchronous endpoint")
+	}
 	if h.openAI == nil || h.openAI.gatewayService == nil {
 		return nil
 	}
@@ -332,6 +338,30 @@ func (h *AsyncImageHandler) validateRequest(c *gin.Context, platform string, bod
 		return errors.New("streaming image requests cannot be submitted as asynchronous tasks")
 	}
 	return nil
+}
+
+// asyncImageRequestsSVG 判断请求是否要求 SVG 输出（JSON 字段或 multipart 表单字段）。
+func asyncImageRequestsSVG(contentType string, body []byte) bool {
+	if isMultipartImagesContentType(contentType) {
+		_, params, err := mime.ParseMediaType(contentType)
+		if err != nil || params["boundary"] == "" {
+			return false
+		}
+		reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+		for {
+			part, err := reader.NextPart()
+			if err != nil {
+				return false
+			}
+			if part.FormName() == "output_format" && part.FileName() == "" {
+				value, _ := io.ReadAll(io.LimitReader(part, 16))
+				_ = part.Close()
+				return strings.EqualFold(strings.TrimSpace(string(value)), "svg")
+			}
+			_ = part.Close()
+		}
+	}
+	return strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "output_format").String()), "svg")
 }
 
 func (h *AsyncImageHandler) executeWithGateway(platform string, c *gin.Context) {

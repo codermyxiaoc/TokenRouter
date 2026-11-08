@@ -101,5 +101,9 @@ func validatedCreativeImageOutput(data []byte, limit int64) (CreativeOutput, boo
 	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
 		return CreativeOutput{}, false
 	}
+	// image.Decode 只解码 GIF 首帧：动图必须全部帧完整才算可交付成品，否则走未确认释放路径。
+	if mime == "image/gif" && !validGIFAllFrames(data) {
+		return CreativeOutput{}, false
+	}
 	return CreativeOutput{Index: 0, Bytes: data, Mime: mime}, true
 }

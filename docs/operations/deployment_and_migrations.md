@@ -11,6 +11,7 @@
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
 - [平台额度事务化升级](#transactional_platform_quotas)：切换额度统计权威来源、旧实例及缓存处理时读取。
+- [v3.40 图片兼容与鉴权修复](#v3_40_upgrade)：升级 GPT Image 2.6、GIF 交付、登录撤销及网关兼容修复时读取。
 - [v3.39 Midjourney 异步兼容](#v3_39_upgrade)：升级 MJ 任务查询、URL 返回及执行预算时读取。
 - [v3.38 创作台图片 Token 计费](#v3_38_upgrade)：部署迁移 327、切换图片计价与核对旧任务兼容时读取。
 - [v3.37 异步图片交付与幂等恢复](#v3_37_upgrade)：部署迁移 326、切换幂等提交、结果恢复和本轮模型/界面修复时读取。
@@ -87,7 +88,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.39`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.40`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -102,7 +103,7 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.39`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.40`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
@@ -204,7 +205,14 @@ Gemini 缓存费用复用本站持久资金合同，使用 `gemini_cache` 报价
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.39`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `327_creative_run_token_billing.sql`。从 v3.38 升级没有新增迁移，包含 Midjourney 异步查询、URL 返回兼容与执行预算调整；不修改历史余额、账本或任务费用。更早版本仍须遵循各自迁移与恢复边界。
+当前发布版本为 `v0.1.278-ct-v3.40`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `327_creative_run_token_billing.sql`。从 v3.38 升级没有新增迁移，包含 Midjourney 异步查询、URL 返回兼容与执行预算调整；不修改历史余额、账本或任务费用。更早版本仍须遵循各自迁移与恢复边界。
+
+<a id="v3_40_upgrade"></a>
+### v3.40 图片兼容与鉴权修复
+
+从 v3.39 升级没有新增或修改数据库迁移，最高迁移仍为 `327_creative_run_token_billing.sql`。本版包含 GPT Image 2.6 参数与 GIF 输出、管理员图片结果判定、失败记录筛选、登录及会话撤销修复，并合入已适配的上游 v0.2.20 协议修复。异步图片不支持 SVG 输出时会在任务创建和资金预留前拒绝；截断 GIF 不作为成功图片交付。资金结算仍按原交付规则执行，不自动重算历史任务或余额。
+
+发布前备份数据库、配置和稳定密钥，排空在途生成与长连接后统一更新全部后端和嵌入前端。令牌撤销、Cyber 会话屏蔽及自定义音色归属依赖新版共同执行；新旧实例混跑不能保证新权限规则一致。保留原 Redis 数据和 JWT/TOTP 密钥，不清空旧任务或账本。升级后核对登录、登出后旧令牌失效、正常图片与任务查询；历史无法交付的结果不会仅因升级自动恢复。
 
 <a id="v3_39_upgrade"></a>
 ### v3.39 Midjourney 异步兼容升级

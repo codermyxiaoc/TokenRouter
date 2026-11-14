@@ -436,7 +436,6 @@ export default {
     teamMemberComparison: 'Member Spending Comparison',
     inbound: 'Inbound',
     requestData: {
-      view: 'Cached data',
       title: 'Cached request data',
       section: 'Cached endpoint information',
       requestId: 'Request ID',

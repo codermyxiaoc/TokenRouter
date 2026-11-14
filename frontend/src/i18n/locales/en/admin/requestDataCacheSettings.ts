@@ -25,6 +25,8 @@ export default {
     targetError: 'the error request cache',
     targetAll: 'all data caches',
     cleared: 'Cleared {count} entries',
+    clearedAll: 'Cleared all caches (about {count} entries); disk space released',
+    clearAllConfirm: 'Clear all data caches? This empties the whole request snapshot table, including error snapshots used by admins for troubleshooting, and releases disk space immediately. The table is briefly locked. This cannot be undone.',
     saved: 'Data cache settings saved',
     loadFailed: 'Failed to load data cache settings',
     saveFailed: 'Failed to save data cache settings',

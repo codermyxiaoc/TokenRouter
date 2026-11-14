@@ -63,7 +63,7 @@ func TestCountRequestDataCacheSplitsKinds(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 手动清除按类别分批删除，直到某批不足批大小。
+// 按类别清除分批删除，直到某批不足批大小；清除全部直接 TRUNCATE。
 func TestDeleteRequestDataCacheBatchesByKind(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	require.NoError(t, err)
@@ -80,10 +80,13 @@ func TestDeleteRequestDataCacheBatchesByKind(t *testing.T) {
 		WithArgs(requestDataCacheDeleteBatch).WillReturnResult(sqlmock.NewResult(0, 0))
 	_, err = (&opsRepository{db: db}).DeleteRequestDataCache(context.Background(), service.RequestDataCacheKindError)
 	require.NoError(t, err)
-	mock.ExpectExec(`(?s)WHERE TRUE LIMIT \$1`).
-		WithArgs(requestDataCacheDeleteBatch).WillReturnResult(sqlmock.NewResult(0, 0))
-	_, err = (&opsRepository{db: db}).DeleteRequestDataCache(context.Background(), "")
+	// 清除全部改为 TRUNCATE：先读估算行数，再整表清空，不走分批 DELETE。
+	mock.ExpectQuery(`(?s)reltuples.*ops_request_details`).
+		WillReturnRows(sqlmock.NewRows([]string{"estimated"}).AddRow(int64(42)))
+	mock.ExpectExec(`^TRUNCATE TABLE ops_request_details$`).WillReturnResult(sqlmock.NewResult(0, 0))
+	all, err := (&opsRepository{db: db}).DeleteRequestDataCache(context.Background(), "")
 	require.NoError(t, err)
+	require.Equal(t, int64(42), all)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

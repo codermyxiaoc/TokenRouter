@@ -124,6 +124,7 @@ const DataTableStub = {
     <div>
       <div v-for="row in data" :key="row.request_id">
         <slot name="cell-model" :row="row" :value="row.model" />
+        <slot name="cell-endpoint" :row="row" />
         <slot name="cell-billing_mode" :row="row" />
         <slot name="cell-billing_type" :row="row" />
         <slot name="cell-tokens" :row="row" />
@@ -910,6 +911,7 @@ const DataTableStubWithUser = {
       <div v-for="row in data" :key="row.request_id">
         <slot name="cell-user" :row="row" />
         <slot name="cell-model" :row="row" :value="row.model" />
+        <slot name="cell-endpoint" :row="row" />
         <slot name="cell-billing_mode" :row="row" />
         <slot name="cell-tokens" :row="row" />
         <slot name="cell-latency" :row="row" />
@@ -1056,5 +1058,26 @@ describe('admin UsageTable deleted-user badge', () => {
 
     expect(wrapper.text()).not.toContain('Deleted')
     expect(wrapper.text()).toContain('a***e')
+  })
+})
+
+describe('UsageTable 端点打开缓存数据', () => {
+  it('开启缓存入口时点击端点发出该行记录，未开启时端点不可点击', async () => {
+    const row = { ...baseImageRow, id: 7, request_id: 'req-7', inbound_endpoint: '/v1/responses' }
+    const clickable = mount(UsageTable, {
+      props: { data: [row], columns: [{ key: 'endpoint', label: 'Endpoint' }], showRequestData: true },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    const button = clickable.get('[data-testid="usage-request-data-7"]')
+    expect(button.element.tagName).toBe('BUTTON')
+    expect(button.text()).toContain('/v1/responses')
+    await button.trigger('click')
+    expect(clickable.emitted('requestData')?.[0]?.[0]).toMatchObject({ id: 7, request_id: 'req-7' })
+
+    const plain = mount(UsageTable, {
+      props: { data: [row], columns: [{ key: 'endpoint', label: 'Endpoint' }] },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    expect(plain.find('[data-testid="usage-request-data-7"]').exists()).toBe(false)
   })
 })

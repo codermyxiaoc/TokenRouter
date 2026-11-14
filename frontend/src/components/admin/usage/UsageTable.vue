@@ -103,7 +103,16 @@
         </template>
 
         <template #cell-endpoint="{ row }">
-          <div class="max-w-[320px] space-y-1 text-xs">
+          <!-- 开启缓存数据入口时，与错误请求一致：点击端点打开该请求缓存的数据。 -->
+          <component
+            :is="showRequestData && row.request_id ? 'button' : 'div'"
+            :type="showRequestData && row.request_id ? 'button' : undefined"
+            class="block max-w-[320px] space-y-1 text-left text-xs"
+            :class="showRequestData && row.request_id ? 'hover:underline' : ''"
+            :title="showRequestData && row.request_id ? t('usage.requestData.title') : undefined"
+            :data-testid="showRequestData && row.request_id ? `usage-request-data-${row.id}` : undefined"
+            @click="showRequestData && row.request_id && emit('requestData', row)"
+          >
             <div class="break-all text-gray-700 dark:text-gray-300">
               <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('usage.inbound') }}:</span>
               <span class="ml-1">{{ row.inbound_endpoint?.trim() || '-' }}</span>
@@ -112,16 +121,7 @@
               <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('usage.upstream') }}:</span>
               <span class="ml-1">{{ row.upstream_endpoint?.trim() || '-' }}</span>
             </div>
-            <button
-              v-if="showRequestData"
-              type="button"
-              class="text-primary-600 hover:underline dark:text-primary-400"
-              :data-testid="`usage-request-data-${row.id}`"
-              @click="emit('requestData', row)"
-            >
-              {{ t('usage.requestData.view') }}
-            </button>
-          </div>
+          </component>
         </template>
 
         <template #cell-group="{ row }">

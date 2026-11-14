@@ -50,7 +50,7 @@
     <ConfirmDialog
       :show="clearTarget !== null"
       :title="t('admin.requestDataCacheSettings.clearConfirmTitle')"
-      :message="t('admin.requestDataCacheSettings.clearConfirm', { target: clearTargetLabel })"
+      :message="clearTarget === 'all' ? t('admin.requestDataCacheSettings.clearAllConfirm') : t('admin.requestDataCacheSettings.clearConfirm', { target: clearTargetLabel })"
       :confirm-text="t('admin.requestDataCacheSettings.clear')"
       :loading="busy"
       danger
@@ -138,7 +138,8 @@ async function confirmClear() {
   try {
     const result = await requestDataCacheAPI.clear(kind)
     stats.value = result.stats
-    app.showSuccess(t('admin.requestDataCacheSettings.cleared', { count: result.deleted }))
+    // 清除全部为整表 TRUNCATE，条数是统计估算值。
+    app.showSuccess(t(kind === 'all' ? 'admin.requestDataCacheSettings.clearedAll' : 'admin.requestDataCacheSettings.cleared', { count: result.deleted }))
     clearTarget.value = null
   } catch (err) {
     app.showError(extractApiErrorMessage(err, t('admin.requestDataCacheSettings.clearFailed')))

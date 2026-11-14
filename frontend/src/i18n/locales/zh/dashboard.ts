@@ -441,7 +441,6 @@ export default {
     teamMemberComparison: '成员消费对比',
     inbound: '入站',
     requestData: {
-      view: '缓存数据',
       title: '请求缓存数据',
       section: '缓存的端点信息',
       requestId: '请求 ID',

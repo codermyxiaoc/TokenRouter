@@ -135,12 +135,14 @@
           :loading="loading"
           :columns="visibleColumns"
           compact-user-column
+          show-request-data
           :show-ip-geo-toolbar="false"
           :server-side-sort="true"
           :default-sort-key="'created_at'"
           :default-sort-order="'desc'"
           @sort="handleSort"
           @userClick="handleUserClick"
+          @requestData="(row) => openRequestPayload(row.request_id)"
         />
         <Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" />
       </div>

@@ -25,6 +25,8 @@ export default {
     targetError: '错误请求缓存',
     targetAll: '全部数据缓存',
     cleared: '已清除 {count} 条缓存',
+    clearedAll: '已清空全部缓存（约 {count} 条），磁盘空间已释放',
+    clearAllConfirm: '确定清空全部数据缓存吗？将清空整张请求快照表（包括管理员排障用的错误请求快照），磁盘空间立即释放，期间会短暂锁表。此操作不可恢复。',
     saved: '数据缓存设置已保存',
     loadFailed: '加载数据缓存设置失败',
     saveFailed: '保存数据缓存设置失败',

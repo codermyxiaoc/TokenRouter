@@ -211,15 +211,33 @@ func (r *opsRepository) DeleteRequestDataCache(ctx context.Context, kind string)
 	if r == nil || r.db == nil {
 		return 0, fmt.Errorf("nil ops repository")
 	}
-	where := "TRUE"
+	if kind == "" {
+		return r.truncateRequestDetails(ctx)
+	}
+	where := ""
 	switch kind {
-	case "":
 	case service.RequestDataCacheKindNormal:
 		where = "kind = 'normal'"
 	default:
 		where = "kind <> 'normal'"
 	}
 	return r.deleteRequestDetailsInBatches(ctx, where)
+}
+
+// truncateRequestDetails 清除全部缓存：直接 TRUNCATE，立即把磁盘空间还给系统，避免 DELETE 留下大量死元组。
+// TRUNCATE 不返回行数，返回值取自表统计信息的估算行数（从未 ANALYZE 时为 0）。
+func (r *opsRepository) truncateRequestDetails(ctx context.Context) (int64, error) {
+	var estimated int64
+	if err := r.db.QueryRowContext(ctx, `
+SELECT COALESCE((
+  SELECT GREATEST(reltuples, 0)::bigint FROM pg_class WHERE oid = to_regclass('public.ops_request_details')
+), 0)`).Scan(&estimated); err != nil {
+		return 0, fmt.Errorf("estimate ops_request_details rows: %w", err)
+	}
+	if _, err := r.db.ExecContext(ctx, `TRUNCATE TABLE ops_request_details`); err != nil {
+		return 0, fmt.Errorf("truncate ops_request_details: %w", err)
+	}
+	return estimated, nil
 }
 
 // deleteRequestDetailsInBatches 按 ctid 分批删除；where 只能是内部常量条件，$1 固定为批大小。

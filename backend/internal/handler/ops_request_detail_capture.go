@@ -146,8 +146,19 @@ func requestDetailRequestID(c *gin.Context) string {
 	return strings.TrimSpace(c.Writer.Header().Get("X-Sub2API-Request-ID"))
 }
 
-func recordRequestPayloadDetail(c *gin.Context, ops *service.OpsService, writer *requestDetailCaptureWriter, bodyReader *requestDetailBodyReader, startedAt time.Time) {
-	if c == nil || ops == nil || writer == nil || !ops.IsMonitoringEnabled(c.Request.Context()) {
+func recordRequestPayloadDetail(c *gin.Context, ops *service.OpsService, writer *requestDetailCaptureWriter, bodyReader *requestDetailBodyReader, startedAt time.Time, isError bool) {
+	if c == nil || ops == nil || writer == nil {
+		return
+	}
+	// 先读内存中的缓存配置判定，普通请求未开启缓存时不做任何额外工作。
+	apiKey := getOpsAPIKey(c)
+	var groupID *int64
+	if apiKey != nil && apiKey.GroupID != nil && *apiKey.GroupID > 0 {
+		id := *apiKey.GroupID
+		groupID = &id
+	}
+	decision := ops.DecideRequestDataCache(isError, groupID)
+	if !decision.Cache || !ops.IsMonitoringEnabled(c.Request.Context()) {
 		return
 	}
 	requestID := requestDetailRequestID(c)
@@ -158,8 +169,8 @@ func recordRequestPayloadDetail(c *gin.Context, ops *service.OpsService, writer 
 	if value, ok := c.Get(opsModelKey); ok {
 		modelName, _ = value.(string)
 	}
-	platform := resolveOpsPlatform(getOpsAPIKey(c), guessPlatformFromPath(c.Request.URL.Path))
-	if apiKey := getOpsAPIKey(c); apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform != "" {
+	platform := resolveOpsPlatform(apiKey, guessPlatformFromPath(c.Request.URL.Path))
+	if apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform != "" {
 		platform = apiKey.Group.Platform
 	}
 	stream := c.GetBool(opsStreamKey)
@@ -185,6 +196,22 @@ func recordRequestPayloadDetail(c *gin.Context, ops *service.OpsService, writer 
 		ResponseTruncated: responseTruncated,
 		CreatedAt:         startedAt,
 		CompletedAt:       time.Now().UTC(),
+		Kind:              decision.Kind,
+		GroupID:           groupID,
+	}
+	if apiKey != nil {
+		if apiKey.UserID > 0 {
+			userID := apiKey.UserID
+			detail.UserID = &userID
+		}
+		if apiKey.ID > 0 {
+			apiKeyID := apiKey.ID
+			detail.APIKeyID = &apiKeyID
+		}
+	}
+	if decision.TTL > 0 {
+		expiresAt := detail.CompletedAt.Add(decision.TTL)
+		detail.ExpiresAt = &expiresAt
 	}
 	// 中间件不能阻塞用户响应，数据库写入使用短超时的后台上下文。
 	go func() {

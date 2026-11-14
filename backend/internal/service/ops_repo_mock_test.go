@@ -50,6 +50,14 @@ func (m *opsRepoMock) GetRequestPayloadDetail(ctx context.Context, requestID str
 	return nil, nil
 }
 
+func (m *opsRepoMock) CountRequestDataCache(ctx context.Context, now time.Time) (*RequestDataCacheStats, error) {
+	return &RequestDataCacheStats{}, nil
+}
+
+func (m *opsRepoMock) DeleteRequestDataCache(ctx context.Context, kind string) (int64, error) {
+	return 0, nil
+}
+
 func (m *opsRepoMock) BatchInsertSystemLogs(ctx context.Context, inputs []*OpsInsertSystemLogInput) (int64, error) {
 	if m.BatchInsertSystemLogsFn != nil {
 		return m.BatchInsertSystemLogsFn(ctx, inputs)

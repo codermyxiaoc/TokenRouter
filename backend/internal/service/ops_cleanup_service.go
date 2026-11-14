@@ -341,15 +341,16 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 	now := time.Now().UTC()
 
 	targets := []opsCleanupTarget{
-		{effective.ErrorLogRetentionDays, "ops_error_logs", "created_at", false, &out.errorLogs},
-		{effective.ErrorLogRetentionDays, "ops_ingress_reject_aggregates", "bucket_start", false, &out.ingressRejects},
-		{effective.ErrorLogRetentionDays, "ops_alert_events", "fired_at", false, &out.alertEvents},
-		{effective.SystemLogRetentionDays, "ops_system_logs", "created_at", false, &out.systemLogs},
-		{effective.ErrorLogRetentionDays, "ops_system_log_cleanup_audits", "created_at", false, &out.logAudits},
-		{effective.ErrorLogRetentionDays, "ops_request_details", "created_at", false, &out.requestDetails},
-		{effective.MinuteMetricsRetentionDays, "ops_system_metrics", "created_at", false, &out.systemMetrics},
-		{effective.HourlyMetricsRetentionDays, "ops_metrics_hourly", "bucket_start", false, &out.hourlyPreagg},
-		{effective.HourlyMetricsRetentionDays, "ops_metrics_daily", "bucket_date", true, &out.dailyPreagg},
+		{effective.ErrorLogRetentionDays, "ops_error_logs", "created_at", false, &out.errorLogs, ""},
+		{effective.ErrorLogRetentionDays, "ops_ingress_reject_aggregates", "bucket_start", false, &out.ingressRejects, ""},
+		{effective.ErrorLogRetentionDays, "ops_alert_events", "fired_at", false, &out.alertEvents, ""},
+		{effective.SystemLogRetentionDays, "ops_system_logs", "created_at", false, &out.systemLogs, ""},
+		{effective.ErrorLogRetentionDays, "ops_system_log_cleanup_audits", "created_at", false, &out.logAudits, ""},
+		// 设置了数据缓存时间的快照只按自身 expires_at 过期，保留天数仅清理未设置到期时间的历史快照。
+		{effective.ErrorLogRetentionDays, "ops_request_details", "created_at", false, &out.requestDetails, "expires_at IS NULL"},
+		{effective.MinuteMetricsRetentionDays, "ops_system_metrics", "created_at", false, &out.systemMetrics, ""},
+		{effective.HourlyMetricsRetentionDays, "ops_metrics_hourly", "bucket_start", false, &out.hourlyPreagg, ""},
+		{effective.HourlyMetricsRetentionDays, "ops_metrics_daily", "bucket_date", true, &out.dailyPreagg, ""},
 	}
 	batchSize := effective.BatchSize
 	if batchSize <= 0 {
@@ -365,7 +366,7 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 		if !ok {
 			continue
 		}
-		result, err := opsCleanupRunOne(ctx, s.db, truncate, cutoff, t.table, t.timeCol, t.castDate, batchSize, batchPause)
+		result, err := opsCleanupRunOne(ctx, s.db, truncate, cutoff, t.table, t.timeCol, t.castDate, t.filter, batchSize, batchPause)
 		if err != nil {
 			return out, err
 		}
@@ -376,6 +377,15 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 			"[OpsCleanup] table complete: table=%s deleted=%d batches=%d throttled_ms=%d",
 			t.table, result.deleted, result.batches, result.throttled.Milliseconds())
 	}
+
+	// 请求数据缓存按每条快照的 expires_at 过期，到期行在保留天数之外额外清理。
+	expired, err := deleteOldRowsByCTID(ctx, s.db, "ops_request_details", "expires_at", now, batchSize, batchPause, false)
+	if err != nil {
+		return out, err
+	}
+	out.requestDetails += expired.deleted
+	out.batches += expired.batches
+	out.throttled += expired.throttled
 
 	return out, nil
 }

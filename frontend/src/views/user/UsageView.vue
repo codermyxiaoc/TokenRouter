@@ -220,12 +220,14 @@
           :show-account-billing="false"
           :show-standard-cost="false"
           :show-upstream-endpoint="false"
+          :show-request-data="true"
           :user-clickable="false"
           :compact-user-column="isTeamOwner"
           :show-ip-geo-toolbar="false"
           default-sort-key="created_at"
           default-sort-order="desc"
           @sort="handleSort"
+          @request-data="openRequestData"
         />
 
         <Pagination
@@ -252,6 +254,16 @@
         @ipGeoBatchFailed="handleIpGeoBatchFailed"
       />
     </div>
+
+    <!-- 使用记录的请求缓存数据 -->
+    <BaseDialog
+      :show="requestDataUsageId !== null"
+      :title="t('usage.requestData.title')"
+      width="wide"
+      @close="requestDataUsageId = null"
+    >
+      <RequestDataCacheView source="usage" :record-id="requestDataUsageId" />
+    </BaseDialog>
   </AppLayout>
 
 </template>
@@ -264,10 +276,12 @@ import { keysAPI, usageAPI, userGroupsAPI } from '@/api'
 import { teamAPI, type TeamAPIKey, type TeamContext, type TeamMembership, type TeamUsageSummary } from '@/api/team'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'
 import UsageTable from '@/components/admin/usage/UsageTable.vue'
+import RequestDataCacheView from '@/components/user/RequestDataCacheView.vue'
 import IpGeoBatchToolbar from '@/components/common/IpGeoBatchToolbar.vue'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'
 import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'
@@ -762,6 +776,12 @@ const exportToCSV = async () => {
   } finally {
     exporting.value = false
   }
+}
+
+// 使用记录“缓存数据”弹窗当前查看的记录 ID。
+const requestDataUsageId = ref<number | null>(null)
+const openRequestData = (row: UsageLog) => {
+  requestDataUsageId.value = row.id
 }
 
 const ALWAYS_VISIBLE = ['created_at']

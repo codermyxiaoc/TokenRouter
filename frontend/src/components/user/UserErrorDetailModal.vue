@@ -86,6 +86,12 @@
         <span class="font-medium text-gray-500 dark:text-dark-400">{{ t('usage.errors.detail.responseBody') }}</span>
         <pre class="mt-1 overflow-auto max-h-[40vh] whitespace-pre-wrap break-all rounded-lg bg-gray-50 dark:bg-dark-900 border border-gray-200 dark:border-dark-700 p-3 text-xs text-gray-800 dark:text-dark-200">{{ detail.error_body }}</pre>
       </div>
+
+      <!-- 错误请求缓存的端点信息 -->
+      <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
+        <span class="font-medium text-gray-700 dark:text-dark-200">{{ t('usage.requestData.section') }}</span>
+        <RequestDataCacheView class="mt-2" source="error" :record-id="errorId" />
+      </div>
     </div>
   </BaseDialog>
 </template>
@@ -98,6 +104,7 @@ import ErrorRecoveryStatus from '@/components/common/ErrorRecoveryStatus.vue'
 import BillingSubscriptionSummary from '@/components/common/BillingSubscriptionSummary.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import { getMyErrorDetail } from '@/api/usage'
+import RequestDataCacheView from './RequestDataCacheView.vue'
 import { formatDateTime } from '@/utils/format'
 import type { UserErrorRequestDetail } from '@/types'
 

@@ -8,6 +8,7 @@ import audit from './audit'
 import plugins from './plugins'
 import videoProtocolProfiles from './videoProtocolProfiles'
 import apiDocsSettings from './apiDocsSettings'
+import requestDataCacheSettings from './requestDataCacheSettings'
 
 export default {
   ...overview,
@@ -20,4 +21,5 @@ export default {
   ...plugins,
   ...videoProtocolProfiles,
   ...apiDocsSettings,
+  ...requestDataCacheSettings,
 }

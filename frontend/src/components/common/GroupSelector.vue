@@ -34,6 +34,7 @@
           type="checkbox"
           :value="group.id"
           :checked="modelValue.includes(group.id)"
+          :disabled="disabled"
           @change="handleChange(group.id, ($event.target as HTMLInputElement).checked)"
           class="h-3.5 w-3.5 shrink-0 rounded border-gray-300 text-primary-500 focus:ring-primary-500 dark:border-dark-500"
         />
@@ -77,10 +78,12 @@ interface Props {
   platform?: GroupPlatform // Optional platform filter
   mixedScheduling?: boolean // For antigravity accounts: allow anthropic/gemini groups
   searchable?: boolean | 'auto'
+  disabled?: boolean // 禁用全部勾选，例如保存请求进行中
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  searchable: 'auto'
+  searchable: 'auto',
+  disabled: false
 })
 const emit = defineEmits<{
   'update:modelValue': [value: number[]]

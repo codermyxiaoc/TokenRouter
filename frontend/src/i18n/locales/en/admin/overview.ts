@@ -110,11 +110,11 @@ backup: {
         },
         opsLogs: {
           title: 'Ops Logs and Error Details',
-          description: 'Includes system logs, error logs, request body snapshots, retry records, and ops metrics. This is often the largest backup source.'
+          description: 'Includes system logs, error logs, normal and error request snapshots, retry records, and ops metrics. This is often the largest backup source.'
         },
         auditLogs: {
           title: 'Audit and Risk History',
-          description: 'Includes payment audits, moderation logs, announcement read history, and migration reports.'
+          description: 'Includes payment audits, moderation logs, moderation image snapshots, Cyber warnings, announcement read history, and migration reports. Moderation logs, images, and warnings are backed up together so their links stay intact after a restore.'
         },
         runtimeData: {
           title: 'Runtime Jobs and Temporary Data',

@@ -24,6 +24,8 @@ type opsCleanupTarget struct {
 	timeCol       string
 	castDate      bool
 	counter       *int64
+	// filter 为附加删除条件；非空时保留天数为 0 也按条件分批删除，不整表 TRUNCATE。
+	filter string
 }
 
 type opsCleanupDeletedCounts struct {
@@ -84,9 +86,15 @@ func opsCleanupRunOne(
 	cutoff time.Time,
 	table, timeCol string,
 	castDate bool,
+	filter string,
 	batchSize int,
 	batchPause time.Duration,
 ) (opsCleanupTargetResult, error) {
+	if truncate && filter != "" {
+		// 带条件的目标不能整表清空，改为删除当前时间之前写入的匹配行。
+		truncate = false
+		cutoff = time.Now().UTC()
+	}
 	if truncate {
 		deleted, err := truncateOpsTable(ctx, db, table)
 		result := opsCleanupTargetResult{deleted: deleted}
@@ -95,7 +103,7 @@ func opsCleanupRunOne(
 		}
 		return result, err
 	}
-	return deleteOldRowsByCTID(ctx, db, table, timeCol, cutoff, batchSize, batchPause, castDate)
+	return deleteOldRowsByCTIDWhere(ctx, db, table, timeCol, cutoff, batchSize, batchPause, castDate, filter)
 }
 
 // deleteOldRowsByCTID 按时间顺序选取物理行并分批删除，避免为每批旧数据额外按主键排序。
@@ -108,6 +116,21 @@ func deleteOldRowsByCTID(
 	batchSize int,
 	batchPause time.Duration,
 	castCutoffToDate bool,
+) (opsCleanupTargetResult, error) {
+	return deleteOldRowsByCTIDWhere(ctx, db, table, timeColumn, cutoff, batchSize, batchPause, castCutoffToDate, "")
+}
+
+// deleteOldRowsByCTIDWhere 与 deleteOldRowsByCTID 相同，filter 非空时追加为删除条件（仅限代码内常量）。
+func deleteOldRowsByCTIDWhere(
+	ctx context.Context,
+	db *sql.DB,
+	table string,
+	timeColumn string,
+	cutoff time.Time,
+	batchSize int,
+	batchPause time.Duration,
+	castCutoffToDate bool,
+	filter string,
 ) (opsCleanupTargetResult, error) {
 	result := opsCleanupTargetResult{}
 	if db == nil {
@@ -123,6 +146,9 @@ func deleteOldRowsByCTID(
 	where := fmt.Sprintf("%s < $1", timeColumn)
 	if castCutoffToDate {
 		where = fmt.Sprintf("%s < $1::date", timeColumn)
+	}
+	if filter != "" {
+		where += " AND (" + filter + ")"
 	}
 
 	q := fmt.Sprintf(`

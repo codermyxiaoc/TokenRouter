@@ -13,6 +13,9 @@ type OpsRepository interface {
 	ListRequestDetails(ctx context.Context, filter *OpsRequestDetailFilter) ([]*OpsRequestDetail, int64, error)
 	UpsertRequestPayloadDetail(ctx context.Context, detail *OpsRequestPayloadDetail) error
 	GetRequestPayloadDetail(ctx context.Context, requestID string) (*OpsRequestPayloadDetail, error)
+	// 请求数据缓存：按类别统计有效条数与手动清除（kind 为空表示全部）；过期行由运维清理任务删除。
+	CountRequestDataCache(ctx context.Context, now time.Time) (*RequestDataCacheStats, error)
+	DeleteRequestDataCache(ctx context.Context, kind string) (int64, error)
 	BatchInsertSystemLogs(ctx context.Context, inputs []*OpsInsertSystemLogInput) (int64, error)
 	ListSystemLogs(ctx context.Context, filter *OpsSystemLogFilter) (*OpsSystemLogList, error)
 	ListRequestTimings(ctx context.Context, clientRequestIDs []string) (map[string]*OpsRequestTiming, error)
@@ -85,6 +88,14 @@ type OpsRequestPayloadDetail struct {
 	ResponseTruncated bool      `json:"response_truncated"`
 	CreatedAt         time.Time `json:"created_at"`
 	CompletedAt       time.Time `json:"completed_at"`
+	// Kind 区分普通请求（normal）与错误请求（error）；历史快照为 error。
+	Kind string `json:"kind,omitempty"`
+	// UserID / APIKeyID / GroupID 是请求归属，用户侧读取缓存时据此校验本人请求。
+	UserID   *int64 `json:"user_id,omitempty"`
+	APIKeyID *int64 `json:"api_key_id,omitempty"`
+	GroupID  *int64 `json:"group_id,omitempty"`
+	// ExpiresAt 为空表示沿用错误日志保留天数；非空时到期后不再返回。
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 type OpsInsertErrorLogInput struct {

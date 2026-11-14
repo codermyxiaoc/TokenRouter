@@ -1153,12 +1153,12 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			!hasOpsUpstreamErrorContext(c) && !parsed.StreamFailure && len(service.GetOpsStreamErrors(c)) == 0 {
 			return
 		}
-		// 成功请求只保留 usage_logs 统计，失败请求才写入管理员排障详情。
-		// 错误日志仍按原有异步队列单独记录。入口拒绝在此之前直接返回，
-		// 遵守 hard skip 语义，不把认证失败正文写入详情表。
-		if shouldPersistRequestPayloadDetail(status, parsed) {
-			recordRequestPayloadDetail(c, ops, requestWriter, requestBodyReader, startedAt)
-		}
+		// 请求快照按"数据缓存"设置写入：失败请求与普通请求走同一条捕获链路，
+		// 各自判断开关、分组范围与缓存时长。错误日志仍按原有异步队列单独记录。
+		// 入口拒绝在此之前直接返回，遵守 hard skip 语义，不把认证失败正文写入详情表。
+		// HTTP 200 的流内失败（如 Gemini SSE 带内 429）已通过 MarkOpsStreamError 登记，同样归为错误请求。
+		isErrorRequest := shouldPersistRequestPayloadDetail(status, parsed) || len(service.GetOpsStreamErrors(c)) > 0
+		recordRequestPayloadDetail(c, ops, requestWriter, requestBodyReader, startedAt, isErrorRequest)
 
 		if ops == nil {
 			return

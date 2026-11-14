@@ -279,6 +279,10 @@ func validateContentModerationRemoteURL(ctx context.Context, value *url.URL) err
 	if value == nil || (value.Scheme != "http" && value.Scheme != "https") || strings.TrimSpace(value.Hostname()) == "" {
 		return errors.New("远程图片 URL 无效")
 	}
+	// 元数据等保留主机名在解析前直接拒绝，与图片下载策略一致。
+	if isBlockedImageDownloadHost(value.Hostname()) {
+		return errors.New("禁止访问私网或本地图片地址")
+	}
 	_, err := resolveContentModerationPublicIPs(ctx, value.Hostname())
 	return err
 }
@@ -302,9 +306,7 @@ func resolveContentModerationPublicIPs(ctx context.Context, host string) ([]net.
 	return ips, nil
 }
 
+// isContentModerationPublicIP 与图片下载共用公网判定，额外拒绝 CGNAT、this-network 与云元数据地址。
 func isContentModerationPublicIP(ip net.IP) bool {
-	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-		return false
-	}
-	return true
+	return isPublicImageDownloadIP(ip)
 }

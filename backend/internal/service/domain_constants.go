@@ -536,6 +536,9 @@ const (
 	// SettingKeyOpsRuntimeLogConfig stores JSON config for runtime log settings.
 	SettingKeyOpsRuntimeLogConfig = "ops_runtime_log_config"
 
+	// SettingKeyRequestDataCacheSettings 保存请求数据缓存配置（JSON），普通请求与错误请求分开设置。
+	SettingKeyRequestDataCacheSettings = "request_data_cache_settings"
+
 	// SettingKeyOllamaCloudUsageSettings 保存可选的全局刷新开关和刷新周期。
 	SettingKeyOllamaCloudUsageSettings = "ollama_cloud_usage_settings"
 

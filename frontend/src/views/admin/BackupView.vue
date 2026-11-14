@@ -505,8 +505,8 @@ const savingContent = ref(false)
 type BackupContentOptionKey = keyof Pick<BackupContentConfig, 'include_usage_records' | 'include_ops_logs' | 'include_audit_logs' | 'include_runtime_data'>
 const contentTablePatternCounts: Record<BackupContentOptionKey, number> = {
   include_usage_records: 10,
-  include_ops_logs: 9,
-  include_audit_logs: 5,
+  include_ops_logs: 10,
+  include_audit_logs: 7,
 	include_runtime_data: 6,
 }
 const contentOptions = computed<Array<{ key: BackupContentOptionKey, title: string, description: string }>>(() => [

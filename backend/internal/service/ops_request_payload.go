@@ -54,6 +54,9 @@ func prepareRequestPayloadDetail(detail *OpsRequestPayloadDetail) {
 	detail.UpstreamEndpoint = truncateOpsPayloadUTF8(strings.TrimSpace(detail.UpstreamEndpoint), 512)
 	detail.Platform = truncateOpsPayloadUTF8(strings.TrimSpace(detail.Platform), 128)
 	detail.Model = truncateOpsPayloadUTF8(strings.TrimSpace(detail.Model), 512)
+	if detail.Kind != RequestDataCacheKindNormal {
+		detail.Kind = RequestDataCacheKindError
+	}
 	detail.RequestHeaders = sanitizePayloadJSON(detail.RequestHeaders, OpsRequestHeaderMaxBytes)
 	detail.ResponseHeaders = sanitizePayloadJSON(detail.ResponseHeaders, OpsRequestHeaderMaxBytes)
 	// 失败请求的请求体需要完整用于复现问题；仍执行敏感字段脱敏，但不再按

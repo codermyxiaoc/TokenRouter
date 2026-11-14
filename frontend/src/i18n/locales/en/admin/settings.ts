@@ -7,6 +7,7 @@ export default {
         dailyActivities: 'Daily activities',
         videoProtocolAI: 'Video protocol AI',
         apiDocs: 'API Docs',
+        dataCache: 'Data cache',
         tickets: 'Tickets',
         general: 'General',
         agreement: 'Agreement',

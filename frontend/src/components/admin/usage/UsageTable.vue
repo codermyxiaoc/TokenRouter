@@ -112,6 +112,15 @@
               <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('usage.upstream') }}:</span>
               <span class="ml-1">{{ row.upstream_endpoint?.trim() || '-' }}</span>
             </div>
+            <button
+              v-if="showRequestData"
+              type="button"
+              class="text-primary-600 hover:underline dark:text-primary-400"
+              :data-testid="`usage-request-data-${row.id}`"
+              @click="emit('requestData', row)"
+            >
+              {{ t('usage.requestData.view') }}
+            </button>
           </div>
         </template>
 
@@ -724,6 +733,8 @@ interface Props {
   /** 用户端只展示实际扣费时隐藏标准费用明细。 */
   showStandardCost?: boolean
   showUpstreamEndpoint?: boolean
+  /** 用户端在端点列提供“缓存数据”入口，查看该请求缓存的端点信息。 */
+  showRequestData?: boolean
   /** 用户端只展示成员归因，不提供管理端余额入口。 */
   userClickable?: boolean
   /** 团队用量表固定成员列宽，长邮箱在单元格内省略。 */
@@ -742,6 +753,7 @@ const props = withDefaults(defineProps<Props>(), {
   showAccountBilling: true,
   showStandardCost: true,
   showUpstreamEndpoint: true,
+  showRequestData: false,
   userClickable: true,
   compactUserColumn: false,
   flat: false,
@@ -751,6 +763,7 @@ const emit = defineEmits<{
   userClick: [userID: number, email?: string]
   sort: [key: string, order: 'asc' | 'desc']
   ipGeoBatchFailed: []
+  requestData: [row: UsageLog]
 }>()
 const { t } = useI18n()
 const { balanceUnitSymbol, usdUnitSymbol, formatBalanceAmount, formatUsdAmount } = useBalanceDisplay()

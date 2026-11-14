@@ -156,6 +156,7 @@ func RegisterUserRoutes(
 			usage.GET("/ranking", h.Usage.Ranking)
 			usage.GET("/errors", h.Usage.ListErrors)
 			usage.GET("/errors/:id", h.Usage.GetErrorDetail)
+			usage.GET("/errors/:id/request-data", h.Usage.GetErrorRequestData)
 			usage.GET("/stats", h.Usage.Stats)
 			// 用户仪表盘接口
 			usage.GET("/dashboard/stats", h.Usage.DashboardStats)
@@ -164,6 +165,7 @@ func RegisterUserRoutes(
 			usage.GET("/dashboard/snapshot-v2", h.Usage.DashboardSnapshotV2)
 			usage.POST("/dashboard/api-keys-usage", h.Usage.DashboardAPIKeysUsage)
 			usage.GET("/:id", h.Usage.GetByID)
+			usage.GET("/:id/request-data", h.Usage.GetRequestData)
 		}
 
 		// 云端画布与旧图片任务入口共享 JWT；旧任务仍可独立完成结算。

@@ -7,6 +7,7 @@ export default {
         dailyActivities: '每日活动',
         videoProtocolAI: '视频协议 AI',
         apiDocs: 'API 文档',
+        dataCache: '数据缓存',
         tickets: '工单设置',
         general: '通用设置',
         agreement: '登录条款',

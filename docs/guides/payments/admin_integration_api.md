@@ -112,20 +112,20 @@ curl -X POST "${BASE}/api/v1/admin/users/123/balance" \
 TokenRouter 打开 `purchase_subscription_url` 或用户侧自定义页面 iframe URL 时，会统一追加：
 
 - `user_id`
-- `token`
+- `token`（仅同源页面）
 - `theme`（`light` 或 `dark`）
 - `lang`（例如 `zh` 或 `en`，表示当前界面语言）
 - `ui_mode`（固定为 `embedded`）
 - `src_host`（TokenRouter 页面来源）
-- `src_url`（TokenRouter 当前页面 URL）
+- `src_url`（TokenRouter 当前页面地址；外部页面只收到 origin 与路径，不含查询参数和 hash）
 
-示例：
+外部页面示例：
 
 ```text
-https://pay.example.com/pay?user_id=123&token=<jwt>&theme=light&lang=zh&ui_mode=embedded&src_host=https%3A%2F%2Frouter.example.com&src_url=https%3A%2F%2Frouter.example.com%2Fpurchase
+https://pay.example.com/pay?user_id=123&theme=light&lang=zh&ui_mode=embedded&src_host=https%3A%2F%2Frouter.example.com&src_url=https%3A%2F%2Frouter.example.com%2Fpurchase
 ```
 
-`token` 是用户 Bearer 凭据。只允许把购买页或自定义页面配置为受信任的 HTTPS 来源；接收方不得记录、转发或通过第三方分析脚本暴露该参数。
+`token` 是用户 Bearer 凭据，只附加给与 TokenRouter 同源的嵌入页，外部域名收不到。来源页的查询参数和 hash 可能携带支付恢复票据等短期上下文，因此也只完整传给同源页面。接收方仍不得记录、转发或通过第三方分析脚本暴露这些参数。
 
 ## 失败处理建议
 

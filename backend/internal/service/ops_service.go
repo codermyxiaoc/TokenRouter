@@ -75,6 +75,8 @@ type OpsService struct {
 	// 已发布快照不可变；网关读取无锁，互斥锁仅用于串行化启动和管理更新。
 	runtimeSettings   atomic.Pointer[opsRuntimeSettingsSnapshot]
 	runtimeSettingsMu sync.Mutex
+	// requestDataCache 是请求数据缓存配置快照，网关响应结束时无锁读取。
+	requestDataCache atomic.Pointer[requestDataCacheRuntime]
 
 	runtimeRefreshMu             sync.Mutex
 	runtimeRefreshCancel         context.CancelFunc
@@ -202,6 +204,7 @@ func (s *OpsService) RefreshRuntimeSettings(ctx context.Context) error {
 	values, err := s.settingRepo.GetMultiple(ctx, []string{
 		SettingKeyOpsMonitoringEnabled,
 		SettingKeyOpsAdvancedSettings,
+		SettingKeyRequestDataCacheSettings,
 	})
 	if err != nil {
 		return err
@@ -220,6 +223,8 @@ func (s *OpsService) RefreshRuntimeSettings(ctx context.Context) error {
 	normalizeOpsAdvancedSettings(advanced)
 
 	s.runtimeSettings.Store(&opsRuntimeSettingsSnapshot{monitoringEnabled: monitoringEnabled, advanced: *advanced})
+	// 与运维开关同周期刷新，多实例部署时其它实例保存的缓存配置也能同步生效。
+	s.storeRequestDataCacheSettings(parseRequestDataCacheSettings(values[SettingKeyRequestDataCacheSettings]))
 	return nil
 }
 

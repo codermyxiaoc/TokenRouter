@@ -416,6 +416,35 @@ export async function getMyErrorDetail(id: number): Promise<UserErrorRequestDeta
   return data
 }
 
+/** 请求数据缓存中的端点信息（只含元数据，不含请求头与正文）。 */
+export interface RequestDataCacheEntry {
+  request_id: string
+  kind: 'normal' | 'error'
+  method: string
+  path: string
+  inbound_endpoint: string
+  upstream_endpoint: string
+  platform: string
+  model: string
+  status_code: number
+  stream: boolean
+  created_at: string
+  completed_at: string
+  expires_at?: string
+}
+
+/** 读取某条使用记录缓存的请求端点信息；未缓存或已过期时返回 404。 */
+export async function getUsageRequestData(id: number): Promise<RequestDataCacheEntry> {
+  const { data } = await apiClient.get<RequestDataCacheEntry>(`/usage/${id}/request-data`)
+  return data
+}
+
+/** 读取某条错误请求缓存的请求端点信息；未缓存或已过期时返回 404。 */
+export async function getErrorRequestData(id: number): Promise<RequestDataCacheEntry> {
+  const { data } = await apiClient.get<RequestDataCacheEntry>(`/usage/errors/${id}/request-data`)
+  return data
+}
+
 export const usageAPI = {
   list,
   query,

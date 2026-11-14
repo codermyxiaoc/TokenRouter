@@ -9101,12 +9101,13 @@
         <DailyActivitySettingsTab v-if="activeTab === 'dailyActivities'" />
         <VideoProtocolAISettingsTab v-if="activeTab === 'videoProtocolAI'" />
         <ApiDocsSettingsTab v-if="activeTab === 'apiDocs'" />
+        <RequestDataCacheSettingsTab v-if="activeTab === 'dataCache'" />
         <div v-show="activeTab === 'backup'">
           <BackupSettings />
         </div>
 
         <!-- Save Button -->
-        <div v-show="activeTab !== 'backup' && activeTab !== 'tickets' && activeTab !== 'dailyActivities' && activeTab !== 'videoProtocolAI' && activeTab !== 'apiDocs'" class="flex justify-end">
+        <div v-show="activeTab !== 'backup' && activeTab !== 'tickets' && activeTab !== 'dailyActivities' && activeTab !== 'videoProtocolAI' && activeTab !== 'apiDocs' && activeTab !== 'dataCache'" class="flex justify-end">
           <button
             type="submit"
             :disabled="saving || loadFailed"
@@ -9233,6 +9234,7 @@ import TicketSettingsTab from "@/views/admin/settings/TicketSettingsTab.vue";
 import DailyActivitySettingsTab from "@/views/admin/settings/DailyActivitySettingsTab.vue";
 import VideoProtocolAISettingsTab from "@/views/admin/settings/VideoProtocolAISettingsTab.vue";
 import ApiDocsSettingsTab from "@/views/admin/settings/ApiDocsSettingsTab.vue";
+import RequestDataCacheSettingsTab from "@/views/admin/settings/RequestDataCacheSettingsTab.vue";
 import { useBalanceDisplay } from "@/composables/useBalanceDisplay";
 import RechargeBonusTierEditor from "@/components/admin/settings/RechargeBonusTierEditor.vue";
 import {
@@ -9302,6 +9304,7 @@ type SettingsTab =
   | "dailyActivities"
   | "videoProtocolAI"
   | "apiDocs"
+  | "dataCache"
   | "backup";
 const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
@@ -9317,6 +9320,7 @@ const settingsTabs = [
   { key: "dailyActivities" as SettingsTab, icon: "gift" as const },
   { key: "videoProtocolAI" as SettingsTab, icon: "sparkles" as const },
   { key: "apiDocs" as SettingsTab, icon: "book" as const },
+  { key: "dataCache" as SettingsTab, icon: "database" as const },
   { key: "backup" as SettingsTab, icon: "database" as const },
 ];
 // 允许通过路由参数直接定位到指定标签。
@@ -12089,7 +12093,7 @@ function findDuplicateDefaultSubscription(
 
 async function saveSettings() {
   // 工单页中的回车不能触发无关系统配置保存。
-  if (activeTab.value === "tickets" || activeTab.value === "dailyActivities" || activeTab.value === "videoProtocolAI" || activeTab.value === "apiDocs") return;
+  if (activeTab.value === "tickets" || activeTab.value === "dailyActivities" || activeTab.value === "videoProtocolAI" || activeTab.value === "apiDocs" || activeTab.value === "dataCache") return;
   saving.value = true;
   try {
     // 在组装任何设置更新前拒绝非法档位；空白草稿仍由提交清洗忽略。

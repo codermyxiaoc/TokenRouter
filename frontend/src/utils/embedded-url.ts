@@ -38,7 +38,12 @@ export function buildEmbeddedUrl(
     // Source tracking: let the embedded page know where it's being loaded from
     if (typeof window !== 'undefined') {
       url.searchParams.set(EMBEDDED_SRC_HOST_QUERY_KEY, window.location.origin)
-      url.searchParams.set(EMBEDDED_SRC_QUERY_KEY, window.location.href)
+      // 外部页面只拿到来源 origin + pathname：query/hash 可能携带支付恢复票据等短期上下文。
+      const sameOrigin = url.origin === window.location.origin
+      const sourceUrl = sameOrigin
+        ? window.location.href
+        : `${window.location.origin}${window.location.pathname ?? ''}`
+      url.searchParams.set(EMBEDDED_SRC_QUERY_KEY, sourceUrl)
     }
     return url.toString()
   } catch {

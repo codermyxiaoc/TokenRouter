@@ -8,6 +8,7 @@ describe('embedded-url', () => {
     Object.defineProperty(window, 'location', {
       value: {
         origin: 'https://app.example.com',
+        pathname: '/user/purchase',
         href: 'https://app.example.com/user/purchase',
       },
       writable: true,
@@ -44,6 +45,15 @@ describe('embedded-url', () => {
     expect(url.searchParams.get('ui_mode')).toBe('embedded')
     expect(url.searchParams.get('src_host')).toBe('https://app.example.com')
     expect(url.searchParams.get('src_url')).toBe('https://app.example.com/user/purchase')
+  })
+
+  it('strips source query and hash for external embedded pages', () => {
+    window.location.href = 'https://app.example.com/user/purchase?wechat_resume_token=secret#frag'
+    const external = new URL(buildEmbeddedUrl('https://pay.example.com/checkout', 42))
+    expect(external.searchParams.get('src_url')).toBe('https://app.example.com/user/purchase')
+    // 同源嵌入页仍拿到完整来源地址。
+    const internal = new URL(buildEmbeddedUrl('https://app.example.com/embedded/plan', 42))
+    expect(internal.searchParams.get('src_url')).toBe('https://app.example.com/user/purchase?wechat_resume_token=secret#frag')
   })
 
   it('passes the auth token only to same-origin embedded pages', () => {

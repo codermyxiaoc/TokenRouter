@@ -232,6 +232,10 @@ func registerOpsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		// 高级设置（数据库持久化）
 		ops.GET("/advanced-settings", h.Admin.Ops.GetAdvancedSettings)
 		ops.PUT("/advanced-settings", h.Admin.Ops.UpdateAdvancedSettings)
+		// 请求数据缓存：普通/错误请求分开配置，支持统计与手动清除。
+		ops.GET("/request-data-cache", h.Admin.Ops.GetRequestDataCache)
+		ops.PUT("/request-data-cache", h.Admin.Ops.UpdateRequestDataCache)
+		ops.POST("/request-data-cache/clear", h.Admin.Ops.ClearRequestDataCache)
 
 		// 设置分组（数据库持久化）
 		settings := ops.Group("/settings")

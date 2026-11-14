@@ -30,13 +30,21 @@ func TestOpsCleanupIncludesRequestPayloadDetails(t *testing.T) {
 		if table == "ops_request_details" {
 			deleted = 3
 		}
-		mock.ExpectExec(`(?s)WITH batch AS MATERIALIZED.*DELETE FROM `+table+` AS target`).
+		pattern := `(?s)WITH batch AS MATERIALIZED.*DELETE FROM ` + table + ` AS target`
+		if table == "ops_request_details" {
+			// 设置了数据缓存时间的快照不受保留天数影响，只按自身 expires_at 过期。
+			pattern = `(?s)WHERE created_at < \$1 AND \(expires_at IS NULL\).*DELETE FROM ops_request_details AS target`
+		}
+		mock.ExpectExec(pattern).
 			WithArgs(sqlmock.AnyArg(), 100).WillReturnResult(sqlmock.NewResult(0, deleted))
 	}
+	// 数据缓存按 expires_at 到期的快照额外清理，计入同一计数。
+	mock.ExpectExec(`(?s)WHERE expires_at < \$1.*DELETE FROM ops_request_details AS target`).
+		WithArgs(sqlmock.AnyArg(), 100).WillReturnResult(sqlmock.NewResult(0, 2))
 	counts, err := svc.runCleanupOnce(context.Background())
 	require.NoError(t, err)
-	require.EqualValues(t, 3, counts.requestDetails)
-	require.Contains(t, counts.String(), "request_details=3")
+	require.EqualValues(t, 5, counts.requestDetails)
+	require.Contains(t, counts.String(), "request_details=5")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

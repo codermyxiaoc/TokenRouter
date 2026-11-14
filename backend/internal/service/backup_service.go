@@ -88,10 +88,16 @@ var backupContentTableDataGroups = map[string][]string{
 		"public.ops_alert_events",
 		"public.ops_job_heartbeats",
 		"public.ops_system_log_cleanup_audits",
+		// 请求快照（普通与错误请求共用一表，不按 kind 拆分）。
+		"public.ops_request_details",
 	},
 	"audit_logs": {
 		"public.payment_audit_logs",
+		// 审核日志、审核图片快照与 Cyber 警告必须同组：media 通过外键同时挂在另外两张表下，
+		// 分组不一致会让恢复后出现缺父记录的子行或缺图片的审核记录。
 		"public.content_moderation_logs",
+		"public.content_moderation_media",
+		"public.content_moderation_cyber_warnings",
 		"public.announcement_reads",
 		"public.orphan_allowed_groups_audit",
 		"public.auth_identity_migration_reports",

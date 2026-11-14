@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/service"
 )
@@ -15,8 +16,8 @@ INSERT INTO ops_request_details (
   request_id, client_request_id, method, path, inbound_endpoint, upstream_endpoint,
   platform, model, status_code, stream, request_headers, request_body,
   response_headers, response_body, request_truncated, response_truncated,
-  created_at, completed_at
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13::jsonb,$14,$15,$16,$17,$18)
+  created_at, completed_at, kind, user_id, api_key_id, group_id, expires_at
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13::jsonb,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 ON CONFLICT (request_id) DO UPDATE SET
   client_request_id = EXCLUDED.client_request_id,
   method = EXCLUDED.method,
@@ -34,7 +35,12 @@ ON CONFLICT (request_id) DO UPDATE SET
   request_truncated = EXCLUDED.request_truncated,
   response_truncated = EXCLUDED.response_truncated,
   created_at = EXCLUDED.created_at,
-  completed_at = EXCLUDED.completed_at`
+  completed_at = EXCLUDED.completed_at,
+  kind = EXCLUDED.kind,
+  user_id = EXCLUDED.user_id,
+  api_key_id = EXCLUDED.api_key_id,
+  group_id = EXCLUDED.group_id,
+  expires_at = EXCLUDED.expires_at`
 
 func (r *opsRepository) UpsertRequestPayloadDetail(ctx context.Context, detail *service.OpsRequestPayloadDetail) error {
 	if r == nil || r.db == nil {
@@ -62,8 +68,21 @@ func (r *opsRepository) UpsertRequestPayloadDetail(ctx context.Context, detail *
 		detail.ResponseTruncated,
 		detail.CreatedAt,
 		detail.CompletedAt,
+		requestPayloadKind(detail.Kind),
+		detail.UserID,
+		detail.APIKeyID,
+		detail.GroupID,
+		detail.ExpiresAt,
 	)
 	return err
+}
+
+// requestPayloadKind 把空类别归为错误请求，与迁移默认值一致。
+func requestPayloadKind(kind string) string {
+	if kind == service.RequestDataCacheKindNormal {
+		return kind
+	}
+	return service.RequestDataCacheKindError
 }
 
 func (r *opsRepository) GetRequestPayloadDetail(ctx context.Context, requestID string) (*service.OpsRequestPayloadDetail, error) {
@@ -78,17 +97,21 @@ func (r *opsRepository) GetRequestPayloadDetail(ctx context.Context, requestID s
 	var detail service.OpsRequestPayloadDetail
 	var clientRequestID, method, path, inbound, upstream, platform, model sql.NullString
 	var requestHeaders, responseHeaders []byte
-	var requestBody, responseBody sql.NullString
+	var requestBody, responseBody, kind sql.NullString
+	var userID, apiKeyID, groupID sql.NullInt64
+	var expiresAt sql.NullTime
 	err := r.db.QueryRowContext(ctx, `
 SELECT request_id, client_request_id, method, path, inbound_endpoint, upstream_endpoint,
        platform, model, status_code, stream, request_headers, request_body,
        response_headers, response_body, request_truncated, response_truncated,
-       created_at, completed_at
+       created_at, completed_at, kind, user_id, api_key_id, group_id, expires_at
 FROM ops_request_details
-WHERE request_id = $1
+WHERE (request_id = $1
    OR client_request_id = $1
    OR request_id = $2
-   OR client_request_id = $2
+   OR client_request_id = $2)
+  -- 到期快照在清理任务删除前同样不可读，管理员与用户入口口径一致。
+  AND (expires_at IS NULL OR expires_at > NOW())
 ORDER BY CASE
   WHEN request_id = $1 THEN 0
   WHEN client_request_id = $1 THEN 1
@@ -100,6 +123,7 @@ LIMIT 1`, requestID, clientRequestAlias).Scan(
 		&platform, &model, &detail.StatusCode, &detail.Stream, &requestHeaders,
 		&requestBody, &responseHeaders, &responseBody, &detail.RequestTruncated,
 		&detail.ResponseTruncated, &detail.CreatedAt, &detail.CompletedAt,
+		&kind, &userID, &apiKeyID, &groupID, &expiresAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -116,6 +140,14 @@ LIMIT 1`, requestID, clientRequestAlias).Scan(
 	detail.Model = model.String
 	detail.RequestBody = requestBody.String
 	detail.ResponseBody = responseBody.String
+	detail.Kind = requestPayloadKind(kind.String)
+	detail.UserID = sqlNullInt64Ptr(userID)
+	detail.APIKeyID = sqlNullInt64Ptr(apiKeyID)
+	detail.GroupID = sqlNullInt64Ptr(groupID)
+	if expiresAt.Valid {
+		t := expiresAt.Time
+		detail.ExpiresAt = &t
+	}
 	if len(requestHeaders) > 0 {
 		detail.RequestHeaders = string(requestHeaders)
 	}
@@ -142,4 +174,79 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
+}
+
+// sqlNullInt64Ptr 把可空整数列转换为指针。
+func sqlNullInt64Ptr(v sql.NullInt64) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	out := v.Int64
+	return &out
+}
+
+// requestDataCacheDeleteBatch 是手动清除与过期清理的单批删除行数，避免一次性长事务锁表。
+const requestDataCacheDeleteBatch = 5000
+
+// CountRequestDataCache 统计两类缓存中仍在有效期内的条数。
+func (r *opsRepository) CountRequestDataCache(ctx context.Context, now time.Time) (*service.RequestDataCacheStats, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("nil ops repository")
+	}
+	stats := &service.RequestDataCacheStats{}
+	err := r.db.QueryRowContext(ctx, `
+SELECT
+  COUNT(*) FILTER (WHERE kind = 'normal'),
+  COUNT(*) FILTER (WHERE kind <> 'normal')
+FROM ops_request_details
+WHERE expires_at IS NULL OR expires_at > $1`, now).Scan(&stats.Normal, &stats.Error)
+	if err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
+// DeleteRequestDataCache 分批删除指定类别的缓存；kind 为空时删除全部。
+func (r *opsRepository) DeleteRequestDataCache(ctx context.Context, kind string) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("nil ops repository")
+	}
+	where := "TRUE"
+	switch kind {
+	case "":
+	case service.RequestDataCacheKindNormal:
+		where = "kind = 'normal'"
+	default:
+		where = "kind <> 'normal'"
+	}
+	return r.deleteRequestDetailsInBatches(ctx, where)
+}
+
+// deleteRequestDetailsInBatches 按 ctid 分批删除；where 只能是内部常量条件，$1 固定为批大小。
+func (r *opsRepository) deleteRequestDetailsInBatches(ctx context.Context, where string) (int64, error) {
+	q := `
+WITH batch AS MATERIALIZED (
+  SELECT ctid AS row_ctid FROM ops_request_details WHERE ` + where + ` LIMIT $1
+)
+DELETE FROM ops_request_details AS target
+USING batch
+WHERE target.ctid = batch.row_ctid`
+	var total int64
+	for {
+		res, err := r.db.ExecContext(ctx, q, requestDataCacheDeleteBatch)
+		if err != nil {
+			return total, err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += affected
+		if affected < requestDataCacheDeleteBatch {
+			return total, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+	}
 }

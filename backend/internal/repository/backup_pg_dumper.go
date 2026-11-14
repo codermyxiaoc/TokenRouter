@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/service"
@@ -20,13 +21,13 @@ func NewPgDumper(cfg *config.Config) service.DBDumper {
 	return &PgDumper{cfg: &cfg.Database}
 }
 
-// Dump executes pg_dump and returns a streaming reader of the output
-func (d *PgDumper) Dump(ctx context.Context, opts service.BackupDumpOptions) (io.ReadCloser, error) {
+// pgDumpArgs 构造 pg_dump 参数；排除项只使用 --exclude-table-data，表结构始终导出。
+func pgDumpArgs(cfg *config.DatabaseConfig, opts service.BackupDumpOptions) []string {
 	args := []string{
-		"-h", d.cfg.Host,
-		"-p", fmt.Sprintf("%d", d.cfg.Port),
-		"-U", d.cfg.User,
-		"-d", d.cfg.DBName,
+		"-h", cfg.Host,
+		"-p", fmt.Sprintf("%d", cfg.Port),
+		"-U", cfg.User,
+		"-d", cfg.DBName,
 		"--no-owner",
 		"--no-acl",
 		"--clean",
@@ -36,6 +37,13 @@ func (d *PgDumper) Dump(ctx context.Context, opts service.BackupDumpOptions) (io
 		// 只跳过表数据，保留结构、约束和索引，避免恢复后缺表。
 		args = append(args, "--exclude-table-data="+tablePattern)
 	}
+
+	return args
+}
+
+// Dump executes pg_dump and returns a streaming reader of the output
+func (d *PgDumper) Dump(ctx context.Context, opts service.BackupDumpOptions) (io.ReadCloser, error) {
+	args := pgDumpArgs(d.cfg, opts)
 
 	cmd := exec.CommandContext(ctx, "pg_dump", args...)
 	if d.cfg.Password != "" {
@@ -58,15 +66,34 @@ func (d *PgDumper) Dump(ctx context.Context, opts service.BackupDumpOptions) (io
 	return &cmdReadCloser{ReadCloser: stdout, cmd: cmd}, nil
 }
 
-// Restore executes psql to restore from a streaming reader
-func (d *PgDumper) Restore(ctx context.Context, data io.Reader) error {
-	args := []string{
-		"-h", d.cfg.Host,
-		"-p", fmt.Sprintf("%d", d.cfg.Port),
-		"-U", d.cfg.User,
-		"-d", d.cfg.DBName,
+// psqlRestoreArgs 构造恢复参数。psql 默认遇到 SQL 错误会继续执行并以 0 退出，
+// 在 --single-transaction 下整段事务已回滚却被当作成功；ON_ERROR_STOP 让首个错误即以非零退出。
+func psqlRestoreArgs(cfg *config.DatabaseConfig) []string {
+	return []string{
+		"-h", cfg.Host,
+		"-p", fmt.Sprintf("%d", cfg.Port),
+		"-U", cfg.User,
+		"-d", cfg.DBName,
+		"-v", "ON_ERROR_STOP=1",
 		"--single-transaction",
 	}
+}
+
+// maxRestoreErrorOutput 限制写入备份记录的 psql 输出长度，避免把大段 SQL 原文带进错误信息。
+const maxRestoreErrorOutput = 2048
+
+// restoreErrorOutput 只保留 psql 输出末尾（错误行通常在最后），超长时截断。
+func restoreErrorOutput(output []byte) string {
+	text := strings.TrimSpace(string(output))
+	if len(text) > maxRestoreErrorOutput {
+		text = "..." + text[len(text)-maxRestoreErrorOutput:]
+	}
+	return text
+}
+
+// Restore executes psql to restore from a streaming reader
+func (d *PgDumper) Restore(ctx context.Context, data io.Reader) error {
+	args := psqlRestoreArgs(d.cfg)
 
 	cmd := exec.CommandContext(ctx, "psql", args...)
 	if d.cfg.Password != "" {
@@ -80,7 +107,7 @@ func (d *PgDumper) Restore(ctx context.Context, data io.Reader) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%v: %s", err, string(output))
+		return fmt.Errorf("psql restore failed: %v: %s", err, restoreErrorOutput(output))
 	}
 	return nil
 }

@@ -3,7 +3,7 @@
 当前标准、本地目录和 standalone Compose 默认从 DockerHub 拉取：
 
 ```text
-coderxiaoc/tokenrouter:v0.1.278-ct-v3.41
+coderxiaoc/tokenrouter:v0.1.278-ct-v3.42
 ```
 
 在 `.env` 中设置 `SUB2API_IMAGE` 可选择其他已发布标签或镜像摘要。这些 Compose 保留 `pull_policy: always`，部署服务器无需源码。应用依赖 PostgreSQL 和 Redis；Compose 提供运行配置、持久化存储、健康检查和依赖启动顺序。
@@ -27,10 +27,10 @@ coderxiaoc/tokenrouter:v0.1.278-ct-v3.41
 
 ```bash
 docker login
-docker buildx build --platform linux/amd64 --build-arg ALPINE_IMAGE=alpine:3.23 --build-arg POSTGRES_IMAGE=postgres:18-alpine3.23 --build-arg VERSION=0.1.278-ct-v3.41 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v3.41 --load --file Dockerfile .
-docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v3.41 --version
-docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v3.41 --version
-docker push coderxiaoc/tokenrouter:v0.1.278-ct-v3.41
+docker buildx build --platform linux/amd64 --build-arg ALPINE_IMAGE=alpine:3.23 --build-arg POSTGRES_IMAGE=postgres:18-alpine3.23 --build-arg VERSION=0.1.278-ct-v3.42 --tag coderxiaoc/tokenrouter:v0.1.278-ct-v3.42 --load --file Dockerfile .
+docker run --rm --entrypoint /app/sub2api coderxiaoc/tokenrouter:v0.1.278-ct-v3.42 --version
+docker run --rm --entrypoint /usr/local/bin/pg_dump coderxiaoc/tokenrouter:v0.1.278-ct-v3.42 --version
+docker push coderxiaoc/tokenrouter:v0.1.278-ct-v3.42
 ```
 
 版本和 PostgreSQL 客户端检查不挂载现有数据，也不启动应用服务。程序内部版本号不带 `v`，镜像标签保留 `v` 前缀。根 `Dockerfile` 还支持 `COMMIT`、`DATE` 构建参数；发布下一版本时同时替换构建参数、镜像标签与部署端 `SUB2API_IMAGE`。以上命令只发布 `amd64`，不会同时生成 `arm64` 镜像。
@@ -43,8 +43,8 @@ docker push coderxiaoc/tokenrouter:v0.1.278-ct-v3.41
 
 ```bash
 set -e
-binary="$PWD/release/sub2api_v0.1.278-ct-v3.41_linux_amd64/sub2api"
-image=coderxiaoc/tokenrouter:v0.1.278-ct-v3.41
+binary="$PWD/release/sub2api_v0.1.278-ct-v3.42_linux_amd64/sub2api"
+image=coderxiaoc/tokenrouter:v0.1.278-ct-v3.42
 build_context="$(mktemp -d)"
 test -s "$binary"
 mkdir -p "$build_context/backend" "$build_context/deploy"
@@ -64,7 +64,7 @@ image_binary_hash="$(docker run --rm --entrypoint sha256sum "$image" /app/sub2ap
 test "$binary_hash" = "$image_binary_hash"
 ```
 
-核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v3.41`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
+核对平台为 `linux/amd64`、程序版本为 `0.1.278-ct-v3.42`、二进制哈希一致，并完成隔离环境的健康、前端及升级验证后再发布：
 
 ```bash
 docker login
@@ -89,7 +89,7 @@ nano .env
 在现有部署目录修改 `.env`，保留原有密码、JWT/TOTP 密钥以及其他配置：
 
 ```dotenv
-SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v3.41
+SUB2API_IMAGE=coderxiaoc/tokenrouter:v0.1.278-ct-v3.42
 POSTGRES_BIND_HOST=127.0.0.1
 POSTGRES_PORT=5433
 ```
@@ -129,6 +129,12 @@ docker compose -f docker-compose.yml exec -T sub2api wget -q -O - http://127.0.0
 私有 DockerHub 仓库需要先在服务器执行 `docker login`。应用镜像更新或端口映射变更应使用 `up -d` 重建相关容器；仅 `restart` 不会应用这些变更。已有部署无需用 `.env.example` 覆盖 `.env`，也不要执行 `down -v`。
 
 `--no-deps sub2api` 只更新应用，不替换 PostgreSQL 或 Redis。新应用启动时自动执行待应用迁移。沿用既有数据、配置和稳定安全密钥，完成升级后检查程序版本、健康状态、登录、网关调用和用量记录。
+
+### v3.42 请求缓存查看与清理
+
+管理员使用记录支持点击端点查看请求缓存。“清除全部”直接清空快照表以释放磁盘空间，包含错误快照，数量为估算值；按类别清除仍保留其它类别。整表清理会短暂独占锁表，请在低峰操作。余额、账务和任务数据不因清理改变。
+
+从 v3.41 升级没有新增迁移，保留原数据和配置，统一更新后端与前端。回退不恢复已经清除的快照。完整边界见 [v3.42 升级](../docs/operations/deployment_and_migrations.md#v3_42_upgrade)。本次交付 `linux/amd64`。
 
 ### v3.41 请求缓存、备份与安全修复
 
@@ -508,7 +514,7 @@ v1.3 的 WS 执行状态按 API Key、原始线程/会话和 `request_kind` 隔�
 
 ## 镜像标签
 
-当前默认固定版本标签 `v0.1.278-ct-v3.41`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
+当前默认固定版本标签 `v0.1.278-ct-v3.42`。后续发布应使用新版本标签，避免同一标签对应不同构建；需要严格固定内容时使用镜像摘要。升级前应验证数据库备份。
 
 ## 相关链接
 

@@ -11,6 +11,7 @@
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
 - [平台额度事务化升级](#transactional_platform_quotas)：切换额度统计权威来源、旧实例及缓存处理时读取。
+- [v3.41 请求缓存、备份与安全修复](#v3_41_upgrade)：部署迁移 328/329、请求快照保存期及备份恢复修复时读取。
 - [v3.40 图片兼容与鉴权修复](#v3_40_upgrade)：升级 GPT Image 2.6、GIF 交付、登录撤销及网关兼容修复时读取。
 - [v3.39 Midjourney 异步兼容](#v3_39_upgrade)：升级 MJ 任务查询、URL 返回及执行预算时读取。
 - [v3.38 创作台图片 Token 计费](#v3_38_upgrade)：部署迁移 327、切换图片计价与核对旧任务兼容时读取。
@@ -88,7 +89,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.40`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.41`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -103,11 +104,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.40`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.41`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.34 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.41 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -205,7 +206,18 @@ Gemini 缓存费用复用本站持久资金合同，使用 `gemini_cache` 报价
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.40`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `327_creative_run_token_billing.sql`。从 v3.38 升级没有新增迁移，包含 Midjourney 异步查询、URL 返回兼容与执行预算调整；不修改历史余额、账本或任务费用。更早版本仍须遵循各自迁移与恢复边界。
+当前发布版本为 `v0.1.278-ct-v3.41`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `329_ops_request_details_cache_indexes_notx.sql`。从 v3.40 升级新增请求快照分类、归属与期限字段及索引，包含请求缓存管理、备份范围与恢复错误处理、安全日志和嵌入链接修复；不修改历史余额、账本或任务费用。更早版本仍须遵循各自迁移与恢复边界。
+
+<a id="v3_41_upgrade"></a>
+### v3.41 请求缓存、备份与安全修复
+
+从 v3.40 升级新增 `328_ops_request_details_cache_scope.sql` 和 `329_ops_request_details_cache_indexes_notx.sql`。328 给请求快照增加分类、用户/Key/分组归属与可空到期时间，历史记录默认为错误快照，不猜测回填归属，不修改账务数据；329 独立并发建立到期及分类时间索引。启动时等待迁移完成，并核对两条迁移记录，不能跳过失败的索引创建。
+
+普通请求缓存默认关闭，开启后的默认保存期为 1 天；错误缓存默认启用、全分组且保存 30 天。新显式到期快照在到期后立即不可查询，再由清理任务删除；历史 `expires_at` 为空的记录仍沿用原错误日志留存规则。用户查看缓存需校验本人请求归属，不因升级放开历史未知归属快照。详细规则见[请求数据缓存说明](observability_and_data_lifecycle.md)。
+
+备份的运维日志选项包含请求快照，审核历史选项同时包含审核日志、图片及关联警告。未选组只排除表数据，结构保留；旧备份内容不会自动补齐。恢复遇到 SQL 错误时中止并回滚，后台任务记为失败。TOTP 日志不再输出种子前缀，审核图片下载补强特殊网段校验，外域嵌入来源不再附带 query/hash。
+
+升级前备份数据库、配置和稳定密钥，排空在途任务，统一更新全部应用实例及前端后再启用普通请求缓存。保留原 Redis、素材和账本。回退旧程序前关闭普通缓存，并按原保存策略处理已经留存的快照；保留新增列和索引，但旧程序不识别新分类和到期设置，不能保证继续执行新 TTL。回退不撤销已完成的账务事实。
 
 <a id="v3_40_upgrade"></a>
 ### v3.40 图片兼容与鉴权修复

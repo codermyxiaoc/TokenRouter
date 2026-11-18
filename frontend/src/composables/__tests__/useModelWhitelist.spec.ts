@@ -50,6 +50,8 @@ describe('useModelWhitelist', () => {
 			'gpt-5.6-luna',
 			'gpt-6-astra',
       'gpt-6-sol',
+      'gpt-6.2-sol',
+      'gpt-6.2-astra',
       'gpt-6.1-sol',
       'gpt-6.1-terra',
       'gpt-6-luna',
@@ -88,7 +90,7 @@ describe('useModelWhitelist', () => {
   })
 
   it('新增官方型号可选择和原名映射，且不扩展第三方平台预设', () => {
-    for (const model of ['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-terra']) {
+    for (const model of ['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6.2-sol', 'gpt-6.2-astra']) {
       expect(getModelsByPlatform('openai')).toContain(model)
       expect(getPresetMappingsByPlatform('openai')).toEqual(expect.arrayContaining([
         expect.objectContaining({ from: model, to: model })
@@ -282,6 +284,24 @@ describe('useModelWhitelist', () => {
     expect(getModelsByPlatform('antigravity')).toContain('claude-opus-4-8')
   })
 
+  it.each([
+    ['claude-fable-5-2', 'Fable 5.2'],
+    ['claude-mythos-5-2', 'Mythos 5.2']
+  ])('preserves %s in Anthropic whitelists and presets without inventing provider mappings', (model, label) => {
+    for (const platform of ['claude', 'anthropic']) {
+      const models = getModelsByPlatform(platform)
+      expect(models).toContain(model)
+      expect(buildModelMappingObject('whitelist', models, [])?.[model]).toBe(model)
+      expect(getPresetMappingsByPlatform(platform)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ label, from: model, to: model })
+      ]))
+    }
+    // AWS 未发布 5.2 区域卡前不提供 Bedrock 预设。
+    expect(getPresetMappingsByPlatform('bedrock').some(mapping => mapping.from === model)).toBe(false)
+    expect(getModelsByPlatform('antigravity')).not.toContain(model)
+    expect(getPresetMappingsByPlatform('antigravity').some(mapping => mapping.from === model)).toBe(false)
+  })
+
   it('Bedrock 预设使用官方模型 ID 并保留旧型号合法的版本后缀', () => {
     const presets = getPresetMappingsByPlatform('bedrock')
     const expected = {
@@ -370,6 +390,19 @@ describe('useModelWhitelist', () => {
     const models = getModelsByPlatform('antigravity')
 
     expect(models).toContain('gemini-3.1-pro')
+  })
+
+  it('Gemini 4 Carbon exposes the official API model without invented aliases', () => {
+    const models = getModelsByPlatform('gemini')
+    expect(models).toContain('gemini-4-carbon')
+    expect(models).not.toContain('gemini-4-carbon-preview')
+    expect(getModelsByPlatform('antigravity')).toContain('gemini-4-carbon')
+    expect(getPresetMappingsByPlatform('antigravity')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'gemini-4-carbon', to: 'gemini-4-carbon' })
+    ]))
+    expect(buildModelMappingObject('whitelist', ['gemini-4-carbon'], [])).toEqual({
+      'gemini-4-carbon': 'gemini-4-carbon'
+    })
   })
 
   it('antigravity 模型列表包含 Gemini 3.6 Flash 分档模型', () => {

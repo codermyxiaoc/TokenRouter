@@ -13,6 +13,7 @@ const messages: Record<string, string> = {
   'admin.dashboard.tokens': 'Tokens',
   'admin.dashboard.actual': 'Actual',
   'admin.dashboard.standard': 'Standard',
+  'admin.dashboard.accountCost': 'Account Cost',
   'admin.dashboard.metricTokens': 'By Tokens',
   'admin.dashboard.metricActualCost': 'By Actual Cost',
   'admin.dashboard.noDataAvailable': 'No data available',
@@ -129,5 +130,22 @@ describe('EndpointDistributionChart', () => {
     const rows = wrapper.findAll('tbody tr')
     expect(rows[0].text()).toContain('/v1/messages')
     expect(rows[1].text()).toContain('/v1/responses')
+  })
+
+  // 管理员视图默认展示账号成本列，用户视图可关闭
+  it('shows the account cost column by default and hides it when disabled', () => {
+    const stats = [{ ...endpointStats[0], account_cost: 0.35 }]
+    const adminWrapper = mount(EndpointDistributionChart, {
+      props: { endpointStats: stats },
+      global: { stubs: { LoadingSpinner: true } },
+    })
+    expect(adminWrapper.find('thead').text()).toContain('Account Cost')
+    expect(adminWrapper.find('tbody tr').text()).toContain('0.35')
+
+    const userWrapper = mount(EndpointDistributionChart, {
+      props: { endpointStats: stats, showAccountCost: false },
+      global: { stubs: { LoadingSpinner: true } },
+    })
+    expect(userWrapper.find('thead').text()).not.toContain('Account Cost')
   })
 })

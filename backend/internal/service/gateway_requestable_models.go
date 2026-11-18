@@ -53,10 +53,28 @@ func (s *GatewayService) resolveRequestableModelsWithAccounts(
 	baseModels []string,
 	accounts []Account,
 ) RequestableModelsResult {
+	result, _ := s.resolveRequestableModelsFromSnapshot(ctx, groupID, platform, baseModels, accounts, nil)
+	return result
+}
+
+// resolveRequestableModelsFromSnapshot 同时返回兼容性回退目录和加载错误，购买预览只接受成功解析的目录。
+func (s *GatewayService) resolveRequestableModelsFromSnapshot(
+	ctx context.Context, groupID *int64, platform string, baseModels []string, accounts []Account, previewGroup *Group,
+) (RequestableModelsResult, error) {
 	accounts = filterRequestableModelAccounts(accounts, platform)
+	if previewGroup != nil && previewGroup.RequirePrivacySet {
+		// 先筛账号再生成候选，未确认隐私的账号不能把自己的别名或默认型号带入套餐。
+		eligible := make([]Account, 0, len(accounts))
+		for i := range accounts {
+			if accounts[i].IsPrivacySet() {
+				eligible = append(eligible, accounts[i])
+			}
+		}
+		accounts = eligible
+	}
 	// 账号查询成功但没有平台匹配账号时必须保持空结果；渠道读取失败不能凭空补入默认模型。
 	if len(accounts) == 0 {
-		return RequestableModelsResult{}
+		return RequestableModelsResult{}, nil
 	}
 	currentAccountModels := configuredRequestModelsFromAccounts(accounts, platform)
 	hadExplicitAccountModels := len(baseModels) > 0 || len(currentAccountModels) > 0
@@ -79,12 +97,12 @@ func (s *GatewayService) resolveRequestableModelsWithAccounts(
 			// 账号快照有效，渠道读取失败也不能借默认目录或价格条目扩大该账号声明。
 			fallback := RequestableModelsResult{HadExplicitAccountModels: hadExplicitAccountModels}
 			for _, model := range fallbackModels {
-				if resolved, ok := s.resolveRequestableModel(ctx, groupID, nil, accounts, model); ok {
+				if resolved, ok := s.resolveRequestableModel(ctx, groupID, nil, accounts, model, previewGroup); ok {
 					fallback.Models = append(fallback.Models, resolved)
 				}
 			}
 			fallback.Restricted = len(fallback.Models) == 0
-			return fallback
+			return fallback, err
 		}
 		if cachedPlatform := strings.TrimSpace(s.channelService.GetGroupPlatform(ctx, *groupID)); cachedPlatform != "" {
 			channelPlatform = cachedPlatform
@@ -98,12 +116,12 @@ func (s *GatewayService) resolveRequestableModelsWithAccounts(
 	}
 	if len(candidates) == 0 || len(accounts) == 0 {
 		result.Restricted = true
-		return result
+		return result, nil
 	}
 
 	result.Models = make([]RequestableModel, 0, len(candidates))
 	for _, requestedModel := range candidates {
-		if resolved, ok := s.resolveRequestableModel(ctx, groupID, channel, accounts, requestedModel); ok {
+		if resolved, ok := s.resolveRequestableModel(ctx, groupID, channel, accounts, requestedModel, previewGroup); ok {
 			result.Models = append(result.Models, resolved)
 		}
 	}
@@ -111,7 +129,7 @@ func (s *GatewayService) resolveRequestableModelsWithAccounts(
 	if len(result.Models) == 0 {
 		result.Restricted = true
 	}
-	return result
+	return result, nil
 }
 
 // configuredRequestModelsFromAccounts 复用 GetAvailableModels 的显式模型聚合规则。
@@ -324,6 +342,7 @@ func (s *GatewayService) resolveRequestableModel(
 	channel *Channel,
 	accounts []Account,
 	requestedModel string,
+	previewGroup *Group,
 ) (RequestableModel, bool) {
 	channelMappedModel := requestedModel
 	channelMapped := false
@@ -340,6 +359,10 @@ func (s *GatewayService) resolveRequestableModel(
 		}
 	}
 
+	// Gemini 在入站时也检查原始型号；其余图片入口用渠道改写后的路由型号判断。
+	if GeminiImageGenerationDenied(previewGroup, nil, requestedModel) || planPreviewImageModelDenied(previewGroup, channelMappedModel) {
+		return RequestableModel{}, false
+	}
 	if channel != nil && channel.RestrictModels && billingSource != BillingModelSourceUpstream {
 		pricingModel := billingModelForRestriction(billingSource, requestedModel, channelMappedModel)
 		if s.requestableModelRestricted(ctx, groupID, pricingModel) {
@@ -355,6 +378,10 @@ func (s *GatewayService) resolveRequestableModel(
 			continue
 		}
 		for _, upstreamModel := range s.resolveAccountUpstreamModelsForListing(ctx, account, channelMappedModel) {
+			// 同一别名可能在其他账号映射为文本模型，仅排除当前不可用的图片路径。
+			if planPreviewImageModelDenied(previewGroup, upstreamModel) {
+				continue
+			}
 			// 渠道和账号映射均完成后过滤，不按客户端别名误伤有效替代型号。
 			if IsRetiredOpenAISubscriptionModel(account, upstreamModel) {
 				continue
@@ -380,6 +407,21 @@ func (s *GatewayService) resolveRequestableModel(
 		resolved.PricingModel = channelMappedModel
 	}
 	return resolved, true
+}
+
+// planPreviewImageModelDenied 使用对应平台的专用图片型号规则。可选生图工具不影响文本模型本身。
+func planPreviewImageModelDenied(group *Group, model string) bool {
+	if GroupAllowsImageGeneration(group) {
+		return false
+	}
+	switch group.Platform {
+	case PlatformOpenAI:
+		return isOpenAIImageGenerationModel(model) || isAPIKeyOnlyImagesModel(model)
+	case PlatformGrok:
+		return isGrokImageGenerationModel(model)
+	default:
+		return GeminiImageGenerationDenied(group, nil, model)
+	}
 }
 
 // resolveAccountUpstreamModelsForListing 返回静态模型列表可能产生的最终上游模型。

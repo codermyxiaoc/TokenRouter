@@ -94,8 +94,8 @@ func TestAccountFilteredEndpointStatsKeepUserActualCost(t *testing.T) {
 	for _, endpoint := range []string{"/v1/chat/completions", "/api/v1/coding/chat", "/v1/chat/completions -> /api/v1/coding/chat"} {
 		mock.ExpectQuery("(?s)SELECT.*"+actualExpr+".*account_id = \\$3").
 			WithArgs(start, end, accountID).
-			WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost"}).
-				AddRow(endpoint, int64(1247), int64(300), 10.603, 530.797))
+			WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost", "account_cost"}).
+				AddRow(endpoint, int64(1247), int64(300), 10.603, 530.797, 8.25))
 	}
 
 	inbound, err := repo.GetEndpointStatsWithFilters(context.Background(), start, end, 0, 0, accountID, 0, "", nil, nil, nil)
@@ -109,6 +109,8 @@ func TestAccountFilteredEndpointStatsKeepUserActualCost(t *testing.T) {
 		require.Len(t, rows, 1)
 		require.InDelta(t, 530.797, rows[0].ActualCost, 0.000001)
 		require.InDelta(t, 10.603, rows[0].Cost, 0.000001)
+		// 账号成本单独返回，不替换“实际”扣费口径。
+		require.InDelta(t, 8.25, rows[0].AccountCost, 0.000001)
 	}
 	require.NoError(t, mock.ExpectationsWereMet())
 }

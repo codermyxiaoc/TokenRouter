@@ -143,18 +143,9 @@ func creativeUsageTokensEmpty(tokens UsageTokens) bool {
 		tokens.OutputTokens <= 0 && tokens.CacheCreationTokens <= 0 && tokens.CacheReadTokens <= 0 && tokens.ImageOutputTokens <= 0
 }
 
-// creativeTokensFromOpenAIUsage 与 API RecordUsage 相同地把 OpenAI 用量拆成互斥计费桶：
-// input_tokens 含缓存读写，图片输入扣除明确报告的图片缓存。
+// 创作台图片和 API 共用输入、图片缓存与缓存写入期限的拆分规则。
 func creativeTokensFromOpenAIUsage(usage OpenAIUsage) UsageTokens {
-	return UsageTokens{
-		InputTokens:          max(usage.InputTokens-usage.CacheReadInputTokens-usage.CacheCreationInputTokens, 0),
-		ImageInputTokens:     max(usage.ImageInputTokens-usage.ImageCacheReadTokens, 0),
-		ImageCacheReadTokens: usage.ImageCacheReadTokens,
-		OutputTokens:         usage.OutputTokens,
-		CacheCreationTokens:  usage.CacheCreationInputTokens,
-		CacheReadTokens:      usage.CacheReadInputTokens,
-		ImageOutputTokens:    usage.ImageOutputTokens,
-	}
+	return usage.billingUsageTokens()
 }
 
 // creativeTokensFromGeminiUsage 与 Gemini 网关 calculateTokenCost 相同地映射 usageMetadata。
@@ -184,6 +175,8 @@ func (s *CreativePublicService) computeCreativeProviderUsage(ctx context.Context
 	usage.Reported = true
 	usage.InputTokens, usage.ImageInputTokens, usage.ImageCacheReadTokens = tokens.InputTokens, tokens.ImageInputTokens, tokens.ImageCacheReadTokens
 	usage.OutputTokens, usage.CacheCreationTokens, usage.CacheReadTokens = tokens.OutputTokens, tokens.CacheCreationTokens, tokens.CacheReadTokens
+	usage.CacheCreation5mTokens, usage.CacheCreation1hTokens = tokens.CacheCreation5mTokens, tokens.CacheCreation1hTokens
+	usage.CacheCreation30mTokens, usage.CacheCreation12hTokens = tokens.CacheCreation30mTokens, tokens.CacheCreation12hTokens
 	usage.ImageOutputTokens = tokens.ImageOutputTokens
 	group, err := s.creativeRunGroup(ctx, run)
 	if err != nil {

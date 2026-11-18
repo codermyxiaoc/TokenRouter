@@ -35,6 +35,7 @@ export interface PricingInterval {
   output_price: number | null
   cache_write_price: number | null
   cache_write_1h_price?: number | null
+  cache_write_12h_price?: number | null
   cache_read_price: number | null
   input_multiplier: number | null
   output_multiplier: number | null
@@ -74,12 +75,15 @@ export interface ChannelModelPricing {
   // 通用服务层级倍率；为空表示沿用模型目录或官方默认倍率。
   fast_multiplier?: number | null
   flex_multiplier?: number | null
+  // 渠道级 Ultra Fast 倍率；null 表示沿用模型默认倍率
+  ultrafast_multiplier?: number | null
   max_reasoning_effort_multiplier?: number | null
   reasoning_effort_multipliers?: Record<string, number>
   input_price: number | null
   output_price: number | null
   cache_write_price: number | null
   cache_write_1h_price?: number | null
+  cache_write_12h_price?: number | null
   cache_read_price: number | null
   image_input_price: number | null
   image_output_price: number | null
@@ -212,6 +216,7 @@ export interface ModelDefaultPricing {
   output_price?: number
   cache_write_price?: number
   cache_write_1h_price?: number | null
+  cache_write_12h_price?: number | null
   cache_read_price?: number
   max_reasoning_effort_multiplier?: number | null
   reasoning_effort_multipliers?: Record<string, number>

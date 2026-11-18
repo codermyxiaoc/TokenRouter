@@ -997,10 +997,12 @@ func anthropicBetaTokensContains(header, token string) bool {
 //   - system 有正文则保留正文与其余字段；user/assistant 只剥字段，绝不整条删除；
 //   - 无任何消息携带该字段时返回原 body（字节 no-op）。
 //
-// header 含该 beta 时完全保留。顶层 output_config / effort 不属于该 beta 保护范围，
+// header 含 mid-conversation-output-config 或 per-turn-control 任一 beta 时完全保留。
+// 顶层 output_config / effort 不属于这些 beta 保护范围，
 // 本函数不做任何处理。多条删除用「稳健重建」实现，保留其余字段与消息先后顺序。
 func stripAnthropicMessageOutputConfigUnlessBeta(body []byte, anthropicBetaHeader string) ([]byte, bool) {
-	if anthropicBetaTokensContains(anthropicBetaHeader, claude.BetaMidConversationOutputConfig) {
+	if anthropicBetaTokensContains(anthropicBetaHeader, claude.BetaMidConversationOutputConfig) ||
+		anthropicBetaTokensContains(anthropicBetaHeader, claude.BetaPerTurnControl) {
 		return body, false
 	}
 	// 快速路径：body 中不含 output_config 字面量时无需解析。

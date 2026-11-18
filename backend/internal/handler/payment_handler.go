@@ -20,13 +20,85 @@ import (
 type PaymentHandler struct {
 	paymentService *service.PaymentService
 	configService  *service.PaymentConfigService
+	apiKeyService  *service.APIKeyService
+	modelCatalog   *service.ModelMarketplaceService
 }
 
 // NewPaymentHandler creates a new PaymentHandler.
-func NewPaymentHandler(paymentService *service.PaymentService, configService *service.PaymentConfigService) *PaymentHandler {
+func NewPaymentHandler(paymentService *service.PaymentService, configService *service.PaymentConfigService, apiKeyService *service.APIKeyService, modelCatalog *service.ModelMarketplaceService) *PaymentHandler {
 	return &PaymentHandler{
 		paymentService: paymentService,
 		configService:  configService,
+		apiKeyService:  apiKeyService,
+		modelCatalog:   modelCatalog,
+	}
+}
+
+// @project-doc docs/domains/payments_and_entitlements.md#subscription_plan_preview
+// GetPlanGroups 展示已登录用户购买该套餐后可用于订阅结算的分组与模型。
+func (h *PaymentHandler) GetPlanGroups(c *gin.Context) {
+	// 同一套餐随登录用户和授权变化返回不同目录。
+	c.Header("Cache-Control", "private, no-store")
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid plan ID")
+		return
+	}
+	ctx := c.Request.Context()
+	plan, err := h.configService.GetPlanGroupScopeForSale(ctx, id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	groups, err := h.apiKeyService.GetAvailableGroupsForPlan(ctx, subject.UserID, plan)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	models, err := h.modelCatalog.ListGroupModelIDs(ctx, groups)
+	if err != nil {
+		response.ErrorFrom(c, infraerrors.ServiceUnavailable("MODEL_CATALOG_UNAVAILABLE", "Model catalog unavailable"))
+		return
+	}
+	result := make([]planPreviewGroup, 0, len(groups))
+	language := c.GetHeader("Accept-Language")
+	for i := range groups {
+		g := &groups[i]
+		result = append(result, newPlanPreviewGroup(g, models[g.ID], language))
+	}
+	response.Success(c, gin.H{"groups_restricted": len(plan.GroupIDs) > 0, "groups": result})
+}
+
+// planPreviewGroup 仅公开购买决策所需的字段，账号信息、上游映射和内部费率均不参与响应。
+type planPreviewGroup struct {
+	ID             int64    `json:"id"`
+	Name           string   `json:"name"`
+	Platform       string   `json:"platform"`
+	DisplayBrand   string   `json:"display_brand,omitempty"`
+	RateMultiplier float64  `json:"rate_multiplier"`
+	Models         []string `json:"models"`
+}
+
+func newPlanPreviewGroup(g *service.Group, models []string, language string) planPreviewGroup {
+	// 套餐详情使用与 Key 模型列表相同的自定义目录，保留管理员设定的排序。
+	if g.CustomModelsListEnabled() {
+		models = filterModelsByCustomList(models, nil, g.ModelsListConfig.Models)
+	}
+	if models == nil {
+		models = []string{}
+	}
+	return planPreviewGroup{
+		ID:             g.ID,
+		Name:           g.I18n.LocalizeName(language, g.Name),
+		Platform:       g.Platform,
+		DisplayBrand:   g.DisplayBrand,
+		RateMultiplier: g.RateMultiplier,
+		Models:         models,
 	}
 }
 

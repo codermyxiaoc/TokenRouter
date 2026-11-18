@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -80,8 +81,9 @@ func respondOpenAIReasoningEffortPolicyError(c *gin.Context, err error, write fu
 	write(c, http.StatusForbidden, "permission_error", err.Error())
 }
 
-// bindOpenAIReasoningEffortPolicyForMessagesRequest 只为显式 output_config.effort
-// 绑定策略，避免桥接器为缺省请求补出的 medium 被错误地当作客户端请求。
+// bindOpenAIReasoningEffortPolicyForMessagesRequest 为 Messages 请求绑定推理强度策略。
+// 缺省 effort 时桥接器补出的默认强度不受分组上限约束（不被当作客户端请求的强度），
+// 但显式关闭思考转换出的 none 仍按 from=none 映射，关闭思考时保留上限。
 func bindOpenAIReasoningEffortPolicyForMessagesRequest(c *gin.Context, apiKey *service.APIKey, body []byte) {
 	if c == nil || c.Request == nil {
 		return
@@ -89,19 +91,21 @@ func bindOpenAIReasoningEffortPolicyForMessagesRequest(c *gin.Context, apiKey *s
 	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	bindRequestedReasoningEffort(c, body, model)
 	effort := gjson.GetBytes(body, "output_config.effort")
-	if !effort.Exists() || effort.Type != gjson.String || strings.TrimSpace(effort.String()) == "" {
+	explicitEffort := effort.Exists() && effort.Type == gjson.String && strings.TrimSpace(effort.String()) != ""
+	// CN 平台仍只约束显式强度；其它平台缺省强度时由 Messages 专用策略决定（不加上限，只保留 none 映射）。
+	isCNTarget := service.IsCNProvider(effectiveAPIKeyPlatform(c, apiKey))
+	if isCNTarget && !explicitEffort {
 		return
 	}
 	maxEffort, mappings, overLimit, ok := openAIReasoningEffortPolicyForRequest(c, apiKey)
 	if !ok {
 		return
 	}
-	ctx := service.WithOpenAIReasoningEffortPolicyForModel(
-		c.Request.Context(),
-		maxEffort,
-		mappings,
-		overLimit,
-		model,
-	)
+	var ctx context.Context
+	if explicitEffort || isCNTarget {
+		ctx = service.WithOpenAIReasoningEffortPolicyForModel(c.Request.Context(), maxEffort, mappings, overLimit, model)
+	} else {
+		ctx = service.WithOpenAIReasoningEffortPolicyForMessages(c.Request.Context(), body, maxEffort, mappings, overLimit, model)
+	}
 	c.Request = c.Request.WithContext(ctx)
 }

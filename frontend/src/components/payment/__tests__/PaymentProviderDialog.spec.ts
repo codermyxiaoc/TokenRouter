@@ -86,6 +86,7 @@ function mountDialog(options: { editing?: ProviderInstance | null } = {}) {
           template: '<div><slot /><slot name="footer" /></div>',
         },
         Select: {
+          name: 'Select',
           props: ['modelValue', 'options', 'disabled'],
           template: '<div />',
         },
@@ -96,6 +97,34 @@ function mountDialog(options: { editing?: ProviderInstance | null } = {}) {
     },
   })
 }
+
+describe('PaymentProviderDialog EasyPay refund protocol', () => {
+  it.each([undefined, '1', '0'])('loads and saves the refund success code %s', async (storedCode) => {
+    const provider = providerFactory({
+      provider_key: 'easypay', name: 'EasyPay', supported_types: ['alipay'],
+      config: {
+        pid: 'pid-1', apiBase: 'https://pay.example.com',
+        ...(storedCode === undefined ? {} : { refundSuccessCode: storedCode }),
+      },
+    })
+    const wrapper = mountDialog({ editing: provider })
+    ;(wrapper.vm as unknown as { loadProvider: (provider: ProviderInstance) => void }).loadProvider(provider)
+    await nextTick()
+
+    const selector = wrapper.findAllComponents({ name: 'Select' }).find(select =>
+      select.props('options').some((option: { value: string }) => option.value === '0'),
+    )
+    expect(selector, 'refund success code selector').toBeDefined()
+    expect(selector!.props('modelValue')).toBe(storedCode ?? '1')
+    const selectedCode = storedCode === '0' ? '1' : '0'
+    selector!.vm.$emit('update:modelValue', selectedCode)
+    await wrapper.find('form').trigger('submit')
+
+    const payload = wrapper.emitted('save')?.[0]?.[0] as { config: Record<string, string> }
+    expect(payload.config.refundSuccessCode).toBe(selectedCode)
+    wrapper.unmount()
+  })
+})
 
 describe('PaymentProviderDialog payment guide', () => {
   it('shows no payment guide for providers without a flow guide', () => {
@@ -264,6 +293,8 @@ describe('PaymentProviderDialog payment guide', () => {
         notifyUrl: 'https://example.com/api/v1/payment/webhook/easypay',
         returnUrl: 'https://example.com/payment/result',
         customMethods: '',
+        // 退款成功码字段带默认值 1，草稿测试同样提交。
+        refundSuccessCode: '1',
       },
     })
   })

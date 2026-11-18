@@ -8,9 +8,11 @@
 # =============================================================================
 
 ARG NODE_IMAGE=node:24-alpine
-ARG GOLANG_IMAGE=golang:1.27.3-alpine
-ARG ALPINE_IMAGE=alpine:3.21
-ARG POSTGRES_IMAGE=postgres:18-alpine
+ARG GOLANG_IMAGE=golang:1.27.4-alpine
+# 运行层使用仍在安全维护期的 Alpine 3.22（OpenSSL 3.5 系列）；构建时 apk upgrade 拉取发布后的安全修复。
+ARG ALPINE_IMAGE=alpine:3.22
+# 固定已经验证过的多架构镜像清单，使重新构建使用同一套备份客户端。
+ARG POSTGRES_IMAGE=postgres:18.7-alpine@sha256:b6972e1115a4ff8eba5d7f7d19184926d1e16d7d1136ae1e1a7ebf286da0f015
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
 ARG NPM_CONFIG_REGISTRY=
@@ -109,7 +111,7 @@ LABEL description="Sub2API - AI API Gateway Platform"
 LABEL org.opencontainers.image.source="https://github.com/codermyxiaoc/TokenRouter"
 
 # Install runtime dependencies
-RUN apk add --no-cache \
+RUN apk upgrade --no-cache && apk add --no-cache \
     ca-certificates \
     tzdata \
     su-exec \
@@ -121,11 +123,12 @@ RUN apk add --no-cache \
     libedit \
     && rm -rf /var/cache/apk/*
 
-# Copy pg_dump and psql from the same postgres image used in docker-compose
-# This ensures version consistency between backup tools and the database server
+# 从同一镜像复制备份工具及 libpq，并在最终运行层检查动态库兼容性和客户端版本。
 COPY --from=pg-client /usr/local/bin/pg_dump /usr/local/bin/pg_dump
 COPY --from=pg-client /usr/local/bin/psql /usr/local/bin/psql
 COPY --from=pg-client /usr/local/lib/libpq.so.5* /usr/local/lib/
+RUN test "$(pg_dump --version)" = 'pg_dump (PostgreSQL) 18.7' && \
+    test "$(psql --version)" = 'psql (PostgreSQL) 18.7'
 
 # Create non-root user
 RUN addgroup -g 1000 sub2api && \

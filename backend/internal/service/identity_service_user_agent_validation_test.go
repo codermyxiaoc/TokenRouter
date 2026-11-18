@@ -121,7 +121,8 @@ func TestGetOrCreateFingerprintStillUpgradesOnValidNewerVersion(t *testing.T) {
 	}}
 	service := NewIdentityService(cache)
 
-	newUserAgent := "claude-cli/2.1.223 (external, cli)"
+	// 高于内置基线的合法版本才会触发升级
+	newUserAgent := "claude-cli/" + claudeCodeTestVersion(3) + " (external, cli)"
 	fingerprint, err := service.GetOrCreateFingerprint(context.Background(), 1, fingerprintHeadersWithUA(newUserAgent))
 
 	require.NoError(t, err)
@@ -183,8 +184,10 @@ func TestGetOrCreateFingerprintHealsPoisonedCacheWithoutValidClientUA(t *testing
 }
 
 func TestGetOrCreateFingerprintDoesNotRewriteHealthyCache(t *testing.T) {
+	// 健康缓存：版本不低于内置基线
+	healthyUserAgent := "claude-cli/" + claude.CLICurrentVersion + " (external, cli)"
 	cache := &stubIdentityCache{fingerprint: &Fingerprint{
-		UserAgent: "claude-cli/2.1.220 (external, cli)",
+		UserAgent: healthyUserAgent,
 		ClientID:  "cid-1",
 		UpdatedAt: time.Now().Unix(),
 	}}
@@ -196,7 +199,7 @@ func TestGetOrCreateFingerprintDoesNotRewriteHealthyCache(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, "claude-cli/2.1.220 (external, cli)", fingerprint.UserAgent)
+	require.Equal(t, healthyUserAgent, fingerprint.UserAgent)
 	require.Zero(t, cache.setCalls)
 }
 

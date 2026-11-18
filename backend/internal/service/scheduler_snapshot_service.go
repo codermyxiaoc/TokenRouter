@@ -223,7 +223,7 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] cache read failed: bucket=%s err=%v", bucket.String(), err)
 		} else if hit {
 			// simple 模式保留共享 bucket；智能路由只读取其中属于最终分组的成员。
-			return filterSmartRoutingAccounts(ctx, derefAccounts(cached), groupID), useMixed, nil
+			return filterSmartRoutingAccounts(ctx, derefSchedulableAccounts(cached), groupID), useMixed, nil
 		}
 		token, err := s.cache.CaptureBucketWriteToken(ctx, bucket)
 		if err != nil {
@@ -260,7 +260,14 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 		}
 	}
 
-	return filterSmartRoutingAccounts(ctx, accounts, groupID), useMixed, nil
+	// 快照按配置成员缓存；限流、过载、临时不可调度与到期等时间窗口在每次读取时判断。
+	eligible := make([]Account, 0, len(accounts))
+	for _, account := range accounts {
+		if account.IsSchedulable() {
+			eligible = append(eligible, account)
+		}
+	}
+	return filterSmartRoutingAccounts(ctx, eligible, groupID), useMixed, nil
 }
 
 func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int64) (*Account, error) {
@@ -1439,42 +1446,28 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 	if s.accountRepo == nil {
 		return nil, ErrSchedulerCacheNotReady
 	}
-	groupID := bucket.GroupID
-	if s.isRunModeSimple() {
-		groupID = 0
+	var groupID *int64
+	if !s.isRunModeSimple() && bucket.GroupID > 0 {
+		groupID = &bucket.GroupID
 	}
-
+	platforms := []string{bucket.Platform}
 	if useMixed {
-		platforms := []string{bucket.Platform, PlatformAntigravity}
-		var accounts []Account
-		var err error
-		if groupID > 0 {
-			accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatforms(ctx, groupID, platforms)
-		} else if s.isRunModeSimple() {
-			accounts, err = s.accountRepo.ListSchedulableByPlatforms(ctx, platforms)
-		} else {
-			accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatforms(ctx, platforms)
-		}
-		if err != nil {
-			return nil, err
-		}
-		filtered := make([]Account, 0, len(accounts))
-		for _, acc := range accounts {
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
-				continue
-			}
-			filtered = append(filtered, acc)
-		}
-		return filtered, nil
+		platforms = append(platforms, PlatformAntigravity)
 	}
-
-	if groupID > 0 {
-		return s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, groupID, bucket.Platform)
+	// 与模型可用性一致，缓存配置层面的账号池。限流等时间窗口必须在每次读取时判断，
+	// 否则冷却到期后没有写入或 outbox 事件触发重建，账号会一直不在快照里。
+	accounts, err := s.accountRepo.ListModelAvailabilityCandidates(ctx, groupID, platforms, s.isRunModeSimple())
+	if err != nil || !useMixed {
+		return accounts, err
 	}
-	if s.isRunModeSimple() {
-		return s.accountRepo.ListSchedulableByPlatform(ctx, bucket.Platform)
+	filtered := make([]Account, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+			continue
+		}
+		filtered = append(filtered, acc)
 	}
-	return s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, bucket.Platform)
+	return filtered, nil
 }
 
 func (s *SchedulerSnapshotService) loadAccountsForRebuild(
@@ -1621,13 +1614,14 @@ func dedupeBuckets(in []SchedulerBucket) []SchedulerBucket {
 	return out
 }
 
-func derefAccounts(accounts []*Account) []Account {
+// derefSchedulableAccounts 解引用快照账号，并按当前时间过滤限流、过载等暂时不可调度的账号。
+func derefSchedulableAccounts(accounts []*Account) []Account {
 	if len(accounts) == 0 {
 		return []Account{}
 	}
 	out := make([]Account, 0, len(accounts))
 	for _, account := range accounts {
-		if account == nil {
+		if account == nil || !account.IsSchedulable() {
 			continue
 		}
 		out = append(out, *account)

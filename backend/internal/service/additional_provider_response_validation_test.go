@@ -137,7 +137,7 @@ func TestWSPassthroughRejectsAmbiguousModelFields(t *testing.T) {
 // 实际适配器必须以失败回调交付可信部分用量，且坏计量不能触发可重放错误。
 func TestWSPassthroughInvalidUsageReportsFailedTurn(t *testing.T) {
 	upstream := newStagedPassthroughConn()
-	upstream.Send(`{"type":"response.in_progress","response":{"id":"partial_usage","usage":{"input_tokens":7,"output_tokens":2}}}`)
+	upstream.Send(`{"type":"response.in_progress","response":{"id":"partial_usage","usage":{"input_tokens":7,"output_tokens":2,"input_tokens_details":{"cache_write_tokens":5,"cache_write_tokens_details":{"ttl_30m_tokens":2,"ttl_12h_tokens":3}}}}}`)
 	upstream.Send(`{"type":"response.completed","response":{"id":"partial_usage","usage":{"input_tokens":99,"output_tokens":5,"input_tokens_details":{"image_tokens":"invalid"}}}}`)
 	captures := make(chan OpenAIWSTurnCapture, 2)
 	server, serverErrors := startPassthroughLifecycleServerWithHooks(t, t.Context(),
@@ -171,6 +171,9 @@ func TestWSPassthroughInvalidUsageReportsFailedTurn(t *testing.T) {
 		require.Equal(t, "response.failed", capture.Result.UpstreamTerminalEvent)
 		require.Equal(t, 7, capture.Result.Usage.InputTokens)
 		require.Equal(t, 2, capture.Result.Usage.OutputTokens)
+		require.Equal(t, 5, capture.Result.Usage.CacheCreationInputTokens)
+		require.Equal(t, 2, capture.Result.Usage.CacheCreation30mInputTokens)
+		require.Equal(t, 3, capture.Result.Usage.CacheCreation12hInputTokens)
 		require.Zero(t, capture.Result.Usage.ImageInputTokens)
 	case <-time.After(3 * time.Second):
 		t.Fatal("坏计量未生成失败回调")

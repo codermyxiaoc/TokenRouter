@@ -88,6 +88,7 @@ func TestOpenAINativeMetadataDoesNotDisarmFirstOutputTimeout(t *testing.T) {
 		defer func() { _ = writer.Close() }()
 		_, _ = io.WriteString(writer, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_test\"}}\n\n")
 		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"item_test\",\"type\":\"reasoning\",\"summary\":[]}}\n\n")
+		_, _ = io.WriteString(writer, "data: {\"type\":\"keepalive\"}\n\n")
 		time.Sleep(1200 * time.Millisecond)
 	}()
 
@@ -101,7 +102,9 @@ func TestOpenAINativeMetadataDoesNotDisarmFirstOutputTimeout(t *testing.T) {
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.True(t, failoverErr.SafeToFailoverAfterWrite)
-	require.Empty(t, recorder.Body.String())
+	// Only the upstream keepalive event reaches the client; it is not output.
+	require.Equal(t, "data: {\"type\":\"keepalive\"}\n\n", recorder.Body.String())
+	require.Equal(t, -1, OpenAICompactKeepaliveAdjustedWrittenSize(c))
 	select {
 	case <-writerDone:
 	case <-time.After(time.Second):

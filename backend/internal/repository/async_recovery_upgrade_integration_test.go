@@ -21,7 +21,7 @@ func TestAsyncRecoveryUpgradePreservesPendingAndSettledFinancialState(t *testing
 	defer cancel()
 	container, err := tcpostgres.Run(ctx, selectDockerImage(ctx, postgresImageTag),
 		tcpostgres.WithDatabase("async_recovery_upgrade"), tcpostgres.WithUsername("postgres"),
-		tcpostgres.WithPassword("postgres"), tcpostgres.BasicWaitStrategies())
+		tcpostgres.WithPassword("postgres"), tcpostgres.BasicWaitStrategies(), loopbackPortBinding("5432/tcp"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, container.Terminate(context.Background())) })
 	dsn, err := container.ConnectionString(ctx, "sslmode=disable", "TimeZone=UTC")
@@ -74,7 +74,8 @@ func TestAsyncRecoveryUpgradePreservesPendingAndSettledFinancialState(t *testing
 	// 比较完整旧行，包含 NULL、状态、金额精度、资金来源和时间，避免只检查总余额遗漏账本变化。
 	excluded := map[string]string{
 		"users": "{}", "api_keys": "{}", "media_tasks": "{billing_review_retry_at}",
-		"groups": "{image_subscription_rate_priority,video_subscription_rate_priority}", "usage_billing_dedup": "{}",
+		// force_openai_ultrafast 由迁移 332 新增（默认 false），不属于旧记录内容，下方单独断言默认值。
+		"groups": "{image_subscription_rate_priority,video_subscription_rate_priority,force_openai_ultrafast}", "usage_billing_dedup": "{}",
 		"image_billing_reservations": "{settlement_evidence,settlement_retry_at,settlement_attempts,settlement_completed_at}",
 		// 后续迁移新增的可空列不属于旧记录内容，单独断言保持 NULL，而不是让整行比较误报。
 		"creative_runs": "{usage_recorded_at,quota_platform,image_attempt_account_ids,image_execution_deadline_at,capture_result,billing_mode,provider_usage}",
@@ -96,6 +97,9 @@ func TestAsyncRecoveryUpgradePreservesPendingAndSettledFinancialState(t *testing
 		}
 	}
 	var count int
+	// 新增列单独核对默认值：旧分组不得被开启强制 Ultra Fast。
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM groups WHERE force_openai_ultrafast`).Scan(&count))
+	require.Zero(t, count, "升级不得为旧分组开启强制 Ultra Fast")
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM legacy_video_tasks`).Scan(&count))
 	require.Zero(t, count, "迁移本身不得产生旧视频扣款任务")
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM image_billing_reservations

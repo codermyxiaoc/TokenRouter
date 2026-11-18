@@ -12,6 +12,7 @@ func TestDefaultModels_ContainsNewAndLegacyImageModels(t *testing.T) {
 	}
 
 	requiredIDs := []string{
+		"gemini-4-carbon",
 		"claude-fable-5-1",
 		"claude-fable-5",
 		"claude-opus-4-8",
@@ -51,5 +52,14 @@ func TestDefaultModels_ContainsNewAndLegacyImageModels(t *testing.T) {
 		if _, ok := byID[id]; !ok {
 			t.Fatalf("expected model %q to be exposed in DefaultModels", id)
 		}
+	}
+}
+
+// Carbon 等 Gemini 推理模型都应被识别。
+func TestIsGeminiReasoningModel_IncludesCarbon(t *testing.T) {
+	t.Parallel()
+
+	if !IsGeminiReasoningModel("gemini-4-carbon") {
+		t.Fatal("expected Carbon to be recognized as a Gemini reasoning model")
 	}
 }

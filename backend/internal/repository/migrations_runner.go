@@ -65,6 +65,10 @@ const usageLogsEffectiveUpstreamModelIndex = "idx_usage_logs_effective_upstream_
 const usageLogsUpstreamRequestIDIndexMigration = "267_add_usage_log_upstream_request_id_index_notx.sql"
 const usageLogsUpstreamRequestIDIndex = "idx_usage_logs_upstream_request_id"
 
+// usageLogsAPIKeyCostIndexMigration 为按 Key 费用汇总提供覆盖索引；重试前需清理 INVALID 残留。
+const usageLogsAPIKeyCostIndexMigration = "330_add_usage_logs_api_key_cost_index_notx.sql"
+const usageLogsAPIKeyCostIndex = "idx_usage_logs_api_key_created_cost"
+
 type migrationChecksumCompatibilityRule struct {
 	fileChecksum       string
 	acceptedDBChecksum map[string]struct{}
@@ -306,6 +310,8 @@ func prepareNonTransactionalMigration(ctx context.Context, db migrationConnectio
 		return nil
 	case usageLogsUpstreamRequestIDIndexMigration:
 		return dropInvalidIndexIfPresent(ctx, db, usageLogsUpstreamRequestIDIndex)
+	case usageLogsAPIKeyCostIndexMigration:
+		return dropInvalidIndexIfPresent(ctx, db, usageLogsAPIKeyCostIndex)
 	default:
 		return nil
 	}

@@ -6,8 +6,10 @@
       <div class="flex flex-wrap items-center justify-between gap-2 text-sm"><span class="inline-flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full" :class="resultColor(run)" />{{ t(`intelligence.statuses.${resultStatus(run)}`) }}</span><span class="text-gray-500">{{ formatDateTime(run.created_at) }}</span></div>
       <dl class="grid grid-cols-2 gap-x-6 gap-y-4 rounded-lg bg-gray-50 p-4 text-sm dark:bg-dark-900 sm:grid-cols-3">
         <div class="min-w-0"><dt class="text-gray-500">{{ t('intelligence.model') }}</dt><dd class="mt-1 break-all font-medium">{{ run.model }}</dd></div>
+        <div v-if="referenceQuality"><dt class="text-gray-500">{{ t('intelligence.referenceQuality') }}</dt><dd class="mt-1 font-medium">{{ t(`intelligence.qualities.${referenceQuality}`) }}</dd></div>
         <div v-for="stat in stats" :key="stat.label"><dt class="text-gray-500">{{ t(`intelligence.${stat.label}`) }}</dt><dd class="mt-1 font-medium">{{ stat.value }}</dd></div>
       </dl>
+      <p v-if="resultStatus(run) === 'reference'" class="text-sm text-gray-600 dark:text-dark-300">{{ t('intelligence.drawingModelHint') }}</p>
       <p v-if="run.error_message" class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-200">{{ run.error_message }}</p>
       <p v-if="run.assessment_reason" class="text-sm text-gray-600 dark:text-gray-300">{{ run.assessment_reason }}</p>
       <section v-if="run.question"><h4 class="mb-2 text-sm font-semibold">{{ t('intelligence.question') }}</h4><div class="intelligence-markdown" v-html="resultMarkdown(run.question)" /></section>
@@ -30,6 +32,14 @@ import { resultColor, resultMarkdown, resultStatus } from './results'
 const props = defineProps<{ show: boolean; run: IntelligenceRun | null; loading: boolean; error: string }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
+// 旧记录的通过对应 normal；未通过可能是 degraded 或 suspicious，只有明确质量时才展示。
+const referenceQuality = computed(() => {
+  const run = props.run
+  if (!run || resultStatus(run) !== 'reference') return undefined
+  if (run.assessment_quality) return run.assessment_quality
+  if (run.verdict === 'passed') return 'normal'
+  return undefined
+})
 // 缺少统计字段时显示未知；总耗时包含排队与评测，不能用它编造 TPS。
 const number = (value?: number | null) => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '—'
 const stats = computed(() => [

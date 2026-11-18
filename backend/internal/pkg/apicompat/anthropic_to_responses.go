@@ -193,6 +193,16 @@ func anthropicMsgToResponsesItems(m AnthropicMessage) ([]ResponsesInputItem, err
 		return anthropicUserToResponses(m.Content)
 	case "assistant":
 		return anthropicAssistantToResponses(m.Content)
+	case "system":
+		// Mid-conversation system turns (e.g. hook output) keep system-level
+		// authority: Responses uses developer for them, not user.
+		items, err := anthropicUserToResponses(m.Content)
+		for i := range items {
+			if items[i].Role == "user" {
+				items[i].Role = "developer"
+			}
+		}
+		return items, err
 	default:
 		return anthropicUserToResponses(m.Content)
 	}
@@ -299,6 +309,11 @@ func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, e
 		// 只回放提供方生成的密文。跳过 GPT/Codex 风格的 gAAAA 密文和空占位符，
 		// 因为 xAI 解密外部签名时会返回 400。
 		if sig == "" || strings.HasPrefix(sig, "gAAAA") {
+			continue
+		}
+		// CC Switch carries a JSON reasoning item in this versioned envelope,
+		// not provider ciphertext. Ignore the foreign state when resuming directly.
+		if strings.HasPrefix(sig, "ccswitch-openai-reasoning-v1:") {
 			continue
 		}
 		items = append(items, ResponsesInputItem{

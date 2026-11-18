@@ -276,6 +276,8 @@ func (h *GatewayHandler) GeminiCachedContentsCreate(c *gin.Context) {
 				RequestID: service.GeminiCachedContentCreateUsageRequestID(publicID),
 				Model:     modelName, UpstreamModel: mappedModel,
 				Usage: service.ClaudeUsage{InputTokens: int(tokens)}, CacheStorageTokenHours: storageTokenHours,
+				// Vertex 多区域端点按 1.1 倍计价；预扣报价与结算走同一计费函数，倍数一致。
+				UpstreamPriceMultiplier: service.VertexUpstreamPriceMultiplier(account, mappedModel, ""),
 			},
 			APIKey: apiKey, User: apiKey.User, Account: account, Subscription: subscription, PricingAt: pricingAt, ChannelUsageFields: usageFields, RequestPayloadHash: service.HashUsageRequestPayload(body),
 		}
@@ -725,15 +727,18 @@ func (h *GatewayHandler) submitGeminiCachedContentUsage(
 			return
 		}
 	}
+	// 先按真实上游模型取端点倍数，再按既有约定清空与公开模型相同的上游模型。
+	priceMultiplier := service.VertexUpstreamPriceMultiplier(account, upstreamModel, "")
 	if upstreamModel == model {
 		upstreamModel = ""
 	}
 	result := &service.ForwardResult{
-		RequestID:              requestID,
-		Model:                  model,
-		UpstreamModel:          upstreamModel,
-		Usage:                  service.ClaudeUsage{InputTokens: inputTokens},
-		CacheStorageTokenHours: storageTokenHours,
+		RequestID:               requestID,
+		Model:                   model,
+		UpstreamModel:           upstreamModel,
+		Usage:                   service.ClaudeUsage{InputTokens: inputTokens},
+		CacheStorageTokenHours:  storageTokenHours,
+		UpstreamPriceMultiplier: priceMultiplier,
 	}
 
 	input := &service.RecordUsageInput{Result: result, APIKey: apiKey, User: apiKey.User, Account: account,

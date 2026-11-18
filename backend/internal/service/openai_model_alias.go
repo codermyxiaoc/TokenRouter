@@ -62,7 +62,7 @@ func openAIModelSupportsReasoningEffort(model string, effort string) bool {
 		return false
 	}
 	value = strings.NewReplacer("-", "", "_", "", " ", "").Replace(value)
-	if isOpenAIGPT61SolModel(model) && (value == "none" || value == "minimal") {
+	if (isOpenAIGPT61SolModel(model) || isOpenAIGPT62Model(model)) && (value == "none" || value == "minimal") {
 		return false
 	}
 	switch value {
@@ -157,12 +157,17 @@ func normalizeKnownOpenAICodexModel(model string) string {
 	if isOpenAIGPT61SolModel(normalized) {
 		return "gpt-6.1-sol"
 	}
+	if base := openAIGPT62ModelID(normalized); base != "" {
+		return base
+	}
 	// 6.1 Terra 与 6 Sol/Luna 一样接受 none 档位，共用受支持别名的归一规则。
 	if mapped := normalizeOpenAIGPT6SolLunaModel(normalized); mapped != "" {
 		return mapped
 	}
 	// 新产品只接受已登记的别名，未知后缀不能再进入旧 Codex 兜底。
-	if normalized == "gpt-6.1-sol" || strings.HasPrefix(normalized, "gpt-6.1-sol-") ||
+	if normalized == "gpt-6.2-sol" || strings.HasPrefix(normalized, "gpt-6.2-sol-") ||
+		normalized == "gpt-6.2-astra" || strings.HasPrefix(normalized, "gpt-6.2-astra-") ||
+		normalized == "gpt-6.1-sol" || strings.HasPrefix(normalized, "gpt-6.1-sol-") ||
 		normalized == "gpt-6.1-terra" || strings.HasPrefix(normalized, "gpt-6.1-terra-") ||
 		normalized == "gpt-6-sol" || strings.HasPrefix(normalized, "gpt-6-sol-") ||
 		normalized == "gpt-6-luna" || strings.HasPrefix(normalized, "gpt-6-luna-") {
@@ -322,6 +327,29 @@ func firstUsageBillingModel(candidates []string) string {
 		}
 	}
 	return ""
+}
+
+// openAIGPT62ModelID 返回 GPT-6.2 Sol/Astra 的发布模型名；支持推理档位与 compact 后缀。
+// none/minimal 后缀仍可识别，以便推理强度校验明确拒绝而不是当作未知模型放行。
+func openAIGPT62ModelID(model string) string {
+	id := strings.TrimSuffix(canonicalizeOpenAIModelAliasSpelling(model), "-openai-compact")
+	for _, base := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
+		if id == base {
+			return base
+		}
+		if suffix, ok := strings.CutPrefix(id, base+"-"); ok {
+			switch suffix {
+			case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+				return base
+			}
+		}
+	}
+	return ""
+}
+
+// isOpenAIGPT62Model 判断是否 GPT-6.2 Sol/Astra（含受支持的推理档位别名）。
+func isOpenAIGPT62Model(model string) bool {
+	return openAIGPT62ModelID(model) != ""
 }
 
 // isOpenAIGPT61SolModel 保留 6.1 Sol 独立身份；无效推理档位仍可识别以便显式校验。

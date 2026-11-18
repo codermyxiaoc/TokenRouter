@@ -462,6 +462,11 @@ func multiplyModelPricing(pricing *ModelPricing, multiplier float64) *ModelPrici
 	scaled.CacheReadPricePerTokenPriority *= multiplier
 	scaled.CacheCreation5mPrice *= multiplier
 	scaled.CacheCreation1hPrice *= multiplier
+	// 12h 写入价是独立指针，需复制后缩放，避免修改共享价卡。
+	if pricing.CacheCreation12hPricePerToken != nil {
+		price := *pricing.CacheCreation12hPricePerToken * multiplier
+		scaled.CacheCreation12hPricePerToken = &price
+	}
 	scaled.ImageOutputPricePerToken *= multiplier
 	return &scaled
 }
@@ -478,6 +483,7 @@ func multiplyPricingIntervals(intervals []PricingInterval, multiplier float64) [
 		scaled[i].OutputPrice = multiplyPricePointer(intervals[i].OutputPrice, multiplier)
 		scaled[i].CacheWritePrice = multiplyPricePointer(intervals[i].CacheWritePrice, multiplier)
 		scaled[i].CacheWrite1hPrice = multiplyPricePointer(intervals[i].CacheWrite1hPrice, multiplier)
+		scaled[i].CacheWrite12hPrice = multiplyPricePointer(intervals[i].CacheWrite12hPrice, multiplier)
 		scaled[i].CacheReadPrice = multiplyPricePointer(intervals[i].CacheReadPrice, multiplier)
 		scaled[i].PerRequestPrice = multiplyPricePointer(intervals[i].PerRequestPrice, multiplier)
 	}
@@ -493,6 +499,7 @@ func multiplyChannelPricingFields(pricing *ChannelModelPricing, multiplier float
 	pricing.OutputPrice = multiplyPricePointer(pricing.OutputPrice, multiplier)
 	pricing.CacheWritePrice = multiplyPricePointer(pricing.CacheWritePrice, multiplier)
 	pricing.CacheWrite1hPrice = multiplyPricePointer(pricing.CacheWrite1hPrice, multiplier)
+	pricing.CacheWrite12hPrice = multiplyPricePointer(pricing.CacheWrite12hPrice, multiplier)
 	pricing.CacheReadPrice = multiplyPricePointer(pricing.CacheReadPrice, multiplier)
 	pricing.ImageInputPrice = multiplyPricePointer(pricing.ImageInputPrice, multiplier)
 	pricing.ImageOutputPrice = multiplyPricePointer(pricing.ImageOutputPrice, multiplier)
@@ -524,7 +531,7 @@ func filterValidTokenIntervals(intervals []PricingInterval) []PricingInterval {
 	var valid []PricingInterval
 	for _, iv := range intervals {
 		if iv.InputPrice != nil || iv.OutputPrice != nil ||
-			iv.CacheWritePrice != nil || iv.CacheWrite1hPrice != nil || iv.CacheReadPrice != nil ||
+			iv.CacheWritePrice != nil || iv.CacheWrite1hPrice != nil || iv.CacheWrite12hPrice != nil || iv.CacheReadPrice != nil ||
 			iv.InputMultiplier != nil || iv.OutputMultiplier != nil ||
 			iv.CacheWriteMultiplier != nil || iv.CacheReadMultiplier != nil {
 			valid = append(valid, iv)
@@ -614,10 +621,22 @@ func intervalToModelPricingWithBase(iv *PricingInterval, supportsCacheBreakdown 
 		pricing.CacheCreationPricePerTokenPriority *= *iv.CacheWriteMultiplier
 		pricing.CacheCreation5mPrice *= *iv.CacheWriteMultiplier
 		pricing.CacheCreation1hPrice *= *iv.CacheWriteMultiplier
+		// 12h 写入价同样按区间倍率缩放；复制后再改，避免修改共享的基础价卡。
+		if pricing.CacheCreation12hPricePerToken != nil {
+			price := *pricing.CacheCreation12hPricePerToken * *iv.CacheWriteMultiplier
+			pricing.CacheCreation12hPricePerToken = &price
+		}
 	}
 	if iv.CacheWrite1hPrice != nil {
 		pricing.CacheCreation1hPrice = *iv.CacheWrite1hPrice
 		pricing.SupportsCacheBreakdown = true
+	}
+	// 区间的 12h 写入价；只给统一写入价时与模型级规则一致，不再套用目录 12h 价。
+	if iv.CacheWrite12hPrice != nil {
+		price := *iv.CacheWrite12hPrice
+		pricing.CacheCreation12hPricePerToken = &price
+	} else if iv.CacheWritePrice != nil {
+		pricing.CacheCreation12hPricePerToken = nil
 	}
 	if iv.CacheReadPrice != nil {
 		priority := channelTierOverridePrice(pricing.CacheReadPricePerToken, pricing.CacheReadPricePerTokenPriority, *iv.CacheReadPrice)

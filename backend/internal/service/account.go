@@ -1050,7 +1050,21 @@ func (a *Account) isModelMappingSupported(requestedModel string) bool {
 	// OpenAI 透传模式仅替换认证，模型能力由上游决定；必须在 model_mapping
 	// 分支前短路，否则调度快照中的历史映射会把可用账号误判为不支持模型。
 	if a.IsOpenAIPassthroughEnabled() {
-		return true
+		if !a.IsOpenAIPassthroughModelFilterEnabled() {
+			return true
+		}
+		// 显式开启按模型过滤时只用请求侧模型筛选候选：命中映射源键或 fork 拆分持久化的最终白名单；
+		// 转发仍保持透传请求体，不改写模型，映射目标不授予访问。
+		requestedModel = strings.TrimSpace(requestedModel)
+		mapping := a.GetModelMapping()
+		whitelist, explicit := resolveFinalModelWhitelist(a.Platform, a.Credentials, mapping)
+		if len(mapping) == 0 && (!explicit || len(whitelist) == 0) {
+			return true
+		}
+		if _, matched := a.ResolveMappedModel(requestedModel); matched && len(mapping) > 0 {
+			return true
+		}
+		return explicit && len(whitelist) > 0 && isModelInFinalWhitelist(a.Platform, requestedModel, whitelist)
 	}
 	mapping := a.GetModelMapping()
 	// Antigravity 仍保持“请求模型命中映射即可支持”的既有语义。
@@ -2529,6 +2543,12 @@ func (a *Account) IsOpenAIPassthroughEnabled() bool {
 		return enabled
 	}
 	return false
+}
+
+// IsOpenAIPassthroughModelFilterEnabled 返回透传账号是否显式开启“调度时按模型过滤”
+// （extra.openai_passthrough_model_filter=true）。缺省或非法值保持忽略历史 model_mapping 的默认行为。
+func (a *Account) IsOpenAIPassthroughModelFilterEnabled() bool {
+	return a.IsOpenAIPassthroughEnabled() && a.Extra["openai_passthrough_model_filter"] == true
 }
 
 // IsOpenAIResponsesFlattenNamespacesEnabled 返回账号级 Codex namespace 工具摊平开关。

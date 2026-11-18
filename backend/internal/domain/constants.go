@@ -194,6 +194,8 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-3.8-flash-low":    "gemini-3.8-flash-low",
 	"gemini-3.8-flash-medium": "gemini-3.8-flash-medium",
 	"gemini-3.8-flash-tiered": "gemini-3.8-flash-tiered",
+	// Gemini 4 Carbon 使用官方发布的模型 ID，不推断 Argon 风格的档位别名。
+	"gemini-4-carbon": "gemini-4-carbon",
 	// Gemini 4 Argon 默认高思考档位，显式档位保留原 ID。
 	"gemini-4-argon":        "gemini-4-argon-high",
 	"gemini-4-argon-high":   "gemini-4-argon-high",
@@ -212,7 +214,7 @@ var DefaultAntigravityModelMapping = map[string]string{
 // 注意：此处的 "us." 前缀仅为默认值，ResolveBedrockModelID 会根据账号配置的
 // aws_region 自动调整为匹配的区域前缀（如 eu.、apac.、jp. 等）
 var DefaultBedrockModelMapping = map[string]string{
-	// Claude Fable
+	// Claude Fable（Fable/Mythos 5.2 暂未加入：AWS 尚未发布其推理配置文件与区域卡，不臆造区域）
 	"claude-fable-5-1": "anthropic.claude-fable-5-1",
 	"claude-fable-5":   "anthropic.claude-fable-5",
 	// Claude Opus

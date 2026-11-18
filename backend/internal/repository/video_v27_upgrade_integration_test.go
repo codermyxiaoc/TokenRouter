@@ -21,7 +21,7 @@ func TestVideoV27UpgradePreservesFinancialState(t *testing.T) {
 	defer cancel()
 	container, err := tcpostgres.Run(ctx, selectDockerImage(ctx, postgresImageTag),
 		tcpostgres.WithDatabase("video_v27_upgrade_test"), tcpostgres.WithUsername("postgres"),
-		tcpostgres.WithPassword("postgres"), tcpostgres.BasicWaitStrategies())
+		tcpostgres.WithPassword("postgres"), tcpostgres.BasicWaitStrategies(), loopbackPortBinding("5432/tcp"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, container.Terminate(context.Background())) })
 	dsn, err := container.ConnectionString(ctx, "sslmode=disable", "TimeZone=UTC")
@@ -86,10 +86,12 @@ func TestVideoV27UpgradePreservesFinancialState(t *testing.T) {
 		if table == "user_subscriptions" || table == "user_platform_quotas" {
 			excluded = "{daily_reset_generation,weekly_reset_generation,monthly_reset_generation}"
 		} else if table == "channel_model_pricing" {
-			excluded = "{video_prices,video_image_input_pricing,video_fallback_price,video_token_prepay,model_details}"
+			// cache_write_12h_price、ultrafast_multiplier 由迁移 331/333 新增（可空），不属于旧记录内容。
+			excluded = "{video_prices,video_image_input_pricing,video_fallback_price,video_token_prepay,model_details,cache_write_12h_price,ultrafast_multiplier}"
 		} else if table == "groups" {
 			// 新增展示字段另验空默认值，原有资金与模型价格仍逐字段保持一致。
-			excluded = "{i18n,image_subscription_rate_priority,video_subscription_rate_priority}"
+			// force_openai_ultrafast 由迁移 332 新增（默认 false），不属于旧记录内容，下方单独断言默认值。
+			excluded = "{i18n,image_subscription_rate_priority,video_subscription_rate_priority,force_openai_ultrafast}"
 		} else if table == "media_tasks" {
 			// 后续迁移新增的可空列不属于旧记录内容。
 			excluded = "{billing_review_retry_at}"
@@ -112,6 +114,12 @@ func TestVideoV27UpgradePreservesFinancialState(t *testing.T) {
 			require.JSONEq(t, before[table], after, "第 %d 次完整迁移改变了 %s 旧行", round, table)
 		}
 	}
+	// 新增列单独核对默认值：旧分组不得被开启强制 Ultra Fast，旧价卡不得凭空出现 12h 价或 Ultra Fast 倍率。
+	var newColumnValues int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM groups WHERE force_openai_ultrafast`).Scan(&newColumnValues))
+	require.Zero(t, newColumnValues, "升级不得为旧分组开启强制 Ultra Fast")
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM channel_model_pricing WHERE cache_write_12h_price IS NOT NULL OR ultrafast_multiplier IS NOT NULL`).Scan(&newColumnValues))
+	require.Zero(t, newColumnValues, "升级不得为旧价卡写入 12h 缓存价或 Ultra Fast 倍率")
 	var migrated, tasks, videoQuotas, invalidDefaults int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE filename >= '289_' AND filename < '294_'`).Scan(&migrated))
 	require.Equal(t, 5, migrated)

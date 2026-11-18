@@ -86,6 +86,37 @@ func TestHandleResponsesStreamingResponse_NormalizesTerminalUsage(t *testing.T) 
 			wantOutput:        30,
 			wantCacheCreation: 800,
 		},
+		// 以下用例同步自上游 v0.2.23：聚合缓存写入为权威，null/0 占位不清空已有快照。
+		{
+			name:       "explicit aggregate caps contradictory TTL breakdown",
+			startUsage: `"input_tokens":10,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_1h_input_tokens":200}`,
+			deltaUsage: `"output_tokens":7,"cache_creation":{"ephemeral_1h_input_tokens":200}`,
+			wantInput:  10, wantOutput: 7, wantCacheCreation: 100,
+		},
+		{
+			name:       "explicit zero falls back to TTL breakdown",
+			startUsage: `"input_tokens":10,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_1h_input_tokens":200}`,
+			deltaUsage: `"output_tokens":7,"cache_creation":{"ephemeral_1h_input_tokens":200}`,
+			wantInput:  10, wantOutput: 7, wantCacheCreation: 200,
+		},
+		{
+			name:       "null aggregate and TTL preserve partial snapshots",
+			startUsage: `"input_tokens":10,"cache_creation_input_tokens":null,"cache_creation":{"ephemeral_5m_input_tokens":20,"ephemeral_1h_input_tokens":null}`,
+			deltaUsage: `"output_tokens":7,"cache_creation_input_tokens":null,"cache_creation":{"ephemeral_5m_input_tokens":null,"ephemeral_1h_input_tokens":30}`,
+			wantInput:  10, wantOutput: 7, wantCacheCreation: 50,
+		},
+		{
+			name:       "null does not clear explicit aggregate zero",
+			startUsage: `"input_tokens":10,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_1h_input_tokens":200}`,
+			deltaUsage: `"output_tokens":7,"cache_creation_input_tokens":null,"cache_creation":{"ephemeral_1h_input_tokens":null}`,
+			wantInput:  10, wantOutput: 7, wantCacheCreation: 200,
+		},
+		{
+			name:       "zero placeholders preserve normalized prompt total",
+			startUsage: `"input_tokens":100,"prompt_tokens":100,"cache_read_input_tokens":30,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":20}`,
+			deltaUsage: `"input_tokens":0,"output_tokens":7,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_1h_input_tokens":10}`,
+			wantInput:  40, wantOutput: 7, wantCached: 30, wantCacheCreation: 30,
+		},
 	}
 
 	for _, tt := range tests {

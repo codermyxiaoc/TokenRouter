@@ -105,7 +105,8 @@ type CreateGroupRequest struct {
 	AllowMessagesDispatch bool `json:"allow_messages_dispatch"`
 	AllowLive             bool `json:"allow_live"`
 	// OpenAI/Composite 分组是否强制请求使用 Fast 优先级。
-	ForceOpenAIFast bool `json:"force_openai_fast"`
+	ForceOpenAIFast      bool `json:"force_openai_fast"`
+	ForceOpenAIUltrafast bool `json:"force_openai_ultrafast"`
 	// OpenAI/Composite 分组的 Fast 请求是否按 Standard 价格计费。
 	FreeOpenAIFast              bool                                      `json:"free_openai_fast"`
 	RequireOAuthOnly            bool                                      `json:"require_oauth_only"`
@@ -188,7 +189,8 @@ type UpdateGroupRequest struct {
 	AllowMessagesDispatch *bool `json:"allow_messages_dispatch"`
 	AllowLive             *bool `json:"allow_live"`
 	// OpenAI/Composite 分组是否强制请求使用 Fast 优先级。
-	ForceOpenAIFast *bool `json:"force_openai_fast"`
+	ForceOpenAIFast      *bool `json:"force_openai_fast"`
+	ForceOpenAIUltrafast *bool `json:"force_openai_ultrafast"`
 	// OpenAI/Composite 分组的 Fast 请求是否按 Standard 价格计费。
 	FreeOpenAIFast              *bool                                      `json:"free_openai_fast"`
 	RequireOAuthOnly            *bool                                      `json:"require_oauth_only"`
@@ -382,6 +384,7 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		AllowMessagesDispatch:           req.AllowMessagesDispatch,
 		AllowLive:                       req.AllowLive,
 		ForceOpenAIFast:                 req.ForceOpenAIFast,
+		ForceOpenAIUltrafast:            req.ForceOpenAIUltrafast,
 		FreeOpenAIFast:                  req.FreeOpenAIFast,
 		RequireOAuthOnly:                req.RequireOAuthOnly,
 		RequirePrivacySet:               req.RequirePrivacySet,
@@ -519,6 +522,7 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		AllowMessagesDispatch:           req.AllowMessagesDispatch,
 		AllowLive:                       req.AllowLive,
 		ForceOpenAIFast:                 req.ForceOpenAIFast,
+		ForceOpenAIUltrafast:            req.ForceOpenAIUltrafast,
 		FreeOpenAIFast:                  req.FreeOpenAIFast,
 		RequireOAuthOnly:                req.RequireOAuthOnly,
 		RequirePrivacySet:               req.RequirePrivacySet,

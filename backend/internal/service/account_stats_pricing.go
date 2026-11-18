@@ -103,12 +103,12 @@ func resolveAccountStatsCostWithMapped(
 					continue
 				}
 				if cost := tryModelFilePricingWithLongContextPolicy(billingService, model, tokens, serviceTier, !accountStatsModelLongContextExempt(ctx), reasoningEffort); cost != nil {
-					return cost
+					return scaleAccountStatsModelFileCost(ctx, cost)
 				}
 			}
 			return nil
 		}
-		return tryModelFilePricingWithLongContextPolicy(billingService, upstreamModel, tokens, serviceTier, !accountStatsModelLongContextExempt(ctx), reasoningEffort)
+		return scaleAccountStatsModelFileCost(ctx, tryModelFilePricingWithLongContextPolicy(billingService, upstreamModel, tokens, serviceTier, !accountStatsModelLongContextExempt(ctx), reasoningEffort))
 	}
 
 	return nil
@@ -354,12 +354,13 @@ func calculateTokenStatsCost(pricing *ChannelModelPricing, tokens UsageTokens) *
 		totalTokens := tokens.InputTokens + tokens.OutputTokens + tokens.CacheCreationTokens + tokens.CacheReadTokens
 		if iv := FindMatchingInterval(validIntervals, totalTokens); iv != nil {
 			p = &ChannelModelPricing{
-				InputPrice:        iv.InputPrice,
-				OutputPrice:       iv.OutputPrice,
-				CacheWritePrice:   iv.CacheWritePrice,
-				CacheWrite1hPrice: iv.CacheWrite1hPrice,
-				CacheReadPrice:    iv.CacheReadPrice,
-				ImageOutputPrice:  pricing.ImageOutputPrice,
+				InputPrice:         iv.InputPrice,
+				OutputPrice:        iv.OutputPrice,
+				CacheWritePrice:    iv.CacheWritePrice,
+				CacheWrite1hPrice:  iv.CacheWrite1hPrice,
+				CacheWrite12hPrice: iv.CacheWrite12hPrice,
+				CacheReadPrice:     iv.CacheReadPrice,
+				ImageOutputPrice:   pricing.ImageOutputPrice,
 			}
 		}
 	}
@@ -373,8 +374,11 @@ func calculateTokenStatsCost(pricing *ChannelModelPricing, tokens UsageTokens) *
 		return *ptr
 	}
 	cacheCreationCost := float64(tokens.CacheCreationTokens) * deref(p.CacheWritePrice)
-	if p.CacheWrite1hPrice != nil {
-		cache5m, cache1h := normalizeCacheCreationBreakdown(tokens)
+	// OpenAI 30m/12h 拆分优先；未配置 12h 价时沿用统一写入价。
+	if cost, ok := openAICacheCreationTTLCost(tokens, deref(p.CacheWritePrice), p.CacheWrite12hPrice); ok {
+		cacheCreationCost = cost
+	} else if p.CacheWrite1hPrice != nil {
+		cache5m, cache1h := allocateCacheCreationBillingTokens(tokens)
 		if cache5m > 0 || cache1h > 0 {
 			cacheCreationCost = float64(cache5m)*deref(p.CacheWritePrice) +
 				float64(cache1h)*deref(p.CacheWrite1hPrice)
@@ -396,6 +400,7 @@ func hasAnyTokenStatsPrice(pricing *ChannelModelPricing) bool {
 		pricing.OutputPrice != nil ||
 		pricing.CacheWritePrice != nil ||
 		pricing.CacheWrite1hPrice != nil ||
+		pricing.CacheWrite12hPrice != nil ||
 		pricing.CacheReadPrice != nil ||
 		pricing.ImageOutputPrice != nil)
 }
@@ -444,6 +449,30 @@ func applyAccountStatsCost(
 
 // accountStatsLongContextContextKey 仅在上游账号统计路径传递订阅凭据豁免，不影响用户报价。
 type accountStatsLongContextContextKey struct{}
+
+// accountStatsUpstreamPriceFactorKey 传递上游按实际端点计价的倍数（如 Vertex 多区域 1.1 倍），
+// 只作用于模型定价文件默认价得出的账号统计成本。
+type accountStatsUpstreamPriceFactorKey struct{}
+
+// withAccountStatsUpstreamPriceFactor 在倍数不为 1 时把它写入上下文。
+func withAccountStatsUpstreamPriceFactor(ctx context.Context, factor float64) context.Context {
+	if ctx == nil || factor <= 0 || factor == 1 {
+		return ctx
+	}
+	return context.WithValue(ctx, accountStatsUpstreamPriceFactorKey{}, factor)
+}
+
+// scaleAccountStatsModelFileCost 按上下文中的上游端点倍数放大默认价统计成本。
+func scaleAccountStatsModelFileCost(ctx context.Context, cost *float64) *float64 {
+	if cost == nil || ctx == nil {
+		return cost
+	}
+	if factor, ok := ctx.Value(accountStatsUpstreamPriceFactorKey{}).(float64); ok && factor > 0 && factor != 1 {
+		scaled := *cost * factor
+		return &scaled
+	}
+	return cost
+}
 
 func accountStatsModelLongContextExempt(ctx context.Context) bool {
 	if ctx == nil {

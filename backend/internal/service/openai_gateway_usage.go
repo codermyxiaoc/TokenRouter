@@ -173,6 +173,29 @@ func groupBillsOpenAIFastAtStandard(apiKey *APIKey, account *Account, serviceTie
 	}
 }
 
+// billingUsageTokens 把 OpenAI 用量拆成互斥计费桶：输入扣除缓存读取与缓存写入，
+// 缓存写入以聚合量为权威，缺失时由 Anthropic 原生上游的 5m/1h 明细求和。
+func (usage OpenAIUsage) billingUsageTokens() UsageTokens {
+	creationTokens := usage.CacheCreationInputTokens
+	if creationTokens <= 0 {
+		creationTokens = max(usage.CacheCreation5mTokens, 0) + max(usage.CacheCreation1hTokens, 0)
+	}
+	tokens := UsageTokens{
+		InputTokens:            max(usage.InputTokens-usage.CacheReadInputTokens-creationTokens, 0),
+		ImageInputTokens:       max(usage.ImageInputTokens-usage.ImageCacheReadTokens, 0),
+		ImageCacheReadTokens:   usage.ImageCacheReadTokens,
+		OutputTokens:           usage.OutputTokens,
+		CacheCreationTokens:    creationTokens,
+		CacheCreation5mTokens:  usage.CacheCreation5mTokens,
+		CacheCreation1hTokens:  usage.CacheCreation1hTokens,
+		CacheCreation30mTokens: usage.CacheCreation30mInputTokens,
+		CacheCreation12hTokens: usage.CacheCreation12hInputTokens,
+		CacheReadTokens:        usage.CacheReadInputTokens,
+		ImageOutputTokens:      usage.ImageOutputTokens,
+	}
+	return tokens
+}
+
 // RecordUsage records usage and deducts balance
 func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRecordUsageInput) error {
 	if input == nil {
@@ -212,21 +235,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	// OpenAI input_tokens 是总输入，包含缓存读取和缓存写入明细。
 	// 将三类 token 拆成互斥桶，避免缓存写入同时按普通输入和 cache_write 重复计费。
-	actualInputTokens := result.Usage.InputTokens - result.Usage.CacheReadInputTokens - result.Usage.CacheCreationInputTokens
-	if actualInputTokens < 0 {
-		actualInputTokens = 0
-	}
-
-	// Calculate cost
-	tokens := UsageTokens{
-		InputTokens:          actualInputTokens,
-		ImageInputTokens:     max(result.Usage.ImageInputTokens-result.Usage.ImageCacheReadTokens, 0),
-		ImageCacheReadTokens: result.Usage.ImageCacheReadTokens,
-		OutputTokens:         result.Usage.OutputTokens,
-		CacheCreationTokens:  result.Usage.CacheCreationInputTokens,
-		CacheReadTokens:      result.Usage.CacheReadInputTokens,
-		ImageOutputTokens:    result.Usage.ImageOutputTokens,
-	}
+	// 计费 token 统一由 billingUsageTokens 拆分；OpenAI 30m/12h 写入拆分只在上游上报且自洽时非零。
+	tokens := result.Usage.billingUsageTokens()
+	actualInputTokens := tokens.InputTokens
 
 	// Get rate multiplier
 	multiplier := 1.0
@@ -415,20 +426,24 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			result.RequestedReasoningEffort,
 			CanonicalRequestedReasoningEffort(input.RequestBody, input.OriginalModel, input.ChannelMappedModel),
 		),
-		InboundEndpoint:     optionalTrimmedStringPtr(input.InboundEndpoint),
-		UpstreamEndpoint:    optionalTrimmedStringPtr(input.UpstreamEndpoint),
-		InputTokens:         actualInputTokens,
-		OutputTokens:        result.Usage.OutputTokens,
-		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
-		CacheReadTokens:     result.Usage.CacheReadInputTokens,
-		ImageInputTokens:    result.Usage.ImageInputTokens,
-		ImageOutputTokens:   result.Usage.ImageOutputTokens,
-		ImageCount:          result.ImageCount,
-		ImageSize:           optionalTrimmedStringPtr(result.ImageSize),
-		ImageInputSize:      optionalTrimmedStringPtr(result.ImageInputSize),
-		ImageOutputSize:     optionalTrimmedStringPtr(result.ImageOutputSize),
-		ImageSizeSource:     optionalTrimmedStringPtr(result.ImageSizeSource),
-		ImageSizeBreakdown:  imageSizeBreakdown,
+		InboundEndpoint:        optionalTrimmedStringPtr(input.InboundEndpoint),
+		UpstreamEndpoint:       optionalTrimmedStringPtr(input.UpstreamEndpoint),
+		InputTokens:            actualInputTokens,
+		OutputTokens:           result.Usage.OutputTokens,
+		CacheCreationTokens:    result.Usage.CacheCreationInputTokens,
+		CacheCreation30mTokens: result.Usage.CacheCreation30mInputTokens,
+		CacheCreation5mTokens:  result.Usage.CacheCreation5mTokens,
+		CacheCreation1hTokens:  result.Usage.CacheCreation1hTokens,
+		CacheCreation12hTokens: result.Usage.CacheCreation12hInputTokens,
+		CacheReadTokens:        result.Usage.CacheReadInputTokens,
+		ImageInputTokens:       result.Usage.ImageInputTokens,
+		ImageOutputTokens:      result.Usage.ImageOutputTokens,
+		ImageCount:             result.ImageCount,
+		ImageSize:              optionalTrimmedStringPtr(result.ImageSize),
+		ImageInputSize:         optionalTrimmedStringPtr(result.ImageInputSize),
+		ImageOutputSize:        optionalTrimmedStringPtr(result.ImageOutputSize),
+		ImageSizeSource:        optionalTrimmedStringPtr(result.ImageSizeSource),
+		ImageSizeBreakdown:     imageSizeBreakdown,
 	}
 	isVideoUsage := isGrokVideoUsageResult(result, billingModels)
 	if isVideoUsage {
@@ -1259,5 +1274,5 @@ func openAISubscriptionLongContextExempt(account *Account, result *OpenAIForward
 	if model == "" {
 		model = result.Model
 	}
-	return isOpenAIGPT61SolModel(model)
+	return isOpenAIGPT61SolModel(model) || isOpenAIGPT62Model(model)
 }

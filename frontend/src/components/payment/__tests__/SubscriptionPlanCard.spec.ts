@@ -112,7 +112,18 @@ describe('SubscriptionPlanCard', () => {
     expect(title.element.parentElement?.classList).toContain('flex-1')
     expect(price?.element.parentElement?.parentElement?.classList).toContain('shrink-0')
     expect(wrapper.get('p').text()).toBe('Includes advanced models and priority support.')
-    expect(wrapper.get('button').text()).toBe('payment.subscribeNow')
+    expect(wrapper.get('button:not([aria-haspopup])').text()).toBe('payment.subscribeNow')
+  })
+
+  it('允许购买前独立查看分组和模型，再主动开通套餐', async () => {
+    const wrapper = mountPlanCard('openai')
+    const plan = wrapper.props('plan')
+    await wrapper.get('button[aria-haspopup="dialog"]').trigger('click')
+    expect(wrapper.emitted('details')).toEqual([[plan]])
+    expect(wrapper.emitted('select')).toBeUndefined()
+
+    await wrapper.get('button:not([aria-haspopup])').trigger('click')
+    expect(wrapper.emitted('select')).toEqual([[plan]])
   })
 
   it('短标题也保持卡片对齐所需的固定高度', () => {

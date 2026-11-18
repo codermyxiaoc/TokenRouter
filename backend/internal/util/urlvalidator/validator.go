@@ -117,8 +117,7 @@ func ValidateResolvedIP(host string) error {
 	}
 
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-			ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		if IsDisallowedIP(ip) {
 			return fmt.Errorf("resolved ip %s is not allowed", ip.String())
 		}
 	}

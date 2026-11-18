@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
 	"github.com/TokenFlux/TokenRouter/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -1208,12 +1209,36 @@ func openAIImagesToolUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
 			return OpenAIUsage{}, false
 		}
 	}
-	return OpenAIUsage{
-		InputTokens:       inputTokens,
-		ImageInputTokens:  imageInputTokens,
-		OutputTokens:      outputTokens,
-		ImageOutputTokens: imageOutputTokens,
-	}, true
+	// 缓存明细只能取自同一份工具用量，顶层 Responses 可能使用不同的输入计数。
+	cacheWriteTokens := openAICacheCreationTokensFromUsage(value)
+	if cacheWriteTokens > inputTokens {
+		return OpenAIUsage{}, false
+	}
+	cacheReadTokens := openAICacheReadTokensFromUsage(value)
+	if cached := value.Get("input_tokens_details.cached_tokens"); cached.Exists() {
+		var valid bool
+		cacheReadTokens, valid = boundedJSONNonNegativeInt(cached)
+		if !valid {
+			return OpenAIUsage{}, false
+		}
+	}
+	short, long := openai.CacheWriteTTLTokens(value, cacheWriteTokens)
+	usage := OpenAIUsage{
+		InputTokens:                 inputTokens,
+		ImageInputTokens:            imageInputTokens,
+		OutputTokens:                outputTokens,
+		ImageOutputTokens:           imageOutputTokens,
+		CacheCreationInputTokens:    cacheWriteTokens,
+		CacheCreation30mInputTokens: short,
+		CacheCreation12hInputTokens: long,
+		CacheReadInputTokens:        cacheReadTokens,
+	}
+	applyOpenAIImageCacheReadDetails(&usage, value)
+	// 写入、命中和普通输入互斥；工具总量无法容纳两种缓存时保留已有顶层快照。
+	if usage.CacheReadInputTokens > inputTokens-cacheWriteTokens {
+		return OpenAIUsage{}, false
+	}
+	return usage, true
 }
 
 // boundedJSONNonNegativeInt 解析整数形式的 JSON 指数记法，同时避免对上游可控指数使用任意精度解析器。

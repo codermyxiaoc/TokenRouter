@@ -194,6 +194,8 @@ func (r *creativeFakeRunRepo) SetCreativeRunProviderUsage(_ context.Context, run
 // 端到端：执行成功后固定 token 用量与金额（只写一次），结算按 token 费用扣款，用量日志记录 token 与计费模式。
 func TestCreativeTokenRunSettlesByTokens(t *testing.T) {
 	group := newCreativeTokenTestGroup()
+	group.ModelPricing[0].CacheWritePrice = testPtrFloat64(10e-6)
+	group.ModelPricing[0].CacheWrite12hPrice = testPtrFloat64(25e-6)
 	svc, billingService := newCreativeTokenTestService(group)
 	repo := svc.Repo.(*creativeFakeRunRepo)
 	run := creativeUsageTestRun("crun_token_settle")
@@ -207,9 +209,15 @@ func TestCreativeTokenRunSettlesByTokens(t *testing.T) {
 	logs := &creativeUsageLogRepo{}
 	svc.UsageLogRepo = logs
 
-	tokens := creativeTokensFromOpenAIUsage(OpenAIUsage{InputTokens: 3461, ImageInputTokens: 1024, OutputTokens: 110, ImageOutputTokens: 110})
+	// 上游将 100 个写入计入总输入，20 个属于 30m，另外 80 个按 12h 收费。
+	usage, ok := extractOpenAIUsageFromJSONBytes([]byte(`{"usage":{"input_tokens":3561,"input_tokens_details":{"image_tokens":1024,"cache_write_tokens":100,"cache_write_tokens_details":{"ttl_30m_tokens":20,"ttl_12h_tokens":80}},"output_tokens":110,"output_tokens_details":{"image_tokens":110}}}`))
+	require.True(t, ok)
+	tokens := creativeTokensFromOpenAIUsage(usage)
 	require.NoError(t, svc.recordCreativeTokenUsage(context.Background(), run, &tokens))
 	first := *run.ProviderUsage
+	require.Equal(t, 20, first.CacheCreation30mTokens)
+	require.Equal(t, 80, first.CacheCreation12hTokens)
+	require.InDelta(t, 0.0022, first.CacheCreationCost, 1e-12)
 	// 重复记录（如重试）不改变已算定的金额。
 	// 用一份没有用量的过期快照模拟重试：数据库里已有的记录必须保留原值。
 	more := UsageTokens{InputTokens: 999999, OutputTokens: 999999}
@@ -219,7 +227,7 @@ func TestCreativeTokenRunSettlesByTokens(t *testing.T) {
 	require.Equal(t, first, *repo.runs[run.RunID].ProviderUsage)
 
 	gateway := &OpenAIGatewayService{resolver: svc.PricingResolver, billingService: billingService}
-	apiCost, err := gateway.calculateOpenAIRecordUsageTokenCostAt(context.Background(), &APIKey{Group: group}, creativeTokenTestModel, 1, time.Now(), tokens, "", "")
+	apiCost, err := gateway.calculateOpenAIRecordUsageTokenCostAt(context.Background(), &APIKey{Group: group}, creativeTokenTestModel, 1, time.Now(), usage.billingUsageTokens(), "", "")
 	require.NoError(t, err)
 
 	require.NoError(t, svc.SettleRun(context.Background(), run.RunID))
@@ -238,5 +246,9 @@ func TestCreativeTokenRunSettlesByTokens(t *testing.T) {
 	require.Equal(t, string(BillingModeToken), *log.BillingMode)
 	require.Equal(t, 3461, log.InputTokens)
 	require.Equal(t, 110, log.ImageOutputTokens)
+	require.Equal(t, 100, log.CacheCreationTokens)
+	require.Equal(t, 20, log.CacheCreation30mTokens)
+	require.Equal(t, 80, log.CacheCreation12hTokens)
+	require.InDelta(t, 0.0022, log.CacheCreationCost, 1e-12)
 	require.InDelta(t, apiCost.TotalCost, log.TotalCost, 1e-12)
 }

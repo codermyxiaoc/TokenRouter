@@ -187,7 +187,7 @@ creative_settle:{run_id}    写 usage_logs 的结算记录 ID
 图片模型的计费方式与 API 一致，由同一个函数 `resolveGroupChannelPricing` 判定：分组或渠道把该模型定为 token 价时按 token 结算，否则按张（分组/渠道按张价 → 分组图片价 → 默认图片价）。默认目录价不参与判定，与 API 的 OpenAI、Gemini 图片计费分支一致。MJ 只接受按张价。文本画布、视频（统一视频与 Grok）和 TTS 本身走网关或复用 API 计价，不经过此判定。
 
 - **预扣上限**：报价时按“提示词字符数 × 2 + 1000 固定开销 + 每张参考图（含遮罩）6000 图片输入 token”和“各尺寸单张图片输出上限（512：2000、1K：8000、2K：20000、4K：48000）+ 1000 文本输出”估算用量，用与 API 相同的 `CalculateCostUnified` 计算基础金额，作为每张的预扣上限（`base_unit_price`）。倍率与 API 的 token 路径一致：用户/订阅倍率叠加分组高峰因子，不使用图片独立倍率。token 价缺失或无法计算时拒绝生成，不按零元预扣，也不退回按张价。
-- **用量**：执行器用 API 同一解析函数读取上游用量（API Key Images 用 `extractOpenAIUsageFromJSONBytes`，OAuth 直连用 `codexDirectImagesUsage`，OAuth Responses 逐个 SSE 事件用 `parseOpenAIImagesSSEUsageBytes`，Gemini 用 `extractGeminiUsage`，Grok 按 OpenAI 兼容 JSON 解析），并按 API `RecordUsage` 的规则拆成互斥计费桶。全零用量视为未返回。
+- **用量**：执行器用 API 同一解析函数读取上游用量（API Key Images 用 `extractOpenAIUsageFromJSONBytes`，OAuth 直连用 `codexDirectImagesUsage`，OAuth Responses 逐个 SSE 事件用 `parseOpenAIImagesSSEUsageBytes`，Gemini 用 `extractGeminiUsage`，Grok 按 OpenAI 兼容 JSON 解析）。OpenAI 图片与 API 共用同一用量拆分逻辑。上游报告的有效 30m/12h 缓存写入明细随任务快照保存，并在交付时写入用量日志。历史快照缺少拆分时保留原金额和总写入量。全零用量视为未返回。
 - **算定与持久化**：执行成功、输出落库之前，按 API 同一公式算出 token 费用，连同用量写入 `creative_runs.provider_usage`（迁移 `327_creative_run_token_billing.sql`，`billing_mode='token'`）。只写一次，已有记录保留原值；结算、重试和崩溃恢复都读取这份金额，不随之后的价格变化重算，保证同一捕获请求 ID 的金额一致。
 - **扣费**：成功交付后按算定的 token 费用捕获，多冻结部分退回。token 费用超过预扣上限时只扣到上限，`review_reason=token_cost_exceeds_hold`；上游没有返回用量、或执行后定价已改为非 token 时按预扣上限扣费，`review_reason=token_usage_missing`。两种情况都记录告警日志，需管理员核对，不当作免费。缺少 `provider_usage` 记录（写入失败）时同样按预扣上限并视为缺少用量。
 - **用量日志**：`BillingMode` 记为 `token`，记录上游 token 数和分项费用，`TotalCost` 为实际计入的 token 基础金额，`ActualCost` 以资金回执为准。

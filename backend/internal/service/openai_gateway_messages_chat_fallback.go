@@ -79,9 +79,9 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	if normalizedBody, normalized := NormalizeGLMOpenAIReasoningEffort(chatBody, upstreamModel); normalized {
 		chatBody = normalizedBody
 	}
-	// Messages 桥只对客户端显式指定的推理强度执行分组超限策略。
+	// Messages 桥的推理强度策略；GLM 上游把分组上限换算为 GLM 支持的合法档位。
 	if account.Platform == PlatformOpenAI {
-		policyBody, changed, policyErr := ApplyOpenAIReasoningEffortPolicyFromContext(ctx, chatBody)
+		policyBody, changed, policyErr := applyOpenAIReasoningEffortPolicyForGLMFromContext(ctx, chatBody, upstreamModel)
 		if policyErr != nil {
 			var overLimit *ReasoningEffortOverLimitError
 			if errors.As(policyErr, &overLimit) {

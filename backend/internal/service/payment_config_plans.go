@@ -160,6 +160,20 @@ func (s *PaymentConfigService) ListPlansForSale(ctx context.Context) ([]*dbent.S
 	return s.entClient.SubscriptionPlan.Query().Where(subscriptionplan.ForSaleEQ(true)).Order(subscriptionplan.BySortOrder()).All(ctx)
 }
 
+// GetPlanGroupScopeForSale 只读取在售套餐的分组配置，下架和不存在的计划使用相同响应。
+func (s *PaymentConfigService) GetPlanGroupScopeForSale(ctx context.Context, id int64) (*SubscriptionPlan, error) {
+	row, err := s.entClient.SubscriptionPlan.Query().
+		Where(subscriptionplan.IDEQ(id), subscriptionplan.ForSaleEQ(true)).
+		Select(subscriptionplan.FieldGroupIds, subscriptionplan.FieldGroupRateMultipliers).Only(ctx)
+	if dbent.IsNotFound(err) {
+		return nil, infraerrors.NotFound("PLAN_NOT_AVAILABLE", "plan not found or not for sale")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get subscription plan group scope: %w", err)
+	}
+	return &SubscriptionPlan{GroupIDs: row.GroupIds, GroupRateMultipliers: row.GroupRateMultipliers}, nil
+}
+
 func (s *PaymentConfigService) CreatePlan(ctx context.Context, req CreatePlanRequest) (*dbent.SubscriptionPlan, error) {
 	groupIDs := normalizePlanGroupIDs(req.GroupID, req.GroupIDs)
 	groupRates, err := normalizePlanGroupRateMultipliers(groupIDs, req.GroupRateMultipliers)

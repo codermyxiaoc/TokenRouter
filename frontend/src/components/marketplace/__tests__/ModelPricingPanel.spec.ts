@@ -344,6 +344,38 @@ describe('ModelPricingPanel', () => {
     expect(wrapper.text()).toContain('6.00')
   })
 
+  // 12h 缓存写入价是独立结算单价：配置时展示（含显式 0），未配置时不出现
+  it('展示独立的 12h 缓存写入价格，含显式免费', async () => {
+    const wrapper = mountPanel(marketplaceModel('m1', {
+      ...tokenPricing,
+      cache_write_price_per_token: 0.000003,
+      cache_write_12h_price_per_token: 0.000007,
+    }))
+    await wrapper.get('[data-testid="model-pricing-toggle"]').trigger('click')
+    let labels = wrapper.get('[data-testid="pricing-rows"]').findAll('span:first-child').map((el) => el.text())
+    expect(labels).toContain('marketplace.cacheWrite12h')
+    expect(wrapper.text()).toContain('7.00')
+
+    const free = mountPanel(marketplaceModel('m2', { ...tokenPricing, cache_write_12h_price_per_token: 0 }))
+    await free.get('[data-testid="model-pricing-toggle"]').trigger('click')
+    labels = free.get('[data-testid="pricing-rows"]').findAll('span:first-child').map((el) => el.text())
+    expect(labels).toContain('marketplace.cacheWrite12h')
+
+    const unset = mountPanel(marketplaceModel('m3', tokenPricing))
+    await unset.get('[data-testid="model-pricing-toggle"]').trigger('click')
+    labels = unset.get('[data-testid="pricing-rows"]').findAll('span:first-child').map((el) => el.text())
+    expect(labels).not.toContain('marketplace.cacheWrite12h')
+  })
+
+  it('Fast 档展示 12h 缓存写入价格', async () => {
+    const wrapper = mountPanel(marketplaceModel('m1', { ...fastPricing, fast_cache_write_12h_price_per_token: 0.000014 }))
+    await wrapper.get('[data-testid="model-pricing-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="pricing-fast-switch"]').findAll('button')[1].trigger('click')
+    const labels = wrapper.get('[data-testid="pricing-rows"]').findAll('span:first-child').map((el) => el.text())
+    expect(labels).toContain('marketplace.fastCacheWrite12h')
+    expect(wrapper.text()).toContain('14.00')
+  })
+
   it('存在 fast mode 计价时展示切换，切换后只显示 fast 价格行', async () => {
     const wrapper = mountPanel(marketplaceModel('m1', fastPricing))
 

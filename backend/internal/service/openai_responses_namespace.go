@@ -100,11 +100,13 @@ func hasOpenAIResponsesNamespaceToolDeclaration(body []byte) bool {
 		})
 		return found
 	}
-	if hasNamespaceTool(gjson.GetBytes(body, "tools")) {
+	// 零拷贝视图读取 tools 与 input，避免为只读检查复制请求体。
+	root := parseRawJSONView(body)
+	if hasNamespaceTool(root.Get("tools")) {
 		return true
 	}
 	// Lite 把工具声明放入独立历史项；只检查该载体，不能误认正文内的同名字段。
-	input := gjson.GetBytes(body, "input")
+	input := root.Get("input")
 	if !input.IsArray() {
 		return false
 	}
@@ -164,7 +166,9 @@ func stripOpenAIResponsesInputNamespaces(body []byte, keepToolCallNamespaces boo
 	if !bytes.Contains(body, []byte(`"namespace"`)) {
 		return body, nil
 	}
-	input := gjson.GetBytes(body, "input")
+	// Zero-copy view: input.Raw aliases body and is only read below; the
+	// rebuilt array is written into a fresh buffer.
+	input := parseRawJSONView(body).Get("input")
 	if !input.IsArray() {
 		return body, nil
 	}

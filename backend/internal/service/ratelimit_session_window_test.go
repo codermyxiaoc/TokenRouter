@@ -438,3 +438,7 @@ func TestUpdateSessionWindow_NoStatusHeader(t *testing.T) {
 		t.Errorf("expected no calls when status header absent, got %d", len(repo.sessionWindowCalls))
 	}
 }
+
+func (r *sessionWindowMockRepo) ClearModelRateLimit(context.Context, int64, string) error {
+	return nil
+}

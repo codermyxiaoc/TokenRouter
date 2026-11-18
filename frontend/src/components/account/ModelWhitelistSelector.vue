@@ -274,6 +274,11 @@ const copyModelId = async (model: string) => {
 const addCustom = () => {
   const model = customModel.value.trim()
   if (!model) return
+  // 白名单按精确模型匹配，通配符不会生效，直接拒绝避免误以为已放行。
+  if (model.includes('*')) {
+    appStore.showInfo(t('admin.accounts.modelWildcardNotSupported'))
+    return
+  }
   if (findModelWhitelistMappingConflict([model], props.modelMappings ?? [])) {
     appStore.showError(t('admin.accounts.modelMappingConflict', { model }))
     return

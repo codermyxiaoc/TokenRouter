@@ -325,7 +325,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		return nil, err
 	}
 	passkeyHandler := handler.NewPasskeyHandler(passkeyService, authService, settingService)
-	handlerPaymentHandler := handler.NewPaymentHandler(paymentService, paymentConfigService)
+	handlerPaymentHandler := handler.NewPaymentHandler(paymentService, paymentConfigService, apiKeyService, modelMarketplaceService)
 	paymentWebhookHandler := handler.NewPaymentWebhookHandler(paymentService, registry)
 	mediaTaskRepository := repository.NewMediaTaskRepository(db)
 	mediaTaskPreviewCache := repository.NewMediaTaskPreviewCache(redisClient)

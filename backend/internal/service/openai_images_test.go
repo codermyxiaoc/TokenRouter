@@ -917,6 +917,22 @@ func TestParseOpenAIImagesSSEUsageBytes_ToolUsagePrecedenceAndFallback(t *testin
 			toolUsage: `{"input_tokens":46,"input_tokens_details":{"image_tokens":35},"output_tokens":2459,"output_tokens_details":{"image_tokens":2459}}`,
 			want:      OpenAIUsage{InputTokens: 46, ImageInputTokens: 35, OutputTokens: 2459, ImageOutputTokens: 2459},
 		},
+		{
+			name:      "读写总数与图片缓存取自同一工具快照",
+			toolUsage: `{"input_tokens":110,"input_tokens_details":{"image_tokens":6,"cached_tokens":10,"cached_tokens_details":{"image_tokens":6,"text_tokens":4},"cache_write_tokens":100,"cache_write_tokens_details":{"ttl_30m_tokens":20,"ttl_12h_tokens":80}},"output_tokens":2,"output_tokens_details":{"image_tokens":2}}`,
+			want:      OpenAIUsage{InputTokens: 110, ImageInputTokens: 6, ImageCacheReadTokens: 6, CacheReadInputTokens: 10, CacheCreationInputTokens: 100, CacheCreation30mInputTokens: 20, CacheCreation12hInputTokens: 80, OutputTokens: 2, ImageOutputTokens: 2},
+		},
+		{
+			name:      "缓存图片受总命中量限制且不一致的写入期限回退到总写入",
+			toolUsage: `{"input_tokens":110,"input_tokens_details":{"image_tokens":20,"cached_tokens":10,"cached_tokens_details":{"image_tokens":12},"cache_write_tokens":100,"cache_write_tokens_details":{"ttl_30m_tokens":20,"ttl_12h_tokens":81}},"output_tokens":2,"output_tokens_details":{"image_tokens":2}}`,
+			want:      OpenAIUsage{InputTokens: 110, ImageInputTokens: 20, ImageCacheReadTokens: 10, CacheReadInputTokens: 10, CacheCreationInputTokens: 100, OutputTokens: 2, ImageOutputTokens: 2},
+		},
+		{
+			name:      "缺少总命中量时使用工具的图文命中明细",
+			toolUsage: `{"input_tokens":110,"input_tokens_details":{"image_tokens":6,"cached_tokens_details":{"image_tokens":6,"text_tokens":4},"cache_write_tokens":100},"output_tokens":2,"output_tokens_details":{"image_tokens":2}}`,
+			want:      OpenAIUsage{InputTokens: 110, ImageInputTokens: 6, ImageCacheReadTokens: 6, CacheReadInputTokens: 10, CacheCreationInputTokens: 100, OutputTokens: 2, ImageOutputTokens: 2},
+		},
+		{name: "工具缓存读写超过总输入时保留顶层快照", toolUsage: `{"input_tokens":110,"input_tokens_details":{"cached_tokens":11,"cache_write_tokens":100},"output_tokens":2,"output_tokens_details":{"image_tokens":2}}`, want: fallback},
 		{name: "absent", want: fallback},
 		{name: "malformed field", toolUsage: `{"input_tokens":"46","output_tokens":2459,"output_tokens_details":{"image_tokens":2459}}`, want: fallback},
 		{name: "fractional field", toolUsage: `{"input_tokens":46,"output_tokens":2459.5,"output_tokens_details":{"image_tokens":2459}}`, want: fallback},
@@ -1400,7 +1416,7 @@ func TestOpenAIGatewayServiceForwardImages_APIKeyStreamJSONResponseBillsImage(t 
 					"Content-Type": []string{"application/json"},
 					"X-Request-Id": []string{"req_img_stream_json"},
 				},
-				Body: io.NopCloser(strings.NewReader(`{"created":1710000008,"usage":{"input_tokens":12,"output_tokens":21,"output_tokens_details":{"image_tokens":9}},"data":[{"b64_json":"aGVsbG8=","revised_prompt":"draw a cat"}]}`)),
+				Body: io.NopCloser(strings.NewReader(`{"created":1710000008,"usage":{"input_tokens":12,"input_tokens_details":{"cache_write_tokens":10,"cache_write_tokens_details":{"ttl_30m_tokens":2,"ttl_12h_tokens":8}},"output_tokens":21,"output_tokens_details":{"image_tokens":9}},"data":[{"b64_json":"aGVsbG8=","revised_prompt":"draw a cat"}]}`)),
 			},
 		},
 	}
@@ -1426,6 +1442,9 @@ func TestOpenAIGatewayServiceForwardImages_APIKeyStreamJSONResponseBillsImage(t 
 	require.Equal(t, 12, result.Usage.InputTokens)
 	require.Equal(t, 21, result.Usage.OutputTokens)
 	require.Equal(t, 9, result.Usage.ImageOutputTokens)
+	require.Equal(t, 10, result.Usage.CacheCreationInputTokens)
+	require.Equal(t, 2, result.Usage.CacheCreation30mInputTokens)
+	require.Equal(t, 8, result.Usage.CacheCreation12hInputTokens)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "aGVsbG8=", gjson.Get(rec.Body.String(), "data.0.b64_json").String())
 }

@@ -87,7 +87,7 @@ func extractFirstUserText(body []byte) string {
 //
 // 形态对齐真实 Claude Code CLI：
 //
-//	x-anthropic-billing-header: cc_version=2.1.220.{fp}; cc_entrypoint=cli;
+//	x-anthropic-billing-header: cc_version=2.1.321.{fp}; cc_entrypoint=cli;
 //
 // 注意：新版 Claude Code CLI 已不再发送 cch=... 签名字段（见 issue #3358）。我们
 // 随之去掉了 cch 段——继续注入它反而会让伪装请求偏离真实 CLI 流量。cc_version +

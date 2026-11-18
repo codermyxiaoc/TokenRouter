@@ -89,7 +89,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			reqStream = false
 		}
 
-		accountScopedBody, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(body, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+		accountScopedBody, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(body, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), codexClientSessionID(c))
 		if scopeErr != nil {
 			return nil, scopeErr
 		}
@@ -1041,7 +1041,9 @@ func openAIStreamClientOutputStarted(c *gin.Context, localStarted bool) bool {
 
 func openAIStreamEventIsPreamble(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
-	case "response.created", "response.queued", "response.in_progress", "response.metadata":
+	// 排队与 Codex 元数据事件不算模型输出，也不解除首输出超时；其后的过载仍可安全重试或故障转移。
+	case "response.created", "response.queued", "response.in_progress", "response.metadata",
+		"codex.rate_limits", "codex.response.metadata":
 		return true
 	default:
 		return false
@@ -1522,6 +1524,31 @@ func applyOpenAIStreamFailedErrorPassthroughRule(
 	)
 }
 
+// OpenAIStreamFailedFrame 是触发 failover 的流内 failed/error 帧；保留下来使切换耗尽时
+// 仍能套用本应命中该帧的错误透传规则。
+type OpenAIStreamFailedFrame struct {
+	Platform string
+	Payload  []byte
+	Message  string
+}
+
+// ApplyOpenAIStreamFailedFrameRule 对触发已耗尽 failover 的帧套用错误透传规则，
+// 匹配方式与流内帧的 applyOpenAIStreamFailedErrorPassthroughRule 一致。
+func ApplyOpenAIStreamFailedFrameRule(c *gin.Context, failoverErr *UpstreamFailoverError) (status int, errType string, errMsg string, matched bool) {
+	if failoverErr == nil || failoverErr.StreamFailedFrame == nil {
+		return 0, "", "", false
+	}
+	frame := failoverErr.StreamFailedFrame
+	status, errType, errMsg, matched = applyOpenAIStreamFailedErrorPassthroughRule(c, frame.Platform, frame.Payload, frame.Message)
+	if !matched {
+		return 0, "", "", false
+	}
+	if errMsg == "" {
+		errMsg = frame.Message
+	}
+	return status, errType, errMsg, true
+}
+
 func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool {
 	if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
 		return false
@@ -1853,6 +1880,10 @@ func (s *OpenAIGatewayService) newOpenAIStreamPolicyFailoverErrorWithModel(
 		classificationHeaders = nil
 	}
 	failoverErr := s.newOpenAIAccountFailoverErrorWithClassificationHeaders(account, statusCode, headers, classificationHeaders, payload, message, shouldDisable, retryable)
+	// 保留触发 failover 的流内 failed/error 帧，切换耗尽时据此套用错误透传规则。
+	if len(payload) > 0 && account != nil {
+		failoverErr.StreamFailedFrame = &OpenAIStreamFailedFrame{Platform: account.Platform, Payload: payload, Message: message}
+	}
 	if failoverErr.IsCredentialFailure() || failoverErr.RequestScopedTransient {
 		return failoverErr
 	}

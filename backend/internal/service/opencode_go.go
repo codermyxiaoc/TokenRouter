@@ -98,7 +98,8 @@ func writeOpenCodeUnsupportedModelError(c *gin.Context, isAnthropic bool, model 
 	message := fmt.Sprintf("Model '%s' requires a dedicated OpenCode endpoint (Gemini: Google SDK; Jev: /v1/systemone)", model)
 	if c != nil {
 		if isAnthropic {
-			c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": message}})
+			// 已以 SSE 提交响应（如 keepalive）时 writeAnthropicError 会改写为 SSE 错误事件。
+			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", message)
 		} else {
 			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "code": "model_not_supported", "message": message}})
 		}

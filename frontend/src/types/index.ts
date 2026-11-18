@@ -619,6 +619,8 @@ export interface MarketplacePricingInterval {
   output_price_per_token?: number
   cache_write_price_per_token?: number
   cache_write_1h_price_per_token?: number
+  // OpenAI 12 小时缓存写入单价；缺省表示未单独定价，显式 0 表示免费
+  cache_write_12h_price_per_token?: number
   cache_read_price_per_token?: number
   image_output_price_per_token?: number
   fast_input_price_per_token?: number
@@ -626,6 +628,7 @@ export interface MarketplacePricingInterval {
   fast_output_price_per_token?: number
   fast_cache_write_price_per_token?: number
   fast_cache_write_1h_price_per_token?: number
+  fast_cache_write_12h_price_per_token?: number
   fast_cache_read_price_per_token?: number
   fast_image_output_price_per_token?: number
 }
@@ -639,6 +642,8 @@ export interface MarketplaceModelPricing {
   output_price_per_token?: number
   cache_write_price_per_token?: number
   cache_write_1h_price_per_token?: number
+  // OpenAI 12 小时缓存写入单价；缺省表示未单独定价，显式 0 表示免费
+  cache_write_12h_price_per_token?: number
   cache_read_price_per_token?: number
   image_output_price_per_token?: number
   fast_input_price_per_token?: number
@@ -646,6 +651,7 @@ export interface MarketplaceModelPricing {
   fast_output_price_per_token?: number
   fast_cache_write_price_per_token?: number
   fast_cache_write_1h_price_per_token?: number
+  fast_cache_write_12h_price_per_token?: number
   fast_cache_read_price_per_token?: number
   fast_image_output_price_per_token?: number
   context_intervals?: MarketplacePricingInterval[]
@@ -878,6 +884,7 @@ export interface AdminGroup extends Group {
   i18n?: GroupI18n
   // 仅管理端可配置，公开分组接口不返回该策略。
   force_openai_fast?: boolean
+  force_openai_ultrafast?: boolean
   // 仅管理端可配置，公开分组接口不返回该计费策略。
   free_openai_fast?: boolean
   // 仅管理端可配置，公开分组接口不返回调度器模式。
@@ -1051,6 +1058,7 @@ export interface CreateGroupRequest {
   session_isolation_enabled?: boolean
   long_context_pricing_enabled?: boolean
   force_openai_fast?: boolean
+  force_openai_ultrafast?: boolean
   free_openai_fast?: boolean
   model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
   allow_image_generation?: boolean
@@ -1120,6 +1128,7 @@ export interface UpdateGroupRequest {
   status?: 'active' | 'inactive'
   long_context_pricing_enabled?: boolean
   force_openai_fast?: boolean
+  force_openai_ultrafast?: boolean
   free_openai_fast?: boolean
   model_pricing?: import('@/api/admin/channels').ChannelModelPricing[]
   allow_image_generation?: boolean
@@ -1581,6 +1590,7 @@ export interface WindowStats {
 
 export interface UsageProgress {
   utilization: number // Percentage (0-100+, 100 = 100%)
+  utilization_unknown?: boolean
   resets_at: string | null
   remaining_seconds: number
   window_stats?: WindowStats | null // 窗口期统计（从窗口开始到当前的使用量）
@@ -2145,6 +2155,9 @@ export interface UsageLog {
   cache_read_tokens: number
   cache_creation_5m_tokens: number
   cache_creation_1h_tokens: number
+  // OpenAI 30m/12h 缓存写入拆分（旧记录缺省为 0）
+  cache_creation_30m_tokens?: number
+  cache_creation_12h_tokens?: number
 
   input_cost: number
   output_cost: number
@@ -2427,8 +2440,9 @@ export interface EndpointStat {
   endpoint: string
   requests: number
   total_tokens: number
-  cost: number
-  actual_cost: number
+  cost: number // 标准计费
+  actual_cost: number // 实际扣除
+  account_cost?: number // 账号成本（仅管理员接口返回）
 }
 
 export interface GroupStat {

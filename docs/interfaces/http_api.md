@@ -171,7 +171,9 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 
 `GET /api/v1/keys/billing-options?scope=personal|team` 返回当前作用域可指定的有效订阅摘要，包括 `id`、`plan_id`、`plan_name`、`expires_at`、`groups_restricted` 和 `applicable_groups`。`GET /api/v1/groups/available?scope=personal|team&subscription_id={id}` 在带 `subscription_id` 时返回付款主体原有分组权限与该订阅套餐分组的交集，条目的 `rate_multiplier` 已按指定套餐的有效额外倍率优先、分组默认倍率兜底解析；不带该参数时保持历史的可用分组结果。两个接口都不把成员自己的订阅泄露到团队作用域。指定订阅的前端选择器不得再次用用户专属倍率覆盖该值。
 
-用户订阅列表的 `plan.applicable_groups` 条目包含 `id`、`name` 和可选 `platform`、`display_brand`、`rate_multiplier`，平台及展示品牌供前端复用统一的分组标签图标与配色。该倍率采用同一套餐覆盖规则，默认分组 `0` 会显式返回；仅在分组数据不可读取且无有效套餐倍率时省略，前端只隐藏缺失倍率、不补默认数字。上述展示字段不改变套餐授权范围或实际扣费。
+用户订阅列表的 `plan.applicable_groups` 条目包含 `id`、`name` 和可选 `platform`、`display_brand`、`rate_multiplier`，平台及展示品牌供前端复用统一的分组标签图标及配色。该倍率采用同一套餐覆盖规则，默认分组 `0` 会显式返回；仅在分组数据不可读取且无有效套餐倍率时省略，前端只隐藏缺失倍率、不补默认数字。上述展示字段不改变套餐授权范围或实际扣费。
+
+登录用户在购买页打开套餐详情时，`GET /api/v1/payment/plans/:id/groups` 按在售套餐 ID 返回 `groups_restricted` 和 `groups`。每组携带展示名称、平台、品牌、有效倍率及 `models` 客户端模型 ID 列表。调用者可以尚未购买该套餐。没有可请求模型的组返回空列表；目录读取失败返回 503，可在详情页重试。不存在或已下架的套餐返回 404。响应使用 `Cache-Control: private, no-store`。权限和倍率口径见[购买前查看分组和模型](../domains/payments_and_entitlements.md#subscription_plan_preview)。
 
 网关 `GET /v1/usage` 在原有 Key 配额、订阅或余额字段之外始终返回 `billing` 对象，至少包含 `mode`、`source`、`preferred_subscription_id`、`available` 和 `unit`。`source=subscription` 时只返回实际选择的订阅额度/剩余值；指定订阅失效时仍使用该来源并标记 `available=false`，不返回余额。`source=balance` 时只返回付款主体余额，不加载或展示订阅额度。`auto` 的 `source` 随当前可用订阅动态变化；Key 自身的配额和滚动限额字段不受该展示规则影响。
 

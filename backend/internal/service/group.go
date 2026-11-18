@@ -137,6 +137,9 @@ type Group struct {
 	AllowLive             bool
 	// ForceOpenAIFast 强制 OpenAI/Composite 分组请求使用 service_tier=priority。
 	ForceOpenAIFast bool
+	// ForceOpenAIUltrafast 对支持 Ultrafast 的模型（GPT-6 Astra、GPT-6.1 Sol）强制 service_tier=ultrafast，
+	// 优先于 ForceOpenAIFast；其它模型仍按 ForceOpenAIFast 或客户端取值。
+	ForceOpenAIUltrafast bool
 	// FreeOpenAIFast 让 OpenAI/Composite 分组的 Fast 请求按 Standard 价格向用户计费。
 	FreeOpenAIFast              bool
 	RequireOAuthOnly            bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）

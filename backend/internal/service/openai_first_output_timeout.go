@@ -145,7 +145,10 @@ func (s *openAIFirstOutputStage) prepareWrite(incoming int) error {
 	}
 	file, err := s.createTemp()
 	if err != nil {
-		return fmt.Errorf("create first-output spool: %w", err)
+		// Unavailable temporary storage must not fail an otherwise valid stream.
+		// Keep buffering in memory under the same stage limit.
+		s.memoryOnly = true
+		return nil
 	}
 	path := file.Name()
 	// 写入任何请求数据前先 unlink。Unix 仍可通过文件描述符读取，进程崩溃或 SIGKILL

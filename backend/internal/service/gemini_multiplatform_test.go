@@ -1102,3 +1102,7 @@ func TestGeminiMessagesCompatService_isModelSupportedByAccount(t *testing.T) {
 		})
 	}
 }
+
+func (r *mockAccountRepoForGemini) ClearModelRateLimit(context.Context, int64, string) error {
+	return nil
+}

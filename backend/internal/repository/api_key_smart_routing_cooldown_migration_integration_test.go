@@ -69,7 +69,7 @@ func TestMigration272UpgradesPublished271WithoutChangingCooldownValues(t *testin
 		tcpostgres.WithDatabase("cooldown_upgrade_test"),
 		tcpostgres.WithUsername("postgres"),
 		tcpostgres.WithPassword("postgres"),
-		tcpostgres.BasicWaitStrategies())
+		tcpostgres.BasicWaitStrategies(), loopbackPortBinding("5432/tcp"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, container.Terminate(context.Background())) })
 	dsn, err := container.ConnectionString(ctx, "sslmode=disable", "TimeZone=UTC")

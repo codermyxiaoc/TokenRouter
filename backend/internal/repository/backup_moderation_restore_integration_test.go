@@ -44,7 +44,7 @@ func TestBackupRestoreModerationSnapshotScope(t *testing.T) {
 		tcpostgres.WithDatabase("backup_source"),
 		tcpostgres.WithUsername("postgres"),
 		tcpostgres.WithPassword("postgres"),
-		tcpostgres.BasicWaitStrategies(),
+		tcpostgres.BasicWaitStrategies(), loopbackPortBinding("5432/tcp"),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
@@ -159,7 +159,7 @@ func TestBackupRestoreFailsOnSQLError(t *testing.T) {
 		tcpostgres.WithDatabase("restore_error"),
 		tcpostgres.WithUsername("postgres"),
 		tcpostgres.WithPassword("postgres"),
-		tcpostgres.BasicWaitStrategies(),
+		tcpostgres.BasicWaitStrategies(), loopbackPortBinding("5432/tcp"),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = container.Terminate(context.Background()) })

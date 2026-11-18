@@ -34,6 +34,12 @@
           <input :value="interval.cache_write_1h_price" @input="emitField('cache_write_1h_price', ($event.target as HTMLInputElement).value)"
             type="number" step="any" min="0" class="input mt-0.5 text-xs" />
         </div>
+        <!-- OpenAI 12 小时缓存写入价 -->
+        <div>
+          <label class="text-xs text-gray-400">{{ t('admin.channels.form.cacheWrite12hPriceShort', '缓存W 12h') }} <span class="text-gray-300">$/M</span></label>
+          <input :value="interval.cache_write_12h_price" @input="emitField('cache_write_12h_price', ($event.target as HTMLInputElement).value)"
+            type="number" step="any" min="0" class="input mt-0.5 text-xs" />
+        </div>
         <div>
           <label class="text-xs text-gray-400">{{ t('admin.channels.form.cacheReadPrice', '缓存R') }} <span class="text-gray-300">$/M</span></label>
           <input :value="interval.cache_read_price" @input="emitField('cache_read_price', ($event.target as HTMLInputElement).value)"
@@ -123,6 +129,7 @@ const isEmpty = computed(() => {
     (iv.output_price == null || iv.output_price === '') &&
     (iv.cache_write_price == null || iv.cache_write_price === '') &&
     (iv.cache_write_1h_price == null || iv.cache_write_1h_price === '') &&
+    (iv.cache_write_12h_price == null || iv.cache_write_12h_price === '') &&
     (iv.cache_read_price == null || iv.cache_read_price === '') &&
     (iv.input_multiplier == null || iv.input_multiplier === '') &&
     (iv.output_multiplier == null || iv.output_multiplier === '') &&

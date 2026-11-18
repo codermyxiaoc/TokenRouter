@@ -2,7 +2,9 @@ import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import type { IntelligenceRun, IntelligenceTest } from '@/api/intelligence'
 
-export type IntelligenceDisplayStatus = 'passed' | 'incorrect' | 'error' | 'unknown' | 'running' | 'queued'
+// Manxue 的鹈鹕分类器以该模型训练，其余模型的绘图评分仅供参考。
+export const drawingClassifierModel = 'gpt-6-astra'
+export type IntelligenceDisplayStatus = 'passed' | 'incorrect' | 'reference' | 'error' | 'unknown' | 'running' | 'queued'
 
 // 未结束或供应商异常不能误标为模型答错，红色只表示明确未通过。
 export function resultStatus(run: IntelligenceRun): IntelligenceDisplayStatus {
@@ -10,6 +12,9 @@ export function resultStatus(run: IntelligenceRun): IntelligenceDisplayStatus {
   if (run.status === 'submitting' || run.status === 'running') return 'running'
   if (run.status === 'error' || run.verdict === 'error') return 'error'
   if (run.status === 'unknown' || run.verdict === 'unknown') return 'unknown'
+  // 历史记录可能只保存了通过/未通过，其他绘图模型同样按参考结果展示。
+  if (run.benchmark === 'drawing' && (run.verdict === 'reference' ||
+    (run.model.trim() !== drawingClassifierModel && (run.verdict === 'passed' || run.verdict === 'failed')))) return 'reference'
   if (run.verdict === 'passed') return 'passed'
   if (run.verdict === 'failed') return 'incorrect'
   return 'unknown'
@@ -19,6 +24,7 @@ export function resultColor(run: IntelligenceRun): string {
   const status = resultStatus(run)
   if (status === 'passed') return 'bg-emerald-500'
   if (status === 'incorrect') return 'bg-rose-500'
+  if (status === 'reference') return 'bg-sky-600'
   if (status === 'error' || status === 'unknown') return 'bg-amber-400'
   return 'bg-gray-300 dark:bg-dark-600'
 }

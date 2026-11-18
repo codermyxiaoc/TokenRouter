@@ -387,6 +387,7 @@ func ChatCompletionsResponseToAnthropic(resp *ChatCompletionsResponse, model str
 		Type:  "message",
 		Role:  "assistant",
 		Model: model,
+		Usage: chatUsageToAnthropicUsage(nil),
 	}
 
 	if resp != nil {
@@ -483,20 +484,16 @@ func chatFinishReasonToAnthropicStopReason(reason string, blocks []AnthropicCont
 // chatUsageToAnthropicUsage 把 Chat token usage 转换为 Anthropic usage，口径与旧桥一致。
 func chatUsageToAnthropicUsage(usage *ChatUsage) AnthropicUsage {
 	if usage == nil {
-		return AnthropicUsage{}
+		// 缺少 usage 时显式标记缓存字段存在且为 0，避免后续事件把它当作“未上报”而沿用旧值。
+		return AnthropicUsage{CacheCreationInputTokensPresent: true, CacheReadInputTokensPresent: true}
 	}
 
 	cachedTokens := 0
-	cacheCreationTokens := 0
+	// cache_write_tokens 与 cache_creation_tokens 是同一数量的两种字段名，不能相加；
+	// 统一由 cacheCreationInputTokens 选择（显式给出 write 时以 write 为准）。
+	cacheCreationTokens := usage.PromptTokensDetails.cacheCreationInputTokens()
 	if usage.PromptTokensDetails != nil {
 		cachedTokens = usage.PromptTokensDetails.CachedTokens
-		// cache_write_tokens 与 cache_creation_tokens 是同一数量的两种字段名，不能相加；
-		// 与旧桥一致地优先使用 write，缺失时再使用 creation。
-		if usage.PromptTokensDetails.CacheWriteTokens > 0 {
-			cacheCreationTokens = usage.PromptTokensDetails.CacheWriteTokens
-		} else {
-			cacheCreationTokens = usage.PromptTokensDetails.CacheCreationTokens
-		}
 	}
 
 	inputTokens := usage.PromptTokens - cachedTokens - cacheCreationTokens
@@ -505,10 +502,12 @@ func chatUsageToAnthropicUsage(usage *ChatUsage) AnthropicUsage {
 	}
 
 	return AnthropicUsage{
-		InputTokens:              inputTokens,
-		OutputTokens:             usage.CompletionTokens,
-		CacheReadInputTokens:     cachedTokens,
-		CacheCreationInputTokens: cacheCreationTokens,
+		InputTokens:                     inputTokens,
+		OutputTokens:                    usage.CompletionTokens,
+		CacheReadInputTokens:            cachedTokens,
+		CacheCreationInputTokens:        cacheCreationTokens,
+		CacheCreationInputTokensPresent: true,
+		CacheReadInputTokensPresent:     true,
 	}
 }
 
@@ -642,10 +641,12 @@ func FinalizeChatCompletionsAnthropicStream(state *ChatCompletionsToAnthropicStr
 				StopReason: stopReason,
 			},
 			Usage: &AnthropicUsage{
-				InputTokens:              state.InputTokens,
-				OutputTokens:             state.OutputTokens,
-				CacheReadInputTokens:     state.CacheReadInputTokens,
-				CacheCreationInputTokens: state.CacheCreationInputTokens,
+				InputTokens:                     state.InputTokens,
+				OutputTokens:                    state.OutputTokens,
+				CacheReadInputTokens:            state.CacheReadInputTokens,
+				CacheCreationInputTokens:        state.CacheCreationInputTokens,
+				CacheCreationInputTokensPresent: true,
+				CacheReadInputTokensPresent:     true,
 			},
 		},
 		AnthropicStreamEvent{Type: "message_stop"},
@@ -669,7 +670,7 @@ func ensureCCAnthropicMessageStart(state *ChatCompletionsToAnthropicStreamState)
 			Content:    []AnthropicContentBlock{},
 			Model:      state.Model,
 			StopReason: nil, // 序列化为 JSON null，不能是空字符串。
-			Usage:      AnthropicUsage{InputTokens: 0, OutputTokens: 0},
+			Usage:      chatUsageToAnthropicUsage(nil),
 		},
 	}}
 }

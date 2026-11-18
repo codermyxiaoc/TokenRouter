@@ -845,17 +845,11 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		storageCost = *input.FrozenCacheStorageCost
 	}
 	if apiKey.GroupID != nil && !isCacheStorageOnlyResult(result) {
-		applyAccountStatsCost(ctx, usageLog, s.channelService, s.billingService,
+		applyAccountStatsCost(withAccountStatsUpstreamPriceFactor(ctx, result.upstreamPriceFactor()), usageLog, s.channelService, s.billingService,
 			account.ID, *apiKey.GroupID, result.UpstreamModel, requestedModel, input.ChannelMappedModel,
 			// Anthropic's input_tokens excludes cache_read and cache_creation (billed separately);
 			// OpenAI gateway uses actualInputTokens which also excludes cache_read for the same reason.
-			UsageTokens{
-				InputTokens:         result.Usage.InputTokens,
-				OutputTokens:        result.Usage.OutputTokens,
-				CacheCreationTokens: result.Usage.CacheCreationInputTokens,
-				CacheReadTokens:     result.Usage.CacheReadInputTokens,
-				ImageOutputTokens:   result.Usage.ImageOutputTokens,
-			},
+			result.Usage.billingUsageTokens(),
 			cost.TotalCost-storageCost,
 		)
 		addCacheStorageToAccountStatsCost(usageLog, storageCost)
@@ -907,6 +901,14 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 	return nil
+}
+
+// applyUpstreamPriceFactor 把上游端点价格倍数作用于按 token 计费的费用，按次等其他计费模式不受影响。
+func applyUpstreamPriceFactor(cost *CostBreakdown, result *ForwardResult) {
+	if cost == nil || (cost.BillingMode != "" && cost.BillingMode != string(BillingModeToken)) {
+		return
+	}
+	applyCostBreakdownMultiplier(cost, result.upstreamPriceFactor())
 }
 
 // calculateRecordUsageCost 根据请求类型和选项计算费用。
@@ -971,6 +973,12 @@ func (s *GatewayService) calculateRecordUsageCost(
 
 	// Token 费用与搜索附加费分别计算，搜索不会替代模型本身的 token 费用。
 	tokenCost := s.calculateTokenCost(ctx, result, apiKey, account, billingModel, requestedModel, billingModelSource, channelMappedModel, multiplier, opts)
+	// 上游端点价格倍数（如 Vertex 多区域 1.1 倍）只作用于默认模型价；分组价、渠道价是管理员配置的最终价，不叠加。
+	if result.upstreamPriceFactor() != 1 && tokenCost != nil {
+		if resolved, _ := s.resolveChannelPricingForUsage(ctx, billingModel, requestedModel, billingModelSource, channelMappedModel, result.UpstreamModel, apiKey, account); resolved == nil {
+			applyUpstreamPriceFactor(tokenCost, result)
+		}
+	}
 	if opts.RequirePricing && tokenCost == nil {
 		return nil
 	}
@@ -1102,15 +1110,8 @@ func (s *GatewayService) calculateTokenCost(
 	opts *recordUsageOpts,
 ) *CostBreakdown {
 	serviceTier := forwardResultServiceTier(result)
-	tokens := UsageTokens{
-		InputTokens:           result.Usage.InputTokens,
-		OutputTokens:          result.Usage.OutputTokens,
-		CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
-		CacheReadTokens:       result.Usage.CacheReadInputTokens,
-		CacheCreation5mTokens: result.Usage.CacheCreation5mTokens,
-		CacheCreation1hTokens: result.Usage.CacheCreation1hTokens,
-		ImageOutputTokens:     result.Usage.ImageOutputTokens,
-	}
+	// 与账号统计共用同一份计费 token 口径（聚合缓存写入为权威，缺失时由 5m/1h 明细求和）。
+	tokens := result.Usage.billingUsageTokens()
 
 	var cost *CostBreakdown
 	var err error
@@ -1257,8 +1258,25 @@ func (s *GatewayService) buildRecordUsageLog(
 		usageLog.ActualCost = cost.ActualCost
 		usageLog.LongContextBillingApplied = cost.LongContextBillingApplied
 	}
-
 	return usageLog
+}
+
+// billingUsageTokens 把 Claude 用量转成计费 token；缓存写入以聚合量为权威，缺失时由 5m/1h 明细求和。
+func (usage ClaudeUsage) billingUsageTokens() UsageTokens {
+	creationTokens := usage.CacheCreationInputTokens
+	if creationTokens <= 0 {
+		creationTokens = max(usage.CacheCreation5mTokens, 0) + max(usage.CacheCreation1hTokens, 0)
+	}
+	tokens := UsageTokens{
+		InputTokens:           usage.InputTokens,
+		OutputTokens:          usage.OutputTokens,
+		CacheCreationTokens:   creationTokens,
+		CacheReadTokens:       usage.CacheReadInputTokens,
+		CacheCreation5mTokens: usage.CacheCreation5mTokens,
+		CacheCreation1hTokens: usage.CacheCreation1hTokens,
+		ImageOutputTokens:     usage.ImageOutputTokens,
+	}
+	return tokens
 }
 
 // claudeUsageServiceTier 将 Claude usage.speed 复用为内部统一的 Fast 计费层级。

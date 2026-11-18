@@ -41,7 +41,7 @@ func TestSeptember29ModelPricing(t *testing.T) {
 						require.InDelta(t, float64(n)*2e-6*0.5*factor, cost.InputCost, 1e-12)
 					}
 				} else {
-					require.InDelta(t, 0.2e-6, price.CacheReadPricePerToken, 1e-15)
+					require.InDelta(t, 0.1e-6, price.CacheReadPricePerToken, 1e-15) // Sonnet 5.5 缓存读取为输入价的 5%
 					require.InDelta(t, 4e-6, price.CacheCreation1hPrice, 1e-15)
 					require.Zero(t, price.LongContextInputThreshold)
 				}

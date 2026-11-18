@@ -102,7 +102,7 @@ func (s *ModelMarketplaceService) ListPublic(ctx context.Context) ([]ModelMarket
 	discountConfig, showDiscount := s.getOfficialPriceRatioConfig(ctx)
 	capacityMap := s.getPublicCapacityMap(ctx, groups)
 	availabilityMap := s.getPublicAvailabilityMap(ctx, groups)
-	accountsByGroup, accountsPrefetched := s.prefetchPublicGroupAccounts(ctx)
+	accountsByGroup, accountsPrefetched := s.prefetchGroupAccounts(ctx)
 	out := make([]ModelMarketplaceGroup, 0, len(groups))
 	for i := range groups {
 		group := &groups[i]
@@ -150,8 +150,8 @@ func (s *ModelMarketplaceService) ListPublic(ctx context.Context) ([]ModelMarket
 	return out, nil
 }
 
-// prefetchPublicGroupAccounts 一次读取全部可调度账号，并按账号全局优先级恢复分组查询顺序。
-func (s *ModelMarketplaceService) prefetchPublicGroupAccounts(ctx context.Context) (map[int64][]Account, bool) {
+// prefetchGroupAccounts 一次读取可调度账号快照，调用方分别按公开范围或用户权限选择分组。
+func (s *ModelMarketplaceService) prefetchGroupAccounts(ctx context.Context) (map[int64][]Account, bool) {
 	if s == nil || s.gatewayService == nil || s.gatewayService.accountRepo == nil {
 		return nil, false
 	}
@@ -194,6 +194,27 @@ func (s *ModelMarketplaceService) prefetchPublicGroupAccounts(ctx context.Contex
 		accountsByGroup[groupID] = groupAccounts
 	}
 	return accountsByGroup, true
+}
+
+// ListGroupModelIDs 批量投影已获准展示的分组模型，只暴露客户端型号，不计算价格、容量或可用性指标。
+func (s *ModelMarketplaceService) ListGroupModelIDs(ctx context.Context, groups []Group) (map[int64][]string, error) {
+	ids := make(map[int64][]string, len(groups))
+	if len(groups) == 0 {
+		return ids, nil
+	}
+	accounts, ok := s.prefetchGroupAccounts(ctx)
+	if !ok {
+		return nil, fmt.Errorf("group model catalog unavailable")
+	}
+	for i := range groups {
+		g := &groups[i]
+		resolution, err := s.gatewayService.resolveRequestableModelsFromSnapshot(ctx, &g.ID, g.Platform, nil, accounts[g.ID], g)
+		if err != nil {
+			return nil, err
+		}
+		ids[g.ID] = RequestableModelIDs(resolution.Models)
+	}
+	return ids, nil
 }
 
 func (s *ModelMarketplaceService) getPublicCapacityMap(ctx context.Context, groups []Group) map[int64]GroupCapacitySummary {

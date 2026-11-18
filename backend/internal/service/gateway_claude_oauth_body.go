@@ -266,7 +266,8 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	// 策略：客户端传了什么就透传；没传则补默认 1。
 	// 采样锁定型号只传 top_p 时不补 temperature，避免网关生成冲突参数。
 	samplingLocked := claude.IsSonnet55Model(modelID) || claude.IsHaiku55Model(modelID)
-	if !gjson.GetBytes(out, "temperature").Exists() && (!samplingLocked || !gjson.GetBytes(out, "top_p").Exists()) {
+	// Fable/Mythos 5.2 不补 temperature：上游只接受缺省或显式 1，不补可避免与 top_p 冲突。
+	if !gjson.GetBytes(out, "temperature").Exists() && !claude.IsClaude52Model(modelID) && (!samplingLocked || !gjson.GetBytes(out, "top_p").Exists()) {
 		if next, ok := setJSONValueBytes(out, "temperature", 1); ok {
 			out = next
 			modified = true
@@ -306,7 +307,9 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	//   applyToolNameRewriteToBody 同步映射为假名
 	// - 其他形态（auto/any/none）原样透传
 	// 如果 body 里完全没有 tools（空数组），tool_choice 没意义时才删除
-	if !gjson.GetBytes(out, "tools").IsArray() || len(gjson.GetBytes(out, "tools").Array()) == 0 {
+	// 只读首元素判断是否为空数组，避免为判空复制整个 tools 数组。
+	toolsResult := gjson.GetBytes(out, "tools")
+	if !toolsResult.IsArray() || !toolsResult.Get("0").Exists() {
 		if gjson.GetBytes(out, "tool_choice").Exists() {
 			if next, ok := deleteJSONPathBytes(out, "tool_choice"); ok {
 				out = next
@@ -1054,9 +1057,37 @@ func collectCacheControlPaths(body []byte) (invalidThinking []cacheControlPath, 
 	return invalidThinking, messagePaths, toolPaths, systemPaths
 }
 
+var (
+	cacheControlKeyBytes   = []byte(`"cache_control"`)
+	thinkingBlockTypeBytes = []byte(`"thinking"`)
+	cacheTTL1hJSONBytes    = []byte(`"1h"`)
+	jsonUnicodeEscapeBytes = []byte(`\u`)
+)
+
 // enforceCacheControlLimit 让出站 cache_control 满足上游约束：
 // 先执行块数量限制，再修正 TTL 顺序。
+//
+// 大多数请求的 cache_control 块不超过 4 个、没有 thinking 块、也没有 1h TTL，
+// 此时两步都是 no-op。用字节级预检查跳过两次 collectCacheControlPaths 遍历。
+// 预检查只会多算（把请求送回原路径），不会漏判；含 \u 转义的 body 可能把
+// 键名或值写成转义形式，字节匹配看不到，因此直接走原路径。
 func enforceCacheControlLimit(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	if bytes.Contains(body, jsonUnicodeEscapeBytes) {
+		return normalizeCacheControlTTLOrder(enforceCacheControlBlockLimit(body))
+	}
+	if !bytes.Contains(body, cacheControlKeyBytes) {
+		return body
+	}
+	if bytes.Count(body, cacheControlKeyBytes) <= maxCacheControlBlocks &&
+		!bytes.Contains(body, thinkingBlockTypeBytes) {
+		if !bytes.Contains(body, cacheTTL1hJSONBytes) {
+			return body
+		}
+		return normalizeCacheControlTTLOrder(body)
+	}
 	return normalizeCacheControlTTLOrder(enforceCacheControlBlockLimit(body))
 }
 

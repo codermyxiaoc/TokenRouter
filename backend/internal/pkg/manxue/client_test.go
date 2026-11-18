@@ -28,7 +28,7 @@ func testClient(t *testing.T, handler http.HandlerFunc) *Client {
 func createInput(benchmark string) CreateRequest {
 	model := "unit-model"
 	if benchmark == "pelican" {
-		model = DrawingModel
+		model = "gpt-6-astra"
 	}
 	return CreateRequest{Benchmark: benchmark, BaseURL: "https://gateway.example/v1", APIKey: "sk-unit-test-only", Model: model}
 }
@@ -38,16 +38,20 @@ func TestCreateCurrentWireContract(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		benchmark string
+		model     string
 		reasoning string
 		tier      string
 	}{
-		{"candy defaults", "candy", "", ""},
-		{"candy extended reasoning", "candy", "max", "ultrafast"},
-		{"drawing defaults", "pelican", "", ""},
-		{"drawing high reasoning", "pelican", "high", "priority"},
+		{"candy defaults", "candy", "unit-model", "", ""},
+		{"candy extended reasoning", "candy", "unit-model", "max", "ultrafast"},
+		{"drawing original model", "pelican", "gpt-6-astra", "", ""},
+		{"drawing high reasoning", "pelican", "gpt-6.2-astra", "high", "priority"},
+		{"drawing other preset", "pelican", "gpt-6.2-sol", "", ""},
+		{"drawing custom upstream model", "pelican", "vendor/custom-model", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			input := createInput(tc.benchmark)
+			input.Model = tc.model
 			input.ReasoningEffort = tc.reasoning
 			input.ServiceTier = tc.tier
 			var calls atomic.Int32
@@ -69,7 +73,7 @@ func TestCreateCurrentWireContract(t *testing.T) {
 					"benchmark": tc.benchmark,
 					"base_url":  input.BaseURL,
 					"api_key":   input.APIKey,
-					"model":     input.Model,
+					"model":     tc.model,
 				}
 				if tc.reasoning != "" {
 					expected["reasoning_effort"] = tc.reasoning
@@ -185,6 +189,11 @@ func TestOutcomeNeverTreatsUnknownAsPassed(t *testing.T) {
 		{"failed", TestResult{Status: "failed", Benchmark: "candy", Candy: &CandyResult{Status: "passed"}}, "error", true},
 		{"cancelled", TestResult{Status: "cancelled"}, "error", true},
 		{"normal", TestResult{Status: "succeeded", Benchmark: "pelican", Assessment: &Assessment{Quality: "normal"}}, "passed", true},
+		{"非训练模型的正常评估", TestResult{Status: "succeeded", Benchmark: "pelican", Model: "gpt-6.2-astra", Assessment: &Assessment{Quality: "normal"}}, "reference", true},
+		{"非训练模型的降智评估", TestResult{Status: "succeeded", Benchmark: "pelican", Model: "vendor/custom-model", Assessment: &Assessment{Quality: "degraded"}}, "reference", true},
+		{"上游标记为参考", TestResult{Status: "succeeded", Benchmark: "pelican", Model: "gpt-6-astra", Assessment: &Assessment{Quality: "normal", Label: "参考"}}, "reference", true},
+		{"参考标签缺少有效评估", TestResult{Status: "succeeded", Benchmark: "pelican", Model: "gpt-6.2-sol", Assessment: &Assessment{Quality: "unknown", Label: "参考"}}, "unknown", true},
+		{"生成错误优先于参考标签", TestResult{Status: "failed", Benchmark: "pelican", Model: "gpt-6.2-sol", Assessment: &Assessment{Quality: "normal", Label: "参考"}}, "error", true},
 		{"remote error overrides pass", TestResult{Status: "succeeded", Benchmark: "candy", Candy: &CandyResult{Status: "passed"}, Error: &RemoteError{Code: "remote_error"}}, "error", true},
 	}
 	for _, tc := range cases {
@@ -403,12 +412,12 @@ func TestCreateValidatesBeforeSending(t *testing.T) {
 		key    string
 	}{
 		{"benchmark", func(r *CreateRequest) { r.Benchmark = "arbitrary" }, "ok"},
-		{"unsupported drawing model", func(r *CreateRequest) { r.Benchmark = "pelican" }, "ok"},
-		{"drawing model alias", func(r *CreateRequest) { r.Benchmark = "pelican"; r.Model = "alias/" + DrawingModel }, "ok"},
-		{"drawing model whitespace", func(r *CreateRequest) { r.Benchmark = "pelican"; r.Model = DrawingModel + " " }, "ok"},
+		{"drawing blank model", func(r *CreateRequest) { r.Benchmark = "pelican"; r.Model = " " }, "ok"},
+		{"drawing padded model", func(r *CreateRequest) { r.Benchmark = "pelican"; r.Model = "gpt-6.2-sol " }, "ok"},
+		{"drawing oversized model", func(r *CreateRequest) { r.Benchmark = "pelican"; r.Model = strings.Repeat("a", 257) }, "ok"},
 		{"drawing extended reasoning", func(r *CreateRequest) {
 			r.Benchmark = "pelican"
-			r.Model = DrawingModel
+			r.Model = "gpt-6.2-astra"
 			r.ReasoningEffort = "max"
 		}, "ok"},
 		{"key missing", func(r *CreateRequest) { r.APIKey = "" }, "ok"},

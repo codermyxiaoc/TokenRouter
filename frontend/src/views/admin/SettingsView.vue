@@ -4589,7 +4589,7 @@
                 <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                   {{ t('admin.settings.claudeCode.claudeCodeClientVersion') }}
                 </label>
-                <input v-model="form.claude_code_client_version" type="text" class="input max-w-xs font-mono text-sm" placeholder="2.1.280" />
+                <input v-model="form.claude_code_client_version" type="text" class="input max-w-xs font-mono text-sm" placeholder="2.1.321" />
                 <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.claudeCode.claudeCodeClientVersionHint') }}</p>
                 <div class="mt-4 flex items-center justify-between gap-4">
                   <div>
@@ -8172,8 +8172,8 @@
                           ) || 1
                       "
                       type="number"
-                      step="0.01"
-                      min="0.01"
+                      step="0.000001"
+                      min="0.000001"
                       class="input"
                     />
                     <p class="mt-0.5 text-xs text-gray-400">
@@ -8185,7 +8185,7 @@
                       class="mt-1 text-xs font-medium text-primary-600 dark:text-primary-400"
                     >
                       {{
-                        t("admin.settings.payment.balanceRechargePreview", { amount: (Number(form.payment_balance_recharge_multiplier) || 1).toFixed(2), unitName: previewBalanceUnitName })
+                        t("admin.settings.payment.balanceRechargePreview", { amount: formatBalanceRechargeMultiplier(Number(form.payment_balance_recharge_multiplier) || 1), unitName: previewBalanceUnitName })
                       }}
                     </p>
                   </div>
@@ -9106,8 +9106,8 @@
           <BackupSettings />
         </div>
 
-        <!-- Save Button -->
-        <div v-show="activeTab !== 'backup' && activeTab !== 'tickets' && activeTab !== 'dailyActivities' && activeTab !== 'videoProtocolAI' && activeTab !== 'apiDocs' && activeTab !== 'dataCache'" class="flex justify-end">
+        <!-- 保存按钮吸附在底部，长标签页无需滚动到末尾即可保存 -->
+        <div v-show="activeTab !== 'backup' && activeTab !== 'tickets' && activeTab !== 'dailyActivities' && activeTab !== 'videoProtocolAI' && activeTab !== 'apiDocs' && activeTab !== 'dataCache'" class="settings-save-dock">
           <button
             type="submit"
             :disabled="saving || loadFailed"
@@ -9238,6 +9238,7 @@ import RequestDataCacheSettingsTab from "@/views/admin/settings/RequestDataCache
 import { useBalanceDisplay } from "@/composables/useBalanceDisplay";
 import RechargeBonusTierEditor from "@/components/admin/settings/RechargeBonusTierEditor.vue";
 import {
+  formatBalanceRechargeMultiplier,
   normalizeRechargeBonusMode,
   normalizeRechargeBonusTiers,
   rechargeBonusTierError,
@@ -14054,6 +14055,13 @@ watch(
   scroll-margin-top: 12.75rem;
 }
 
+/* ============ 系统设置 保存浮标 ============ */
+.settings-save-dock {
+  @apply sticky bottom-3 z-20 ml-auto flex w-fit items-center rounded-full border border-white/80 bg-white/90 p-1.5 backdrop-blur-xl;
+  box-shadow:
+    0 10px 26px rgb(15 23 42 / 0.12),
+    0 1px 0 rgb(255 255 255 / 0.9) inset;
+}
 </style>
 
 <style>
@@ -14070,5 +14078,13 @@ watch(
 
 .dark .settings-tab-active {
   box-shadow: 0 1px 0 rgb(255 255 255 / 0.08) inset;
+}
+
+.dark .settings-save-dock {
+  border-color: rgb(51 65 85 / 0.65);
+  background: rgb(15 23 42 / 0.86);
+  box-shadow:
+    0 14px 32px rgb(0 0 0 / 0.34),
+    0 1px 0 rgb(255 255 255 / 0.06) inset;
 }
 </style>

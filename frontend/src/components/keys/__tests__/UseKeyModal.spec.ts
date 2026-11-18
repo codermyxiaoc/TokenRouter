@@ -84,6 +84,10 @@ describe('UseKeyModal', () => {
     const models = config.provider[platform === 'antigravity' ? 'antigravity-claude' : platform].models
     if (platform === 'openai') {
       expect(Object.keys(models['gpt-6.1-sol'].variants)).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+      // GPT-6.2 与 6.1 Sol 一样不提供 none/minimal 档位
+      for (const model of ['gpt-6.2-sol', 'gpt-6.2-astra']) {
+        expect(Object.keys(models[model].variants)).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+      }
       expect(models['gpt-6-sol'].variants).toHaveProperty('none')
     } else if (platform === 'anthropic') {
       expect(models['claude-sonnet-5-5'].options).toEqual({ thinking: { type: 'adaptive' }, effort: 'high' })
@@ -821,6 +825,36 @@ describe('UseKeyModal', () => {
     })
   })
 
+  it.each([
+    ['claude-fable-5-2', 'Claude Fable 5.2'],
+    ['claude-mythos-5-2', 'Claude Mythos 5.2']
+  ])('exports %s on Anthropic with adaptive thinking and all supported effort levels', async (model, name) => {
+    const wrapper = mount(UseKeyModal, {
+      props: { show: true, apiKey: 'sk-test', baseUrl: 'https://example.com/v1', platform: 'anthropic',
+        // fork 只在分组允许 Anthropic Messages 协议时展示 OpenCode 配置
+        allowedClientProtocols: ['anthropic_messages'] },
+      global: { stubs: { BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }, Icon: { template: '<span />' } } }
+    })
+    const tab = wrapper.findAll('button').find(button => button.text().includes('keys.useKeyModal.cliTabs.opencode'))
+    expect(tab).toBeDefined()
+    await tab!.trigger('click')
+    await nextTick()
+    const config = JSON.parse(wrapper.find('pre code').text()).provider.anthropic.models[model]
+    expect(config.name).toBe(name)
+    expect(config.limit).toEqual({ context: 1000000, output: 128000 })
+    expect(config.modalities).toEqual({ input: ['text', 'image', 'pdf'], output: ['text'] })
+    expect(config.options).toEqual({ thinking: { type: 'adaptive' }, effort: 'high' })
+    expect(config.variants).toEqual({
+      low: { effort: 'low' },
+      medium: { effort: 'medium' },
+      high: { effort: 'high' },
+      xhigh: { effort: 'xhigh' },
+      max: { effort: 'max' }
+    })
+    // fork 为原生模型统一开启工具调用。
+    expect(config.tool_call).toBe(true)
+  })
+
   it('renders Claude Fable 5 OpenCode config with adaptive thinking', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
@@ -857,6 +891,8 @@ describe('UseKeyModal', () => {
     expect(claudeConfig).toBeDefined()
     const parsed = JSON.parse(claudeConfig!)
     expect(parsed.provider['antigravity-claude'].models).not.toHaveProperty('claude-opus-5-5')
+    expect(parsed.provider['antigravity-claude'].models).not.toHaveProperty('claude-fable-5-2')
+    expect(parsed.provider['antigravity-claude'].models).not.toHaveProperty('claude-mythos-5-2')
     const fable = parsed.provider['antigravity-claude'].models['claude-fable-5']
     const fable51 = parsed.provider['antigravity-claude'].models['claude-fable-5-1']
 

@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 40 // v40：媒体订阅倍率优先开关加入快照，强制重建旧缓存。
+const apiKeyAuthSnapshotVersion = 41 // v41：组级强制 OpenAI Ultra Fast 开关加入快照，强制重建旧缓存。
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -439,6 +439,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 		override, err := s.userGroupRateRepo.GetRPMOverrideByUserAndGroup(ctx, apiKey.User.ID, *apiKey.GroupID)
 		if err == nil && override != nil {
 			snapshot.User.UserGroupRPMOverride = override
+			snapshot.User.UserGroupRPMOverrideGroupID = *apiKey.GroupID
 		}
 		// 查询失败或无 override 时留 nil，checkRPM 会回退到 DB 查询
 	}
@@ -486,6 +487,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			AllowedClientProtocols:          cloneGroupClientProtocols(apiKey.Group.AllowedClientProtocols),
 			AllowLive:                       apiKey.Group.AllowLive,
 			ForceOpenAIFast:                 apiKey.Group.ForceOpenAIFast,
+			ForceOpenAIUltrafast:            apiKey.Group.ForceOpenAIUltrafast,
 			FreeOpenAIFast:                  apiKey.Group.FreeOpenAIFast,
 			DefaultMappedModel:              apiKey.Group.DefaultMappedModel,
 			MessagesDispatchModelConfig:     apiKey.Group.MessagesDispatchModelConfig,
@@ -554,23 +556,24 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 		RateLimit7d:                           snapshot.RateLimit7d,
 		FallbackToDefaultGroupWhenUnavailable: snapshot.FallbackToDefaultGroupWhenUnavailable,
 		User: &User{
-			ID:                         snapshot.User.ID,
-			Status:                     snapshot.User.Status,
-			Role:                       snapshot.User.Role,
-			Balance:                    snapshot.User.Balance,
-			Concurrency:                snapshot.User.Concurrency,
-			AllowedGroups:              snapshot.User.AllowedGroups,
-			Email:                      snapshot.User.Email,
-			Username:                   snapshot.User.Username,
-			BalanceNotifyEnabled:       snapshot.User.BalanceNotifyEnabled,
-			BalanceNotifyThresholdType: snapshot.User.BalanceNotifyThresholdType,
-			BalanceNotifyThreshold:     snapshot.User.BalanceNotifyThreshold,
-			BalanceNotifyExtraEmails:   snapshot.User.BalanceNotifyExtraEmails,
-			TotalRecharged:             snapshot.User.TotalRecharged,
-			RPMLimit:                   snapshot.User.RPMLimit,
-			UserGroupRPMOverride:       snapshot.User.UserGroupRPMOverride,
-			DisabledPublicGroups:       append([]int64(nil), snapshot.User.DisabledPublicGroups...),
-			GroupRestrictionsLoaded:    true,
+			ID:                          snapshot.User.ID,
+			Status:                      snapshot.User.Status,
+			Role:                        snapshot.User.Role,
+			Balance:                     snapshot.User.Balance,
+			Concurrency:                 snapshot.User.Concurrency,
+			AllowedGroups:               snapshot.User.AllowedGroups,
+			Email:                       snapshot.User.Email,
+			Username:                    snapshot.User.Username,
+			BalanceNotifyEnabled:        snapshot.User.BalanceNotifyEnabled,
+			BalanceNotifyThresholdType:  snapshot.User.BalanceNotifyThresholdType,
+			BalanceNotifyThreshold:      snapshot.User.BalanceNotifyThreshold,
+			BalanceNotifyExtraEmails:    snapshot.User.BalanceNotifyExtraEmails,
+			TotalRecharged:              snapshot.User.TotalRecharged,
+			RPMLimit:                    snapshot.User.RPMLimit,
+			UserGroupRPMOverride:        snapshot.User.UserGroupRPMOverride,
+			UserGroupRPMOverrideGroupID: snapshot.User.UserGroupRPMOverrideGroupID,
+			DisabledPublicGroups:        append([]int64(nil), snapshot.User.DisabledPublicGroups...),
+			GroupRestrictionsLoaded:     true,
 		},
 	}
 	if snapshot.ActorUser != nil {
@@ -627,6 +630,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			AllowedClientProtocols:          cloneGroupClientProtocols(snapshot.Group.AllowedClientProtocols),
 			AllowLive:                       snapshot.Group.AllowLive,
 			ForceOpenAIFast:                 snapshot.Group.ForceOpenAIFast,
+			ForceOpenAIUltrafast:            snapshot.Group.ForceOpenAIUltrafast,
 			FreeOpenAIFast:                  snapshot.Group.FreeOpenAIFast,
 			DefaultMappedModel:              snapshot.Group.DefaultMappedModel,
 			MessagesDispatchModelConfig:     snapshot.Group.MessagesDispatchModelConfig,
@@ -686,7 +690,7 @@ func authGroupSnapshotFromGroup(group *Group) *APIKeyAuthGroupSnapshot {
 		UnavailableFallbackGroupID: group.UnavailableFallbackGroupID, ModelRouting: group.ModelRouting,
 		ModelRoutingEnabled: group.ModelRoutingEnabled, MCPXMLInject: group.MCPXMLInject,
 		SupportedModelScopes: group.SupportedModelScopes, AllowedClientProtocols: cloneGroupClientProtocols(group.AllowedClientProtocols),
-		AllowLive: group.AllowLive, ForceOpenAIFast: group.ForceOpenAIFast, FreeOpenAIFast: group.FreeOpenAIFast, DefaultMappedModel: group.DefaultMappedModel,
+		AllowLive: group.AllowLive, ForceOpenAIFast: group.ForceOpenAIFast, ForceOpenAIUltrafast: group.ForceOpenAIUltrafast, FreeOpenAIFast: group.FreeOpenAIFast, DefaultMappedModel: group.DefaultMappedModel,
 		MessagesDispatchModelConfig: group.MessagesDispatchModelConfig, ModelsListConfig: group.ModelsListConfig,
 		RPMLimit: group.RPMLimit, MaxReasoningEffort: group.MaxReasoningEffort,
 		MaxReasoningEffortOverLimit: group.MaxReasoningEffortOverLimit,
@@ -724,7 +728,7 @@ func groupFromAuthSnapshot(snapshot *APIKeyAuthGroupSnapshot) *Group {
 		UnavailableFallbackGroupID:      snapshot.UnavailableFallbackGroupID, ModelRouting: snapshot.ModelRouting,
 		ModelRoutingEnabled: snapshot.ModelRoutingEnabled, MCPXMLInject: snapshot.MCPXMLInject,
 		SupportedModelScopes: snapshot.SupportedModelScopes, AllowedClientProtocols: cloneGroupClientProtocols(snapshot.AllowedClientProtocols),
-		AllowLive: snapshot.AllowLive, ForceOpenAIFast: snapshot.ForceOpenAIFast, FreeOpenAIFast: snapshot.FreeOpenAIFast, DefaultMappedModel: snapshot.DefaultMappedModel,
+		AllowLive: snapshot.AllowLive, ForceOpenAIFast: snapshot.ForceOpenAIFast, ForceOpenAIUltrafast: snapshot.ForceOpenAIUltrafast, FreeOpenAIFast: snapshot.FreeOpenAIFast, DefaultMappedModel: snapshot.DefaultMappedModel,
 		MessagesDispatchModelConfig: snapshot.MessagesDispatchModelConfig, ModelsListConfig: snapshot.ModelsListConfig,
 		RPMLimit: snapshot.RPMLimit, MaxReasoningEffort: snapshot.MaxReasoningEffort,
 		MaxReasoningEffortOverLimit: snapshot.MaxReasoningEffortOverLimit,

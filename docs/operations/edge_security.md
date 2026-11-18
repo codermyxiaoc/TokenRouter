@@ -11,6 +11,7 @@ TokenRouter 支持长时间运行的 SSE 和 WebSocket 请求。入口保护不�
 - [Nginx 基线](#nginx-基线)：使用 Nginx 作为边缘入口时读取。
 - [Caddy 与 CDN](#caddy-与-cdn)：修改仓库内 Caddyfile 或接入 CDN 前读取。
 - [DDoS 边界](#ddos-边界)：判断防护应位于应用还是网络边缘时读取。
+- [出站请求 SSRF 防护](#outbound_ssrf_dial_guard)：修改共享 HTTP 客户端、上游传输或不可信 URL 下载时读取。
 
 <a id="http_ingress_limits"></a>
 ## 应用默认值
@@ -33,7 +34,7 @@ TokenRouter 支持长时间运行的 SSE 和 WebSocket 请求。入口保护不�
 
 首次升级到该模式时，只有在 `server.trusted_proxies` 未被显式配置的情况下，旧的 `false` 才会改成 `true`；已有明确代理策略的环境继续使用安全模式。新安装在数据库初始化期间持久化自定义请求头列表。旧安装会用 YAML 配置回填缺失的数据库值。隐藏迁移标记会阻止后续管理员修改被再次覆盖。设置读取失败或已持久化的自定义请求头列表格式错误时，进程会以无自定义请求头的可信代理模式安全关闭兼容路径。迁移写入失败时，本次进程仍使用计算后的模式，并在启动日志记录警告。
 
-兼容接管模式会接受转发请求头而不校验直接对端，包括任何已配置的自定义请求头。开启时必须阻止外部直接访问源站。CDN 部署应通过防火墙只允许 CDN 或负载均衡器连接源站，并由该代理覆盖每个可信客户端 IP 请求头，而不是在不可信客户端值后追加。
+兼容接管模式会接受转发请求头而不校验直接对端，包括任何已配置的自定义请求头。开启时必须阻止外部直接访问源站，否则任何人都能伪造 `X-Forwarded-For` 等请求头绕过登录限流与 API Key IP 白名单。该开关开启时服务启动会记录一条安全告警；仓库示例配置 `deploy/config.example.yaml` 默认关闭它并只信任本机代理。CDN 部署应通过防火墙只允许 CDN 或负载均衡器连接源站，并由该代理覆盖每个可信客户端 IP 请求头，而不是在不可信客户端值后追加。
 
 同主机代理示例：
 
@@ -142,3 +143,14 @@ Caddy 核心不提供通用请求限速器，应使用可信 CDN/WAF、受支持
 应用检查只能减少连接到达 Go 进程后的放大效应，无法吸收容量型攻击、TLS 洪泛、带宽饱和或大规模分布式来源。这些威胁需要上游网络容量、CDN/WAF 过滤、云厂商防火墙规则和源站隔离。拒绝风暴期间应避免高基数指标或每请求数据库安全日志。
 
 相关文档：[HTTP 接口边界](../interfaces/http_api.md)、[配置边界](../interfaces/configuration.md)、[网关请求生命周期](../architecture/gateway_request_lifecycle.md)、[可观测性与数据生命周期](observability_and_data_lifecycle.md)和[运维目录](index.md)。
+
+<a id="outbound_ssrf_dial_guard"></a>
+## 出站请求 SSRF 防护
+
+请求前对域名做一次解析校验无法防御 DNS Rebinding：攻击者控制的域名可以在校验时解析到公网地址、真正拨号时改为 `127.0.0.1` 或内网地址。因此需要防护的出站请求在套接字 `connect` 之前，用拨号器的 `Control`/`ControlContext` 钩子校验本次实际连接的 IP（`urlvalidator.PublicOnlyDialControl`），校验与连接必然是同一地址；回环、私网、链路本地和未指定地址一律拒绝。TLS 仍按原始主机名做 SNI 与证书校验。
+
+- 共享 HTTP 客户端（`httpclient.GetClient`）：`ValidateResolvedIP` 开启且未允许私网时，直连拨号附带该钩子。请求前校验与 30 秒校验缓存保留，只作为快速失败。
+- 上游传输（普通与 TLS 指纹）：全局开启 `security.url_allowlist` 且禁止私网时，所有直连拨号校验；单次请求带 `WithHTTPUpstreamPublicHostsOnly` 标记时（如图片 URL 回填下载），只对该请求校验。拨号上下文就是请求上下文，因此同一连接池里的运营者内网上游不受影响。
+- TLS 指纹客户端在跟随重定向之前要求目标继续使用 HTTPS。直连指纹握手与普通 TCP 共享受控拨号器，指纹代理也拒绝降级跳转。[上游重定向策略](upstream_transport_security.md#目标与重定向校验)
+- 走 HTTP/SOCKS 代理时实际连接的是代理地址，由代理访问目标，钩子不拦截代理本身；部署在内网的代理照常可用。
+- 平台原有的 Linux `TCP_USER_TIMEOUT` 钩子保持不变，在公网校验通过后继续执行。

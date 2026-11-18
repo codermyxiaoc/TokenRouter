@@ -18,9 +18,12 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest, upstreamModel ...string)
 	if len(upstreamModel) > 0 && upstreamModel[0] != "" {
 		thinkingModel = upstreamModel[0]
 	}
-	if claude.IsSonnet55Model(thinkingModel) || claude.IsHaiku55Model(thinkingModel) {
+	if claude.IsSonnet55Model(thinkingModel) || claude.IsHaiku55Model(thinkingModel) || claude.IsClaude52Model(thinkingModel) {
 		body, err := json.Marshal(req)
 		if err != nil {
+			return nil, err
+		}
+		if err := claude.ValidateClaude52Request(body, thinkingModel); err != nil {
 			return nil, err
 		}
 		if err := claude.ValidateHaiku55Request(body, thinkingModel); err != nil {
@@ -75,8 +78,9 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest, upstreamModel ...string)
 		out.ToolChoice = tc
 	}
 
-	// Sonnet 5.5 默认启用自适应思考；none 只关闭工具调用之外的思考。
-	if claude.IsSonnet55Model(thinkingModel) || claude.IsHaiku55Model(thinkingModel) {
+	// Sonnet 5.5、Haiku 5.5 与 Fable/Mythos 5.2 默认启用自适应思考（默认 high）；
+	// none 只关闭工具调用之外的思考。
+	if claude.IsSonnet55Model(thinkingModel) || claude.IsHaiku55Model(thinkingModel) || claude.IsClaude52Model(thinkingModel) {
 		effort := "high"
 		if req.Reasoning != nil && strings.TrimSpace(req.Reasoning.Effort) != "" {
 			effort = strings.ToLower(strings.TrimSpace(req.Reasoning.Effort))
@@ -87,6 +91,10 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest, upstreamModel ...string)
 			out.Thinking.Type, effort = "between_tools", "low"
 			if claude.IsHaiku55Model(thinkingModel) {
 				out.Thinking.Type = "disabled"
+			}
+			// 5.2 只接受自适应思考，none 退化为最低档 low。
+			if claude.IsClaude52Model(thinkingModel) {
+				out.Thinking.Type = "adaptive"
 			}
 		case "low", "medium", "high", "xhigh", "max":
 		default:

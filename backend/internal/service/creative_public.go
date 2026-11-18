@@ -2683,6 +2683,8 @@ func (s *CreativePublicService) recordCreativeUsageLog(ctx context.Context, run 
 			usageLog.InputTokens, usageLog.ImageInputTokens = usage.InputTokens, usage.ImageInputTokens
 			usageLog.OutputTokens, usageLog.ImageOutputTokens = usage.OutputTokens, usage.ImageOutputTokens
 			usageLog.CacheCreationTokens, usageLog.CacheReadTokens = usage.CacheCreationTokens, usage.CacheReadTokens
+			usageLog.CacheCreation5mTokens, usageLog.CacheCreation1hTokens = usage.CacheCreation5mTokens, usage.CacheCreation1hTokens
+			usageLog.CacheCreation30mTokens, usageLog.CacheCreation12hTokens = usage.CacheCreation30mTokens, usage.CacheCreation12hTokens
 			usageLog.InputCost, usageLog.ImageInputCost, usageLog.OutputCost = usage.InputCost, usage.ImageInputCost, usage.OutputCost
 			usageLog.ImageOutputCost, usageLog.CacheCreationCost, usageLog.CacheReadCost = usage.ImageOutputCost, usage.CacheCreationCost, usage.CacheReadCost
 		}

@@ -7,6 +7,7 @@ import { apiClient } from './client'
 import type {
   PaymentConfig,
   SubscriptionPlan,
+  SubscriptionPlanGroupPreview,
   MethodLimitsResponse,
   CheckoutInfoResponse,
   CreateOrderRequest,
@@ -35,6 +36,11 @@ export const paymentAPI = {
   /** Get available subscription plans */
   getPlans() {
     return apiClient.get<SubscriptionPlan[]>('/payment/plans')
+  },
+
+  /** 按需读取在售套餐可使用的分组和模型。 */
+  getPlanGroups(planId: number, signal?: AbortSignal) {
+    return apiClient.get<SubscriptionPlanGroupPreview>(`/payment/plans/${planId}/groups`, { signal })
   },
 
   /** Get all checkout page data in a single call */

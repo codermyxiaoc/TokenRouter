@@ -7,8 +7,9 @@
 # =============================================================================
 
 ARG NODE_IMAGE=node:24-alpine
-ARG GOLANG_IMAGE=golang:1.27.3-alpine
-ARG ALPINE_IMAGE=alpine:3.20
+ARG GOLANG_IMAGE=golang:1.27.4-alpine
+# 运行层使用仍在安全维护期的 Alpine 3.22（OpenSSL 3.5 系列）；构建时 apk upgrade 拉取发布后的安全修复。
+ARG ALPINE_IMAGE=alpine:3.22
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
 
@@ -86,7 +87,7 @@ LABEL description="TokenRouter - AI API Gateway Platform"
 LABEL org.opencontainers.image.source="https://github.com/TokenFlux/TokenRouter"
 
 # Install runtime dependencies
-RUN apk add --no-cache \
+RUN apk upgrade --no-cache && apk add --no-cache \
     ca-certificates \
     tzdata \
     curl \

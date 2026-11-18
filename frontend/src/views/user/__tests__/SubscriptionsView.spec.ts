@@ -3,13 +3,14 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n, type MessageContext } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
-import type { SubscriptionPlan, UserSubscription } from '@/types'
+import type { PublicSettings, SubscriptionPlan, UserSubscription } from '@/types'
 import SubscriptionsView from '../SubscriptionsView.vue'
 import english from '@/i18n/locales/en/misc'
 
 const mockGetMySubscriptions = vi.fn()
 const mockGetActiveSubscriptions = vi.fn()
 const mockRevokeExhaustedSubscription = vi.fn()
+const originalConfig = window.__APP_CONFIG__
 
 vi.mock('@/api/subscriptions', () => ({
   default: {
@@ -46,6 +47,7 @@ function createTestI18n() {
           weekly: 'Weekly',
           monthly: 'Monthly',
           resetIn: ({ named }: MessageContext) => `Reset in ${named('time')}`,
+          resetTime: () => english.userSubscriptions.resetTime,
           quotaEndsIn: ({ named }: MessageContext) => `Ends in ${named('time')}`,
           // 测试环境使用 runtime-only i18n，消息函数验证实际计数而非只检查翻译键。
           resetCount: ({ named }: MessageContext) => english.userSubscriptions.resetCount.replace('{count}', String(named('count'))),
@@ -159,6 +161,33 @@ describe('SubscriptionsView', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    window.__APP_CONFIG__ = originalConfig
+  })
+
+  it('按项目时区在每个可刷新窗口的倒计时前显示精确到秒的重置时间', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-23T16:00:00Z'))
+    window.__APP_CONFIG__ = { server_timezone: 'America/New_York' } as PublicSettings
+    mockGetMySubscriptions.mockResolvedValue([{
+      ...subscriptionWithGroups(), starts_at: '2026-08-01T04:00:00Z', expires_at: '2026-11-01T04:00:00Z',
+      daily_limit_usd: 10, weekly_limit_usd: 60, monthly_limit_usd: 150,
+      daily_window_start: '2026-09-23T04:00:00Z', weekly_window_start: '2026-09-22T15:44:35Z',
+      monthly_window_start: '2026-09-01T17:03:51Z'
+    }])
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const times = wrapper.findAll('time')
+    expect(times.map(time => time.attributes('datetime'))).toEqual([
+      '2026-09-24T04:00:00.000Z', '2026-09-29T15:44:35.000Z', '2026-10-01T17:03:51.000Z'
+    ])
+    expect(times.map(time => time.text())).toEqual([
+      '09/24/2026, 00:00:00', '09/29/2026, 11:44:35', '10/01/2026, 13:03:51'
+    ])
+    expect(times.map(time => time.element.parentElement?.nextElementSibling?.textContent)).toEqual([
+      'Reset in 12h 0m', 'Reset in 5d 23h', 'Reset in 8d 1h'
+    ])
+    wrapper.unmount()
   })
 
   it('shows the server reset count for each configured window even before it is started', async () => {
@@ -173,6 +202,7 @@ describe('SubscriptionsView', () => {
     expect(wrapper.get('[data-testid="quota-reset-count-daily"]').text()).toBe('Reset 17 times')
     expect(wrapper.get('[data-testid="quota-reset-count-weekly"]').text()).toBe('Reset 3 times')
     expect(wrapper.get('[data-testid="quota-reset-count-monthly"]').text()).toBe('Reset 2 times')
+    expect(wrapper.find('time').exists()).toBe(false)
     expect(wrapper.get('[data-testid="quota-reset-count-daily"]').attributes('title')).toContain('even without usage')
     wrapper.unmount()
   })
@@ -266,6 +296,7 @@ describe('SubscriptionsView', () => {
     const wrapper = await mountView()
     await flushPromises()
     expect(wrapper.text()).toContain('Ends in')
+    expect(wrapper.find('time').exists()).toBe(false)
     expect(wrapper.get('[data-testid="quota-window-explanation-daily"]').text()).toBe(english.userSubscriptions.quotaNoFurtherResetHint)
     expect(wrapper.text()).not.toContain('Reset in')
     wrapper.unmount()
@@ -282,6 +313,7 @@ describe('SubscriptionsView', () => {
     const wrapper = await mountView()
     await flushPromises()
     expect(wrapper.get('[data-testid="quota-window-explanation-daily"]').text()).toBe(english.userSubscriptions.oneTimeQuotaHint)
+    expect(wrapper.find('time').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Reset in')
     expect(wrapper.get('[data-testid="quota-reset-count-daily"]').text()).toBe('Reset 0 times')
     wrapper.unmount()

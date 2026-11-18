@@ -758,15 +758,37 @@ func TestTransformClaudeToGemini_ToolResultImagesReachUpstream(t *testing.T) {
 	require.Equal(t, "toolu_img_1", userParts[0].FunctionResponse.ID)
 	require.Equal(t, "loaded colors.png", userParts[0].FunctionResponse.Response["result"])
 
-	require.NotNil(t, userParts[1].InlineData)
-	require.Equal(t, "image/png", userParts[1].InlineData.MimeType)
-	require.Equal(t, "aGVsbG8=", userParts[1].InlineData.Data)
+	// functionResponse 保持连续，图片统一排在其后。
+	require.NotNil(t, userParts[1].FunctionResponse)
+	require.Equal(t, "read_image", userParts[1].FunctionResponse.Name)
+	require.Equal(t, "Command executed successfully.", userParts[1].FunctionResponse.Response["result"])
 
-	require.NotNil(t, userParts[2].FunctionResponse)
-	require.Equal(t, "read_image", userParts[2].FunctionResponse.Name)
-	require.Equal(t, "Command executed successfully.", userParts[2].FunctionResponse.Response["result"])
+	require.NotNil(t, userParts[2].InlineData)
+	require.Equal(t, "image/png", userParts[2].InlineData.MimeType)
+	require.Equal(t, "aGVsbG8=", userParts[2].InlineData.Data)
 
 	require.NotNil(t, userParts[3].InlineData)
 	require.Equal(t, "image/jpeg", userParts[3].InlineData.MimeType)
 	require.Equal(t, "d29ybGQ=", userParts[3].InlineData.Data)
+}
+
+// 并行工具结果中的图片必须排在所有 functionResponse 之后，保持 functionResponse 连续，否则上游返回 400。
+func TestBuildParts_ParallelToolResultMediaAfterFunctionResponses(t *testing.T) {
+	content := `[
+		{"type":"tool_result","tool_use_id":"call_img_1","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AQID"}}]},
+		{"type":"tool_result","tool_use_id":"call_img_2","content":[{"type":"text","text":"loaded b.jpg"},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"BAUG"}}]},
+		{"type":"tool_result","tool_use_id":"call_cmd_3","content":"README.md"}
+	]`
+	toolIDToName := map[string]string{"call_img_1": "view_image", "call_img_2": "view_image", "call_cmd_3": "exec_command"}
+	parts, _, err := buildParts(json.RawMessage(content), toolIDToName, true)
+	require.NoError(t, err)
+	require.Len(t, parts, 5)
+	for i, id := range []string{"call_img_1", "call_img_2", "call_cmd_3"} {
+		require.NotNil(t, parts[i].FunctionResponse, "part %d", i)
+		require.Equal(t, id, parts[i].FunctionResponse.ID)
+	}
+	require.NotNil(t, parts[3].InlineData)
+	require.Equal(t, "image/png", parts[3].InlineData.MimeType)
+	require.NotNil(t, parts[4].InlineData)
+	require.Equal(t, "image/jpeg", parts[4].InlineData.MimeType)
 }

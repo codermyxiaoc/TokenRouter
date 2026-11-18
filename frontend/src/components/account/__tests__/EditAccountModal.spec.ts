@@ -358,6 +358,48 @@ describe('EditAccountModal', () => {
     listTLSProfilesMock.mockResolvedValue([])
   })
 
+  // 透传账号可显式开启按模型过滤；关闭透传时清除该开关。
+  it.each(['apikey', 'oauth'])('can opt a passthrough %s account into model filtering without changing groups', async (type) => {
+    const account = buildAccount()
+    account.type = type
+    account.extra = { openai_passthrough: true }
+    account.group_ids = [17]
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    expect(wrapper.findComponent(ModelWhitelistSelectorStub).exists()).toBe(false)
+    await wrapper.get('[data-testid="edit-openai-passthrough-model-filter"]').setValue(true)
+    // 开启过滤后模型限制区出现，选择一个白名单模型再提交。
+    wrapper.getComponent(ModelWhitelistSelectorStub).vm.$emit('update:modelValue', ['gpt-5.2-2025-12-11'])
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload.extra.openai_passthrough).toBe(true)
+    expect(payload.extra.openai_passthrough_model_filter).toBe(true)
+    // fork 将最终白名单与请求侧映射拆开持久化。
+    expect(payload.credentials.model_whitelist).toEqual(['gpt-5.2-2025-12-11'])
+    expect(payload.group_ids).toEqual([17])
+    wrapper.unmount()
+  })
+
+  it('loads the saved model filter and removes it when passthrough is disabled', async () => {
+    const account = buildAccount()
+    account.extra = { openai_passthrough: true, openai_passthrough_model_filter: true }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get<HTMLInputElement>('[data-testid="edit-openai-passthrough-model-filter"]').element.checked).toBe(true)
+    expect(wrapper.findComponent(ModelWhitelistSelectorStub).exists()).toBe(true)
+    await wrapper.get('[data-testid="edit-openai-passthrough-toggle"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_passthrough_model_filter')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials.model_mapping).toEqual(account.credentials.model_mapping)
+    wrapper.unmount()
+  })
+
   // OpenAI API Key 可独立覆盖渠道搜索配置，订阅账号不能开启此模拟路径。
   it.each(['enabled', 'disabled', true, undefined])('round-trips the OpenAI web search mode %s and restores channel default', async mode => {
     getWebSearchEmulationConfigMock.mockResolvedValue({ enabled: true, providers: [{ type: 'tavily' }] })

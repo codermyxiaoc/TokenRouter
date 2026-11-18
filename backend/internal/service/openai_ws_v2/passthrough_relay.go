@@ -15,6 +15,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 )
 
@@ -25,12 +26,14 @@ type FrameConn interface {
 }
 
 type Usage struct {
-	InputTokens              int
-	ImageInputTokens         int
-	OutputTokens             int
-	CacheCreationInputTokens int
-	CacheReadInputTokens     int
-	ImageOutputTokens        int
+	InputTokens                 int
+	ImageInputTokens            int
+	OutputTokens                int
+	CacheCreationInputTokens    int
+	CacheCreation30mInputTokens int
+	CacheCreation12hInputTokens int
+	CacheReadInputTokens        int
+	ImageOutputTokens           int
 }
 
 type RelayResult struct {
@@ -87,6 +90,8 @@ type RelayOptions struct {
 	BeforeRelayCancel func(exit RelayExit)
 	ReadClientFrame   func(ctx context.Context, clientConn FrameConn) (coderws.MessageType, []byte, error)
 	OnTrace           func(event RelayTraceEvent)
+	// IsFirstTokenEvent 决定哪个上游事件标记首 token；为 nil 时沿用内置的 delta 规则。
+	IsFirstTokenEvent func(eventType string, message []byte) bool
 	Now               func() time.Time
 }
 
@@ -114,6 +119,7 @@ type relayState struct {
 	turnTimingByID          map[string]*relayTurnTiming
 	activeTurn              *relayTurnTiming
 	pendingBareError        *observedUpstreamEvent
+	isFirstTokenEvent       func(eventType string, message []byte) bool
 }
 
 type relayExitSignal struct {
@@ -175,7 +181,7 @@ func Relay(
 		firstMessageType = coderws.MessageText
 	}
 	startAt := nowFn()
-	state := &relayState{requestModel: result.RequestModel}
+	state := &relayState{requestModel: result.RequestModel, isFirstTokenEvent: options.IsFirstTokenEvent}
 	if isClientResponseCreateFrame(firstMessageType, firstClientMessage) {
 		firstTurnStartedAt := options.FirstTurnStartedAt
 		if firstTurnStartedAt.IsZero() {
@@ -774,7 +780,7 @@ func observeUpstreamMessage(
 	}
 	now := nowFn()
 
-	if state.firstTokenMs == nil && isTokenEvent(eventType) {
+	if state.firstTokenMs == nil && state.startsFirstToken(eventType, message) {
 		ms := int(now.Sub(startAt).Milliseconds())
 		if ms >= 0 {
 			state.firstTokenMs = &ms
@@ -797,7 +803,7 @@ func observeUpstreamMessage(
 		turnTiming = state.activeTurn
 	}
 	// 每个 turn 独立记录首 token；连接级 firstTokenMs 只反映整条连接的第一个 token。
-	if turnTiming != nil && turnTiming.firstTokenMs == nil && isTokenEvent(eventType) {
+	if turnTiming != nil && turnTiming.firstTokenMs == nil && state.startsFirstToken(eventType, message) {
 		ms := int(now.Sub(turnTiming.startAt).Milliseconds())
 		if ms >= 0 {
 			turnTiming.firstTokenMs = &ms
@@ -1101,13 +1107,17 @@ func parseUsageAndAccumulate(
 			int64(inputTokens), int64(outputTokens), int64(totalTokens), int64(reasoningTokens),
 		))
 	}
+	cacheCreationTokens := openAICacheCreationTokensFromUsage(usageResult)
+	cache30m, cache12h := openai.CacheWriteTTLTokens(usageResult, cacheCreationTokens)
 	parsedUsage := Usage{
-		InputTokens:              inputTokens,
-		ImageInputTokens:         imageInputTokens,
-		OutputTokens:             outputTokens,
-		CacheCreationInputTokens: openAICacheCreationTokensFromUsage(usageResult),
-		CacheReadInputTokens:     cachedTokens,
-		ImageOutputTokens:        imageTokens,
+		InputTokens:                 inputTokens,
+		ImageInputTokens:            imageInputTokens,
+		OutputTokens:                outputTokens,
+		CacheCreationInputTokens:    cacheCreationTokens,
+		CacheCreation30mInputTokens: cache30m,
+		CacheCreation12hInputTokens: cache12h,
+		CacheReadInputTokens:        cachedTokens,
+		ImageOutputTokens:           imageTokens,
 	}
 
 	if isTerminalEvent(strings.TrimSpace(eventType)) {
@@ -1178,6 +1188,9 @@ func mergeRelayUsageNonZero(dst *Usage, src Usage) {
 	}
 	if src.CacheCreationInputTokens > 0 {
 		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
+		// 同轮后续快照更新总量时同步替换期限，避免沿用旧快照的拆分。
+		dst.CacheCreation30mInputTokens = src.CacheCreation30mInputTokens
+		dst.CacheCreation12hInputTokens = src.CacheCreation12hInputTokens
 	}
 	if src.CacheReadInputTokens > 0 {
 		dst.CacheReadInputTokens = src.CacheReadInputTokens
@@ -1215,12 +1228,18 @@ func addRelayUsage(previous, next Usage) (Usage, bool) {
 	}{
 		{&result.InputTokens, next.InputTokens}, {&result.ImageInputTokens, next.ImageInputTokens},
 		{&result.OutputTokens, next.OutputTokens}, {&result.CacheCreationInputTokens, next.CacheCreationInputTokens},
+		{&result.CacheCreation30mInputTokens, next.CacheCreation30mInputTokens}, {&result.CacheCreation12hInputTokens, next.CacheCreation12hInputTokens},
 		{&result.CacheReadInputTokens, next.CacheReadInputTokens}, {&result.ImageOutputTokens, next.ImageOutputTokens},
 	} {
 		if *pair.target < 0 || pair.increment < 0 || *pair.target > math.MaxInt-pair.increment {
 			return Usage{}, false
 		}
 		*pair.target += pair.increment
+	}
+	// 有写入的回合缺少明细时，整个会话的总量无法完整拆分；逐轮结果仍保留各自的明细。
+	if result.CacheCreation12hInputTokens != result.CacheCreationInputTokens-result.CacheCreation30mInputTokens {
+		result.CacheCreation30mInputTokens = 0
+		result.CacheCreation12hInputTokens = 0
 	}
 	return result, true
 }
@@ -1314,6 +1333,13 @@ func shouldParseUsage(eventType string) bool {
 		return true
 	}
 	return strings.HasPrefix(eventType, "response.") && !strings.HasSuffix(eventType, ".delta")
+}
+
+func (s *relayState) startsFirstToken(eventType string, message []byte) bool {
+	if s.isFirstTokenEvent != nil {
+		return !isTerminalEvent(eventType) && s.isFirstTokenEvent(eventType, message)
+	}
+	return isTokenEvent(eventType)
 }
 
 func isTokenEvent(eventType string) bool {

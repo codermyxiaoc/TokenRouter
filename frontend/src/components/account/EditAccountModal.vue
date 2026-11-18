@@ -1861,6 +1861,7 @@
           </div>
           <button
             type="button"
+            data-testid="edit-openai-passthrough-toggle"
             @click="openaiPassthroughEnabled = !openaiPassthroughEnabled"
             :class="[
               'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
@@ -1875,6 +1876,20 @@
             />
           </button>
         </div>
+        <label v-if="openaiPassthroughEnabled" class="mt-3 flex items-start gap-2">
+          <input
+            v-model="openaiPassthroughModelFilterEnabled"
+            type="checkbox"
+            data-testid="edit-openai-passthrough-model-filter"
+            class="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+          <span class="text-sm">
+            {{ t('admin.accounts.openai.passthroughModelFilter') }}
+            <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.passthroughModelFilterDesc') }}
+            </span>
+          </span>
+        </label>
       </div>
 
       <!-- OpenAI Codex namespace 工具摊平兼容开关，仅 OAuth 可用 -->
@@ -3568,6 +3583,8 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
+// 透传账号显式开启“调度时按模型过滤”（extra.openai_passthrough_model_filter）
+const openaiPassthroughModelFilterEnabled = ref(false)
 // OpenAI OAuth namespace 工具摊平兼容开关，缺省关闭即原样保留。
 const openaiFlattenNamespacesEnabled = ref(false)
 // OpenAI 订阅档位（Plus/Pro/Free）手动覆盖值,存于 credentials.plan_type;'' 表示清空/自动识别
@@ -3791,7 +3808,7 @@ const readOpenAIResponsesProbeStatus = (extra?: Record<string, unknown>): OpenAI
   return 'unknown'
 }
 const isOpenAIModelRestrictionDisabled = computed(() =>
-  props.account?.platform === 'openai' && openaiPassthroughEnabled.value
+  props.account?.platform === 'openai' && openaiPassthroughEnabled.value && !openaiPassthroughModelFilterEnabled.value
 )
 const openAIResponsesProbeStatus = computed(() => {
   const extra = props.account?.extra as Record<string, unknown> | undefined
@@ -4040,7 +4057,7 @@ const applyQoderModelRestriction = (credentials: Record<string, unknown>) => {
 }
 
 const applyOpenAIModelMappingCredentials = (credentials: Record<string, unknown>) => {
-  const shouldApplyModelMapping = !openaiPassthroughEnabled.value
+  const shouldApplyModelMapping = !isOpenAIModelRestrictionDisabled.value
 
   if (shouldApplyModelMapping) {
     if (isSparkShadow.value) {
@@ -4150,6 +4167,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // 加载 OpenAI OAuth、SetupToken 和 API Key 账号的透传设置。
   openaiPassthroughEnabled.value = false
+  openaiPassthroughModelFilterEnabled.value = false
   openaiFlattenNamespacesEnabled.value = false
   editPlanType.value = ''
   openAICompactMode.value = 'auto'
@@ -4170,6 +4188,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
+    openaiPassthroughModelFilterEnabled.value = extra?.openai_passthrough_model_filter === true
     openaiFlattenNamespacesEnabled.value =
       newAccount.type === 'oauth' && extra?.openai_responses_flatten_namespaces === true
     // plan_type 手动覆盖仅 OAuth 有实际调度语义(IsOpenAIChatGPTSubscription 要求 oauth),故只对 oauth 回填
@@ -5217,7 +5236,7 @@ const handleSubmit = async () => {
         return
       }
       const newBaseUrl = enteredBaseUrl || defaultBaseUrl.value
-      const shouldApplyModelMapping = !(props.account.platform === 'openai' && openaiPassthroughEnabled.value)
+      const shouldApplyModelMapping = !isOpenAIModelRestrictionDisabled.value
 
       // API Key 类型始终提交 credentials，以便同步模型映射变更。
       const newCredentials: Record<string, unknown> = {
@@ -5793,6 +5812,12 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.openai_passthrough
         delete newExtra.openai_oauth_passthrough
+      }
+      // 只有透传开启时才保存按模型过滤开关，关闭时删除避免残留。
+      if (openaiPassthroughEnabled.value && openaiPassthroughModelFilterEnabled.value) {
+        newExtra.openai_passthrough_model_filter = true
+      } else {
+        delete newExtra.openai_passthrough_model_filter
       }
       // 关闭时删除默认项，避免账号 extra 堆积无意义的 false。
       if (props.account.type === 'oauth' && openaiFlattenNamespacesEnabled.value) {

@@ -19,7 +19,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/service"
 )
 
-const usageLogSelectColumns = "id, user_id, billing_user_id, team_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, image_input_tokens, image_input_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, subscription_amount_usd, balance_amount_usd, billing_allocations, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, image_count, image_size, image_input_size, image_output_size, image_size_source, image_size_breakdown, video_count, video_resolution, video_duration_seconds, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, long_context_billing_applied, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, upstream_request_id, session_id, created_at, requested_reasoning_effort, native_compaction_v2"
+const usageLogSelectColumns = "id, user_id, billing_user_id, team_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, image_input_tokens, image_input_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, subscription_amount_usd, balance_amount_usd, billing_allocations, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, image_count, image_size, image_input_size, image_output_size, image_size_source, image_size_breakdown, video_count, video_resolution, video_duration_seconds, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, long_context_billing_applied, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, upstream_request_id, session_id, created_at, requested_reasoning_effort, native_compaction_v2, cache_creation_30m_tokens, cache_creation_12h_tokens"
 
 func (r *usageLogRepository) GetByID(ctx context.Context, id int64) (log *service.UsageLog, err error) {
 	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE id = $1"
@@ -576,6 +576,8 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		createdAt                 time.Time
 		requestedReasoningEffort  sql.NullString
 		nativeCompactionV2        bool
+		cacheCreation30m          int
+		cacheCreation12h          int
 	)
 
 	if err := scanner.Scan(
@@ -645,6 +647,8 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		&createdAt,
 		&requestedReasoningEffort,
 		&nativeCompactionV2,
+		&cacheCreation30m,
+		&cacheCreation12h,
 	); err != nil {
 		return nil, err
 	}
@@ -685,6 +689,8 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		LongContextBillingApplied: longContextBillingApplied,
 		CreatedAt:                 createdAt,
 		NativeCompactionV2:        nativeCompactionV2,
+		CacheCreation30mTokens:    cacheCreation30m,
+		CacheCreation12hTokens:    cacheCreation12h,
 	}
 	// 先回填 legacy 字段，再基于 legacy + request_type 计算最终请求类型，保证历史数据兼容。
 	log.Stream = stream

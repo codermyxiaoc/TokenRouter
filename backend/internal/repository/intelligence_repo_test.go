@@ -12,7 +12,7 @@ import (
 
 // 摘要大小不能随作品增长；私有恢复凭证不属于任何可展示 JSON 列。
 func TestIntelligenceRunSummaryPayloadSplit(t *testing.T) {
-	run := &service.IntelligenceRun{ID: "iq-test", ConfigID: 1, GroupID: 2, Model: "test-model", Benchmark: "drawing", Status: "completed", Verdict: "passed", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), HTML: "<svg>" + strings.Repeat("画", 200000) + "</svg>", Question: "full question", Answer: strings.Repeat("full answer", 20000), AssessmentReason: "full assessment", RemoteID: "private-remote-token", LeaseToken: "private-lease", HasDetail: true}
+	run := &service.IntelligenceRun{ID: "iq-test", ConfigID: 1, GroupID: 2, Model: "test-model", Benchmark: "drawing", Status: "completed", Verdict: "reference", AssessmentQuality: "degraded", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), HTML: "<svg>" + strings.Repeat("画", 200000) + "</svg>", Question: "full question", Answer: strings.Repeat("full answer", 20000), AssessmentReason: "full assessment", RemoteID: "private-remote-token", LeaseToken: "private-lease", HasDetail: true}
 	record, payload, err := marshalIntelligenceRun(run)
 	require.NoError(t, err)
 	require.Less(t, len(record), 2048)
@@ -40,6 +40,8 @@ func TestIntelligenceRunSummaryPayloadSplit(t *testing.T) {
 	require.Equal(t, run.Question, restored.Question)
 	require.Equal(t, run.Answer, restored.Answer)
 	require.Equal(t, run.AssessmentReason, restored.AssessmentReason)
+	require.Equal(t, "reference", restored.Verdict)
+	require.Equal(t, "degraded", restored.AssessmentQuality)
 	require.Equal(t, run.Model, restored.Model)
 	require.Empty(t, restored.RemoteID)
 	require.Empty(t, restored.LeaseToken)

@@ -76,6 +76,7 @@ const props = withDefaults(
   defineProps<{
     label: string
     utilization: number // Percentage (0-100+)
+    utilizationUnknown?: boolean
     resetsAt?: string | null
     color: 'indigo' | 'emerald' | 'purple' | 'amber'
     windowStats?: WindowStats | null
@@ -170,11 +171,13 @@ const textClass = computed(() => {
 
 // Bar width (capped at 100%)
 const barWidth = computed(() => {
+  if (props.utilizationUnknown) return '0%'
   return `${Math.min(Math.max(props.utilization, 0), 100)}%`
 })
 
 // Display percentage (cap at 999% for readability)
 const displayPercent = computed(() => {
+  if (props.utilizationUnknown) return '—'
   const percent = Math.round(
     props.remainingCapacity
       ? Math.min(Math.max(props.utilization, 0), 100)
@@ -184,6 +187,7 @@ const displayPercent = computed(() => {
 })
 
 const shouldShowResetTime = computed(() => {
+  if (props.utilizationUnknown) return false
   if (props.resetsAt) return true
   return Boolean(props.showNowWhenIdle && props.utilization <= 0)
 })

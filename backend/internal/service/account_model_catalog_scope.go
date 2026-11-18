@@ -9,7 +9,8 @@ func accountDeclaresCatalogModel(account *Account, model string) bool {
 		return false
 	}
 	// 这些平台继续使用各自已有的透传、平台映射或站点目录合同。
-	if account.IsOpenAIPassthroughEnabled() || account.Platform == PlatformAntigravity || account.Platform == PlatformQoder {
+	// 开启按模型过滤的透传账号受映射约束，不再整体放行。
+	if (account.IsOpenAIPassthroughEnabled() && !account.IsOpenAIPassthroughModelFilterEnabled()) || account.Platform == PlatformAntigravity || account.Platform == PlatformQoder {
 		return true
 	}
 	if account.Platform == PlatformVideo {

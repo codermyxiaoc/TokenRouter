@@ -111,10 +111,11 @@ func buildTransport(opts Options) (*http.Transport, error) {
 		maxIdleConnsPerHost = defaultMaxIdleConnsPerHost
 	}
 
+	dialer := &net.Dialer{
+		Timeout: defaultDialTimeout,
+	}
 	transport := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout: defaultDialTimeout,
-		}).DialContext,
+		DialContext:           dialer.DialContext,
 		TLSHandshakeTimeout:   defaultTLSHandshakeTimeout,
 		MaxIdleConns:          maxIdleConns,
 		MaxIdleConnsPerHost:   maxIdleConnsPerHost,
@@ -133,6 +134,11 @@ func buildTransport(opts Options) (*http.Transport, error) {
 		return nil, err
 	}
 	if parsed == nil {
+		// 防 DNS Rebinding：直连时在套接字连接前校验本次实际连接的 IP，使校验与连接是同一地址。
+		// 走代理时连接的是代理地址，由代理访问目标，不在此处拦截。
+		if opts.ValidateResolvedIP && !opts.AllowPrivateHosts {
+			dialer.Control = urlvalidator.PublicOnlyDialControl
+		}
 		return transport, nil
 	}
 

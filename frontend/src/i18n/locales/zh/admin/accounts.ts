@@ -896,7 +896,11 @@ export default {
         grokLastHeadersSeen: '响应头 {time}',
         passiveSampled: '被动采样',
         activeQuery: '查询',
-        quotaAutoPaused: '暂停调度中'
+        quotaAutoPaused: '暂停调度中',
+        quotaRefreshFailedCached: '刷新失败，当前显示历史额度，不能确认剩余额度。',
+        quotaRefreshFailedUnknown: '刷新失败，当前额度未知。',
+        quotaObservedAt: '额度采样时间：',
+        quotaObservationUnknown: '未知（历史缓存）'
       },
       openaiReferral: {
         available: '可邀请',
@@ -1108,6 +1112,9 @@ export default {
         oauthPassthrough: '自动透传（仅替换认证）',
         oauthPassthroughDesc:
           '开启后，该 OpenAI 账号将自动透传请求与响应，仅替换认证并保留计费/并发/审计及必要安全过滤；如遇兼容性问题可随时关闭回滚。',
+        passthroughModelFilter: '透传时按账号模型筛选',
+        passthroughModelFilterDesc:
+          '使用账号模型白名单与映射的来源模型名筛选候选账号，映射目标不会改写透传请求的模型名。列表为空时允许所有模型。默认关闭。',
         flattenNamespaces: '摊平 Codex namespace 工具（兼容）',
         flattenNamespacesDesc:
           '默认关闭。仅当 OAuth 中转上游拒绝 namespace 工具时开启；普通 Responses 请求会原样保留，compact 请求始终摊平。',
@@ -1221,7 +1228,7 @@ export default {
         testModeDefault: '常规请求',
         testModeCompact: '原生 V2 压缩探测',
         testModeLegacyCompact: '旧版 Compact 端点探测',
-        modelRestrictionDisabledByPassthrough: '已开启自动透传：最终模型白名单和账号模型映射不会生效。',
+        modelRestrictionDisabledByPassthrough: '已开启自动透传：默认忽略最终模型白名单和账号模型映射；开启“透传时按账号模型筛选”后，模型限制仅用于筛选候选账号，转发仍保持透传。',
       },
       grok: {
         baseUrlHint: 'Grok OAuth 账号会转发到官方 xAI API Base URL。',
@@ -1321,6 +1328,7 @@ export default {
       addModel: '填入',
       modelMappingConflict: '模型 {model} 已映射到其他目标，无法同时作为 Antigravity 白名单自映射。请移除冲突项后保存。',
       modelExists: '该模型已存在',
+      modelWildcardNotSupported: '模型白名单不支持通配符，请输入完整的模型名称。',
       modelCount: '{count} 个模型',
       poolMode: '池模式',
       poolModeHint: '上游为账号池时启用，默认错误不标记本地调度状态',

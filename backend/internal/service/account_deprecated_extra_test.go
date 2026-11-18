@@ -205,3 +205,7 @@ func TestAdminServiceBulkUpdateAccountsIgnoresDeprecatedLongContextBillingExtra(
 	require.Equal(t, 1, repo.bulkUpdateCalls)
 	require.Equal(t, map[string]any{"preserved": true}, repo.lastBulkExtraUpdate)
 }
+
+func (r *deprecatedAccountExtraRepoStub) ClearModelRateLimit(context.Context, int64, string) error {
+	return nil
+}

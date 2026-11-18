@@ -17,6 +17,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/apicompat"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 	"github.com/TokenFlux/TokenRouter/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
@@ -196,15 +197,16 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		}
 		streamInterval = resolveGrokStreamIdleTimeout(cfgSec)
 	}
-	// 仅监控上游数据间隔超时，不被下游写入阻塞影响
-	var intervalTicker *time.Ticker
+	// 仅监控上游数据间隔超时，不被下游写入阻塞影响。
+	// 用 Timer 并按最后读取时间重新计时，避免 Ticker 在临界点附近多等将近一个周期。
+	var intervalTimer *time.Timer
 	if streamInterval > 0 {
-		intervalTicker = time.NewTicker(streamInterval)
-		defer intervalTicker.Stop()
+		intervalTimer = time.NewTimer(streamInterval)
+		defer intervalTimer.Stop()
 	}
 	var intervalCh <-chan time.Time
-	if intervalTicker != nil {
-		intervalCh = intervalTicker.C
+	if intervalTimer != nil {
+		intervalCh = intervalTimer.C
 	}
 
 	keepaliveInterval := time.Duration(0)
@@ -370,6 +372,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	needModelReplace := originalModel != mappedModel
 	var createdAtStamper responsesCreatedAtStamper
 	responseAccumulator := apicompat.NewBufferedResponseAccumulator()
+	// xAI 服务端搜索调用按原条目重建，不当作客户端 function_call。
+	responseAccumulator.XAIServerSideSearch = account != nil && account.IsGrok()
 	streamDoneItems := newResponsesStreamOutputItems()
 	streamImageOutputs := make([]json.RawMessage, 0, 1)
 	streamSeenImages := make(map[string]struct{})
@@ -513,6 +517,24 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		sendErrorEvent(code, message)
 		return resultWithUsage(), fmt.Errorf("stream read error: %w", scanErr), true
 	}
+	// 上游 keepalive 事件与注释心跳一样绕过首输出暂存区：Codex 只在解析出 SSE 事件时重置
+	// 空闲计时，长推理期间仅收到注释心跳会在 300s 后断流。生命周期事件与账号头仍暂存到
+	// 语义输出出现为止；keepalive 字节不计为客户端输出，也不重置首输出超时。
+	keepaliveEventDirect := false
+	forwardsKeepaliveDirect := func(eventType string) bool {
+		return eventType == "keepalive" && stageFirstOutput && firstOutputStage != nil && !firstOutputStage.closed && !failureDelivered && !suppressCurrentEvent
+	}
+	writeKeepaliveDirect := func(value string) {
+		if clientDisconnected {
+			return
+		}
+		n, err := w.Write([]byte(value))
+		recordOpenAIStreamKeepaliveBytes(c, n)
+		if err != nil {
+			clientDisconnected = true
+			logger.LegacyPrintf("service.openai_gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
+		}
+	}
 	processSSELine := func(line string, queueDrained bool) {
 		if streamEarlyErr != nil {
 			return
@@ -521,12 +543,25 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			pendingSSEEventType = eventType
 			eventType = strings.TrimSpace(eventType)
 			suppressCurrentEvent = codexFailureTerminal && (eventType == "error" || (sawBareError && !sawResponseFailed && eventType != "response.failed"))
+			if forwardsKeepaliveDirect(eventType) {
+				keepaliveEventDirect = true
+				eventInProgress = true
+				writeKeepaliveDirect(line + "\n")
+				return
+			}
 		}
 		// Extract data from SSE line (supports both "data: " and "data:" formats)
 		if data, ok := extractOpenAISSEDataLine(line); ok {
 			MarkOpsTimestamp(c, ctxkey.FirstSSEDataAt)
 			dataBytes := []byte(data)
 			eventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
+			// 覆盖 event: keepalive + data 与仅 data 两种 keepalive 形态。
+			if keepaliveEventDirect || forwardsKeepaliveDirect(eventType) {
+				keepaliveEventDirect = true
+				eventInProgress = true
+				writeKeepaliveDirect(line + "\n")
+				return
+			}
 			if codexFailureTerminal && sawBareError && !sawResponseFailed &&
 				(eventType == "response.completed" || eventType == "response.done") {
 				// 成功终态恢复暂存错误，但上游错误事实仍保留为已恢复记录。
@@ -778,6 +813,17 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		// A blank line dispatches a guarded event from the attempt-local stage.
 		if stageFirstOutput && line == "" {
 			pendingSSEEventType = ""
+			// 直写的 keepalive 事件在空行处结束并立即 flush，不进入暂存区。
+			if keepaliveEventDirect {
+				keepaliveEventDirect = false
+				eventInProgress = false
+				writeKeepaliveDirect("\n")
+				if !clientDisconnected {
+					flusher.Flush()
+					lastDownstreamWriteAt = time.Now()
+				}
+				return
+			}
 			if suppressCurrentEvent {
 				suppressCurrentEvent = false
 				terminalFailurePending = false
@@ -958,7 +1004,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage)
 			}
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
-			if time.Since(lastRead) < streamInterval {
+			if remaining := streamInterval - time.Since(lastRead); remaining > 0 {
+				// 按最后一次读取时间重新计时，到期时间精确等于“最后读取 + 间隔”。
+				intervalTimer.Reset(remaining)
 				continue
 			}
 			if codexFailureTerminal && sawBareError && !sawResponseFailed {
@@ -972,6 +1020,19 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			// 处理流超时，可能标记账户为临时不可调度或错误状态
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
+			}
+			// OpenAI 在模型尚未输出、也没有可计费结果时空闲超时：换号重试而不是直接报 stream_timeout。
+			if account != nil && account.Platform == PlatformOpenAI &&
+				!openAIStreamClientOutputStarted(c, clientOutputStarted) && !eventShouldFlush && !hasBillableResult() {
+				_ = resp.Body.Close()
+				failoverErr := s.newOpenAIStreamFailoverErrorWithModel(
+					c, account, false, upstreamRequestID, nil,
+					"OpenAI upstream stream idle timeout before model output", mappedModel, resp.Header,
+				)
+				// 客户端此时最多只收到过 keepalive 注释；纳入首字换号预算后最多换号一次，
+				// 避免一个卡住的请求遍历整个账号池并对每个账号都执行 HandleStreamTimeout。
+				failoverErr.SafeToFailoverAfterWrite = true
+				return resultWithUsage(), failoverErr
 			}
 			// Grok 在尚未向客户端提交可见字节时执行短期冷却与账号故障转移。
 			// 输出开始后保留旧版 stream_timeout 路径，避免部分 SSE 被重复写入。
@@ -1308,6 +1369,9 @@ func mergeOpenAIUsageNonZero(dst *OpenAIUsage, src OpenAIUsage) {
 	}
 	if src.CacheCreationInputTokens > 0 {
 		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
+		// 拆分与总量同源更新，避免拼出不一致的组合。
+		dst.CacheCreation30mInputTokens = src.CacheCreation30mInputTokens
+		dst.CacheCreation12hInputTokens = src.CacheCreation12hInputTokens
 	}
 	if src.CacheReadInputTokens > 0 {
 		dst.CacheReadInputTokens = src.CacheReadInputTokens
@@ -1510,6 +1574,7 @@ func openAIUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
 	}
 	cacheReadTokens := openAICacheReadTokensFromUsage(value)
 	cacheCreationTokens := openAICacheCreationTokensFromUsage(value)
+	cache30m, cache12h := openai.CacheWriteTTLTokens(value, cacheCreationTokens)
 	imageOutputTokens := value.Get("output_tokens_details.image_tokens").Int()
 	if imageOutputTokens == 0 {
 		imageOutputTokens = value.Get("completion_tokens_details.image_tokens").Int()
@@ -1522,12 +1587,14 @@ func openAIUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
 		value.Get("prompt_tokens_details.image_tokens"),
 	)
 	return OpenAIUsage{
-		InputTokens:              int(inputTokens),
-		ImageInputTokens:         imageInputTokens,
-		OutputTokens:             int(outputTokens),
-		CacheCreationInputTokens: cacheCreationTokens,
-		CacheReadInputTokens:     cacheReadTokens,
-		ImageOutputTokens:        int(imageOutputTokens),
+		InputTokens:                 int(inputTokens),
+		ImageInputTokens:            imageInputTokens,
+		OutputTokens:                int(outputTokens),
+		CacheCreationInputTokens:    cacheCreationTokens,
+		CacheCreation30mInputTokens: cache30m,
+		CacheCreation12hInputTokens: cache12h,
+		CacheReadInputTokens:        cacheReadTokens,
+		ImageOutputTokens:           int(imageOutputTokens),
 	}, true
 }
 

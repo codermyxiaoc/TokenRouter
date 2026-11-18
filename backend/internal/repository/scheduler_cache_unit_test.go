@@ -33,6 +33,46 @@ func newSchedulerCacheUnitWithRedis(t *testing.T) (*schedulerCache, *miniredis.M
 	return cache, mr
 }
 
+// 旧快照没有隐私状态时按未确认处理；重建或账号更新后，候选应立即采用最新状态。
+func TestSchedulerCacheSnapshotRefreshesPrivacyMode(t *testing.T) {
+	for _, tc := range []struct{ platform, confirmed string }{
+		{service.PlatformOpenAI, service.PrivacyModeTrainingOff},
+		{service.PlatformAntigravity, service.AntigravityPrivacySet},
+	} {
+		t.Run(tc.platform, func(t *testing.T) {
+			ctx := t.Context()
+			cache := newSchedulerCacheUnit(t)
+			bucket := service.SchedulerBucket{GroupID: 17, Platform: tc.platform, Mode: service.SchedulerModeSingle}
+			account := service.Account{ID: 1, Platform: tc.platform, Type: service.AccountTypeOAuth,
+				GroupIDs:    []int64{bucket.GroupID},
+				Credentials: map[string]any{"access_token": "test-access", "refresh_token": "test-refresh"},
+			}
+			token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+			require.NoError(t, err)
+			require.NoError(t, cache.SetSnapshot(ctx, bucket, token, []service.Account{account}))
+			checkPrivacy := func(confirmed bool) {
+				t.Helper()
+				candidates, hit, err := cache.GetSnapshot(ctx, bucket)
+				require.NoError(t, err)
+				require.True(t, hit)
+				require.Len(t, candidates, 1)
+				require.Equal(t, confirmed, candidates[0].IsPrivacySet())
+				require.NotContains(t, candidates[0].Credentials, "access_token")
+				require.NotContains(t, candidates[0].Credentials, "refresh_token")
+			}
+			checkPrivacy(false)
+
+			account.Extra = map[string]any{"privacy_mode": tc.confirmed}
+			require.NoError(t, cache.SetAccount(ctx, &account))
+			checkPrivacy(true)
+
+			account.Extra["privacy_mode"] = "failed"
+			require.NoError(t, cache.SetAccount(ctx, &account))
+			checkPrivacy(false)
+		})
+	}
+}
+
 func TestSchedulerCacheWriteAccountIDsSkipsUnencodableTimes(t *testing.T) {
 	ctx := context.Background()
 	cache := newSchedulerCacheUnit(t)
@@ -1110,6 +1150,34 @@ func schedulerCacheBenchmarkAccounts(size int) []service.Account {
 // 一旦投影把开关裁掉、却保留了白名单，透传账号在选号阶段就会退回白名单判定并被误判成
 // model_not_supported，而转发阶段（读完整账号）仍按透传工作 —— 表现为"单独测这个账号能通、
 // 走网关却报 no available accounts"。#4936 修的是判定逻辑，这里守的是喂给判定的输入。
+// 透传账号显式开启"按模型筛选"后，候选过滤同样读的是本投影；裁掉
+// openai_passthrough_model_filter 会让账号在选号阶段退回"透传放行全部模型"，
+// 而模型列表等读完整账号的路径仍按白名单收窄，两边口径分裂。
+func TestBuildSchedulerMetadataAccount_KeepsOpenAIPassthroughModelFilter(t *testing.T) {
+	account := service.Account{
+		ID:       8748,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"qwen3.8-max": "qwen3.8-max"},
+			"api_key":       "drop-me",
+		},
+		Extra: map[string]any{"openai_passthrough": true, "openai_passthrough_model_filter": true},
+	}
+	require.False(t, account.IsModelSupported("gpt-6.1-sol"), "前置条件：开启筛选的透传账号应拒绝白名单外模型")
+
+	payload, err := json.Marshal(buildSchedulerMetadataAccount(account))
+	require.NoError(t, err)
+	var restored service.Account
+	require.NoError(t, json.Unmarshal(payload, &restored))
+
+	// 投影往返后过滤开关与映射判定必须保持一致
+	require.Equal(t, true, restored.Extra["openai_passthrough_model_filter"])
+	require.True(t, restored.IsOpenAIPassthroughModelFilterEnabled())
+	require.False(t, restored.IsModelSupported("gpt-6.1-sol"))
+	require.True(t, restored.IsModelSupported("qwen3.8-max"))
+}
+
 func TestBuildSchedulerMetadataAccount_KeepsOpenAIPassthroughForModelGate(t *testing.T) {
 	for _, key := range []string{"openai_passthrough", "openai_oauth_passthrough"} {
 		t.Run(key, func(t *testing.T) {

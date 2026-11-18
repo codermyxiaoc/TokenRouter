@@ -5,6 +5,7 @@ import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
+import SubscriptionPlanDetailsDialog from '@/components/payment/SubscriptionPlanDetailsDialog.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
@@ -421,6 +422,21 @@ describe('PaymentView subscription plan group matching', () => {
 })
 
 describe('PaymentView subscription plan grid', () => {
+  it('未持有套餐也能打开所选卡片的详情并返回套餐列表', async () => {
+    const wrapper = await mountSubscriptionPlanList(2)
+    const card = wrapper.findAllComponents(SubscriptionPlanCard)[1]
+    card.vm.$emit('details', card.props('plan'))
+    await flushPromises()
+    const dialog = wrapper.getComponent(SubscriptionPlanDetailsDialog)
+    expect(dialog.props('plan')?.id).toBe(2)
+    expect(wrapper.findAllComponents(SubscriptionPlanCard)).toHaveLength(2)
+    expect(createOrder).not.toHaveBeenCalled()
+
+    dialog.vm.$emit('close')
+    await flushPromises()
+    expect(dialog.props('plan')).toBeNull()
+  })
+
   it.each([3, 4, 6])('为 %i 个套餐保留移动端、平板和桌面端响应式网格', async (planCount) => {
     const wrapper = await mountSubscriptionPlanList(planCount)
     const cards = wrapper.findAllComponents(SubscriptionPlanCard)

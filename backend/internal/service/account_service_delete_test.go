@@ -289,3 +289,7 @@ func TestAccountService_Delete_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{55}, repo.deletedIDs) // 验证正确的 ID 被删除
 }
+
+func (r *accountRepoStub) ClearModelRateLimit(context.Context, int64, string) error {
+	return nil
+}

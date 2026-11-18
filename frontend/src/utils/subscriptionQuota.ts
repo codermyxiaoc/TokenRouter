@@ -32,6 +32,17 @@ function quotaTimezone(settings?: QuotaTimezone): Intl.DateTimeFormat | number {
   return quotaTimezone({ server_timezone: 'Asia/Shanghai' })
 }
 
+// 按计算额度窗口的项目时区展示精确时刻，旧配置只有固定偏移时也不受浏览器时区影响。
+export function formatSubscriptionQuotaResetTime(resetAt: Date, locale: string): string {
+  const timezone = quotaTimezone()
+  const fixedOffset = typeof timezone === 'number'
+  return new Intl.DateTimeFormat(locale, {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    timeZone: fixedOffset ? 'UTC' : timezone.resolvedOptions().timeZone
+  }).format(fixedOffset ? resetAt.getTime() + timezone : resetAt)
+}
+
 function calendarDay(timestamp: number, formatter: Intl.DateTimeFormat): number {
   const parts = formatter.formatToParts(timestamp)
   const part = (name: string) => Number(parts.find(value => value.type === name)?.value)

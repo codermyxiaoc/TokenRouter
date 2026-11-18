@@ -18,6 +18,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 type geminiOpenAICompatProtocol int
@@ -178,6 +179,12 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 	}
 	geminiReq = ensureGeminiFunctionCallThoughtSignatures(geminiReq)
 	geminiReq = applyGeminiCompatThinkingConfig(geminiReq, claudeBody, mappedModel, clientStream)
+	// response_format 在 Chat→Responses→Anthropic 转换中会丢失，这里从原始 Chat 请求体补写到 generationConfig。
+	if protocol == geminiOpenAICompatChatCompletions {
+		if responseFormat := gjson.GetBytes(originalBody, "response_format"); responseFormat.Exists() {
+			geminiReq = applyGeminiChatResponseFormat(geminiReq, json.RawMessage(responseFormat.Raw), mappedModel)
+		}
+	}
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -414,6 +421,8 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsOpenAICompat(
 		ImageSize:        imageSize,
 		ImageInputSize:   imageInputSize,
 		ClientDisconnect: clientDisconnect,
+		// Vertex 多区域端点按 1.1 倍计价，只作用于默认模型价。
+		UpstreamPriceMultiplier: VertexUpstreamPriceMultiplier(account, mappedModel, ""),
 	}, nil
 }
 
@@ -483,15 +492,21 @@ func (s *GeminiMessagesCompatService) buildGeminiChatCompletionsUpstreamRequestF
 					fullURL += "?alt=sse"
 				}
 
-				var inner any
-				if err := json.Unmarshal(geminiReq, &inner); err != nil {
-					return nil, "", fmt.Errorf("failed to parse gemini request: %w", err)
+				// request 按原字节嵌入，保留 responseJsonSchema 等 schema 的属性顺序与大整数字面量。
+				if !json.Valid(geminiReq) {
+					return nil, "", errors.New("failed to parse gemini request: invalid JSON")
 				}
-				wrappedBytes, _ := json.Marshal(map[string]any{
+				wrapperBytes, err := json.Marshal(map[string]any{
 					"model":   mappedModel,
 					"project": projectID,
-					"request": inner,
 				})
+				if err != nil {
+					return nil, "", err
+				}
+				wrappedBytes, err := sjson.SetRawBytes(wrapperBytes, "request", geminiReq)
+				if err != nil {
+					return nil, "", err
+				}
 
 				upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(wrappedBytes))
 				if err != nil {
@@ -530,7 +545,7 @@ func (s *GeminiMessagesCompatService) buildGeminiChatCompletionsUpstreamRequestF
 			if clientStream {
 				action = "streamGenerateContent"
 			}
-			fullURL, err := buildVertexGeminiAccountURL(account, mappedModel, action, clientStream)
+			fullURL, err := buildVertexGeminiAccountURL(account, mappedModel, action, clientStream, "")
 			if err != nil {
 				return nil, "", err
 			}
@@ -807,6 +822,7 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 	var seenThinking geminiTextDelta
 	openToolIndex := -1
 	openToolName := ""
+	var toolBoundary geminiToolCallBoundary
 	var seenToolJSON geminiTextDelta
 
 	closeOpenBlock := func() bool {
@@ -826,6 +842,7 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 		openToolIndex = -1
 		openToolName = ""
 		seenToolJSON.reset()
+		toolBoundary = geminiToolCallBoundary{}
 		return disconnected
 	}
 
@@ -921,7 +938,8 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 								if closeOpenBlock() {
 									return resultSnapshot(), nil
 								}
-								if openToolIndex >= 0 && openToolName != name {
+								argsJSONText := geminiToolCallArgsJSON(fc["args"])
+								if openToolIndex >= 0 && toolBoundary.startsNewBlock(openToolName, seenToolJSON.seen.String(), argsJSONText, fc) {
 									if closeOpenTool() {
 										return resultSnapshot(), nil
 									}
@@ -946,19 +964,8 @@ func (s *GeminiMessagesCompatService) handleOpenAICompatStreamingResponseFromGem
 									}
 								}
 
-								argsJSONText := "{}"
-								switch v := fc["args"].(type) {
-								case nil:
-								case string:
-									if strings.TrimSpace(v) != "" {
-										argsJSONText = v
-									}
-								default:
-									if b, err := json.Marshal(v); err == nil && len(b) > 0 {
-										argsJSONText = string(b)
-									}
-								}
 								delta := seenToolJSON.next(argsJSONText)
+								toolBoundary.observe(fc)
 								if delta != "" {
 									if emitAnthropicEvent(&apicompat.AnthropicStreamEvent{
 										Type: "content_block_delta",

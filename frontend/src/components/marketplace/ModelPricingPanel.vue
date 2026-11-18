@@ -126,6 +126,11 @@ interface PricingRow {
   value: string
 }
 
+// isConfiguredPrice 判断单价是否已配置（含显式 0），用于区分“免费”与“未单独定价”
+function isConfiguredPrice(value?: number | null): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
 function hasPositiveValue(value?: number | null): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
@@ -205,6 +210,10 @@ function tokenPricingRowsFromValues(pricing: MarketplaceModelPricing | Marketpla
   if (hasPositiveValue(pricing.cache_write_1h_price_per_token)) {
     rows.push({ key: 'cache_write_1h', label: t('marketplace.cacheWrite1h'), value: formatPerMillion(pricing.cache_write_1h_price_per_token) })
   }
+  // 12h 写入价是独立结算单价：显式 0 也展示（免费），缺省表示沿用普通缓存写入价，不单独列出
+  if (isConfiguredPrice(pricing.cache_write_12h_price_per_token)) {
+    rows.push({ key: 'cache_write_12h', label: t('marketplace.cacheWrite12h'), value: formatPerMillion(pricing.cache_write_12h_price_per_token) })
+  }
   if (hasPositiveValue(pricing.cache_read_price_per_token)) {
     rows.push({ key: 'cache_read', label: t('marketplace.cacheRead'), value: formatPerMillion(pricing.cache_read_price_per_token) })
   }
@@ -233,6 +242,9 @@ function fastTokenPricingRows(pricing: MarketplaceModelPricing | MarketplacePric
   }
   if (hasPositiveValue(pricing.fast_cache_write_1h_price_per_token)) {
     rows.push({ key: 'fast_cache_write_1h', label: t('marketplace.fastCacheWrite1h'), value: formatPerMillion(pricing.fast_cache_write_1h_price_per_token) })
+  }
+  if (isConfiguredPrice(pricing.fast_cache_write_12h_price_per_token)) {
+    rows.push({ key: 'fast_cache_write_12h', label: t('marketplace.fastCacheWrite12h'), value: formatPerMillion(pricing.fast_cache_write_12h_price_per_token) })
   }
   if (hasPositiveValue(pricing.fast_cache_read_price_per_token)) {
     rows.push({ key: 'fast_cache_read', label: t('marketplace.fastCacheRead'), value: formatPerMillion(pricing.fast_cache_read_price_per_token) })

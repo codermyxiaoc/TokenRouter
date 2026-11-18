@@ -270,7 +270,7 @@ func TestAPIDocMigrationImportsLegacyOverrides(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
 			container, err := tcpostgres.Run(ctx, selectDockerImage(ctx, postgresImageTag), tcpostgres.WithDatabase("api_docs_upgrade"),
-				tcpostgres.WithUsername("postgres"), tcpostgres.WithPassword("postgres"), tcpostgres.BasicWaitStrategies())
+				tcpostgres.WithUsername("postgres"), tcpostgres.WithPassword("postgres"), tcpostgres.BasicWaitStrategies(), loopbackPortBinding("5432/tcp"))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, container.Terminate(context.Background())) })
 			dsn, err := container.ConnectionString(ctx, "sslmode=disable", "TimeZone=UTC")

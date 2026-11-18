@@ -181,7 +181,7 @@ func grokContentPolicyMessage(value string) bool {
 }
 
 func grokContentPolicyClientMessage(responseBody []byte) string {
-	message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(responseBody)))
+	message := sanitizeUpstreamErrorMessage(strings.TrimSpace(grokUpstreamErrorMessage(responseBody)))
 	if message == "" {
 		return "Request blocked by upstream content policy"
 	}
@@ -301,4 +301,48 @@ func (s *OpenAIGatewayService) applyGrokForbiddenPolicy(ctx context.Context, acc
 		s.tempUnscheduleGrok(ctx, account, cooldown, "grok configured forbidden rule")
 	}
 	return true
+}
+
+// grokUpstreamErrorMessage 在共享提取器基础上补充 xAI 扁平错误体 {"code":"...","error":"..."}。
+// 只供 Grok 使用：共享的 extractUpstreamErrorMessage 驱动所有平台的故障转移、模型不存在冷却与
+// 账号禁用判定，不能随 xAI 格式变化。非字符串的 error 值不透出，避免泄露未知对象。
+func grokUpstreamErrorMessage(body []byte) string {
+	if message := extractUpstreamErrorMessage(body); strings.TrimSpace(message) != "" {
+		return message
+	}
+	if errValue := gjson.GetBytes(body, "error"); errValue.Type == gjson.String {
+		return errValue.String()
+	}
+	return ""
+}
+
+// grokUpstreamErrorCode 在共享提取器基础上补充 xAI 顶层 code，嵌套的 error.code 仍优先。
+// 同样只供 Grok 使用：顶层 code 若进入共享提取器，会让 {"object":"error","message":"model not found","code":400}
+// 这类 OpenAI 兼容错误体绕过模型不存在故障转移。
+func grokUpstreamErrorCode(body []byte) string {
+	if code := strings.TrimSpace(extractUpstreamErrorCode(body)); code != "" {
+		return code
+	}
+	if code := gjson.GetBytes(body, "code"); code.Type == gjson.String || code.Type == gjson.Number {
+		return strings.TrimSpace(code.String())
+	}
+	return ""
+}
+
+// applyGrokImagesUpstreamErrorFields 用 Grok 专用提取器补齐图片错误的消息与错误码；
+// 共享构造已读到消息或错误码时保持原值，只在其缺失时使用 xAI 扁平字段。
+func applyGrokImagesUpstreamErrorFields(upstreamErr *OpenAIImagesUpstreamError, body []byte) {
+	if upstreamErr == nil {
+		return
+	}
+	if strings.TrimSpace(extractUpstreamErrorMessage(body)) == "" {
+		if message := sanitizeUpstreamErrorMessage(strings.TrimSpace(grokUpstreamErrorMessage(body))); message != "" {
+			upstreamErr.Message = message
+		}
+	}
+	if strings.TrimSpace(upstreamErr.Code) == "" {
+		if code := sanitizeUpstreamErrorMessage(strings.TrimSpace(grokUpstreamErrorCode(body))); code != "" {
+			upstreamErr.Code = code
+		}
+	}
 }

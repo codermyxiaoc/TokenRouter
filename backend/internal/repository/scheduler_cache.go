@@ -1374,6 +1374,8 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		"quota_weekly_reset_day",
 		"quota_weekly_reset_hour",
 		"quota_reset_timezone",
+		// 隐私组在加载完整账号之前检查资格，调度快照必须保留已确认的隐私状态。
+		"privacy_mode",
 		"mixed_scheduling",
 		"window_cost_limit",
 		"window_cost_sticky_reserve",
@@ -1401,6 +1403,8 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		// 走网关报 no available accounts"。
 		"openai_passthrough",
 		"openai_oauth_passthrough",
+		// 透传账号显式开启“按模型过滤”时，候选筛选同样读本投影；裁掉会让选号退回放行全部模型。
+		"openai_passthrough_model_filter",
 		"codex_fingerprint_mode",
 		"codex_fingerprint_seed",
 		"codex_5h_used_percent",

@@ -958,6 +958,9 @@ export default {
         oauthPassthrough: 'Auto passthrough (auth only)',
         oauthPassthroughDesc:
           'When enabled, this OpenAI account uses automatic passthrough: the gateway forwards request/response as-is and only swaps auth, while keeping billing/concurrency/audit and necessary safety filtering.',
+        passthroughModelFilter: 'Filter passthrough accounts by model',
+        passthroughModelFilterDesc:
+          'Use the account model whitelist and mapping source names to select this account. Mapping targets do not rename passthrough requests. An empty list allows all models. Disabled by default.',
         flattenNamespaces: 'Flatten Codex namespace tools (compatibility)',
         flattenNamespacesDesc:
           'Disabled by default. Enable only for an OAuth relay that rejects namespace tools. Regular Responses requests otherwise preserve Codex namespaces; compact requests always flatten them.',
@@ -1081,7 +1084,7 @@ export default {
         testModeDefault: 'Default request',
         testModeCompact: 'Native V2 compact probe',
         testModeLegacyCompact: 'Legacy compact endpoint probe',
-        modelRestrictionDisabledByPassthrough: 'Automatic passthrough is enabled: the final model whitelist and account model mapping will not take effect.',
+        modelRestrictionDisabledByPassthrough: 'Automatic passthrough ignores the final model whitelist and account model mapping by default. Enable "Filter passthrough accounts by model" to use them for account selection only; forwarding stays passthrough.',
       },
       grok: {
         baseUrlHint: 'Grok OAuth accounts forward to the official xAI API base URL.',
@@ -1184,6 +1187,7 @@ export default {
       addModel: 'Add',
       modelMappingConflict: 'Model {model} maps to another target and cannot also be an Antigravity whitelist identity mapping. Remove the conflict before saving.',
       modelExists: 'Model already exists',
+      modelWildcardNotSupported: 'Wildcards are not supported in the model whitelist. Enter an exact model name.',
       modelCount: '{count} models',
       poolMode: 'Pool Mode',
       poolModeHint: 'Enable when upstream is an account pool; default errors will not mark local scheduling state',
@@ -2109,7 +2113,11 @@ export default {
         grokLastHeadersSeen: 'Headers {time}',
         passiveSampled: 'Passive',
         activeQuery: 'Query',
-        quotaAutoPaused: 'Auto-paused'
+        quotaAutoPaused: 'Auto-paused',
+        quotaRefreshFailedCached: 'Refresh failed. Showing a previous observation; remaining quota is unconfirmed.',
+        quotaRefreshFailedUnknown: 'Refresh failed. Current quota is unknown.',
+        quotaObservedAt: 'Quota observed: ',
+        quotaObservationUnknown: 'Unknown (cached)'
       },
       openaiReferral: {
         available: 'Invites left',

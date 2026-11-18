@@ -79,14 +79,24 @@
 
       <div class="flex-1" />
 
-      <!-- Subscribe Button -->
-      <button
-        type="button"
-        :class="['h-9 w-full rounded-xl py-1.5 text-sm font-semibold transition-all active:scale-[0.98]', btnClass]"
-        @click="emit('select', plan)"
-      >
-        {{ isRenewal ? t('payment.renewNow') : t('payment.subscribeNow') }}
-      </button>
+      <!-- 预览与开通使用独立按钮，查看分组时不进入结账流程。 -->
+      <div class="flex flex-wrap gap-2">
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          class="btn btn-secondary min-h-9 flex-1 rounded-xl px-3 py-1.5 text-xs"
+          @click="emit('details', plan)"
+        >
+          {{ t('payment.planPreview.view') }}
+        </button>
+        <button
+          type="button"
+          :class="['min-h-9 flex-1 rounded-xl px-3 py-1.5 text-sm font-semibold transition-all active:scale-[0.98]', btnClass]"
+          @click="emit('select', plan)"
+        >
+          {{ isRenewal ? t('payment.renewNow') : t('payment.subscribeNow') }}
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -109,7 +119,7 @@ import { currencySymbol } from '@/components/payment/currency'
 import { planValiditySuffix } from './validity'
 
 const props = defineProps<{ plan: SubscriptionPlan; activeSubscriptions?: UserSubscription[] }>()
-const emit = defineEmits<{ select: [plan: SubscriptionPlan] }>()
+const emit = defineEmits<{ select: [plan: SubscriptionPlan]; details: [plan: SubscriptionPlan] }>()
 const { t } = useI18n()
 const { formatBalanceAmount } = useBalanceDisplay()
 const planCurrencySymbol = computed(() => currencySymbol(props.plan.currency || 'USD'))

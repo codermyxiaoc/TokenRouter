@@ -170,15 +170,24 @@
                     :style="{ width: getProgressWidth(window.used, window.limit) }"
                   />
                 </div>
-                <p v-if="window.window_start" class="text-xs text-gray-500 dark:text-dark-400">
-                  {{ formatUsageWindow(chain.active, window) }}
+                <p
+                  v-if="window.window_start"
+                  class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-xs tabular-nums text-gray-500 dark:text-dark-400"
+                >
+                  <span v-if="window.resetAt">
+                    {{ t('userSubscriptions.resetTime') }}
+                    <time :datetime="window.resetAt.toISOString()" class="whitespace-nowrap">{{
+                      formatSubscriptionQuotaResetTime(window.resetAt, locale)
+                    }}</time>
+                  </span>
+                  <span>{{ window.countdown }}</span>
                 </p>
                 <p
-                  v-if="usageWindowExplanation(chain.active, window)"
+                  v-if="window.explanation"
                   :data-testid="`quota-window-explanation-${window.key}`"
                   class="text-xs leading-relaxed text-gray-500 dark:text-dark-400"
                 >
-                  {{ usageWindowExplanation(chain.active, window) }}
+                  {{ window.explanation }}
                 </p>
               </div>
 
@@ -240,13 +249,15 @@ import { resolveProviderBrandKey } from '@/utils/providerBrand'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 import { formatDateOnly, formatDateTimeToMinute } from '@/utils/format'
 import {
+  formatSubscriptionQuotaResetTime,
   getExpirationDateRelation,
   getRemainingDurationParts,
   getSubscriptionQuotaResetTime,
   isOneTimeDailyQuota,
   isQuotaWindowEndingAtSubscriptionExpiry,
   highestQuotaExhausted,
-  type RemainingDurationParts
+  type RemainingDurationParts,
+  type SubscriptionQuotaPeriod
 } from '@/utils/subscriptionQuota'
 
 type PlanChain = {
@@ -259,7 +270,7 @@ type PlanChain = {
   pending_count: number
 }
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const router = useRouter()
 const appStore = useAppStore()
 const subscriptionStore = useSubscriptionStore()
@@ -342,6 +353,7 @@ function usageWindows(subscription: UserSubscription) {
       reset_count: subscription.monthly_reset_count ?? 0
     }
   ].filter((window) => window.limit != null && window.limit > 0)
+    .map((window) => ({ ...window, ...quotaWindowTiming(subscription, window.key, window.window_start) }))
 }
 
 function canRevokeChain(chain: PlanChain): boolean {
@@ -463,46 +475,26 @@ function formatDurationParts(parts: RemainingDurationParts): string {
   return `${parts.minutes}m`
 }
 
-// 只解释既有窗口判断，不在界面重新决定额度是否重置；一次性日额度单独说明。
-function usageWindowExplanation(
+// 精确时间与倒计时使用同一重置点；一次性额度或最后一个窗口只显示结束倒计时。
+function quotaWindowTiming(
   subscription: UserSubscription,
-  window: ReturnType<typeof usageWindows>[number]
-): string {
-  if (window.key === 'daily' && isOneTimeDailyQuota(subscription)) {
-    return t('userSubscriptions.oneTimeQuotaHint')
+  period: SubscriptionQuotaPeriod,
+  start: string | null
+) {
+  const oneTime = period === 'daily' && isOneTimeDailyQuota(subscription)
+  const endsAtExpiry = oneTime || isQuotaWindowEndingAtSubscriptionExpiry(subscription, start, period)
+  const resetAt = endsAtExpiry ? null : getSubscriptionQuotaResetTime(subscription, start, period)
+  const target = endsAtExpiry ? subscription.expires_at : resetAt
+  const remaining = target && getRemainingDurationParts(target)
+  return {
+    resetAt: remaining ? resetAt : null,
+    countdown: remaining
+      ? t(endsAtExpiry ? 'userSubscriptions.quotaEndsIn' : 'userSubscriptions.resetIn', { time: formatDurationParts(remaining) })
+      : t('userSubscriptions.windowNotActive'),
+    explanation: endsAtExpiry
+      ? t(oneTime ? 'userSubscriptions.oneTimeQuotaHint' : 'userSubscriptions.quotaNoFurtherResetHint')
+      : ''
   }
-  if (isQuotaWindowEndingAtSubscriptionExpiry(subscription, window.window_start, window.key)) {
-    return t('userSubscriptions.quotaNoFurtherResetHint')
-  }
-  return ''
-}
-
-function formatUsageWindow(
-  subscription: UserSubscription,
-  window: ReturnType<typeof usageWindows>[number]
-): string {
-  if (window.key === 'daily' && isOneTimeDailyQuota(subscription)) {
-    const parts = getRemainingDurationParts(subscription.expires_at)
-    return parts
-      ? t('userSubscriptions.quotaEndsIn', { time: formatDurationParts(parts) })
-      : t('userSubscriptions.windowNotActive')
-  }
-  if (isQuotaWindowEndingAtSubscriptionExpiry(subscription, window.window_start, window.key)) {
-    const parts = getRemainingDurationParts(subscription.expires_at)
-    return parts
-      ? t('userSubscriptions.quotaEndsIn', { time: formatDurationParts(parts) })
-      : t('userSubscriptions.windowNotActive')
-  }
-  return t('userSubscriptions.resetIn', {
-    time: formatResetTime(subscription, window)
-  })
-}
-
-function formatResetTime(subscription: UserSubscription, window: ReturnType<typeof usageWindows>[number]): string {
-  const end = getSubscriptionQuotaResetTime(subscription, window.window_start, window.key)
-  if (!end) return t('userSubscriptions.windowNotActive')
-  const parts = getRemainingDurationParts(end)
-  return parts ? formatDurationParts(parts) : t('userSubscriptions.windowNotActive')
 }
 
 onMounted(() => {

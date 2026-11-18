@@ -4,11 +4,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/apicompat"
 	"github.com/tidwall/gjson"
 )
 
 // countGrokNativeSearchCallsFromJSONBytes 统计 Responses JSON 中已完成的原生搜索工具调用，
 // 包括 web_search_call、x_search_call、tool_search_call 及同名 function/custom tool 调用。
+// 另含 xAI 服务端自行执行的 custom_tool_call（apicompat.IsServerSideSearchCall：call_id 前缀 xs_ / as_）。
 func countGrokNativeSearchCallsFromJSONBytes(body []byte) int {
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return 0
@@ -209,6 +211,9 @@ func isGrokNativeSearchOutputItem(item gjson.Result) bool {
 	case "web_search_call", "x_search_call", "tool_search_call":
 		return true
 	case "function_call", "custom_tool_call":
+		if apicompat.IsServerSideSearchCall(itemType, item.Get("call_id").String()) {
+			return true
+		}
 		name := strings.ToLower(strings.TrimSpace(item.Get("name").String()))
 		return name == "web_search" || name == "x_search" || name == "tool_search"
 	default:

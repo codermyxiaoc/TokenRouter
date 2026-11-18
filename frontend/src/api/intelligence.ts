@@ -2,7 +2,7 @@ import { apiClient } from './client'
 
 // 检测结果与配置使用独立接口；浏览器从不直接携带站内测试密钥访问检测供应商。
 export type IntelligenceBenchmark = 'candy' | 'drawing'
-export type IntelligenceVerdict = 'pending' | 'passed' | 'failed' | 'error' | 'unknown'
+export type IntelligenceVerdict = 'pending' | 'passed' | 'failed' | 'reference' | 'error' | 'unknown'
 export interface IntelligenceRun {
   id: string
   config_id: number
@@ -20,6 +20,7 @@ export interface IntelligenceRun {
   reasoning_tokens?: number | null
   duration_ms?: number | null
   assessment_reason?: string
+  assessment_quality?: 'normal' | 'degraded' | 'suspicious' | 'unknown'
   error_message?: string
   has_detail?: boolean
   has_artifact?: boolean

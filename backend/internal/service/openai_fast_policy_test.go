@@ -35,8 +35,15 @@ func (s *openAIFastPolicyRepoStub) Set(ctx context.Context, key, value string) e
 	return nil
 }
 
+// GetMultiple 供网关转发设置（如 TTFT 口径）冷缓存读取，只返回已存在的键。
 func (s *openAIFastPolicyRepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
-	panic("unexpected GetMultiple call")
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if value, ok := s.values[key]; ok {
+			out[key] = value
+		}
+	}
+	return out, nil
 }
 
 func (s *openAIFastPolicyRepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {

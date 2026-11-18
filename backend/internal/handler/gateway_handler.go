@@ -77,7 +77,7 @@ func NewGatewayHandler(
 	cfg *config.Config,
 	settingService *service.SettingService,
 ) *GatewayHandler {
-	pingInterval := time.Duration(0)
+	pingInterval := defaultPingInterval
 	maxAccountSwitches := 10
 	maxAccountSwitchesGemini := 3
 	if cfg != nil {
@@ -900,6 +900,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				// 将故障转移后的缓存计费语义传给同步响应改写逻辑。
 				requestCtx = service.WithForceCacheBilling(requestCtx)
 			}
+			if channelMapping.Mapped {
+				// 选号按客户端模型，转发按渠道映射后的模型：模型级账号状态按选号模型记录。
+				requestCtx = service.WithGatewaySchedulingModel(requestCtx, reqModel)
+			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
 			if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
@@ -1113,8 +1117,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// - 粘性账号因负载/RPM 被跳过、选中了其他账号：不覆盖原绑定，
 			//   下次请求粘性账号恢复后仍可命中
 			if sessionKey != "" && (sessionBoundAccountID == 0 || sessionBoundAccountID == account.ID) {
-				if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionKey, account.ID); err != nil {
-					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				// Forward has completed; finish the bounded write even if the client disconnects.
+				bindCtx, cancelBind := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 5*time.Second)
+				bindErr := h.gatewayService.BindStickySession(bindCtx, currentAPIKey.GroupID, sessionKey, account.ID)
+				cancelBind()
+				if bindErr != nil {
+					reqLog.Warn("gateway.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(bindErr))
 				}
 			}
 

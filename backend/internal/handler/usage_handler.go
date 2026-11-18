@@ -590,6 +590,10 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 	stats.TotalAccountCost = nil
 	stats.UpstreamEndpoints = nil
 	stats.EndpointPaths = nil
+	// 端点分布的账号成本只对管理员可见，用户接口清零（omitempty 不输出）。
+	for i := range stats.Endpoints {
+		stats.Endpoints[i].AccountCost = 0
+	}
 
 	response.Success(c, stats)
 }

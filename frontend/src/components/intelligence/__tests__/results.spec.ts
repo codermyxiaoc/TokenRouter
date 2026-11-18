@@ -7,6 +7,16 @@ import { runFixture, testFixture } from './fixtures'
 vi.mock('vue-i18n', async (importOriginal) => ({ ...(await importOriginal<typeof import('vue-i18n')>()), useI18n: () => ({ t: (key: string) => key }) }))
 
 describe('检测结果展示契约', () => {
+  it('鹈鹕参考评分使用独立状态色，保留历史原模型及执行错误语义', () => {
+    const legacy = runFixture({ benchmark: 'drawing', model: 'gpt-6.2-astra', verdict: 'failed' })
+    expect(resultStatus(legacy)).toBe('reference')
+    expect(resultColor(legacy)).toContain('sky')
+    expect(resultStatus({ ...legacy, verdict: 'reference' })).toBe('reference')
+    expect(resultStatus({ ...legacy, status: 'error', verdict: 'error' })).toBe('error')
+    expect(resultStatus({ ...legacy, status: 'unknown', verdict: 'unknown' })).toBe('unknown')
+    expect(resultStatus({ ...legacy, model: 'gpt-6-astra' })).toBe('incorrect')
+    expect(resultStatus({ ...legacy, benchmark: 'candy' })).toBe('incorrect')
+  })
   it('明确未通过为红，执行异常与未知为黄，运行中保持灰色', () => {
     expect(resultColor(runFixture())).toContain('emerald')
     expect(resultColor(runFixture({ verdict: 'failed' }))).toContain('rose')

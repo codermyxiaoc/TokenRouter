@@ -17,15 +17,15 @@ import (
 // 环境配置在包初始化时冻结，子进程验证真实升级场景，避免测试修改生产快照。
 func TestClaudeCodeVersionEnvironmentPin(t *testing.T) {
 	if os.Getenv("TOKENROUTER_TEST_CLAUDE_PIN") == "1" {
-		require.Equal(t, "2.1.280", claude.CLIEnvironmentOverride())
+		require.Equal(t, claudeCodeTestVersion(1), claude.CLIEnvironmentOverride())
 		repo := &authSourceDefaultsRepoStub{values: map[string]string{
-			SettingKeyClaudeCodeClientVersionSynced: "2.1.281",
+			SettingKeyClaudeCodeClientVersionSynced: claudeCodeTestVersion(2),
 		}}
 		svc := NewSettingService(repo, &config.Config{})
-		require.Equal(t, "2.1.280", svc.GetClaudeCodeClientVersion(context.Background()), "同步结果不能覆盖已有环境固定值")
-		repo.values[SettingKeyClaudeCodeClientVersion] = "2.1.282"
+		require.Equal(t, claudeCodeTestVersion(1), svc.GetClaudeCodeClientVersion(context.Background()), "同步结果不能覆盖已有环境固定值")
+		repo.values[SettingKeyClaudeCodeClientVersion] = claudeCodeTestVersion(3)
 		svc.InvalidateClaudeCodeClientVersionCache()
-		require.Equal(t, "2.1.282", svc.GetClaudeCodeClientVersion(context.Background()), "显式面板配置可覆盖环境固定值")
+		require.Equal(t, claudeCodeTestVersion(3), svc.GetClaudeCodeClientVersion(context.Background()), "显式面板配置可覆盖环境固定值")
 		return
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestClaudeCodeVersionEnvironmentPin$")
@@ -34,7 +34,7 @@ func TestClaudeCodeVersionEnvironmentPin(t *testing.T) {
 			cmd.Env = append(cmd.Env, value)
 		}
 	}
-	cmd.Env = append(cmd.Env, claude.CLIVersionEnv+"=2.1.280", "TOKENROUTER_TEST_CLAUDE_PIN=1")
+	cmd.Env = append(cmd.Env, claude.CLIVersionEnv+"="+claudeCodeTestVersion(1), "TOKENROUTER_TEST_CLAUDE_PIN=1")
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", output)
 }
@@ -46,10 +46,10 @@ func TestGetClaudeCodeClientVersionPriority(t *testing.T) {
 		synced string
 		want   string
 	}{
-		{name: "手动值优先", manual: "2.1.280", synced: "2.1.281", want: "2.1.280"},
-		{name: "归一化手动值", manual: " v2.1.280 ", synced: "2.1.281", want: "2.1.280"},
-		{name: "跟随同步值", synced: "2.1.281", want: "2.1.281"},
-		{name: "无效手动值回退", manual: "invalid", synced: "2.1.281", want: "2.1.281"},
+		{name: "手动值优先", manual: claudeCodeTestVersion(1), synced: claudeCodeTestVersion(2), want: claudeCodeTestVersion(1)},
+		{name: "归一化手动值", manual: " v" + claudeCodeTestVersion(1) + " ", synced: claudeCodeTestVersion(2), want: claudeCodeTestVersion(1)},
+		{name: "跟随同步值", synced: claudeCodeTestVersion(2), want: claudeCodeTestVersion(2)},
+		{name: "无效手动值回退", manual: "invalid", synced: claudeCodeTestVersion(2), want: claudeCodeTestVersion(2)},
 		{name: "无效同步值回退", synced: "2.1.9", want: claude.CLIVersion()},
 		{name: "未配置时回退", want: claude.CLIVersion()},
 	} {
@@ -67,26 +67,26 @@ func TestGetClaudeCodeClientVersionPriority(t *testing.T) {
 func TestUpdateSettingsClaudeCodeVersionTakesEffectImmediately(t *testing.T) {
 	ctx := context.Background()
 	repo := &authSourceDefaultsRepoStub{values: map[string]string{
-		SettingKeyClaudeCodeClientVersionSynced: "2.1.281",
+		SettingKeyClaudeCodeClientVersionSynced: claudeCodeTestVersion(2),
 	}}
 	svc := NewSettingService(repo, &config.Config{})
 	resetGatewayForwardingSettingsCacheForTest(t)
 	defer svc.refreshCachedSettings(&SystemSettings{})
-	require.Equal(t, "2.1.281", svc.GetClaudeCodeClientVersion(ctx))
+	require.Equal(t, claudeCodeTestVersion(2), svc.GetClaudeCodeClientVersion(ctx))
 
 	settings := &SystemSettings{
-		ClaudeCodeClientVersion:          "2.1.280",
+		ClaudeCodeClientVersion:          claudeCodeTestVersion(1),
 		ClaudeCodeVersionAutoSyncEnabled: true,
 	}
 	require.NoError(t, svc.UpdateSettings(ctx, settings))
-	require.Equal(t, "2.1.280", svc.GetClaudeCodeClientVersion(ctx), "保存手动版本后应立即生效")
+	require.Equal(t, claudeCodeTestVersion(1), svc.GetClaudeCodeClientVersion(ctx), "保存手动版本后应立即生效")
 	require.NotContains(t, repo.updates, SettingKeyClaudeCodeClientVersionSynced)
-	require.Equal(t, "2.1.281", repo.values[SettingKeyClaudeCodeClientVersionSynced])
+	require.Equal(t, claudeCodeTestVersion(2), repo.values[SettingKeyClaudeCodeClientVersionSynced])
 
 	// 清空手动值并关闭后续同步时，仍保留并使用已有同步值。
 	settings.ClaudeCodeClientVersion = ""
 	settings.ClaudeCodeVersionAutoSyncEnabled = false
 	require.NoError(t, svc.UpdateSettings(ctx, settings))
-	require.Equal(t, "2.1.281", svc.GetClaudeCodeClientVersion(ctx))
+	require.Equal(t, claudeCodeTestVersion(2), svc.GetClaudeCodeClientVersion(ctx))
 	require.Equal(t, "false", repo.values[SettingKeyClaudeCodeVersionAutoSyncEnabled])
 }

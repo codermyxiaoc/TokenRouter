@@ -25,6 +25,6 @@ const emit = defineEmits<{ select: [run: IntelligenceRun] }>()
 const { t } = useI18n()
 const ordered = computed(() => recentRuns(props.runs))
 // 供应商没有详情时保留颜色观测，但不提供无内容的点击入口。
-const hasDetails = (run: IntelligenceRun) => !!(run.has_detail || run.has_artifact || run.question || run.answer || run.html || run.error_message || run.assessment_reason)
+const hasDetails = (run: IntelligenceRun) => !!(run.has_detail || run.has_artifact || run.question || run.answer || run.html || run.error_message || run.assessment_reason || run.assessment_quality)
 const label = (run: IntelligenceRun) => t('intelligence.resultLabel', { time: formatDateTime(run.created_at), status: t(`intelligence.statuses.${resultStatus(run)}`) })
 </script>

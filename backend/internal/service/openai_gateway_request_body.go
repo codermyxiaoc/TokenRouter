@@ -93,7 +93,9 @@ func shouldPreserveOpenAIResponsesNoneReasoningEffortForModel(account *Account, 
 		return true
 	}
 	// 6.1 Sol 的 none 是非法参数，保留到模型校验才能明确拒绝，不能先删成默认档位。
-	if isOpenAIGPT61SolModel(model) || (account != nil && isOpenAIGPT61SolModel(resolveOpenAIForwardModel(account, model, ""))) {
+	// 6.2 与 6.1 Sol 同样不支持 none，保留到模型校验阶段明确拒绝。
+	if isOpenAIGPT61SolModel(model) || isOpenAIGPT62Model(model) ||
+		(account != nil && (isOpenAIGPT61SolModel(resolveOpenAIForwardModel(account, model, "")) || isOpenAIGPT62Model(resolveOpenAIForwardModel(account, model, "")))) {
 		return true
 	}
 	return account != nil && account.IsOpenAIApiKey() &&
@@ -662,19 +664,43 @@ func normalizeOpenAIParallelToolCallsWithoutTools(body []byte, responsesLite boo
 }
 
 // openAIRequestBodyHasTools 同时识别顶层 tools 和 input[].additional_tools。
+// additional_tools 类型字符串只有在字面出现、或被能拼出可见 ASCII 的 \u 转义
+// 拼出时才可能匹配，其余请求体跳过对 input 的结构扫描。
 func openAIRequestBodyHasTools(body []byte) bool {
-	if tools := gjson.GetBytes(body, "tools"); tools.IsArray() && len(tools.Array()) > 0 {
+	root := parseRawJSONView(body)
+	if gjsonArrayHasElements(root.Get("tools")) {
 		return true
 	}
-	for _, item := range gjson.GetBytes(body, "input").Array() {
-		if strings.TrimSpace(item.Get("type").String()) != "additional_tools" {
-			continue
-		}
-		if tools := item.Get("tools"); tools.IsArray() && len(tools.Array()) > 0 {
-			return true
-		}
+	if !bytes.Contains(body, []byte("additional_tools")) && !JSONMayEscapePlainASCII(body) {
+		return false
 	}
-	return false
+	found := false
+	isAdditionalToolsWithTools := func(item gjson.Result) bool {
+		return strings.TrimSpace(item.Get("type").String()) == "additional_tools" && gjsonArrayHasElements(item.Get("tools"))
+	}
+	input := root.Get("input")
+	if !input.IsArray() {
+		// gjson 把非数组的值当作只含它自身的数组。
+		return input.Type != gjson.Null && isAdditionalToolsWithTools(input)
+	}
+	input.ForEach(func(_, item gjson.Result) bool {
+		found = isAdditionalToolsWithTools(item)
+		return !found
+	})
+	return found
+}
+
+// gjsonArrayHasElements 不分配结果切片地判断数组是否非空。
+func gjsonArrayHasElements(value gjson.Result) bool {
+	if !value.IsArray() {
+		return false
+	}
+	nonEmpty := false
+	value.ForEach(func(_, _ gjson.Result) bool {
+		nonEmpty = true
+		return false
+	})
+	return nonEmpty
 }
 
 // normalizeOpenAIResponsesReasoningContentReplay 在历史记录发送到真实 OpenAI Responses
@@ -1282,8 +1308,24 @@ func normalizeOpenAIOAuthResponsesCompatibilityFields(reqBody map[string]any) bo
 		delete(reqBody, "commands")
 		changed = true
 	}
+	// Codex 在自定义 provider 命名为 OpenAI 时会给 input 项附带内部消息元数据，
+	// ChatGPT 上游会拒绝该字段；只删除 input 项上的字段，不触碰同名的用户内容。
+	input, _ := reqBody["input"].([]any)
+	for _, value := range input {
+		item, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, exists := item[openAIOAuthInputInternalMetadataField]; exists {
+			delete(item, openAIOAuthInputInternalMetadataField)
+			changed = true
+		}
+	}
 	return changed
 }
+
+// openAIOAuthInputInternalMetadataField 是 Codex 附带在 input 项上的内部元数据字段名。
+const openAIOAuthInputInternalMetadataField = "internal_chat_message_metadata_passthrough"
 
 func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, error) {
 	if len(body) == 0 {
@@ -1316,7 +1358,37 @@ func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, 
 		normalized = next
 		changed = true
 	}
-	return normalized, changed, nil
+	// 只删除 input 项上的内部元数据字段，不触碰同名的用户内容。
+	input := gjson.GetBytes(normalized, "input")
+	if !input.IsArray() {
+		return normalized, changed, nil
+	}
+	hasMetadata := false
+	input.ForEach(func(_, item gjson.Result) bool {
+		hasMetadata = item.IsObject() && item.Get(openAIOAuthInputInternalMetadataField).Exists()
+		return !hasMetadata
+	})
+	if !hasMetadata {
+		return normalized, changed, nil
+	}
+	// 逐项局部清理后一次性重建 input；按 input.N 在整包上删除会让每条消息都复制整段历史。
+	var items []string
+	var normalizeErr error
+	input.ForEach(func(_, item gjson.Result) bool {
+		raw := item.Raw
+		if item.IsObject() && item.Get(openAIOAuthInputInternalMetadataField).Exists() {
+			raw, normalizeErr = sjson.Delete(raw, openAIOAuthInputInternalMetadataField)
+			if normalizeErr != nil {
+				return false
+			}
+		}
+		items = append(items, raw)
+		return true
+	})
+	if normalizeErr != nil {
+		return body, false, fmt.Errorf("normalize oauth input metadata: %w", normalizeErr)
+	}
+	return replaceOpenAIRawInput(normalized, input, items), true, nil
 }
 
 func normalizeOpenAIResponsesReasoningMode(body []byte) ([]byte, bool, error) {
@@ -1401,6 +1473,13 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 		normalized, changed, err = normalizeOpenAIResponsesLegacyIngressWithConfig(opts.Config, body)
 		if err != nil {
 			return body, false, err
+		}
+		// 透传/WS 路径不经过 filterCodexInput，这里局部压缩 UUID 形态的 additional_tools 声明 ID。
+		if next, idsChanged, err := normalizeCodexAdditionalToolsIDsBody(normalized); err != nil {
+			return body, false, err
+		} else if idsChanged {
+			normalized = next
+			changed = true
 		}
 	}
 	if next, normalizedReasoningContent, err := normalizeOpenAIResponsesReasoningContentReplay(normalized); err != nil {
@@ -1979,14 +2058,61 @@ type openAIFastModeDecision struct {
 	Blocked     *OpenAIFastBlockedError
 }
 
-// openAIGroupForcesFast 仅信任认证链路注入的、已完整加载的分组上下文。
-// 复合分组在请求期会投影到 OpenAI 账号，因此也允许复合分组启用该策略。
-func openAIGroupForcesFast(ctx context.Context, account *Account) bool {
-	if ctx == nil || account == nil || account.Platform != PlatformOpenAI {
+// openAIModelSupportsUltrafast 判断 OpenAI 是否为该模型提供 Ultrafast 档位
+// （GPT-6 Astra、GPT-6.1 Sol、GPT-6.2 Sol/Astra）。
+// 组级强制档位与 Ultrafast 计费共用此判定，避免出现被强制 Ultrafast 却按较低倍率计费的漂移。
+func openAIModelSupportsUltrafast(model string) bool {
+	normalized := normalizeKnownOpenAICodexModel(model)
+	return isOpenAIGPT6AstraModel(normalized) || normalized == "gpt-6.1-sol" || isOpenAIGPT62Model(normalized)
+}
+
+// gpt62PlanIncludesUltrafast 判断 ChatGPT 订阅套餐是否包含 GPT-6.2 Ultrafast：
+// Pro 只包含 GPT-6.2 Sol，Pro Max 两个型号都包含；其它套餐不包含。
+// 套餐名与账号套餐选择器使用同一组别名（忽略大小写、空格、连字符与下划线）。
+func gpt62PlanIncludesUltrafast(account *Account, base string) bool {
+	if account == nil || !account.IsOpenAIOAuthLike() || (base != "gpt-6.2-sol" && base != "gpt-6.2-astra") {
 		return false
 	}
+	plan := strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '-', '_':
+			return -1
+		}
+		return r
+	}, strings.ToLower(strings.TrimSpace(account.GetCredential("plan_type"))))
+	switch plan {
+	case "pro", "chatgptpro":
+		return base == "gpt-6.2-sol"
+	case "promax":
+		return true
+	default:
+		return false
+	}
+}
+
+// openAIGroupForcedServiceTier 返回可信分组上下文为该上游模型强制的 service_tier，未强制时返回空串。
+// 仅信任认证链路注入的、已完整加载的分组上下文；复合分组在请求期会投影到 OpenAI 账号，因此同样适用。
+// 两个开关独立，优先级为 Ultra Fast > Fast > 客户端：Ultra Fast 只作用于支持的模型，
+// 其余模型在同时开启强制 Fast 时写 priority，否则跟随客户端。
+func openAIGroupForcedServiceTier(ctx context.Context, account *Account, model string) string {
+	if ctx == nil || account == nil || account.Platform != PlatformOpenAI {
+		return ""
+	}
 	group, _ := ctx.Value(ctxkey.Group).(*Group)
-	return IsGroupContextValid(group) && groupSupportsOpenAIFast(group.Platform) && group.ForceOpenAIFast
+	if !IsGroupContextValid(group) || !groupSupportsOpenAIFast(group.Platform) {
+		return ""
+	}
+	if group.ForceOpenAIUltrafast && openAIModelSupportsUltrafast(model) {
+		// GPT-6.2 的 API 支持不代表订阅账号有资格：订阅账号只在套餐包含时才强制 Ultrafast，
+		// 否则继续走下方的强制 Fast 或跟随客户端。
+		if base := openAIGPT62ModelID(model); base == "" || !account.IsOpenAIOAuthLike() || gpt62PlanIncludesUltrafast(account, base) {
+			return OpenAIFastTierUltrafast
+		}
+	}
+	if group.ForceOpenAIFast {
+		return OpenAIFastTierPriority
+	}
+	return ""
 }
 
 // resolveOpenAIFastModeDecision 统一解析系统策略与单 Key 策略。
@@ -2006,10 +2132,10 @@ func (s *OpenAIGatewayService) resolveOpenAIFastModeDecision(
 		normTier = OpenAIFastTierPriority
 		hasField = true
 	}
-	if openAIGroupForcesFast(ctx, account) {
-		// 组级强制先形成 priority，再交给全局策略裁决；这样没有显式
+	if forcedTier := openAIGroupForcedServiceTier(ctx, account, model); forcedTier != "" {
+		// 组级强制先形成 priority/ultrafast，再交给全局策略裁决；这样没有显式
 		// service_tier 的请求也能覆盖，同时 ForceOff 仍可删除该字段。
-		normTier = OpenAIFastTierPriority
+		normTier = forcedTier
 		hasField = true
 	}
 	applySystemAction := func(tier string) (openAIFastModeDecision, bool) {
@@ -2293,7 +2419,7 @@ func openAIRequestBodyMayContainEmptyBase64InputImage(body []byte) bool {
 	if len(body) == 0 || !openAIRequestBodyMayContainInputImageToken(body) {
 		return false
 	}
-	input := gjson.GetBytes(body, "input")
+	input := parseRawJSONView(body).Get("input")
 	if !input.Exists() {
 		return false
 	}
@@ -2304,8 +2430,9 @@ func openAIRequestBodyMayContainInputImageToken(body []byte) bool {
 	if bytes.Contains(body, []byte("input_image")) {
 		return true
 	}
-	// JSON 字符串任意字符都可能被 unicode escape，遇到 \u 时交给 gjson 解码后的结构扫描兜底。
-	return bytes.Contains(body, []byte("\\u"))
+	// JSON 字符串任意字符都可能被 unicode escape；只有能拼出可见 ASCII 字符的 \u
+	// 才可能藏住 input_image，此时交给 gjson 解码后的结构扫描兜底。
+	return JSONMayEscapePlainASCII(body)
 }
 
 func openAIJSONValueMayContainEmptyBase64InputImage(value gjson.Result) bool {

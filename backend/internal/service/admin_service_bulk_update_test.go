@@ -431,3 +431,7 @@ func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 	require.Equal(t, 0, result.Failed)
 	require.Equal(t, []int64{7, 11}, result.SuccessIDs)
 }
+
+func (r *accountRepoStubForBulkUpdate) ClearModelRateLimit(context.Context, int64, string) error {
+	return nil
+}

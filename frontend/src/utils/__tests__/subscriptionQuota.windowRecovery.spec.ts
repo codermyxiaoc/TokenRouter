@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { PublicSettings } from '@/types'
 import {
+  formatSubscriptionQuotaResetTime,
   getSubscriptionQuotaResetTime as resetAt,
   isQuotaWindowEndingAtSubscriptionExpiry as endsAtExpiry,
   type SubscriptionQuotaPeriod
@@ -78,6 +79,8 @@ describe('subscription quota tail reset display', () => {
   it('uses the published UTC offset when an old settings cache has no valid time zone', () => {
     const settings = { server_timezone: 'invalid/timezone', server_utc_offset: '+05:30' }
     expect(resetAt(subscription(70), '2026-09-23T12:00:00Z', 'daily', settings)?.toISOString()).toBe('2026-09-23T18:30:00.000Z')
+    window.__APP_CONFIG__ = settings as PublicSettings
+    expect(formatSubscriptionQuotaResetTime(new Date('2026-09-23T18:30:45Z'), 'en-GB')).toBe('24/09/2026, 00:00:45')
     window.__APP_CONFIG__ = undefined
     expect(resetAt(subscription(70), at(1 / 3), 'daily')?.toISOString()).toBe(at(1))
   })

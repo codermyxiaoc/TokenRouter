@@ -129,7 +129,7 @@
                   <span class="text-gray-900 dark:text-white">{{ formatBalanceAmount(creditedAmount, { fractionDigits: 2 }) }}</span>
                 </div>
                 <p v-if="balanceRechargeMultiplier !== 1" class="border-t border-gray-200 pt-2 text-xs text-gray-500 dark:border-dark-600 dark:text-gray-400">
-                  {{ t('payment.rechargeRatePreview', { currency: selectedCurrency, amount: balanceRechargeMultiplier.toFixed(2), unitName: balanceUnitName }) }}
+                  {{ t('payment.rechargeRatePreview', { currency: selectedCurrency, amount: formatBalanceRechargeMultiplier(balanceRechargeMultiplier), unitName: balanceUnitName }) }}
                 </p>
               </div>
             </div>
@@ -268,7 +268,7 @@
                 <p class="text-gray-500 dark:text-gray-400">{{ t('payment.noPlans') }}</p>
               </div>
               <div v-else :class="planGridClass">
-                <SubscriptionPlanCard v-for="plan in checkout.plans" :key="plan.id" :plan="plan" :active-subscriptions="activeSubscriptions" @select="selectPlan" />
+                <SubscriptionPlanCard v-for="plan in checkout.plans" :key="plan.id" :plan="plan" :active-subscriptions="activeSubscriptions" @details="previewPlan = $event" @select="selectPlan" />
               </div>
               <!-- Active subscriptions (compact, below plan list) -->
               <div v-if="activeSubscriptions.length > 0">
@@ -320,12 +320,13 @@
             <h3 class="mb-4 shrink-0 text-lg font-semibold text-gray-900 dark:text-white">{{ t('payment.selectPlan') }}</h3>
             <!-- 仅套餐列表滚动，关闭按钮始终可见。 -->
             <div class="min-h-0 space-y-4 overflow-y-auto">
-              <SubscriptionPlanCard v-for="plan in renewalPlans" :key="plan.id" :plan="plan" :active-subscriptions="activeSubscriptions" @select="selectPlanFromModal" />
+              <SubscriptionPlanCard v-for="plan in renewalPlans" :key="plan.id" :plan="plan" :active-subscriptions="activeSubscriptions" @details="previewPlan = $event" @select="selectPlanFromModal" />
             </div>
           </div>
         </div>
       </Transition>
     </Teleport>
+    <SubscriptionPlanDetailsDialog :plan="previewPlan" @close="previewPlan = null" />
     <ConfirmDialog
       :show="duplicatePlanDialogPlan !== null"
       :title="t('payment.duplicatePlan.title')"
@@ -378,10 +379,11 @@ import {
 } from '@/components/payment/paymentFlow'
 import { platformAccentBarClass, platformTextClass } from '@/utils/platformColors'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
+import SubscriptionPlanDetailsDialog from '@/components/payment/SubscriptionPlanDetailsDialog.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { normalizeRechargeBonusTiers, normalizeRechargeBonusMode, quoteRechargeBonus } from '@/utils/rechargeBonus'
+import { formatBalanceRechargeMultiplier, normalizeRechargeBonusTiers, normalizeRechargeBonusMode, quoteRechargeBonus } from '@/utils/rechargeBonus'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 import { DEFAULT_PAYMENT_CURRENCY, formatPaymentAmount, normalizePaymentCurrency, paymentCurrencyFractionDigits } from '@/components/payment/currency'
 import { planValiditySuffix as validitySuffixOf } from '@/components/payment/validity'
@@ -420,6 +422,7 @@ const activeTab = ref<'recharge' | 'subscription'>('recharge')
 const amount = ref<number | null>(null)
 const selectedMethod = ref('')
 const selectedPlan = ref<SubscriptionPlan | null>(null)
+const previewPlan = ref<SubscriptionPlan | null>(null)
 const previewImage = ref('')
 const duplicatePlanDialogPlan = ref<SubscriptionPlan | null>(null)
 const duplicatePlanDialogConfirm = ref<(() => void) | null>(null)

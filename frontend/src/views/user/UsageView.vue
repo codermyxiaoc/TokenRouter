@@ -63,6 +63,7 @@
             :show-metric-toggle="true"
             :enable-breakdown="false"
             :show-standard-cost="false"
+            :show-account-cost="false"
             :title="t('usage.endpointDistribution')"
             :start-date="startDate"
             :end-date="endDate"

@@ -54,6 +54,35 @@ func (s *GatewayService) shouldFailoverUpstreamError(statusCode int) bool {
 	}
 }
 
+// rotatedClaudeAccessToken 恢复请求进行中被并发轮换的 token。与实际发出的 token 比较（可能来自缓存而非账号快照）；
+// 这里绝不刷新或落库凭证：token 未变化时保持原有 401 处理策略。
+func (s *GatewayService) rotatedClaudeAccessToken(ctx context.Context, account *Account, rejectedToken string) string {
+	if account == nil || account.Platform != PlatformAnthropic || account.Type != AccountTypeOAuth ||
+		s.accountRepo == nil || rejectedToken == "" || ctx.Err() != nil {
+		return ""
+	}
+	latest, err := s.accountRepo.GetByID(ctx, account.ID)
+	if err != nil {
+		slog.Warn("claude_oauth_401_reload_failed", "account_id", account.ID, "error", err)
+		return ""
+	}
+	if latest == nil || latest.Platform != PlatformAnthropic || latest.Type != AccountTypeOAuth ||
+		latest.Status != StatusActive || !latest.Schedulable {
+		return ""
+	}
+	token := strings.TrimSpace(latest.GetCredential("access_token"))
+	if token == "" || token == rejectedToken {
+		return ""
+	}
+	if p := s.claudeTokenProvider; p != nil && p.tokenCache != nil {
+		if err := p.tokenCache.DeleteAccessToken(ctx, ClaudeTokenCacheKey(latest)); err != nil {
+			slog.Warn("claude_oauth_401_invalidate_cache_failed", "account_id", account.ID, "error", err)
+		}
+	}
+	slog.Info("claude_oauth_rotated_token_retry", "account_id", account.ID)
+	return token
+}
+
 func retryBackoffDelay(attempt int) time.Duration {
 	// attempt 从 1 开始，表示第 attempt 次请求刚失败，需要等待后进行第 attempt+1 次请求。
 	if attempt <= 0 {
@@ -311,6 +340,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	var resp *http.Response
 	lastWireBody := body
 	retryStart := time.Now()
+	retriedRotatedToken := false
 	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
 
 		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
@@ -330,6 +360,17 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
 				UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
 			})
+		}
+
+		// 请求进行中 OAuth token 被并发轮换时，库里已是新 token：换用新 token 重试一次，不触发 401 账号策略。
+		if resp.StatusCode == http.StatusUnauthorized && !retriedRotatedToken &&
+			attempt < maxRetryAttempts && time.Since(retryStart) < maxRetryElapsed {
+			if rotatedToken := s.rotatedClaudeAccessToken(ctx, account, token); rotatedToken != "" {
+				_ = resp.Body.Close()
+				token = rotatedToken
+				retriedRotatedToken = true
+				continue
+			}
 		}
 
 		if resp.StatusCode == 400 {

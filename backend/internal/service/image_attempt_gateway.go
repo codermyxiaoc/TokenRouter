@@ -65,6 +65,10 @@ func (s *OpenAIGatewayService) imageAttemptHTTPFailure(ctx context.Context, c *g
 		decision.RetryDifferentAccount, decision.AttemptFault = false, false
 	}
 	upstreamErr := openAIImagesUpstreamErrorFromHTTP(resp.StatusCode, resp.Header, body)
+	if account.Platform == PlatformGrok {
+		// xAI 使用扁平错误体 {"code":"...","error":"..."}，共享提取器读不到，单独补齐消息与错误码。
+		applyGrokImagesUpstreamErrorFields(upstreamErr, body)
+	}
 	if decision.AttemptFault {
 		s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, model)
 	}

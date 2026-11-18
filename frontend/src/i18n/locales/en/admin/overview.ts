@@ -1339,6 +1339,8 @@ affiliates: {
         title: 'OpenAI Fast',
         force: 'Force Fast priority',
         hint: 'When enabled, requests in this OpenAI group use service_tier=priority. Global Fast/Flex policy and API-key overrides still apply.',
+        forceUltrafast: 'Force Ultra Fast',
+        forceUltrafastHint: 'Writes service_tier=ultrafast only for supported models (GPT-6 Astra, GPT-6.1 Sol, GPT-6.2 Sol/Astra), taking precedence over Force Fast. GPT-6.2 subscription accounts need a plan that includes Ultra Fast (Pro: Sol only; Pro Max: both); otherwise Force Fast applies or the client tier is kept. GPT-6.2 costs 3x Standard through February 28, 2027 (Pacific time), then 6x; GPT-6 Astra and GPT-6.1 Sol cost 6x. Other models use priority when Force Fast is on, otherwise they follow the client.',
         free: 'Free Fast',
         freeHint: 'Fast requests still use the priority tier, but customers are charged the equivalent Standard price.'
       },

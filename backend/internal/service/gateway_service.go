@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -287,17 +288,20 @@ func extractSystemPreviewFromBody(body []byte) string {
 
 	switch {
 	case sys.IsArray():
-		for _, item := range sys.Array() {
+		var preview string
+		sys.ForEach(func(_, item gjson.Result) bool {
 			if !item.IsObject() {
-				continue
+				return true
 			}
 			if strings.EqualFold(item.Get("type").String(), "text") {
 				if t := item.Get("text").String(); strings.TrimSpace(t) != "" {
-					return t
+					preview = t
+					return false
 				}
 			}
-		}
-		return ""
+			return true
+		})
+		return preview
 	case sys.Type == gjson.String:
 		return sys.String()
 	default:
@@ -334,7 +338,7 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 
 	h := make([]string, 0, len(interesting))
 	for _, k := range interesting {
-		if v := req.Header.Get(k); v != "" {
+		if v := getHeaderRaw(req.Header, k); v != "" {
 			h = append(h, fmt.Sprintf("%s=%q", k, safeHeaderValueForLog(k, v)))
 		}
 	}
@@ -369,6 +373,61 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 	)
 }
 
+// claudeMimicDebugLine 把诊断行的构建推迟到错误路径真正需要时。该行只在 Claude Code
+// 凭据作用域错误时读取，提前构建会让每个 OAuth 请求白白遍历请求头、扫描系统提示并多次格式化。
+type claudeMimicDebugLine struct {
+	once            sync.Once
+	req             *http.Request
+	body            []byte
+	account         *Account
+	tokenType       string
+	mimicClaudeCode bool
+	line            string
+}
+
+func newClaudeMimicDebugLine(req *http.Request, body []byte, account *Account, tokenType string, mimicClaudeCode bool) *claudeMimicDebugLine {
+	return &claudeMimicDebugLine{
+		req:             req,
+		body:            body,
+		account:         account,
+		tokenType:       tokenType,
+		mimicClaudeCode: mimicClaudeCode,
+	}
+}
+
+func (l *claudeMimicDebugLine) String() string {
+	if l == nil {
+		return ""
+	}
+	l.once.Do(func() {
+		l.line = buildClaudeMimicDebugLine(l.req, l.body, l.account, l.tokenType, l.mimicClaudeCode)
+		// 用后释放引用，避免请求与请求体被长期持有。
+		l.req, l.body, l.account = nil, nil, nil
+	})
+	return l.line
+}
+
+// claudeMimicDebugLineFromContext 返回已存的诊断行，首次读取时才构建；兼容旧的纯字符串值。
+func claudeMimicDebugLineFromContext(c interface {
+	Get(string) (any, bool)
+}) string {
+	if c == nil {
+		return ""
+	}
+	v, ok := c.Get(claudeMimicDebugInfoKey)
+	if !ok {
+		return ""
+	}
+	switch line := v.(type) {
+	case *claudeMimicDebugLine:
+		return line.String()
+	case string:
+		return line
+	default:
+		return ""
+	}
+}
+
 func logClaudeMimicDebug(req *http.Request, body []byte, account *Account, tokenType string, mimicClaudeCode bool) {
 	line := buildClaudeMimicDebugLine(req, body, account, tokenType, mimicClaudeCode)
 	if line == "" {
@@ -386,10 +445,7 @@ func isClaudeCodeCredentialScopeError(msg string) bool {
 		strings.Contains(m, "cannot be used for other api requests")
 }
 
-// sseDataRe matches SSE data lines with optional whitespace after colon.
-// Some upstream APIs return non-standard "data:" without space (should be "data: ").
 var (
-	sseDataRe            = regexp.MustCompile(`^data:\s*`)
 	claudeCliUserAgentRe = regexp.MustCompile(`(?i)^claude-cli/\d+\.\d+\.\d+`)
 
 	// claudeCodePromptPrefixes 用于检测 Claude Code 系统提示词的前缀列表
@@ -570,6 +626,15 @@ type ClaudeUsage struct {
 	ImageOutputTokens        int `json:"image_output_tokens,omitempty"`
 	// Speed 记录 Claude 实际返回的处理速度，"fast" 会映射到内部 priority 计费。
 	Speed string `json:"speed,omitempty"`
+
+	// 以下为跨流式事件合并用量时的内部状态，不参与序列化。
+	// cacheCreationInputTokensPresent 表示上游显式给出过聚合缓存写入量。
+	cacheCreationInputTokensPresent bool
+	// cacheCreationInputTokensFromDetails 表示当前聚合量是由 5m/1h 明细求和得到的。
+	cacheCreationInputTokensFromDetails bool
+	// promptTotalTokens/promptTotalPresent 记住兼容供应商给出的权威 prompt 总量。
+	promptTotalTokens  int
+	promptTotalPresent bool
 }
 
 // ForwardResult 转发结果
@@ -611,6 +676,17 @@ type ForwardResult struct {
 	// CacheStorageTokenHours 显式上下文缓存的存储量（缓存 token 数 × 存储小时数），按计费模型的
 	// 存储单价折算为费用后叠加在 token 费用之上。
 	CacheStorageTokenHours float64
+	// UpstreamPriceMultiplier 是上游按实际请求端点计价相对计费模型价格的倍数（见 VertexUpstreamPriceMultiplier），
+	// 只作用于默认模型价的 token 费用；0 按 1 处理。
+	UpstreamPriceMultiplier float64
+}
+
+// upstreamPriceFactor 返回 UpstreamPriceMultiplier，未设置时为 1。
+func (r *ForwardResult) upstreamPriceFactor() float64 {
+	if r == nil || r.UpstreamPriceMultiplier <= 0 {
+		return 1
+	}
+	return r.UpstreamPriceMultiplier
 }
 
 // GatewayFailureStage 标识请求失败的阶段。零值有意按推理阶段处理，
@@ -664,6 +740,7 @@ type UpstreamFailoverError struct {
 	NextAccountAction        NextAccountAction
 	ClientStatusCode         int
 	ClientMessage            string
+	StreamFailedFrame        *OpenAIStreamFailedFrame // 触发本次 failover 的流内 failed/error 帧；耗尽时用于错误透传规则匹配
 }
 
 func (e *UpstreamFailoverError) Error() string {
@@ -1330,7 +1407,8 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	// OpenAI 透传账号不依赖 model_mapping；旧映射不能限制公开模型列表。
 	if platform == PlatformOpenAI {
 		for i := range accounts {
-			if accounts[i].Platform != PlatformOpenAI || !accounts[i].IsOpenAIPassthroughEnabled() {
+			// 开启按模型过滤的透传账号受映射约束，不能让其放开公开模型列表。
+			if accounts[i].Platform != PlatformOpenAI || !accounts[i].IsOpenAIPassthroughEnabled() || accounts[i].IsOpenAIPassthroughModelFilterEnabled() {
 				continue
 			}
 			if s.modelsListCache != nil {

@@ -22,7 +22,7 @@ export function isModelDetailsOnly(entry: PricingFormEntry): boolean {
   return copyModelDetails(entry.models, entry.model_details) !== undefined &&
     ['token', 'video', 'video_token', 'video_per_request'].includes(entry.billing_mode) &&
     ![
-      entry.price_multiplier, entry.fast_mode_multiplier, entry.fast_multiplier, entry.flex_multiplier,
+      entry.price_multiplier, entry.fast_mode_multiplier, entry.fast_multiplier, entry.flex_multiplier, entry.ultrafast_multiplier,
       entry.max_reasoning_effort_multiplier, entry.input_price, entry.output_price,
       entry.cache_write_price, entry.cache_write_1h_price, entry.cache_read_price,
       entry.image_input_price, entry.image_output_price, entry.per_request_price, entry.video_fallback_price,

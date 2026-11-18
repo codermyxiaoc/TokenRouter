@@ -42,7 +42,7 @@ func TestModelBillingConcurrentSharedPricing(t *testing.T) {
 				{"gpt-6.1-sol", 2e-6, 10e-6, 2.5e-6, .1e-6, true},
 				{"gpt-6-sol", 2e-6, 10e-6, 2.5e-6, .2e-6, true},
 				{"gpt-6-luna", .1e-6, .5e-6, .125e-6, .01e-6, true},
-				{"claude-sonnet-5-5", 2e-6, 10e-6, 2.5e-6, .2e-6, false},
+				{"claude-sonnet-5-5", 2e-6, 10e-6, 2.5e-6, .1e-6, false}, // 缓存读取为输入价的 5%
 				{"claude-opus-5-5", 4e-6, 20e-6, 5e-6, .2e-6, false},
 			} {
 				for _, inputTokens := range []int{271950, 271951} {
@@ -251,11 +251,12 @@ func TestModelBillingConcurrentStreamUsageSettlement(t *testing.T) {
 							require.Equal(t, tc.output, logRepo.lastLog.OutputTokens)
 							require.Equal(t, tc.write, logRepo.lastLog.CacheCreationTokens)
 							require.Equal(t, tc.read, logRepo.lastLog.CacheReadTokens)
-							inputPrice, outputPrice, writePrice := 2e-6, 10e-6, 2.5e-6
+							// Sonnet 5.5 缓存读取为输入价的 5%（0.1e-6），Opus 5.5 仍为 0.2e-6。
+							inputPrice, outputPrice, writePrice, readPrice := 2e-6, 10e-6, 2.5e-6, .1e-6
 							if model == "claude-opus-5-5" {
-								inputPrice, outputPrice, writePrice = 4e-6, 20e-6, 5e-6
+								inputPrice, outputPrice, writePrice, readPrice = 4e-6, 20e-6, 5e-6, .2e-6
 							}
-							want := float64(tc.input)*inputPrice + float64(tc.output)*outputPrice + float64(tc.write)*writePrice + float64(tc.read)*.2e-6
+							want := float64(tc.input)*inputPrice + float64(tc.output)*outputPrice + float64(tc.write)*writePrice + float64(tc.read)*readPrice
 							require.InDelta(t, want, logRepo.lastLog.TotalCost, 1e-12)
 							require.InDelta(t, want*1.1, logRepo.lastLog.ActualCost, 1e-12)
 							require.InDelta(t, math.Round(want*1.1*1e8)/1e8, ledger.lastCmd.BillableAmountUSD, 1e-12)

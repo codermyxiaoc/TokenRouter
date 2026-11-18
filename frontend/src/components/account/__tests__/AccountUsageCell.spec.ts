@@ -295,6 +295,38 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).toContain('admin.accounts.usageWindow.gemini3Image|70|2026-03-01T09:00:00Z')
   })
 
+  it('Antigravity query button refreshes past the server cache', async () => {
+    // 首次读取命中服务端缓存（旧额度），点击“查询”后以 force=true 绕过缓存拿到最新额度。
+    const first = { antigravity_quota: { 'claude-fable-5': { utilization: 100, reset_time: '2026-11-12T03:39:37Z' } } }
+    const upgraded = { antigravity_quota: { 'claude-fable-5': { utilization: 0, reset_time: '2026-11-14T21:22:49Z' } } }
+    getUsage.mockResolvedValueOnce(first).mockResolvedValueOnce(upgraded)
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({ id: 1006, platform: 'antigravity', type: 'oauth', extra: {} })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization', 'resetsAt', 'color'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ resetsAt }}</div>'
+          },
+          AccountQuotaInfo: true
+        }
+      }
+    })
+    await flushPromises()
+    expect(wrapper.find('.usage-bar').text()).toContain('|100|')
+
+    const button = wrapper.find('[data-testid="antigravity-active-query"]')
+    expect(button.exists()).toBe(true)
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(getUsage).toHaveBeenLastCalledWith(1006, 'active', true)
+    expect(wrapper.find('.usage-bar').text()).toContain('|0|2026-11-14T21:22:49Z')
+  })
+
   it('Antigravity 会显示 AI Credits 余额信息', async () => {
     getUsage.mockResolvedValue({
       ai_credits: [
@@ -2043,5 +2075,92 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).not.toContain('5h|99')
     expect(getUsage).toHaveBeenLastCalledWith(9305)
     wrapper.unmount()
+  })
+  // OpenAI 额度新鲜度：刷新失败不能把旧快照伪装成最新读取，仅本地统计时使用率显示未知。
+  describe('OpenAI quota freshness', () => {
+    const observedAt = '2026-11-11T03:33:55Z'
+    const snapshot = (): AccountUsageInfo => ({
+      source: 'passive',
+      updated_at: observedAt,
+      five_hour: null,
+      seven_day: { utilization: 100, resets_at: null, remaining_seconds: 0 },
+      seven_day_sonnet: null
+    } as AccountUsageInfo)
+    const stubs = {
+      UsageProgressBar: {
+        props: ['label', 'utilization'],
+        template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
+      }
+    }
+    const queryButton = (wrapper: ReturnType<typeof mount>) =>
+      wrapper.findAll('button').find(button => button.text().includes('admin.accounts.usageWindow.activeQuery'))!
+
+    it('marks a degraded HTTP 200 response as failed without hiding the last observation', async () => {
+      getUsage.mockResolvedValue({
+        ...snapshot(),
+        error_code: 'quota_refresh_failed',
+        error: 'Could not refresh quota'
+      })
+      const wrapper = mount(AccountUsageCell, {
+        props: { account: makeAccount({ id: 8101, platform: 'openai', type: 'oauth' }) },
+        global: { stubs }
+      })
+      await flushPromises()
+      expect(wrapper.get('[role="alert"]').text()).toContain('quotaRefreshFailedCached')
+      expect(wrapper.text()).toContain('7d|100')
+      expect(wrapper.get('time').attributes('datetime')).toBe(observedAt)
+      wrapper.unmount()
+    })
+
+    it('shows a failed manual refresh and clears the warning only after a successful retry', async () => {
+      getUsage.mockResolvedValueOnce(snapshot()).mockRejectedValueOnce(new Error('401'))
+      const wrapper = mount(AccountUsageCell, {
+        props: { account: makeAccount({ id: 8102, platform: 'openai', type: 'oauth' }) },
+        global: { stubs }
+      })
+      await flushPromises()
+      await queryButton(wrapper).trigger('click')
+      await flushPromises()
+      expect(getUsage).toHaveBeenLastCalledWith(8102, 'active', true)
+      expect(wrapper.get('[role="alert"]').text()).toContain('quotaRefreshFailedCached')
+      expect(wrapper.text()).toContain('7d|100')
+      expect(wrapper.get('time').attributes('datetime')).toBe(observedAt)
+
+      const refreshedAt = '2026-11-12T15:08:56Z'
+      getUsage.mockResolvedValueOnce({
+        ...snapshot(), source: 'active', updated_at: refreshedAt,
+        seven_day: { utilization: 0, resets_at: null, remaining_seconds: 0 }
+      })
+      await queryButton(wrapper).trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+      expect(wrapper.text()).toContain('7d|0')
+      expect(wrapper.get('time').attributes('datetime')).toBe(refreshedAt)
+      wrapper.unmount()
+    })
+
+    it('shows local usage with an unknown percentage when no quota has been fetched', async () => {
+      getUsage.mockResolvedValue({
+        ...snapshot(), updated_at: null,
+        seven_day: {
+          utilization: 0,
+          utilization_unknown: true,
+          resets_at: null,
+          remaining_seconds: 0,
+          window_stats: { requests: 2, tokens: 100, cost: 0, standard_cost: 0, user_cost: 0 }
+        },
+        error_code: 'quota_refresh_failed', error: 'Could not refresh quota'
+      })
+      const wrapper = mount(AccountUsageCell, {
+        props: { account: makeAccount({ id: 8104, platform: 'openai', type: 'oauth' }) }
+      })
+      await flushPromises()
+      expect(wrapper.get('[role="alert"]').text()).toContain('quotaRefreshFailedUnknown')
+      expect(wrapper.find('time').exists()).toBe(false)
+      expect(wrapper.text()).toContain('2 req')
+      expect(wrapper.text()).toContain('—')
+      expect(wrapper.text()).not.toContain('0%')
+      wrapper.unmount()
+    })
   })
 })

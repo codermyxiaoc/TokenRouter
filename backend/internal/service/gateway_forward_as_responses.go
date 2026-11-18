@@ -122,28 +122,40 @@ func (s *GatewayService) ForwardAsResponses(
 		proxyURL = account.Proxy.URL()
 	}
 
-	// 10. Build upstream request
-	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
-	upstreamReq, wireBody, err := s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
+	// 10-11. 构建并发送请求；请求进行中 OAuth token 被并发轮换时换用新 token 重试一次。
+	var upstreamReq *http.Request
+	var wireBody []byte
+	var resp *http.Response
+	for retriedRotatedToken := false; ; {
+		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
+		upstreamReq, wireBody, err = s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
+		releaseUpstreamCtx()
+		if err != nil {
+			return nil, fmt.Errorf("build upstream request: %w", err)
+		}
+		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+		if err != nil {
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
+				UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
+			})
+		}
+		if resp.StatusCode == http.StatusUnauthorized && !retriedRotatedToken {
+			if rotatedToken := s.rotatedClaudeAccessToken(ctx, account, token); rotatedToken != "" {
+				_ = resp.Body.Close()
+				token = rotatedToken
+				retriedRotatedToken = true
+				continue
+			}
+		}
+		break
+	}
+	defer func() { _ = resp.Body.Close() }()
 	// 计费读取最终发送档位，保留账号转换和策略降档结果。
 	reasoningEffort := NormalizeClaudeOutputEffort(gjson.GetBytes(wireBody, "output_config.effort").String())
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, wireBody, mappedModel)
-	releaseUpstreamCtx()
-	if err != nil {
-		return nil, fmt.Errorf("build upstream request: %w", err)
-	}
-
-	// 11. Send request
-	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
-	if err != nil {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-		return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
-			UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
-		})
-	}
-	defer func() { _ = resp.Body.Close() }()
 
 	// 12. Handle error response with failover
 	if resp.StatusCode >= 400 {
@@ -296,39 +308,37 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 		return
 	}
 
-	cacheReadTokens := src.CacheReadInputTokens
-	if cacheReadTokens == 0 && src.CachedTokens > 0 {
-		cacheReadTokens = src.CachedTokens
+	// 缓存读取量：显式给出的 0 也算“已上报”，用于区分“本事件清零”与“本事件未带该字段”。
+	cacheReadTokens := max(src.CacheReadInputTokens, 0)
+	hasCacheReadTokens := src.CacheReadInputTokensPresent || src.CacheReadInputTokens != 0
+	if cacheReadTokens == 0 && (src.CachedTokensPresent || src.CachedTokens != 0) {
+		cacheReadTokens = max(src.CachedTokens, 0)
+		hasCacheReadTokens = true
 	}
-	if cacheReadTokens == 0 && src.PromptTokensDetails != nil && src.PromptTokensDetails.CachedTokens > 0 {
-		cacheReadTokens = src.PromptTokensDetails.CachedTokens
+	if cacheReadTokens == 0 && src.PromptTokensDetails != nil && (src.PromptTokensDetails.CachedTokensPresent || src.PromptTokensDetails.CachedTokens != 0) {
+		cacheReadTokens = max(src.PromptTokensDetails.CachedTokens, 0)
+		hasCacheReadTokens = true
 	}
 	if cacheReadTokens == 0 && src.PromptCacheHitTokens != nil {
 		cacheReadTokens = max(*src.PromptCacheHitTokens, 0)
+		hasCacheReadTokens = true
 	}
+	mergeAnthropicCacheCreationUsage(dst, src)
 
-	// 兼容供应商的总输入与命中/未命中桶优先于含义不一致的 input_tokens。
-	if src.PromptTokens > 0 || src.PromptCacheHitTokens != nil || src.PromptCacheMissTokens != nil {
-		if src.PromptCacheMissTokens != nil {
-			dst.InputTokens = max(*src.PromptCacheMissTokens, 0)
-		} else {
-			dst.InputTokens = max(src.PromptTokens-cacheReadTokens-src.CacheCreationInputTokens, 0)
-		}
-		dst.CacheReadInputTokens = cacheReadTokens
-		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
-	} else {
+	// 兼容供应商的总输入与命中/未命中桶优先于含义不一致的 input_tokens（覆盖 Kimi
+	// 流式语义变化以及 GLM/DeepSeek 的缓存别名）。
+	if src.PromptTokens <= 0 && src.PromptCacheHitTokens == nil && src.PromptCacheMissTokens == nil && !dst.promptTotalPresent {
 		// 缺少权威总输入或未命中桶时，后续缓存事件不能触发推测扣减。
 		// input_tokens 可能已经是不含缓存的独立输入桶。
 		if src.InputTokens > 0 {
 			dst.InputTokens = src.InputTokens
 		}
-		if cacheReadTokens > 0 {
-			dst.CacheReadInputTokens = cacheReadTokens
-		}
-		if src.CacheCreationInputTokens > 0 {
-			dst.CacheCreationInputTokens = src.CacheCreationInputTokens
-		}
 	}
+	// 后续事件中的 0 不覆盖已有的非零缓存读取快照。
+	if hasCacheReadTokens && (cacheReadTokens > 0 || dst.CacheReadInputTokens <= 0) {
+		dst.CacheReadInputTokens = cacheReadTokens
+	}
+	normalizeAnthropicPromptTotal(dst, src.PromptTokens, src.PromptCacheMissTokens)
 	if src.OutputTokens > 0 {
 		dst.OutputTokens = src.OutputTokens
 	}
@@ -336,6 +346,64 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 	if strings.TrimSpace(src.Speed) != "" {
 		dst.Speed = src.Speed
 	}
+}
+
+// normalizeAnthropicPromptTotal 跨事件记住权威的 prompt 总量，并据此重算不含缓存的输入量。
+// 给出未命中桶时直接以未命中桶为输入量。
+func normalizeAnthropicPromptTotal(usage *ClaudeUsage, promptTokens int, promptCacheMissTokens *int) {
+	if promptCacheMissTokens != nil {
+		usage.promptTotalPresent = false
+		usage.InputTokens = max(*promptCacheMissTokens, 0)
+		return
+	}
+	if promptTokens > 0 {
+		usage.promptTotalTokens = promptTokens
+		usage.promptTotalPresent = true
+	}
+	if usage.promptTotalPresent {
+		usage.InputTokens = max(usage.promptTotalTokens-usage.CacheReadInputTokens-usage.CacheCreationInputTokens, 0)
+	}
+}
+
+// mergeAnthropicCacheCreationUsage 合并缓存写入量：以聚合的 cache_creation_input_tokens 为权威，
+// 只有明细（5m/1h）时才由明细求和；后续事件中的 0 不覆盖已有的非零值。
+func mergeAnthropicCacheCreationUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
+	if src.HasCacheCreationInputTokens() && (src.CacheCreationInputTokens > 0 || dst.CacheCreationInputTokens <= 0) {
+		dst.CacheCreationInputTokens = max(src.CacheCreationInputTokens, 0)
+		dst.cacheCreationInputTokensPresent = true
+		dst.cacheCreationInputTokensFromDetails = false
+	}
+	if src.CacheCreation != nil {
+		if src.CacheCreation.Ephemeral5mInputTokens != nil {
+			dst.CacheCreation5mTokens = max(*src.CacheCreation.Ephemeral5mInputTokens, 0)
+		}
+		if src.CacheCreation.Ephemeral1hInputTokens != nil {
+			dst.CacheCreation1hTokens = max(*src.CacheCreation.Ephemeral1hInputTokens, 0)
+		}
+		if (!dst.cacheCreationInputTokensPresent || dst.cacheCreationInputTokensFromDetails || dst.CacheCreationInputTokens <= 0) && (src.CacheCreation.Ephemeral5mInputTokens != nil || src.CacheCreation.Ephemeral1hInputTokens != nil) {
+			dst.CacheCreationInputTokens = dst.CacheCreation5mTokens + dst.CacheCreation1hTokens
+			dst.cacheCreationInputTokensFromDetails = true
+		}
+	}
+}
+
+// mergeRawAnthropicCacheCreationUsage 从原始 usage JSON 节点读取缓存写入聚合量与 5m/1h 明细并合并。
+func mergeRawAnthropicCacheCreationUsage(node gjson.Result, dst *ClaudeUsage) {
+	aggregate := node.Get("cache_creation_input_tokens")
+	usage := apicompat.AnthropicUsage{
+		CacheCreationInputTokens:        int(aggregate.Int()),
+		CacheCreationInputTokensPresent: aggregate.Exists() && aggregate.Type != gjson.Null,
+		CacheCreation:                   &apicompat.AnthropicCacheCreation{},
+	}
+	if tokens := node.Get("cache_creation.ephemeral_5m_input_tokens"); tokens.Exists() && tokens.Type != gjson.Null {
+		value := int(tokens.Int())
+		usage.CacheCreation.Ephemeral5mInputTokens = &value
+	}
+	if tokens := node.Get("cache_creation.ephemeral_1h_input_tokens"); tokens.Exists() && tokens.Type != gjson.Null {
+		value := int(tokens.Int())
+		usage.CacheCreation.Ephemeral1hInputTokens = &value
+	}
+	mergeAnthropicCacheCreationUsage(dst, usage)
 }
 
 // syncAnthropicResponsesUsage 让外发用量与内部计费使用同一组归一化桶。
@@ -356,6 +424,8 @@ func normalizeAnthropicEventUsageForResponses(event *apicompat.AnthropicStreamEv
 		dst.OutputTokens = usage.OutputTokens
 		dst.CacheReadInputTokens = usage.CacheReadInputTokens
 		dst.CacheCreationInputTokens = usage.CacheCreationInputTokens
+		dst.CacheCreationInputTokensPresent = true
+		dst.CacheCreation = nil
 	}
 	normalize(event.Usage)
 	if event.Message != nil {
@@ -375,6 +445,8 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	startTime time.Time,
 	clientToolMapping apicompat.ResponsesClientToolMapping,
 ) (*ForwardResult, error) {
+	// 观测上游 Anthropic usage.speed，供计费按实际档位只降档。
+	observer := beginUpstreamResponseModelObservation(c)
 	requestID := resp.Header.Get("x-request-id")
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -413,6 +485,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 			)
 			continue
 		}
+		observer.ObserveAnthropic([]byte(payload))
 
 		// message_start carries the initial response structure
 		if event.Type == "message_start" && event.Message != nil {
@@ -464,14 +537,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	}
 
 	// Update usage from accumulated delta
-	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
-		finalResp.Usage = apicompat.AnthropicUsage{
-			InputTokens:              usage.InputTokens,
-			OutputTokens:             usage.OutputTokens,
-			CacheCreationInputTokens: usage.CacheCreationInputTokens,
-			CacheReadInputTokens:     usage.CacheReadInputTokens,
-		}
-	}
+	normalizeAnthropicEventUsageForResponses(&apicompat.AnthropicStreamEvent{Message: finalResp}, usage)
 
 	// Convert to Responses format
 	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
@@ -498,14 +564,15 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	}
 
 	return &ForwardResult{
-		RequestID:       requestID,
-		UpstreamHeaders: resp.Header,
-		Usage:           usage,
-		Model:           originalModel,
-		UpstreamModel:   mappedModel,
-		ReasoningEffort: reasoningEffort,
-		Stream:          false,
-		Duration:        time.Since(startTime),
+		UpstreamResponseServiceTier: observer.ServiceTier(),
+		RequestID:                   requestID,
+		UpstreamHeaders:             resp.Header,
+		Usage:                       usage,
+		Model:                       originalModel,
+		UpstreamModel:               mappedModel,
+		ReasoningEffort:             reasoningEffort,
+		Stream:                      false,
+		Duration:                    time.Since(startTime),
 	}, nil
 }
 
@@ -520,6 +587,8 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	startTime time.Time,
 	clientToolMapping apicompat.ResponsesClientToolMapping,
 ) (*ForwardResult, error) {
+	// 观测上游 Anthropic usage.speed，供计费按实际档位只降档。
+	observer := beginUpstreamResponseModelObservation(c)
 	requestID := resp.Header.Get("x-request-id")
 
 	if s.responseHeaderFilter != nil {
@@ -544,16 +613,17 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 
 	resultWithUsage := func() *ForwardResult {
 		return &ForwardResult{
-			RequestID:        requestID,
-			UpstreamHeaders:  resp.Header,
-			Usage:            usage,
-			Model:            originalModel,
-			UpstreamModel:    mappedModel,
-			ReasoningEffort:  reasoningEffort,
-			Stream:           true,
-			Duration:         time.Since(startTime),
-			FirstTokenMs:     firstTokenMs,
-			ClientDisconnect: stream.clientDisconnected,
+			UpstreamResponseServiceTier: observer.ServiceTier(),
+			RequestID:                   requestID,
+			UpstreamHeaders:             resp.Header,
+			Usage:                       usage,
+			Model:                       originalModel,
+			UpstreamModel:               mappedModel,
+			ReasoningEffort:             reasoningEffort,
+			Stream:                      true,
+			Duration:                    time.Since(startTime),
+			FirstTokenMs:                firstTokenMs,
+			ClientDisconnect:            stream.clientDisconnected,
 		}
 	}
 
@@ -657,6 +727,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			logger.L().Warn("forward_as_responses stream: failed to parse event", zap.Error(err), zap.String("request_id", requestID), zap.String("event_type", eventType))
 			continue
 		}
+		observer.ObserveAnthropic([]byte(payload))
 		// 与 Chat 桥一致，协议错误标签优先于载荷中的类型提示。
 		if eventType == "error" || event.Type == "" {
 			event.Type = eventType

@@ -870,7 +870,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		}
 		firstClientMessage = liteFirstMessage
 	}
-	accountScopedFirst, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(firstClientMessage, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+	accountScopedFirst, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(firstClientMessage, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), codexClientSessionID(c))
 	if scopeErr != nil {
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", scopeErr)
 	}
@@ -1166,7 +1166,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 			}
 			if isResponseCreate || eventType == "session.update" {
-				accountScopedPayload, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(payload, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+				accountScopedPayload, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(payload, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), codexClientSessionID(c))
 				if scopeErr != nil {
 					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", scopeErr)
 				}
@@ -1362,6 +1362,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		Options: openaiwsv2.RelayOptions{
 			WriteTimeout:       s.openAIWSWriteTimeout(),
 			FirstTurnStartedAt: firstTurnStartedAt,
+			IsFirstTokenEvent:  openAIWSFirstTokenEventFunc(s.openAITTFTMode(ctx)),
 			TakeNextTurnStartedAt: func() time.Time {
 				startedAt := acceptedTurnStartedAt.Swap(nil)
 				if startedAt == nil {
@@ -1407,15 +1408,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					turnOriginalModel = turn.RequestModel
 				}
 				turnResult := &OpenAIForwardResult{
-					RequestID: turn.RequestID,
-					Usage: OpenAIUsage{
-						InputTokens:              turn.Usage.InputTokens,
-						ImageInputTokens:         turn.Usage.ImageInputTokens,
-						OutputTokens:             turn.Usage.OutputTokens,
-						CacheCreationInputTokens: turn.Usage.CacheCreationInputTokens,
-						CacheReadInputTokens:     turn.Usage.CacheReadInputTokens,
-						ImageOutputTokens:        turn.Usage.ImageOutputTokens,
-					},
+					RequestID:                   turn.RequestID,
+					Usage:                       openAIUsageFromRelay(turn.Usage),
 					Model:                       turnOriginalModel,
 					UpstreamModel:               turnPayload.UpstreamModel,
 					UpstreamResponseServiceTier: normalizeObservedOpenAIServiceTier(turn.ResponseServiceTier),
@@ -1575,15 +1569,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 
 	result := &OpenAIForwardResult{
-		RequestID: relayResult.RequestID,
-		Usage: OpenAIUsage{
-			InputTokens:              relayResult.Usage.InputTokens,
-			ImageInputTokens:         relayResult.Usage.ImageInputTokens,
-			OutputTokens:             relayResult.Usage.OutputTokens,
-			CacheCreationInputTokens: relayResult.Usage.CacheCreationInputTokens,
-			CacheReadInputTokens:     relayResult.Usage.CacheReadInputTokens,
-			ImageOutputTokens:        relayResult.Usage.ImageOutputTokens,
-		},
+		RequestID:                   relayResult.RequestID,
+		Usage:                       openAIUsageFromRelay(relayResult.Usage),
 		Model:                       relayResult.RequestModel,
 		UpstreamResponseServiceTier: normalizeObservedOpenAIServiceTier(relayResult.ResponseServiceTier),
 		ServiceTier:                 usageMeta.serviceTier.Load(),
@@ -1692,14 +1679,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			// 坏计量不能成功结算；此前同轮已验证的消耗仍交给既有失败结算路径。
 			partial := *result
 			partial.RequestID = relayResult.PendingRequestID
-			partial.Usage = OpenAIUsage{
-				InputTokens:              relayResult.PendingUsage.InputTokens,
-				ImageInputTokens:         relayResult.PendingUsage.ImageInputTokens,
-				OutputTokens:             relayResult.PendingUsage.OutputTokens,
-				CacheCreationInputTokens: relayResult.PendingUsage.CacheCreationInputTokens,
-				CacheReadInputTokens:     relayResult.PendingUsage.CacheReadInputTokens,
-				ImageOutputTokens:        relayResult.PendingUsage.ImageOutputTokens,
-			}
+			partial.Usage = openAIUsageFromRelay(relayResult.PendingUsage)
 			if turnPayload.OriginalModel != "" {
 				partial.Model = turnPayload.OriginalModel
 			}
@@ -1725,6 +1705,20 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		})
 	}
 	return turnErr
+}
+
+// 成功回合、连接汇总及失败回合的可信用量共用同一份结算字段映射。
+func openAIUsageFromRelay(usage openaiwsv2.Usage) OpenAIUsage {
+	return OpenAIUsage{
+		InputTokens:                 usage.InputTokens,
+		ImageInputTokens:            usage.ImageInputTokens,
+		OutputTokens:                usage.OutputTokens,
+		CacheCreationInputTokens:    usage.CacheCreationInputTokens,
+		CacheCreation30mInputTokens: usage.CacheCreation30mInputTokens,
+		CacheCreation12hInputTokens: usage.CacheCreation12hInputTokens,
+		CacheReadInputTokens:        usage.CacheReadInputTokens,
+		ImageOutputTokens:           usage.ImageOutputTokens,
+	}
 }
 
 func openAIWSPassthroughRelayClientClose(exit openaiwsv2.RelayExit, completedTurns int) (coderws.StatusCode, string, bool) {
@@ -1853,6 +1847,18 @@ func relayErrorText(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// openAIWSFirstTokenEventFunc applies the configured TTFT mode to WebSocket
+// events so they report first-token time on the same basis as SSE streams.
+// codex.* frames are WebSocket-only out-of-band events, not model output.
+func openAIWSFirstTokenEventFunc(mode string) func(eventType string, message []byte) bool {
+	return func(eventType string, message []byte) bool {
+		if strings.HasPrefix(strings.TrimSpace(eventType), "codex.") {
+			return false
+		}
+		return openAIStreamDataStartsTTFT(string(message), eventType, false, mode)
+	}
 }
 
 func openAIWSFirstTokenMsForLog(firstTokenMs *int) int {

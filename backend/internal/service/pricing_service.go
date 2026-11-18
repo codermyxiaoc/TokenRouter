@@ -37,7 +37,7 @@ var (
 	openAIModelDatePattern = regexp.MustCompile(`-(?:\d{8}|\d{4}-\d{2}-\d{2})$`)
 	openAIModelBasePattern = regexp.MustCompile(`^(gpt-\d+(?:\.\d+)?)(?:-|$)`)
 	// 只移除已知档位，保留版本和产品名；Spark 的价格重定向仍由专用回退处理。
-	geminiThinkingTierPattern = regexp.MustCompile(`^(gemini-\d+(?:\.\d+)?-(?:pro|flash|argon))-(?:high|low|medium|tiered)$`)
+	geminiThinkingTierPattern = regexp.MustCompile(`^(gemini-\d+(?:\.\d+)?-(?:pro|flash|argon|carbon))-(?:high|low|medium|tiered)$`)
 	openAIThinkingTierPattern = regexp.MustCompile(`^(gpt-\d+(?:\.\d+)?(?:-(?:mini|nano|pro|sol|terra|luna|astra|codex))?)-(none|minimal|low|medium|high|xhigh|max)$`)
 	// 次版本最多两位，避免把八位日期误认为版本号。
 	claudeVersionPatterns = []*regexp.Regexp{
@@ -104,6 +104,15 @@ var (
 		LongContextInputTokenThreshold: 272000, LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
 		SupportsServiceTier: true, LiteLLMProvider: "openai", Mode: "chat", SupportsPromptCaching: true,
 	}
+	// GPT-6.2 Astra 官方价：输入 8、输出 40、缓存写 10、缓存读 0.4 美元/百万 Token，Fast 2 倍，272K 长上下文门槛。
+	openAIGPT62AstraPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 8e-6, OutputCostPerToken: 40e-6,
+		CacheCreationInputTokenCost: 10e-6, CacheReadInputTokenCost: 0.4e-6,
+		InputCostPerTokenPriority: 16e-6, OutputCostPerTokenPriority: 80e-6,
+		CacheCreationInputTokenCostPriority: 20e-6, CacheReadInputTokenCostPriority: 0.8e-6,
+		LongContextInputTokenThreshold: 272000, LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
+		SupportsServiceTier: true, LiteLLMProvider: "openai", Mode: "chat", SupportsPromptCaching: true,
+	}
 	// GPT-6.1 Terra 官方价：输入 1、输出 5、缓存写 1.25、缓存读 0.05 美元/百万 Token，Fast 2 倍，同一长上下文门槛。
 	openAIGPT61TerraPricing = &LiteLLMModelPricing{
 		InputCostPerToken: 1e-6, OutputCostPerToken: 5e-6,
@@ -132,8 +141,17 @@ var (
 	claudeSonnet55FallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken: 2e-6, OutputCostPerToken: 10e-6,
 		CacheCreationInputTokenCost: 2.5e-6, CacheCreationInputTokenCostAbove1hr: 4e-6,
-		CacheReadInputTokenCost: 0.2e-6, SupportsPromptCaching: true,
+		// 缓存读取为输入价的 5%。
+		CacheReadInputTokenCost: 0.1e-6, SupportsPromptCaching: true,
 		LiteLLMProvider: "anthropic", Mode: "chat",
+	}
+	// Fable/Mythos 5.2 共用官方价卡，含 5m/1h 两种缓存写入价。
+	claude52FallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 8e-6, OutputCostPerToken: 40e-6,
+		CacheCreationInputTokenCost: 10e-6, CacheCreationInputTokenCostAbove1hr: 16e-6,
+		CacheReadInputTokenCost: 0.2e-6, SupportsPromptCaching: true,
+		// 5.2 支持 Anthropic Fast mode，按通用 service_tier 2 倍档位计费。
+		SupportsServiceTier: true, LiteLLMProvider: "anthropic", Mode: "chat",
 	}
 	// Haiku 5.5 的 100k 长上下文价格对整次 token 用量应用 5 倍。
 	claudeHaiku55FallbackPricing = &LiteLLMModelPricing{
@@ -264,7 +282,9 @@ type LiteLLMModelPricing struct {
 	TokenPricingAbsent bool `json:"-"`
 
 	// 保留目录中缺省与显式免费之间的区别，仅由新型号的兼容策略读取。
-	CacheCreationInputTokenCostExplicit         bool `json:"-"`
+	CacheCreationInputTokenCostExplicit bool `json:"-"`
+	// priceOverrides 区分运营者在 override_file 指定的价格与源目录自带的价格。
+	priceOverrides                              tokenPriceOverrides
 	InputCostPerTokenPriorityExplicit           bool `json:"-"`
 	OutputCostPerTokenPriorityExplicit          bool `json:"-"`
 	CacheCreationInputTokenCostPriorityExplicit bool `json:"-"`
@@ -355,7 +375,10 @@ func (s *PricingService) Initialize() error {
 	// 启动定时更新
 	s.startUpdateScheduler()
 
-	logger.LegacyPrintf("service.pricing", "[Pricing] Service initialized with %d models", len(s.pricingData))
+	s.mu.RLock()
+	modelCount := len(s.pricingData)
+	s.mu.RUnlock()
+	logger.LegacyPrintf("service.pricing", "[Pricing] Service initialized with %d models", modelCount)
 	return nil
 }
 
@@ -428,25 +451,10 @@ func (s *PricingService) checkAndUpdatePricing() error {
 		return s.downloadPricingData()
 	}
 
-	// 如果配置了哈希URL，通过远程哈希检查是否有更新
+	// 如果配置了哈希URL，通过远程哈希检查是否有更新。本地文件已加载，服务已可用，
+	// 校验放到后台做：远端慢或不通时不挡启动与监听（fetchRemoteHash 请求挂住时会一直等到客户端超时）。
 	if s.cfg.Pricing.HashURL != "" {
-		remoteHash, err := s.fetchRemoteHash()
-		if err != nil {
-			logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash on startup: %v", err)
-			return nil // 已加载本地文件，哈希获取失败不影响启动
-		}
-
-		s.mu.RLock()
-		localHash := s.localHash
-		s.mu.RUnlock()
-
-		if localHash == "" || remoteHash != localHash {
-			logger.LegacyPrintf("service.pricing", "[Pricing] Remote hash differs on startup (local=%s remote=%s), downloading...",
-				localHash[:min(8, len(localHash))], remoteHash[:min(8, len(remoteHash))])
-			if err := s.downloadPricingData(); err != nil {
-				logger.LegacyPrintf("service.pricing", "[Pricing] Download failed, using existing file: %v", err)
-			}
-		}
+		go s.checkRemoteHashOnStartup()
 		return nil
 	}
 
@@ -467,6 +475,27 @@ func (s *PricingService) checkAndUpdatePricing() error {
 	}
 
 	return nil
+}
+
+// checkRemoteHashOnStartup 启动后在后台比对远程哈希，不同则下载；失败只记日志，沿用已加载的本地文件。
+func (s *PricingService) checkRemoteHashOnStartup() {
+	remoteHash, err := s.fetchRemoteHash()
+	if err != nil {
+		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to fetch remote hash on startup: %v", err)
+		return
+	}
+
+	s.mu.RLock()
+	localHash := s.localHash
+	s.mu.RUnlock()
+
+	if localHash == "" || remoteHash != localHash {
+		logger.LegacyPrintf("service.pricing", "[Pricing] Remote hash differs on startup (local=%s remote=%s), downloading...",
+			localHash[:min(8, len(localHash))], remoteHash[:min(8, len(remoteHash))])
+		if err := s.downloadPricingData(); err != nil {
+			logger.LegacyPrintf("service.pricing", "[Pricing] Download failed, using existing file: %v", err)
+		}
+	}
 }
 
 // syncWithRemote 与远程同步（基于哈希校验）
@@ -667,10 +696,10 @@ func (s *PricingService) downloadPricingData() error {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to save file: %v", err)
 	}
 
-	// 使用远程哈希作为同步锚点，防止重复下载
-	// 当远程哈希不可用时，回退到数据本身的哈希
+	// 只有远程哈希与下载正文一致时才将其作为同步锚点。
+	// 不匹配时保留正文哈希，让下一轮同步重试，避免旧数据被误标为最新。
 	syncHash := dataHashStr
-	if remoteHash != "" {
+	if strings.EqualFold(remoteHash, dataHashStr) {
 		syncHash = remoteHash
 	}
 	hashFile := s.getHashFilePath()
@@ -698,7 +727,7 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 	if err := json.Unmarshal(body, &rawData); err != nil {
 		return nil, fmt.Errorf("parse raw JSON: %w", err)
 	}
-	rawData = s.applyPricingOverrides(rawData)
+	rawData, priceOverrides := s.applyPricingOverrides(rawData)
 
 	result := make(map[string]*LiteLLMModelPricing)
 	skipped := 0
@@ -722,8 +751,9 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 			continue
 		}
 
-		preserveCatalogPrices := isOpenAIGPT61SolModel(modelName) || isOpenAIGPT61TerraModel(modelName) || isOpenAIGPT6SolModel(modelName) || isOpenAIGPT6LunaModel(modelName)
+		preserveCatalogPrices := isOpenAIGPT62Model(modelName) || isOpenAIGPT61SolModel(modelName) || isOpenAIGPT61TerraModel(modelName) || isOpenAIGPT6SolModel(modelName) || isOpenAIGPT6LunaModel(modelName)
 		pricing := &LiteLLMModelPricing{
+			priceOverrides:                              priceOverrides[modelName],
 			LiteLLMProvider:                             entry.LiteLLMProvider,
 			Mode:                                        entry.Mode,
 			SupportsPromptCaching:                       entry.SupportsPromptCaching,
@@ -966,11 +996,12 @@ func warnOrphanCacheTierFields(entries []string) {
 // 文件的解析都经过 parsePricingData，因此 override 是最高优先级的数据源。这里只修补
 // 已存在的条目：目录/回退里都没有的模型由 mergeOverrideOnlyModels 在两层数据合并后
 // 统一并入——若在此处抢先建条目，纯 override 条目会挡住回退文件中同名完整条目的合并。
-func (s *PricingService) applyPricingOverrides(rawData map[string]json.RawMessage) map[string]json.RawMessage {
+func (s *PricingService) applyPricingOverrides(rawData map[string]json.RawMessage) (map[string]json.RawMessage, map[string]tokenPriceOverrides) {
 	overrides := s.loadPricingOverrideEntries()
 	if len(overrides) == 0 {
-		return rawData
+		return rawData, nil
 	}
+	priceOverrides := make(map[string]tokenPriceOverrides, len(overrides))
 	for name, patch := range overrides {
 		base, ok := rawData[name]
 		if !ok {
@@ -982,8 +1013,37 @@ func (s *PricingService) applyPricingOverrides(rawData map[string]json.RawMessag
 			continue
 		}
 		rawData[name] = merged
+		priceOverrides[name] = tokenPriceOverridesFromPatch(patch)
 	}
-	return rawData
+	return rawData, priceOverrides
+}
+
+// tokenPriceOverrides 记录 override_file 中显式给出（含 0）的非负 token 单价。
+// 来源随解析后的价卡保存，计费时无需重读文件。
+type tokenPriceOverrides struct {
+	input, output, cacheRead, cacheWrite bool
+}
+
+// tokenPriceOverridesFromPatch 解析运营者显式给出的输入、输出和缓存读写价。
+func tokenPriceOverridesFromPatch(patch json.RawMessage) tokenPriceOverrides {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(patch, &fields) != nil {
+		return tokenPriceOverrides{}
+	}
+	explicitRate := func(field string) bool {
+		raw, ok := fields[field]
+		if !ok {
+			return false
+		}
+		var rate *float64
+		return json.Unmarshal(raw, &rate) == nil && rate != nil && *rate >= 0
+	}
+	return tokenPriceOverrides{
+		input:      explicitRate("input_cost_per_token"),
+		output:     explicitRate("output_cost_per_token"),
+		cacheRead:  explicitRate("cache_read_input_token_cost"),
+		cacheWrite: explicitRate("cache_creation_input_token_cost"),
+	}
 }
 
 // loadPricingOverrideEntries 读取 override 文件的原始条目。未配置返回 nil；
@@ -1275,6 +1335,17 @@ func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing 
 
 	// 3. Claude 新型号使用专属静态兜底，避免误用旧 Opus 系列价格。
 	for _, candidate := range lookupCandidates {
+		// Fable/Mythos 5.2 优先使用目录中的精确价卡，缺失时用官方兜底价。
+		if claude.IsClaude52Model(candidate) {
+			key := "claude-fable-5-2"
+			if claude.IsMythos52Model(candidate) {
+				key = "claude-mythos-5-2"
+			}
+			if pricing, ok := s.pricingData[key]; ok {
+				return pricing
+			}
+			return claude52FallbackPricing
+		}
 		if claude.IsHaiku55Model(candidate) {
 			return claudeHaiku55FallbackPricing
 		}
@@ -1733,6 +1804,11 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		product, fallback = "gpt-5.5-pro", openAIGPT55ProFallbackPricing
 	case isOpenAIGPT6AstraModel(model):
 		product, fallback = "gpt-6-astra", openAIGPT6AstraPricing
+	case openAIGPT62ModelID(sameModel) == "gpt-6.2-sol":
+		// GPT-6.2 Sol 与 6.1 Sol 公布价相同。
+		product, fallback = "gpt-6.2-sol", openAIGPT61SolPricing
+	case openAIGPT62ModelID(sameModel) == "gpt-6.2-astra":
+		product, fallback = "gpt-6.2-astra", openAIGPT62AstraPricing
 	case isOpenAIGPT61SolModel(sameModel):
 		product, fallback = "gpt-6.1-sol", openAIGPT61SolPricing
 	case isOpenAIGPT61TerraModel(sameModel):

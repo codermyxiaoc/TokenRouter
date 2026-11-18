@@ -11,6 +11,7 @@
 - [新增与同步迁移](#新增与同步迁移)：创建本 fork 迁移或同步上游时读取。
 - [升级与恢复](#升级与恢复)：修改更新、备份或回退流程时读取。
 - [平台额度事务化升级](#transactional_platform_quotas)：切换额度统计权威来源、旧实例及缓存处理时读取。
+- [v3.43 缓存计费、套餐预览与鹈鹕检测](#v3_43_upgrade)：从 v3.42 部署迁移 330–333、切换调度快照及核对多模型检测时读取。
 - [v3.42 请求缓存查看与清理](#v3_42_upgrade)：更新管理员端点查看入口及整表缓存清理时读取。
 - [v3.41 请求缓存、备份与安全修复](#v3_41_upgrade)：部署迁移 328/329、请求快照保存期及备份恢复修复时读取。
 - [v3.40 图片兼容与鉴权修复](#v3_40_upgrade)：升级 GPT Image 2.6、GIF 交付、登录撤销及网关兼容修复时读取。
@@ -67,6 +68,8 @@
 
 迁移 `312_creative_canvas_text.sql` 为画布执行增加文本类型、正文、发送阶段、响应状态与私有账务证据/回执字段，不修改既有迁移或历史媒体账本。文本走原 Token 后扣事务，回执作为该事务的一部分保存；启用新的文本模型白名单前须完成新程序和迁移。回退前应先关闭文本创建并处理在途/待结算文本，旧程序不能负责恢复新类型。
 
+运行镜像（根 `Dockerfile`、`deploy/Dockerfile`、`Dockerfile.goreleaser`）基于 Alpine 3.22，在安装运行依赖前执行 `apk upgrade`。两个正式发布配方（根 `Dockerfile` 和 `Dockerfile.goreleaser`）按多架构清单摘要固定 `postgres:18.7-alpine`，从中复制 `pg_dump`、`psql` 和 `libpq`。构建在最终运行层执行两个工具并检查版本为 18.7。后续升级客户端时，同步两份配方的镜像摘要和版本断言，并用新镜像完成一次备份恢复。发布前应对最终镜像 digest 重新做组件扫描。
+
 源码镜像由根 `Dockerfile` 多阶段构建：先生成前端静态资源，再嵌入 Go 二进制，最后加入运行时资源和 PostgreSQL 客户端。`buildx --platform` 决定目标架构，`VERSION`、`COMMIT` 和 `DATE` 构建参数写入版本信息。需要让 Ubuntu 二进制包与镜像使用完全相同的程序时，可先完成一次带 `embed` 的静态 `linux/amd64` 构建，再用 `Dockerfile.goreleaser` 打包该程序；最小上下文仍须包含同次源码的 `backend/resources/` 与 `deploy/docker-entrypoint.sh`，并核对镜像内外程序哈希相同。镜像打包阶段不会修正已经编入程序的版本。
 
 二进制归档与多架构发布的另一条入口由 [GoReleaser 配置](../../.goreleaser.yaml) 定义。当前检出没有 `.github/workflows/`，不能依赖 tag 触发自动发布、自动归档或 `VERSION` 回写；发布范围和验证记录由实际执行的流程决定。
@@ -90,7 +93,7 @@
 <a id="dockerhub_deployment"></a>
 ### DockerHub 镜像与宿主机数据库端口
 
-标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.42`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
+标准、本地目录和 standalone Compose 使用 `SUB2API_IMAGE` 选择应用镜像，默认 `coderxiaoc/tokenrouter:v0.1.278-ct-v3.43`，保留 `pull_policy: always`。发布端从当前源码构建程序，使用根 `Dockerfile` 或预编译程序的最小上下文生成 `linux/amd64` 镜像，再按本次发布范围推送 DockerHub；部署端只拉取已发布并验证的指定镜像，不依赖源码或现场编译。开发版仍保留本地构建，Apple Container 仍使用其独立镜像变量。构建、校验、推送与服务器更新命令见 [Docker 镜像说明](../../deploy/DOCKER.md)。
 
 标准和本地目录 Compose 把 PostgreSQL 容器的 `5432` 映射到 `${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}`，默认只允许宿主机本地访问。应用仍经内部网络连接 `postgres:5432`，不能为修改宿主机入口而改变应用的 `DATABASE_PORT`。standalone 不创建 PostgreSQL 容器，其 `DATABASE_PORT` 是既有外置数据库的实际连接端口；开发版和 Apple Container 不使用这两个映射变量。
 
@@ -105,11 +108,11 @@
 <a id="application_update_source"></a>
 ## 应用更新来源
 
-管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.42`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
+管理员版本检查、在线二进制更新、历史回退和安装脚本使用当前项目的 GitHub Releases：`codermyxiaoc/TokenRouter`。Docker 部署使用 DockerHub `coderxiaoc/tokenrouter` 的完整版本标签（保留 `v` 前缀），当前部署默认版本为 `v0.1.278-ct-v3.43`；不依赖 `latest` 标签存在。发布源不可用时只提示检查失败或使用本来源的有效缓存，不切换到其他 fork 或原版仓库。GitHub 的最新正式 release 与 DockerHub 标签可能不同步，检查结果以 GitHub 发布信息为准，执行容器更新前还须确认目标标签及架构已经发布。
 
 版本比较将 `0.1.278-ct-v2.5` 的 `2.5` 视为本项目版本，按数字比较，`2.10` 新于 `2.9`；两个 fork 标签产品版本相同才比较上游基线。兼容未来两段或三段独立版本（如 `v2.6`、`v2.6.1`），保留完整原标签用于链接和下载。最新 release 低于当前版本时不提示升级；回退只允许当前来源最近三个较旧正式版本，草稿、预发布和包含其他字符的标签不会进入候选。无法识别的本地开发版本不猜测升级顺序。
 
-下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.42 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
+下载只接受本仓库对应 release 下、当前系统及架构的准确资产名：手工发布的 `sub2api_v<版本>_<系统>_<架构>.tar.gz` 或 GoReleaser 的 `sub2api_<版本>_<系统>_<架构>.tar.gz`；Windows 对应 `.zip`。校验优先使用同名归档的 `.sha256`，兼容 `checksums.txt`，必须找到当前归档的完整文件名并通过 SHA-256 校验。缺少对应架构、校验文件或校验不符均在替换程序前失败，`.sha256` 和签名文件不能被识别为程序包。当前 v3.43 Docker 镜像发布范围为 `linux/amd64`；Apple Container 的 `linux/arm64` 环境须显式选择实际已发布的兼容镜像，不会自动回退到其他仓库。
 
 更新 Redis 缓存使用带来源和格式版本的 `update:latest:codermyxiaoc/TokenRouter:v2`，内容再次校验来源及格式。旧 `update:latest` 缓存不会被读取，无须扫描或清空 Redis；旧实例继续写旧键也不污染新来源结果。更新与回退只替换应用程序，数据库兼容性和备份要求仍遵循下文升级约束。
 
@@ -207,7 +210,20 @@ Gemini 缓存费用复用本站持久资金合同，使用 `gemini_cache` 报价
 
 ## 升级与恢复
 
-当前发布版本为 `v0.1.278-ct-v3.42`，交付范围为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移仍为 `329_ops_request_details_cache_indexes_notx.sql`。从 v3.41 升级没有新增迁移，更新管理员使用记录的请求缓存查看入口及缓存整表清理；不修改历史余额、账本或任务费用。更早版本仍须遵循各自迁移与恢复边界。
+当前源码版本为 `v0.1.278-ct-v3.43`，打包目标为 Ubuntu `linux/amd64` 二进制与 DockerHub 镜像，最高迁移为 `333_channel_pricing_ultrafast_multiplier.sql`。从 v3.42 升级时按下节核对迁移、缓存计费和已有检测计划。
+
+<a id="v3_43_upgrade"></a>
+### v3.43 缓存计费、套餐预览与鹈鹕检测
+
+从 v3.42 升级前，备份数据库、配置及稳定密钥。统一更新后端、工作者和前端，让一个新实例完成迁移后再接入流量。
+
+- `330_add_usage_logs_api_key_cost_index_notx.sql` 并发创建覆盖索引 `idx_usage_logs_api_key_created_cost`，用于按 Key 和时间查询费用。大表建索引可能延长首次启动。核对索引有效性和迁移记录，迁移器重试时会清理无效索引残留。
+- `331_openai_cache_write_ttl.sql` 为使用记录添加 30 分钟和 12 小时缓存写入量，并为渠道、区间及账号统计价卡添加可空的 12 小时价格。旧记录的新增计数默认为零。升级后用带期限明细的请求核对普通网关、创作台图片和 WebSocket 透传的账单。[路由与结算](../domains/routing_and_billing.md)
+- `332_group_force_openai_ultrafast.sql` 增加默认关闭的分组强制 Ultrafast 开关，认证快照 v41 起携带此字段。`333_channel_pricing_ultrafast_multiplier.sql` 允许渠道模型配置正数 Ultrafast 倍率，空值沿用模型默认倍率。
+- 订阅购买页可预览本人有权绑定的套餐分组、有效倍率与可请求模型。隐私组依赖调度快照的 `privacy_mode`，启动重建完成后核对合格账号的预览和实际调用。「我的订阅」同时展示按项目时区计算的精确重置时刻。[套餐预览](../domains/payments_and_entitlements.md#subscription_plan_preview)
+- 鹈鹕骑行按配置提交所选型号。原已启用定时的配置会在下一次到期时运行，升级前请核对模型、间隔及专用 Key。非训练型号的质量判断标为「仅供参考」，历史作品及原始判定保留。[降智检测](../domains/intelligence_tests.md)
+
+镜像打包时固定 PostgreSQL 18.7 备份客户端。核对迁移 330–333 已完成、重新登录与网关调用正常，并确认新版工作者可以继续查询在途任务。回退应用镜像会恢复旧计费和检测逻辑，数据库已有金额不会自动重算。保留新增列与索引，避免用旧备份覆盖升级后发生的订单或用量记录。
 
 <a id="v3_42_upgrade"></a>
 ### v3.42 请求缓存查看与清理

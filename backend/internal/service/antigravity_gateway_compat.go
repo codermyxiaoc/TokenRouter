@@ -235,7 +235,7 @@ func (s *AntigravityGatewayService) prepareAntigravityCompatCall(
 
 	thinkingEnabled := claudeRequest.Thinking != nil &&
 		(claudeRequest.Thinking.Type == "enabled" || claudeRequest.Thinking.Type == "adaptive")
-	modelCtx := withAntigravityThinkingLevel(WithThinkingEnabled(ctx, thinkingEnabled, false), geminiThinkingLevelFromClaudeThinking(claudeRequest.Thinking))
+	modelCtx := withAntigravityThinkingLevel(WithThinkingEnabled(ctx, thinkingEnabled, false), geminiThinkingLevelFromClaudeBody(request.claudeBody, claudeRequest.Thinking))
 	mappedModel := resolveFinalAntigravityModelKey(modelCtx, account, request.originalModel)
 	if mappedModel == "" {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
@@ -300,6 +300,8 @@ func (s *AntigravityGatewayService) buildAntigravityCompatGeminiBody(
 			return nil, err
 		}
 		body = ensureGeminiFunctionCallThoughtSignatures(body)
+		// 与 Gemini 兼容入口一致，按 output_config.effort / thinking 写入 thinkingConfig。
+		body = applyGeminiCompatThinkingConfig(body, claudeBody, mappedModel, claudeRequest != nil && claudeRequest.Stream)
 		body, err = injectIdentityPatchToGeminiRequest(body)
 		if err != nil {
 			return nil, err

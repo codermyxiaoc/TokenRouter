@@ -939,7 +939,7 @@ type CircuitBreakerConfig struct {
 }
 
 type ConcurrencyConfig struct {
-	// PingInterval: 并发等待期间的 SSE ping 间隔（秒）
+	// PingInterval: 并发等待期间的 SSE ping 间隔（秒），0 禁用 ping
 	PingInterval int `mapstructure:"ping_interval"`
 }
 
@@ -1979,6 +1979,14 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 
 	if !cfg.Security.URLAllowlist.Enabled {
 		slog.Warn("security.url_allowlist.enabled=false; allowlist/SSRF checks disabled (minimal format validation only).")
+	}
+	// 转发头兼容模式会直接采信客户端可写的 X-Forwarded-For/X-Real-IP/自定义头：
+	// 源站若可被公网直连，任何人都能伪造 IP，绕过登录限流与 API Key IP 白名单。
+	// 默认开启只为兼容旧部署，生产应只在源站被防火墙隔离且代理覆盖这些头时使用。
+	if cfg.Security.TrustForwardedIPForAPIKeyACL {
+		slog.Warn("security.trust_forwarded_ip_for_api_key_acl=true; client IP is taken from forwarded headers without verifying the direct peer. " +
+			"Rate limits and API key IP allowlists can be bypassed by spoofing headers unless the origin is reachable only through a proxy that overwrites them. " +
+			"Set it to false and list the exact proxy addresses in server.trusted_proxies.")
 	}
 	if !cfg.Security.ResponseHeaders.Enabled {
 		slog.Warn("security.response_headers.enabled=false; configurable header filtering disabled (default allowlist only).")
@@ -3888,8 +3896,9 @@ func (c *Config) Validate() error {
 	if c.Ops.Cleanup.BatchPauseMS < 1 || c.Ops.Cleanup.BatchPauseMS > 2000 {
 		return fmt.Errorf("ops.cleanup.batch_pause_ms must be between 1 and 2000")
 	}
-	if c.Concurrency.PingInterval < 5 || c.Concurrency.PingInterval > 30 {
-		return fmt.Errorf("concurrency.ping_interval must be between 5-30 seconds")
+	// 0 表示关闭排队等待期间的 ping；非 0 时仍限定 5-30 秒。
+	if c.Concurrency.PingInterval != 0 && (c.Concurrency.PingInterval < 5 || c.Concurrency.PingInterval > 30) {
+		return fmt.Errorf("concurrency.ping_interval must be 0 (disabled) or between 5-30 seconds")
 	}
 	if c.Gateway.Grok.FreeQuotaSoftGateEnabled {
 		if c.Gateway.Grok.FreeQuotaTokenLimit <= 0 {

@@ -244,6 +244,74 @@ func TestCalculateStatsCost_TokenBilling_WithCacheTTLPricing(t *testing.T) {
 	require.InDelta(t, 0.48, *result, 1e-12)
 }
 
+func TestTryCustomRules_CacheTTLAllocation(t *testing.T) {
+	tests := []struct {
+		name      string
+		aggregate int
+		cache5m   int
+		cache1h   int
+		wantCost  float64
+	}{
+		{name: "pure 5m remainder", aggregate: 200, cache5m: 60, wantCost: 0.6},
+		{name: "pure 1h remainder", aggregate: 200, cache1h: 60, wantCost: 0.72},
+		{name: "mixed remainder", aggregate: 200, cache5m: 40, cache1h: 60, wantCost: 0.72},
+		{name: "no details", aggregate: 200, wantCost: 0.6},
+		{name: "complete pure 5m", aggregate: 200, cache5m: 200, wantCost: 0.6},
+		{name: "complete pure 1h", aggregate: 200, cache1h: 200, wantCost: 1.0},
+		{name: "zero aggregate retains details", cache5m: 40, cache1h: 60, wantCost: 0.42},
+		{name: "zero tokens"},
+		{name: "ratio cap", aggregate: 120, cache5m: 80, cache1h: 160, wantCost: 0.52},
+	}
+	for _, interval := range []bool{false, true} {
+		path := "flat"
+		if interval {
+			path = "interval"
+		}
+		t.Run(path, func(t *testing.T) {
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					pricing := ChannelModelPricing{
+						Models:            []string{"claude-test"},
+						BillingMode:       BillingModeToken,
+						CacheWritePrice:   testPtrFloat64(0.003),
+						CacheWrite1hPrice: testPtrFloat64(0.005),
+					}
+					wantCost := tt.wantCost
+					if interval {
+						pricing.Intervals = []PricingInterval{{
+							MinTokens:         0,
+							CacheWritePrice:   testPtrFloat64(0.006),
+							CacheWrite1hPrice: testPtrFloat64(0.010),
+						}}
+						wantCost *= 2
+					}
+					channel := &Channel{
+						AccountStatsPricingRules: []AccountStatsPricingRule{{
+							AccountIDs: []int64{1},
+							Pricing:    []ChannelModelPricing{pricing},
+						}},
+					}
+					tokens := UsageTokens{
+						InputTokens:           1,
+						CacheCreationTokens:   tt.aggregate,
+						CacheCreation5mTokens: tt.cache5m,
+						CacheCreation1hTokens: tt.cache1h,
+					}
+					result := tryCustomRules(channel, 1, 0, "anthropic", "claude-test", tokens, 1)
+					if wantCost == 0 {
+						// 分叉语义：命中规则且有用量时，按规则算出的显式 0 成本也作为最终值返回。
+						require.NotNil(t, result)
+						require.Zero(t, *result)
+						return
+					}
+					require.NotNil(t, result)
+					require.InDelta(t, wantCost, *result, 1e-12)
+				})
+			}
+		})
+	}
+}
+
 func TestCalculateStatsCost_TokenBilling_WithImageOutput(t *testing.T) {
 	pricing := &ChannelModelPricing{
 		BillingMode:      BillingModeToken,

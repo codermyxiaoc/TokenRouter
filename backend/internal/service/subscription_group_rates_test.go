@@ -16,6 +16,30 @@ type subscriptionDisplayGroupRepo struct {
 	groups []Group
 }
 
+// 未持有订阅的用户只能预览自己可绑定、且该套餐覆盖的分组。
+func TestPlanPreviewGroupAccessBeforePurchase(t *testing.T) {
+	const uid int64 = 42
+	groups := &subscriptionDisplayGroupRepo{groups: []Group{
+		{ID: 1, RateMultiplier: 0}, {ID: 2}, {ID: 3, IsExclusive: true}, {ID: 4, IsExclusive: true}, {ID: 5},
+	}}
+	svc := NewAPIKeyService(nil, &billingModeUserRepoStub{users: map[int64]*User{
+		uid: {ID: uid, AllowedGroups: []int64{3}, DisabledPublicGroups: []int64{2}},
+	}}, groups, nil, nil, nil, nil)
+	plan := &SubscriptionPlan{GroupIDs: []int64{1, 2, 3, 4}, GroupRateMultipliers: map[int64]float64{3: 1.4}}
+	preview, err := svc.GetAvailableGroupsForPlan(context.Background(), uid, plan)
+	require.NoError(t, err)
+	require.Len(t, preview, 2)
+	require.Equal(t, int64(1), preview[0].ID)
+	require.Zero(t, preview[0].RateMultiplier)
+	require.Equal(t, int64(3), preview[1].ID)
+	require.Equal(t, 1.4, preview[1].RateMultiplier)
+	require.Zero(t, groups.groups[2].RateMultiplier)
+	preview, err = svc.GetAvailableGroupsForPlan(context.Background(), uid, &SubscriptionPlan{})
+	require.NoError(t, err)
+	require.Len(t, preview, 3)
+	require.Equal(t, int64(5), preview[2].ID)
+}
+
 func (r *subscriptionDisplayGroupRepo) ListActive(context.Context) ([]Group, error) {
 	return r.groups, nil
 }

@@ -69,6 +69,12 @@
         >
           Flex {{ entry.flex_multiplier }}x
         </span>
+        <span
+          v-if="props.enableTierMultipliers && entry.billing_mode === 'token' && entry.ultrafast_multiplier !== null && entry.ultrafast_multiplier !== undefined && entry.ultrafast_multiplier !== ''"
+          class="flex-shrink-0 rounded bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
+        >
+          Ultra Fast {{ entry.ultrafast_multiplier }}x
+        </span>
         <template v-if="props.enableTierMultipliers && entry.billing_mode === 'token'">
           <span
             v-for="(multiplier, effort) in displayedReasoningMultipliers"
@@ -198,6 +204,12 @@
               <input :value="entry.cache_write_1h_price" @input="emitField('cache_write_1h_price', ($event.target as HTMLInputElement).value)"
                 type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder', '默认')" />
             </div>
+            <!-- OpenAI 12 小时缓存写入价；留空沿用上方缓存写入价 -->
+            <div>
+              <label class="text-xs text-gray-400">{{ t('admin.channels.form.cacheWrite12hPrice', '缓存写入（12h）') }}</label>
+              <input :value="entry.cache_write_12h_price" @input="emitField('cache_write_12h_price', ($event.target as HTMLInputElement).value)"
+                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder', '默认')" />
+            </div>
             <div>
               <label class="text-xs text-gray-400">{{ t('admin.channels.form.cacheReadPrice', '缓存读取') }}</label>
               <input :value="entry.cache_read_price" @input="emitField('cache_read_price', ($event.target as HTMLInputElement).value)"
@@ -243,6 +255,22 @@
                 min="0.000001"
                 class="input mt-0.5 text-sm"
                 data-testid="flex-multiplier"
+                :placeholder="t('admin.channels.form.multiplierPlaceholder', '沿用默认')"
+              />
+            </div>
+            <!-- Ultra Fast 只对 OpenAI 支持的模型生效；留空沿用模型默认倍率 -->
+            <div v-if="props.platform === 'openai'">
+              <label class="text-xs text-gray-400">
+                {{ t('admin.channels.form.ultrafastMultiplier', 'Ultra Fast 倍率') }}
+              </label>
+              <input
+                :value="entry.ultrafast_multiplier"
+                @input="emitField('ultrafast_multiplier', ($event.target as HTMLInputElement).value)"
+                type="number"
+                step="any"
+                min="0.000001"
+                class="input mt-0.5 text-sm"
+                data-testid="ultrafast-multiplier"
                 :placeholder="t('admin.channels.form.multiplierPlaceholder', '沿用默认')"
               />
             </div>
@@ -520,6 +548,7 @@ function onBillingModeUpdate(billingMode: BillingMode) {
     fast_mode_multiplier: billingMode === 'token' ? props.entry.fast_mode_multiplier : null,
     fast_multiplier: billingMode === 'token' ? props.entry.fast_multiplier : null,
     flex_multiplier: billingMode === 'token' ? props.entry.flex_multiplier : null,
+    ultrafast_multiplier: billingMode === 'token' ? props.entry.ultrafast_multiplier : null,
     max_reasoning_effort_multiplier: billingMode === 'token' ? props.entry.max_reasoning_effort_multiplier : null,
     reasoning_effort_multipliers: billingMode === 'token' ? { ...props.entry.reasoning_effort_multipliers } : {},
     intervals: [],
@@ -533,7 +562,7 @@ function addInterval() {
   const intervals = [...(props.entry.intervals || [])]
   intervals.push({
     min_tokens: 0, max_tokens: null, tier_label: '',
-    input_price: null, output_price: null, cache_write_price: null, cache_write_1h_price: null,
+    input_price: null, output_price: null, cache_write_price: null, cache_write_1h_price: null, cache_write_12h_price: null,
     cache_read_price: null, per_request_price: null,
     input_multiplier: null, output_multiplier: null,
     cache_write_multiplier: null, cache_read_multiplier: null,
@@ -549,7 +578,7 @@ function addMediaTier() {
     : ['1K', '2K', '4K', 'HD']
   intervals.push({
     min_tokens: 0, max_tokens: null, tier_label: labels[intervals.length] || '',
-    input_price: null, output_price: null, cache_write_price: null, cache_write_1h_price: null,
+    input_price: null, output_price: null, cache_write_price: null, cache_write_1h_price: null, cache_write_12h_price: null,
     cache_read_price: null, per_request_price: null,
     input_multiplier: null, output_multiplier: null,
     cache_write_multiplier: null, cache_read_multiplier: null,
@@ -583,7 +612,7 @@ async function onModelsUpdate(newModels: string[]) {
   // 检查是否所有价格字段都为空
   const e = props.entry
   const hasPrice = e.input_price != null || e.output_price != null ||
-                   e.cache_write_price != null || e.cache_write_1h_price != null || e.cache_read_price != null
+                   e.cache_write_price != null || e.cache_write_1h_price != null || e.cache_write_12h_price != null || e.cache_read_price != null
   if (hasPrice) return
 
   // 查询第一个新增模型的默认价格
@@ -597,6 +626,7 @@ async function onModelsUpdate(newModels: string[]) {
         output_price: perTokenToMTok(result.output_price ?? null),
         cache_write_price: perTokenToMTok(result.cache_write_price ?? null),
         cache_write_1h_price: perTokenToMTok(result.cache_write_1h_price ?? null),
+        cache_write_12h_price: perTokenToMTok(result.cache_write_12h_price ?? null),
         cache_read_price: perTokenToMTok(result.cache_read_price ?? null),
         image_output_price: perTokenToMTok(result.image_output_price ?? null),
       })

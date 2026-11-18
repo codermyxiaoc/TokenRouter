@@ -151,6 +151,9 @@ type UsageLog struct {
 
 	CacheCreation5mTokens int `gorm:"column:cache_creation_5m_tokens"`
 	CacheCreation1hTokens int `gorm:"column:cache_creation_1h_tokens"`
+	// OpenAI 缓存写入按 30m/12h 两档上报，与 Anthropic 5m/1h 分开记录。
+	CacheCreation30mTokens int `gorm:"column:cache_creation_30m_tokens"`
+	CacheCreation12hTokens int `gorm:"column:cache_creation_12h_tokens"`
 
 	ImageInputTokens  int
 	ImageInputCost    float64

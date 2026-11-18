@@ -79,6 +79,8 @@ describe('AccountStatusIndicator', () => {
   })
 
   it.each([
+    ['claude-fable-5-2', 'CFable52'],
+    ['claude-mythos-5-2', 'CMythos52'],
     ['claude-opus-5', 'COpus5'],
     ['claude-opus-5-5', 'COpus55'],
     ['claude-sonnet-5-5', 'CSon55']

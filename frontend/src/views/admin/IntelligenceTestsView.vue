@@ -10,8 +10,8 @@
         <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 p-4 dark:border-dark-700 sm:px-6"><div class="min-w-0"><h2 class="break-words text-lg font-semibold">{{ group.name }}</h2><p class="mt-1 text-xs text-gray-500">{{ t('intelligence.configuredModels', { count: group.configs.length }) }}</p></div><button type="button" class="btn btn-secondary btn-sm" @click="openForm(undefined, group.id)">{{ t('intelligence.add') }}</button></div>
         <div class="divide-y divide-gray-100 dark:divide-dark-700">
           <article v-for="config in group.configs" :key="config.id" class="flex flex-col gap-4 p-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between" :data-config-id="config.id">
-            <div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><h3 class="break-all font-semibold">{{ config.model }}</h3><span class="rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ t(`intelligence.${config.benchmark}`) }}</span><span v-if="!config.enabled" class="text-xs text-gray-400">{{ t('common.inactive') }}</span></div><p class="mt-2 text-xs text-gray-500">Responses · {{ config.schedule_enabled ? t('intelligence.everyMinutes', { minutes: config.interval_minutes }) : t('intelligence.manual') }}</p><p v-if="unsupportedDrawing(config)" class="mt-2 text-xs text-amber-700 dark:text-amber-300">{{ t('intelligence.drawingModelUnsupported') }}</p><p v-if="config.latest_run" class="mt-2 inline-flex items-center gap-2 text-xs text-gray-500"><span class="h-2 w-2 rounded-full" :class="resultColor(config.latest_run)" />{{ t(`intelligence.statuses.${resultStatus(config.latest_run)}`) }} · {{ formatDateTime(config.latest_run.created_at) }}</p></div>
-            <div class="flex flex-wrap gap-2"><button type="button" class="btn btn-primary btn-sm" :disabled="!moduleEnabled || !config.enabled || unsupportedDrawing(config) || isBusy(config) || runningIDs.has(config.id)" @click="runTest(config)">{{ t('intelligence.run') }}</button><button type="button" class="btn btn-secondary btn-sm" @click="openHistory(config)">{{ t('intelligence.history') }}</button><button type="button" class="btn btn-secondary btn-sm" :disabled="isBusy(config)" @click="openForm(config)">{{ t('common.edit') }}</button><button type="button" class="btn btn-secondary btn-sm text-red-600" :disabled="isBusy(config)" @click="deleting = config">{{ t('common.delete') }}</button></div>
+            <div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><h3 class="break-all font-semibold">{{ config.model }}</h3><span class="rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ t(`intelligence.${config.benchmark}`) }}</span><span v-if="!config.enabled" class="text-xs text-gray-400">{{ t('common.inactive') }}</span></div><p class="mt-2 text-xs text-gray-500">Responses · {{ config.schedule_enabled ? t('intelligence.everyMinutes', { minutes: config.interval_minutes }) : t('intelligence.manual') }}</p><p v-if="config.latest_run" class="mt-2 inline-flex items-center gap-2 text-xs text-gray-500"><span class="h-2 w-2 rounded-full" :class="resultColor(config.latest_run)" />{{ t(`intelligence.statuses.${resultStatus(config.latest_run)}`) }} · {{ formatDateTime(config.latest_run.created_at) }}</p></div>
+            <div class="flex flex-wrap gap-2"><button type="button" class="btn btn-primary btn-sm" :disabled="!moduleEnabled || !config.enabled || isBusy(config) || runningIDs.has(config.id)" @click="runTest(config)">{{ t('intelligence.run') }}</button><button type="button" class="btn btn-secondary btn-sm" @click="openHistory(config)">{{ t('intelligence.history') }}</button><button type="button" class="btn btn-secondary btn-sm" :disabled="isBusy(config)" @click="openForm(config)">{{ t('common.edit') }}</button><button type="button" class="btn btn-secondary btn-sm text-red-600" :disabled="isBusy(config)" @click="deleting = config">{{ t('common.delete') }}</button></div>
           </article>
         </div>
       </section>
@@ -19,8 +19,8 @@
       <BaseDialog :show="showForm" :title="t(editingID ? 'intelligence.edit' : 'intelligence.add')" width="wide" :close-on-escape="!saving" @close="closeForm">
         <form id="intelligence-config-form" class="space-y-5" @submit.prevent="save">
           <p v-if="formError" role="alert" class="text-sm text-red-600">{{ formError }}</p>
-          <div class="grid gap-4 sm:grid-cols-2"><div><label for="intelligence-group" class="input-label">{{ t('intelligence.group') }}</label><Select id="intelligence-group" v-model="form.group_id" :options="groupOptions" :disabled="saving || !!editingID" searchable :placeholder="t('intelligence.groupPlaceholder')" /></div><div><label for="intelligence-model" class="input-label">{{ t('intelligence.model') }}</label><Select id="intelligence-model" v-model="form.model" :options="modelOptions" :disabled="saving || !!editingID || !form.group_id || modelsLoading" searchable :creatable="form.benchmark === 'candy'" :placeholder="t('intelligence.modelPlaceholder')" /></div></div>
-          <p v-if="form.benchmark === 'drawing'" class="text-sm" :class="unsupportedDrawing(form) ? 'text-amber-700 dark:text-amber-300' : 'text-gray-500'">{{ t(unsupportedDrawing(form) && editingID ? 'intelligence.drawingModelUnsupported' : 'intelligence.drawingModelHint') }}</p>
+          <div class="grid gap-4 sm:grid-cols-2"><div><label for="intelligence-group" class="input-label">{{ t('intelligence.group') }}</label><Select id="intelligence-group" v-model="form.group_id" :options="groupOptions" :disabled="saving || !!editingID" searchable :placeholder="t('intelligence.groupPlaceholder')" /></div><div><label for="intelligence-model" class="input-label">{{ t('intelligence.model') }}</label><Select id="intelligence-model" v-model="form.model" :options="modelOptions" :disabled="saving || !!editingID || !form.group_id || modelsLoading" searchable creatable :placeholder="t('intelligence.modelPlaceholder')" /></div></div>
+          <p v-if="form.benchmark === 'drawing'" class="text-sm text-gray-500 dark:text-dark-400">{{ t('intelligence.drawingModelHint') }}</p>
           <div class="grid gap-4 sm:grid-cols-2"><div><label for="intelligence-benchmark" class="input-label">{{ t('intelligence.benchmark') }}</label><Select id="intelligence-benchmark" v-model="form.benchmark" :options="benchmarkOptions" :disabled="saving || !!editingID" /></div><div><label for="intelligence-protocol" class="input-label">{{ t('intelligence.protocol') }}</label><Select id="intelligence-protocol" v-model="form.protocol" :options="protocolOptions" :disabled="true" /><p class="mt-2 text-xs text-gray-500">{{ t('intelligence.responsesProtocolHint') }}</p></div></div>
           <div>
             <label for="intelligence-base-url" class="input-label">{{ t('intelligence.baseUrl') }}</label>
@@ -46,7 +46,7 @@
           </div>
           <div class="grid gap-4 sm:grid-cols-2"><div><label for="intelligence-reasoning" class="input-label">{{ t('intelligence.reasoning') }}</label><Select id="intelligence-reasoning" v-model="form.reasoning_effort" :options="reasoningOptions" :disabled="saving" /></div><div><label for="intelligence-tier" class="input-label">{{ t('intelligence.tier') }}</label><Select id="intelligence-tier" v-model="form.service_tier" :options="tierOptions" :disabled="saving" /></div></div>
           <div class="flex items-center justify-between gap-4 border-t border-gray-100 pt-4 dark:border-dark-700"><label for="intelligence-config-enabled" class="input-label">{{ t('intelligence.enabled') }}</label><Toggle id="intelligence-config-enabled" v-model="form.enabled" :disabled="saving" /></div>
-          <div class="flex items-center justify-between gap-4"><div><label for="intelligence-schedule" class="input-label">{{ t('intelligence.schedule') }}</label><p class="mt-1 text-xs text-gray-500">{{ t('intelligence.scheduleHint') }}</p></div><Toggle id="intelligence-schedule" v-model="form.schedule_enabled" :disabled="saving || !form.enabled || unsupportedDrawing(form)" /></div>
+          <div class="flex items-center justify-between gap-4"><div><label for="intelligence-schedule" class="input-label">{{ t('intelligence.schedule') }}</label><p class="mt-1 text-xs text-gray-500">{{ t('intelligence.scheduleHint') }}</p></div><Toggle id="intelligence-schedule" v-model="form.schedule_enabled" :disabled="saving || !form.enabled" /></div>
           <div v-if="form.schedule_enabled"><label for="intelligence-interval" class="input-label">{{ t('intelligence.interval') }}</label><input id="intelligence-interval" v-model.number="form.interval_minutes" type="number" min="5" max="10080" step="1" required class="input w-full" :disabled="saving" /></div>
         </form>
         <template #footer><button type="button" class="btn btn-secondary" :disabled="saving" @click="closeForm">{{ t('common.cancel') }}</button><button type="submit" form="intelligence-config-form" class="btn btn-primary" :disabled="saving || !valid">{{ t(saving ? 'common.processing' : 'intelligence.save') }}</button></template>
@@ -68,7 +68,7 @@ import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import IntelligenceResultBar from '@/components/intelligence/IntelligenceResultBar.vue'
 import IntelligenceRunDialog from '@/components/intelligence/IntelligenceRunDialog.vue'
-import { resultColor, resultStatus } from '@/components/intelligence/results'
+import { drawingClassifierModel, resultColor, resultStatus } from '@/components/intelligence/results'
 import { intelligenceAPI, type IntelligenceConfig, type IntelligenceConfigInput, type IntelligenceRun } from '@/api/intelligence'
 import * as groupsAPI from '@/api/admin/groups'
 import { keysAPI } from '@/api/keys'
@@ -134,14 +134,16 @@ const groupOptions = computed(() => {
   }
   return options
 })
-const drawingModel = 'gpt-6-astra'
-// 画图模型由供应商固定；旧配置仍保留原模型身份，不能把历史记录静默归入新模型。
-const unsupportedDrawing = (config: Pick<IntelligenceConfig, 'model' | 'benchmark'>) => config.benchmark === 'drawing' && config.model.trim() !== drawingModel
+// 鹈鹕模型预设与 Manxue 页面保持一致；分组提供的其它型号也可选择或手动填写。
+const drawingModelPresets = [
+  'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol',
+  'gpt-6-luna', 'gpt-6-sol', drawingClassifierModel,
+  'gpt-6.1-sol', 'gpt-6.2-astra', 'gpt-6.2-sol',
+]
 const modelOptions = computed(() => {
-  const candidates = form.benchmark === 'drawing' ? [drawingModel] : models.value
-  return [...new Set([...candidates, ...(form.model ? [form.model] : [])])].map(model => ({
-    value: model, label: model, disabled: form.benchmark === 'drawing' && model !== drawingModel,
-  }))
+  const presets = form.benchmark === 'drawing' ? drawingModelPresets : []
+  const candidates = new Set([...presets, ...models.value, form.model].filter(Boolean))
+  return [...candidates].map(model => ({ value: model, label: model }))
 })
 // 下拉框只显示名称与编号，密钥明文不进入选项标签或选项值。
 const apiKeyOptions = computed(() => apiKeys.value.map(key => ({ value: key.id, label: `${key.name} (#${key.id})` })))
@@ -152,8 +154,7 @@ const tierOptions = computed(() => [{ value: '', label: t('intelligence.default'
 const valid = computed(() => {
   let validURL = false
   try { const url = new URL(form.base_url.trim()); validURL = url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash } catch { /* 输入过程中允许地址暂时不完整。 */ }
-  const validDrawing = !unsupportedDrawing(form) || (!!editingID.value && !form.enabled && !form.schedule_enabled)
-  return validDrawing && form.group_id > 0 && !!form.model.trim() && validURL && (storedKey.value || !!form.api_key.trim()) && Number.isInteger(form.interval_minutes) && form.interval_minutes >= 5 && form.interval_minutes <= 10080
+  return form.group_id > 0 && !!form.model.trim() && validURL && (storedKey.value || !!form.api_key.trim()) && Number.isInteger(form.interval_minutes) && form.interval_minutes >= 5 && form.interval_minutes <= 10080
 })
 const isBusy = (config: IntelligenceConfig) => !!config.latest_run && ['queued', 'submitting', 'running'].includes(config.latest_run.status)
 
@@ -252,7 +253,7 @@ async function save() {
   finally { saving.value = false }
 }
 async function runTest(config: IntelligenceConfig) {
-  if (!moduleEnabled.value || !config.enabled || unsupportedDrawing(config) || runningIDs.has(config.id) || isBusy(config)) return
+  if (!moduleEnabled.value || !config.enabled || runningIDs.has(config.id) || isBusy(config)) return
   runningIDs.add(config.id)
   try { const run = await intelligenceAPI.run(config.id); config.latest_run = run; appStore.showSuccess(t('intelligence.submitted')) }
   catch (err) { appStore.showError(extractApiErrorMessage(err, t('intelligence.runFailed'))) }
@@ -297,10 +298,12 @@ watch(() => form.group_id, () => {
   clearAPIKeys()
   if (showForm.value) { void loadModels(); void loadAPIKeys() }
 }, { flush: 'sync' })
-// 停用配置时同步停止定时任务；旧不支持的画图配置也可安全关闭并保留历史。
+// 停用配置时同步停止定时任务。
 watch(() => form.enabled, enabled => { if (!enabled) form.schedule_enabled = false }, { flush: 'sync' })
 watch(() => form.benchmark, () => {
   form.protocol = 'responses'
+  // 只在新建且尚未选型时采用鹈鹕默认模型，切换类型时保留已有选择。
+  if (!editingID.value && form.benchmark === 'drawing' && !form.model.trim()) form.model = drawingClassifierModel
   if (!reasoningOptions.value.some(option => option.value === form.reasoning_effort)) form.reasoning_effort = ''
 })
 onMounted(() => {

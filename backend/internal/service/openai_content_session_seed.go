@@ -15,8 +15,8 @@ const contentSessionSeedPrefix = "compat_cs_"
 const contentStablePrefixSessionSeedPrefix = "compat_csp_"
 
 // deriveOpenAIContentSessionSeed 从 OpenAI 格式请求体构建稳定会话种子。
-// 仅包含跨对话轮次不变的字段；Chat 仅采集开头的 system/developer 前缀，
-// 同时支持 Chat Completions 与 Responses API。
+// 仅包含跨对话轮次不变的字段：model、工具定义、开头连续的 system/developer 前缀、
+// instructions（Responses API）与首条 user 消息；同时支持 Chat Completions 与 Responses API。
 func deriveOpenAIContentSessionSeed(body []byte) string {
 	if len(body) == 0 {
 		return ""
@@ -141,15 +141,19 @@ scanRoot:
 			_, _ = b.WriteString("|input=")
 			_, _ = b.WriteString(inp.String())
 		} else if inp.IsArray() {
+			systemPrefixOpen := true
 			inp.ForEach(func(_, item gjson.Result) bool {
 				role := item.Get("role").String()
 				switch role {
 				case "system", "developer":
-					_, _ = b.WriteString("|system=")
-					if c := item.Get("content"); c.Exists() {
-						_, _ = b.WriteString(normalizeCompatSeedJSON(json.RawMessage(c.Raw)))
+					if systemPrefixOpen {
+						_, _ = b.WriteString("|system=")
+						if c := item.Get("content"); c.Exists() {
+							_, _ = b.WriteString(normalizeCompatSeedJSON(json.RawMessage(c.Raw)))
+						}
 					}
 				case "user":
+					systemPrefixOpen = false
 					if !firstUserCaptured {
 						_, _ = b.WriteString("|first_user=")
 						if c := item.Get("content"); c.Exists() {
@@ -157,6 +161,10 @@ scanRoot:
 						}
 						firstUserCaptured = true
 					}
+				default:
+					// Match Chat: reminders appended after conversation/tool items
+					// must not change the identity of an existing session.
+					systemPrefixOpen = false
 				}
 				if !firstUserCaptured && item.Get("type").String() == "input_text" {
 					_, _ = b.WriteString("|first_user=")

@@ -83,6 +83,10 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	if err != nil {
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
 	}
+	if !account.IsOAuth() {
+		// OAuth accounts get their id from the mimicry below.
+		anthropicBody = withChatCompletionsMetadataUserID(body, anthropicBody)
+	}
 
 	// 6. Apply Claude Code mimicry for OAuth accounts.
 	// Chat Completions 协议进来的请求永远不是 Claude Code 客户端，所以对 OAuth 账号
@@ -111,23 +115,35 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		proxyURL = account.Proxy.URL()
 	}
 
-	// 10. Build upstream request
-	upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
-	upstreamReq, wireBody, err := s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
-	releaseUpstreamCtx()
-	if err != nil {
-		return nil, fmt.Errorf("build upstream request: %w", err)
-	}
-
-	// 11. Send request
-	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
-	if err != nil {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
+	// 10-11. 构建并发送请求；请求进行中 OAuth token 被并发轮换时换用新 token 重试一次。
+	var upstreamReq *http.Request
+	var wireBody []byte
+	var resp *http.Response
+	for retriedRotatedToken := false; ; {
+		upstreamCtx, releaseUpstreamCtx := detachStreamUpstreamContext(ctx, reqStream)
+		upstreamReq, wireBody, err = s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
+		releaseUpstreamCtx()
+		if err != nil {
+			return nil, fmt.Errorf("build upstream request: %w", err)
 		}
-		return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
-			UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
-		})
+		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+		if err != nil {
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
+				UpstreamURL: safeUpstreamURL(upstreamReq.URL.String()),
+			})
+		}
+		if resp.StatusCode == http.StatusUnauthorized && !retriedRotatedToken {
+			if rotatedToken := s.rotatedClaudeAccessToken(ctx, account, token); rotatedToken != "" {
+				_ = resp.Body.Close()
+				token = rotatedToken
+				retriedRotatedToken = true
+				continue
+			}
+		}
+		break
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -235,6 +251,8 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	reasoningEffort *string,
 	startTime time.Time,
 ) (*ForwardResult, error) {
+	// 观测上游 Anthropic usage.speed，供计费按实际档位只降档。
+	observer := beginUpstreamResponseModelObservation(c)
 	requestID := resp.Header.Get("x-request-id")
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -266,6 +284,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
 		}
+		observer.ObserveAnthropic([]byte(payload))
 
 		// message_start carries the initial response structure and cache usage
 		if event.Type == "message_start" && event.Message != nil {
@@ -315,14 +334,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	}
 
 	// Update usage from accumulated delta
-	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
-		finalResp.Usage = apicompat.AnthropicUsage{
-			InputTokens:              usage.InputTokens,
-			OutputTokens:             usage.OutputTokens,
-			CacheCreationInputTokens: usage.CacheCreationInputTokens,
-			CacheReadInputTokens:     usage.CacheReadInputTokens,
-		}
-	}
+	normalizeAnthropicEventUsageForResponses(&apicompat.AnthropicStreamEvent{Message: finalResp}, usage)
 
 	// Chain: Anthropic → Responses → Chat Completions
 	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
@@ -347,14 +359,15 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	}
 
 	return &ForwardResult{
-		RequestID:       requestID,
-		UpstreamHeaders: resp.Header,
-		Usage:           usage,
-		Model:           originalModel,
-		UpstreamModel:   mappedModel,
-		ReasoningEffort: reasoningEffort,
-		Stream:          false,
-		Duration:        time.Since(startTime),
+		UpstreamResponseServiceTier: observer.ServiceTier(),
+		RequestID:                   requestID,
+		UpstreamHeaders:             resp.Header,
+		Usage:                       usage,
+		Model:                       originalModel,
+		UpstreamModel:               mappedModel,
+		ReasoningEffort:             reasoningEffort,
+		Stream:                      false,
+		Duration:                    time.Since(startTime),
 	}, nil
 }
 
@@ -368,6 +381,8 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	reasoningEffort *string,
 	startTime time.Time,
 ) (*ForwardResult, error) {
+	// 观测上游 Anthropic usage.speed，供计费按实际档位只降档。
+	observer := beginUpstreamResponseModelObservation(c)
 	requestID := resp.Header.Get("x-request-id")
 
 	if s.responseHeaderFilter != nil {
@@ -395,16 +410,17 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 
 	resultWithUsage := func() *ForwardResult {
 		return &ForwardResult{
-			RequestID:        requestID,
-			UpstreamHeaders:  resp.Header,
-			Usage:            usage,
-			Model:            originalModel,
-			UpstreamModel:    mappedModel,
-			ReasoningEffort:  reasoningEffort,
-			Stream:           true,
-			Duration:         time.Since(startTime),
-			FirstTokenMs:     firstTokenMs,
-			ClientDisconnect: stream.clientDisconnected,
+			UpstreamResponseServiceTier: observer.ServiceTier(),
+			RequestID:                   requestID,
+			UpstreamHeaders:             resp.Header,
+			Usage:                       usage,
+			Model:                       originalModel,
+			UpstreamModel:               mappedModel,
+			ReasoningEffort:             reasoningEffort,
+			Stream:                      true,
+			Duration:                    time.Since(startTime),
+			FirstTokenMs:                firstTokenMs,
+			ClientDisconnect:            stream.clientDisconnected,
 		}
 	}
 
@@ -483,6 +499,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		if err := json.Unmarshal([]byte(payload), &event); err != nil && eventType != "error" {
 			continue
 		}
+		observer.ObserveAnthropic([]byte(payload))
 		// SSE 错误标签是权威终态，不能被缺失或冲突的 JSON type 吞掉。
 		if eventType == "error" || event.Type == "" {
 			event.Type = eventType

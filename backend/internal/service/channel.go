@@ -116,6 +116,8 @@ type ChannelModelPricing struct {
 	FastMultiplier *float64 `json:"fast_multiplier,omitempty"`
 	// FlexMultiplier 是渠道级 Flex 倍率；为空时使用系统默认 0.5。
 	FlexMultiplier *float64 `json:"flex_multiplier,omitempty"`
+	// UltrafastMultiplier 是渠道级 Ultra Fast 倍率；为空时沿用模型默认 Ultrafast 倍率。
+	UltrafastMultiplier *float64 `json:"ultrafast_multiplier,omitempty"`
 	// MaxReasoningEffortMultiplier 仅在最终转发档位为 max 时应用；nil 沿用模型默认倍率。
 	MaxReasoningEffortMultiplier *float64 `json:"max_reasoning_effort_multiplier,omitempty"`
 	// ReasoningEffortMultipliers 优先使用明确配置的档位，缺省时保留旧 Max 及模型默认规则。
@@ -124,13 +126,15 @@ type ChannelModelPricing struct {
 	OutputPrice                *float64           `json:"output_price"`
 	CacheWritePrice            *float64           `json:"cache_write_price"`
 	// CacheWrite1hPrice 是可选的 1 小时缓存写入单价；为空时沿用 CacheWritePrice。
-	CacheWrite1hPrice *float64            `json:"cache_write_1h_price"`
-	CacheReadPrice    *float64            `json:"cache_read_price"`
-	ImageInputPrice   *float64            `json:"image_input_price"`
-	ImageOutputPrice  *float64            `json:"image_output_price"`
-	PerRequestPrice   *float64            `json:"per_request_price"`
-	Intervals         []PricingInterval   `json:"intervals"`
-	TimePricing       *ChannelTimePricing `json:"time_pricing,omitempty"`
+	CacheWrite1hPrice *float64 `json:"cache_write_1h_price"`
+	// CacheWrite12hPrice 是可选的 OpenAI 12 小时缓存写入单价；为空时沿用 CacheWritePrice。
+	CacheWrite12hPrice *float64            `json:"cache_write_12h_price"`
+	CacheReadPrice     *float64            `json:"cache_read_price"`
+	ImageInputPrice    *float64            `json:"image_input_price"`
+	ImageOutputPrice   *float64            `json:"image_output_price"`
+	PerRequestPrice    *float64            `json:"per_request_price"`
+	Intervals          []PricingInterval   `json:"intervals"`
+	TimePricing        *ChannelTimePricing `json:"time_pricing,omitempty"`
 	// VideoPrices 显式区分分辨率和是否输入参考视频；Token 模式单价单位为美元/百万 Token。
 	VideoPrices []VideoPriceTier `json:"video_prices,omitempty"`
 	// VideoFallbackPrice 仅在矩阵没有请求分辨率时回退，显式零价仍然有效。
@@ -205,7 +209,9 @@ type PricingInterval struct {
 	OutputPrice     *float64 `json:"output_price"`
 	CacheWritePrice *float64 `json:"cache_write_price"`
 	// CacheWrite1hPrice 是该区间的可选 1 小时缓存写入单价。
-	CacheWrite1hPrice    *float64  `json:"cache_write_1h_price"`
+	CacheWrite1hPrice *float64 `json:"cache_write_1h_price"`
+	// CacheWrite12hPrice 是该区间的可选 OpenAI 12 小时缓存写入单价。
+	CacheWrite12hPrice   *float64  `json:"cache_write_12h_price"`
 	CacheReadPrice       *float64  `json:"cache_read_price"`
 	InputMultiplier      *float64  `json:"input_multiplier,omitempty"`
 	OutputMultiplier     *float64  `json:"output_multiplier,omitempty"`
@@ -299,11 +305,13 @@ func (p *ChannelModelPricing) HasEffectivePricing() bool {
 			p.OutputPrice != nil ||
 			p.CacheWritePrice != nil ||
 			p.CacheWrite1hPrice != nil ||
+			p.CacheWrite12hPrice != nil ||
 			p.CacheReadPrice != nil ||
 			p.ImageInputPrice != nil ||
 			p.ImageOutputPrice != nil ||
 			p.FastMultiplier != nil ||
 			p.FlexMultiplier != nil ||
+			p.UltrafastMultiplier != nil ||
 			p.MaxReasoningEffortMultiplier != nil || len(p.ReasoningEffortMultipliers) > 0 {
 			return true
 		}
@@ -313,6 +321,7 @@ func (p *ChannelModelPricing) HasEffectivePricing() bool {
 				iv.OutputPrice != nil ||
 				iv.CacheWritePrice != nil ||
 				iv.CacheWrite1hPrice != nil ||
+				iv.CacheWrite12hPrice != nil ||
 				iv.CacheReadPrice != nil ||
 				iv.InputMultiplier != nil ||
 				iv.OutputMultiplier != nil ||
@@ -516,6 +525,7 @@ func validateIntervalPrices(iv *PricingInterval, idx int) error {
 		{"output_price", iv.OutputPrice},
 		{"cache_write_price", iv.CacheWritePrice},
 		{"cache_write_1h_price", iv.CacheWrite1hPrice},
+		{"cache_write_12h_price", iv.CacheWrite12hPrice},
 		{"cache_read_price", iv.CacheReadPrice},
 		{"per_request_price", iv.PerRequestPrice},
 	}

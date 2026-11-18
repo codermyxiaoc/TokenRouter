@@ -1587,6 +1587,31 @@ function generateOpenCodeConfig(
         max: { reasoningEffort: 'max' }
       }
     },
+    // GPT-6.2 Sol/Astra 与 6.1 Sol 一样只提供 low 到 max，不提供不受支持的 none/minimal 档位。
+    'gpt-6.2-sol': {
+      name: 'GPT-6.2 Sol',
+      limit: { context: 1050000, output: 128000 },
+      options: { store: false, reasoningEffort: 'medium' },
+      variants: {
+        low: { reasoningEffort: 'low' },
+        medium: { reasoningEffort: 'medium' },
+        high: { reasoningEffort: 'high' },
+        xhigh: { reasoningEffort: 'xhigh' },
+        max: { reasoningEffort: 'max' }
+      }
+    },
+    'gpt-6.2-astra': {
+      name: 'GPT-6.2 Astra',
+      limit: { context: 1050000, output: 128000 },
+      options: { store: false, reasoningEffort: 'medium' },
+      variants: {
+        low: { reasoningEffort: 'low' },
+        medium: { reasoningEffort: 'medium' },
+        high: { reasoningEffort: 'high' },
+        xhigh: { reasoningEffort: 'xhigh' },
+        max: { reasoningEffort: 'max' }
+      }
+    },
     // 6.1 Sol 与后端目录一致，不提供不受支持的 none/minimal 档位。
     'gpt-6.1-sol': {
       name: 'GPT-6.1 Sol',
@@ -2076,6 +2101,33 @@ function generateOpenCodeConfig(
   } else if (profile === 'anthropic') {
     // 官方原生型号仅进入 Anthropic 配置，不据此推断第三方平台支持。
     provider[profile].models = withOpenCodeToolCalling({
+      // Fable/Mythos 5.2 只支持自适应思考，默认 high；Mythos 需要 Anthropic 授予访问资格。
+      'claude-fable-5-2': {
+        name: 'Claude Fable 5.2',
+        limit: { context: 1000000, output: 128000 },
+        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+        options: { thinking: { type: 'adaptive' }, effort: 'high' },
+        variants: {
+          low: { effort: 'low' },
+          medium: { effort: 'medium' },
+          high: { effort: 'high' },
+          xhigh: { effort: 'xhigh' },
+          max: { effort: 'max' }
+        }
+      },
+      'claude-mythos-5-2': {
+        name: 'Claude Mythos 5.2',
+        limit: { context: 1000000, output: 128000 },
+        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+        options: { thinking: { type: 'adaptive' }, effort: 'high' },
+        variants: {
+          low: { effort: 'low' },
+          medium: { effort: 'medium' },
+          high: { effort: 'high' },
+          xhigh: { effort: 'xhigh' },
+          max: { effort: 'max' }
+        }
+      },
       // Sonnet 5.5 使用自适应思考，effort 保留上游明确支持的档位。
       'claude-sonnet-5-5': {
         name: 'Claude Sonnet 5.5',

@@ -53,7 +53,9 @@ OpenAI 隐私设置和 `chatgpt.com` 账号/套餐检查使用独立的 Firefox 
 
 自定义 base URL 在转发和账号测试等使用入口至少经过格式与 scheme 校验。启用 `security.url_allowlist` 后，入口还要求目标命中对应 host allowlist，并按 `allow_private_hosts` 决定是否允许本地或私网字面量地址；关闭 allowlist 时只保留最小格式校验，HTTP 还必须由 `allow_insecure_http` 显式放行，启动日志会提示 SSRF 检查已关闭。
 
-常规上游请求仅在 allowlist 已启用且 `allow_private_hosts=false` 时，由 HTTP client 在发起请求前解析目标 host，并对后续重定向重新执行解析后 IP 校验。Images URL 回填下载额外携带请求级公网限制：不论全局是否允许私网，都拒绝本地/私网字面量及解析结果，并在每次重定向上执行相同检查，同时保留共享客户端原有的重定向限制。普通请求不会继承此下载标记。当前校验与实际连接仍是分开的解析步骤，代理也可能自行解析，因此不能把它描述为绑定实际连接 IP 的完整 DNS rebinding 防护。
+常规上游请求在 allowlist 已启用且 `allow_private_hosts=false` 时，由 HTTP client 在发起请求前和每次跳转时校验目标域名的解析结果。Images URL 回填等携带 `WithHTTPUpstreamPublicHostsOnly` 的请求始终执行同样的校验。普通直连和指纹直连还会在建立 TCP 连接前校验实际目标 IP。经代理转发时由代理控制最终连接，代理出口需要执行相应的目标限制。[出站请求的拨号校验](edge_security.md#outbound_ssrf_dial_guard)
+
+以 HTTPS 发起的 TLS 指纹请求只接受后续 HTTPS 跳转，直连、HTTP(S) 和 SOCKS 代理使用同一规则。同主机和跨主机 HTTPS 跳转都遵守原有公网限制及十跳上限。业务明确禁止跟随跳转时直接返回上游 3xx。显式配置的初始 HTTP 请求继续进入普通传输并沿用配置的代理。
 
 平台默认端点、管理员允许的兼容上游和对象/媒体下载可能使用不同 allowlist，但都不能直接信任上游返回的任意 URL。默认上游 host 包含 Kimi/Moonshot、Zhipu/Z.ai、DeepSeek 和 MiniMax 官方域名；MiniMax 包括 `api.minimax.io`、`api.minimax.cn` 与旧 `api.minimaxi.com`。CN 周期监控只对这些官方 host 直接运行，自定义中继即使可用于手动请求，也必须在 allowlist 已启用且显式命中时才能被后台周期访问。Grok 视频 content 等下载通过服务端凭据代理时仍需验证任务归属和最终目标。
 

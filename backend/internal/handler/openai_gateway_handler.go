@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ip"
@@ -397,7 +398,7 @@ func NewOpenAIGatewayHandler(
 	opsService *service.OpsService,
 	cfg *config.Config,
 ) *OpenAIGatewayHandler {
-	pingInterval := time.Duration(0)
+	pingInterval := defaultPingInterval
 	maxAccountSwitches := 3
 	if cfg != nil {
 		pingInterval = time.Duration(cfg.Concurrency.PingInterval) * time.Second
@@ -475,6 +476,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
 	}
+	// JSON 改写前先拒绝非法 UTF-8，避免畸形字节在转换后变成可重试的上游错误。
+	if !utf8.Valid(body) {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body must be valid UTF-8 JSON. Send UTF-8 encoded bytes.")
+		return
+	}
 
 	setOpsRequestContext(c, "", false)
 	body, ok = h.normalizeOpenAIResponsesCompactRequest(c, reqLog, body)
@@ -511,6 +517,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	} else if changed {
 		body = cappedBody
+	}
+	if normalizedBody, changed := normalizeCodexUntrustedContext(body); changed {
+		body = normalizedBody
+		reqLog.Info("openai.codex_untrusted_context_normalized",
+			zap.String("normalization", "call_output_to_user_message"),
+		)
 	}
 	if normalizedBody, changed := normalizeCodexAutomationBootstrap(body); changed {
 		body = normalizedBody
@@ -1431,7 +1443,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 		// 应用渠道模型映射到请求体
 		forwardBody := mappedBodyForMessages(channelMappingMsg.Mapped, channelMappingMsg.MappedModel)
-		writerSizeBeforeForward := c.Writer.Size()
+		writerSizeBeforeForward := service.OpenAICompactKeepaliveAdjustedWrittenSize(c)
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
 				if accountReleaseFunc != nil {
@@ -1528,10 +1540,15 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 						return
 					}
 					h.recordOpenAICyberWarning(c, reqLog, apiKey, account, reqModel, failoverErr.StatusCode, failoverErr.ResponseBody, err.Error())
-					if c.Writer.Size() != writerSizeBeforeForward {
+					// 只写过 keepalive 字节时仍可切换账号，用扣除 keepalive 的写出量判断。
+					if !openAIForwardMayFailover(c, writerSizeBeforeForward, failoverErr) {
 						h.gatewayService.ObserveOpenAIAccountHealthFailure(c.Request.Context(), account, err)
 						h.handleAnthropicFailoverExhausted(c, failoverErr, true)
 						return
+					}
+					// 只写过 keepalive 字节时可以继续切换账号，但之后的错误都必须以 SSE 事件写出。
+					if c.Writer.Written() {
+						streamStarted = true
 					}
 					if failoverErr.ShouldReportAccountScheduleFailure() {
 						h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, currentRoutingModel, false, nil), false, nil, err)
@@ -1714,16 +1731,22 @@ func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, 
 		h.anthropicStreamingAwareError(c, status, "api_error", failoverErr.ClientMessage, streamStarted)
 		return
 	}
+	// 触发 failover 的 failed/error 帧不再在流内写给客户端，因此在这里补套错误透传规则。
+	if status, errType, msg, ok := service.ApplyOpenAIStreamFailedFrameRule(c, failoverErr); ok {
+		h.anthropicStreamingAwareError(c, status, errType, msg, streamStarted)
+		return
+	}
 	status, errType, errMsg := h.mapUpstreamError(failoverErr.StatusCode)
 	h.anthropicStreamingAwareError(c, status, errType, errMsg, streamStarted)
 }
 
 // ensureAnthropicErrorResponse writes a fallback Anthropic error if no response was written.
 func (h *OpenAIGatewayHandler) ensureAnthropicErrorResponse(c *gin.Context, streamStarted bool) bool {
-	if c == nil || c.Writer == nil || c.Writer.Written() {
+	// 仅有 keepalive ping 不算已写出响应，但响应已按 SSE 提交，兜底错误必须以 SSE 事件写出。
+	if c == nil || c.Writer == nil || service.OpenAICompactKeepaliveAdjustedWrittenSize(c) >= 0 {
 		return false
 	}
-	h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", "Upstream request failed", streamStarted)
+	h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", "Upstream request failed", streamStarted || c.Writer.Written())
 	return true
 }
 
@@ -1789,10 +1812,17 @@ func normalizeCodexAutomationBootstrap(body []byte) ([]byte, bool) {
 // mayContainCodexCallOutputCandidate 是 bootstrap 候选项的必要条件，在完整唯一性扫描和解码前检查。
 // 候选项的 type 与工具名都是 JSON 字符串，除非用 \u 转义拼写，否则必然字面出现；
 // 两者都不满足时归一化不可能改变请求体，可直接跳过整包解码。
+// 真实客户端会产生的转义（控制字符、HTML 安全转义和非 ASCII 字符）拼不出这些字母，不能因此强制整包解码。
+// 工具声明里也会出现同名字符串，所以字面命中后再用零拷贝扫描确认存在 type=function_call_output 且
+// name 以 toolNames 之一开头的输入项；完整路径会拒绝重复成员，无重复时扫描读到的值与解码器一致。
 func mayContainCodexCallOutputCandidate(body []byte, toolNames ...string) bool {
-	if bytes.Contains(body, []byte(`\u`)) {
-		return true
+	if !service.JSONMayEscapePlainASCII(body) && !containsCodexCallOutputLiterals(body, toolNames) {
+		return false
 	}
+	return service.ResponsesInputHasFunctionCallOutputNamed(body, toolNames...)
+}
+
+func containsCodexCallOutputLiterals(body []byte, toolNames []string) bool {
 	if !bytes.Contains(body, []byte("function_call_output")) {
 		return false
 	}

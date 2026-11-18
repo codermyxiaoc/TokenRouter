@@ -278,16 +278,20 @@ func codexDirectImagesUsage(body []byte) (OpenAIUsage, bool) {
 	if !value.Get("output_tokens_details.image_tokens").Exists() {
 		usage.ImageOutputTokens = usage.OutputTokens
 	}
+	applyOpenAIImageCacheReadDetails(&usage, value)
+	return usage, true
+}
+
+// 图片缓存读取是总缓存读取的子集。原生图片和 Responses 生图工具都只从各自的用量对象补齐明细。
+func applyOpenAIImageCacheReadDetails(usage *OpenAIUsage, value gjson.Result) {
 	cached := value.Get("input_tokens_details.cached_tokens_details")
+	imageTokens, _ := boundedJSONNonNegativeInt(cached.Get("image_tokens"))
 	if !value.Get("input_tokens_details.cached_tokens").Exists() && cached.IsObject() {
-		imageTokens, _ := boundedJSONNonNegativeInt(cached.Get("image_tokens"))
 		textTokens, _ := boundedJSONNonNegativeInt(cached.Get("text_tokens"))
 		usage.CacheReadInputTokens = min(imageTokens, max(usage.InputTokens, 0))
 		usage.CacheReadInputTokens += min(textTokens, max(usage.InputTokens-usage.CacheReadInputTokens, 0))
 	}
-	imageCached, _ := boundedJSONNonNegativeInt(cached.Get("image_tokens"))
-	usage.ImageCacheReadTokens = min(imageCached, max(usage.ImageInputTokens, 0), max(usage.CacheReadInputTokens, 0))
-	return usage, true
+	usage.ImageCacheReadTokens = min(imageTokens, max(usage.ImageInputTokens, 0), max(usage.CacheReadInputTokens, 0))
 }
 
 func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(resp *http.Response, c *gin.Context, parsed *OpenAIImagesRequest) (OpenAIUsage, int, []string, error) {

@@ -63,6 +63,8 @@ OAuth/Codex 凭据的 Images 请求在最终账号模型映射之后选择通道
 
 GPT Image 2.6（同步上游 v0.2.20）：原生端点遇到 404/405 时**不回退** Responses，因为桥接层会把 `image_generation` 绑定到内部模型、无法保留 2.6。解析并原样转发显式 `complexity`（`low`/`medium`/`high`，省略时不注入默认值）、GIF 帧参数 `frame_count`/`frame_duration_ms`、SVG 作者参数 `svg`（`model`、`reasoning.effort`），以及编辑端点的 `markup` 标注图（JSON `markup.image_url` 或 multipart `markup` 文件，与 mask 一样送内容审核）。这些原生参数出现在 Responses 桥接请求中时直接拒绝而不是静默丢弃。`output_format=gif|svg` 的 url 结果使用对应 MIME；GIF/SVG 能否产出由上游账号权限决定。编辑端点对 `stream=true` 返回完整 JSON 时，网关将其转换为完成事件（保留 usage）再判定成功，既不丢弃已付费图片也不换号重发。2.6 内置与 2.5 相同的官方 token 兜底价（远端价格表缺失或动态价格服务不可用时使用），实际按张或按 token 仍由分组/渠道配置决定；已有显式账号映射或分组白名单需要手动加入 2.6 模型。
 
+`output_format` / `output_compression` 透传不保证上游按指定格式输出（同步上游 v0.2.22 说明）：原生端点可能以 4xx 拒绝某种格式，也可能返回 HTTP 200、`output_format: "png"` 和 PNG 内容，即使请求的是 `jpeg` 或 `svg`。客户端保存或交付图片前应比较返回的 `output_format`（含图片项中的该字段）与请求并核验实际格式，扩展名和 MIME 以实际输出为准。格式不匹配的成功响应仍保留状态、图片内容与 usage，照常计费；自动重试可能再次生成并计费。
+
 公开 Images 同步及异步后台执行共用图片尝试策略：一个逻辑请求仅在同组最多向两个不同账号各发送一次，禁止叠加池模式同号重试、OAuth 原生到 Responses 回退及其它隐式重发。首次执行固定 900 秒总截止，已有更短截止优先，换号不延长；异步任务原 30 分钟受理/执行外层预算及独立存储预算保留。管理员指定账号测试未挂载此策略，仍只验证被选中的账号，保留其已有明确端点兼容边界。
 
 仅确定未连接的 DNS/dial 错误和明确未受理的上游拒绝可快速切至备用账号；普通 5xx、408、发送后断连、HTTP 200 后读体失败、已有任务/图片/用量或实际模型输出时不得重新生成。参数与审核拒绝不冷却账号。可信上游故障按账号、最终上游模型及 generate/edit/inpaint 写入十秒共享冷却，后续请求跳过该组合，重复写入不延长窗口；全部候选冷却时立即返回 503 与 Retry-After，不等待冷却。图片及部分用量仍按原账本结算，存储失败只恢复存储/账务；没有资金预占的同步与 Token 图片同样受禁止重放保护。
@@ -74,6 +76,8 @@ API Key Images 兼容接口还接受 `gemini-*` 且含完整 `-image` 型号段�
 所有去除首尾空白后以 `mj` 开头的型号（忽略大小写，如 `MJ-v7`、`mj_custom`、`MjFast`、`MJ`）均识别为 Midjourney 图片模型，复用第三方 API Key Images 能力；原有 `midjourney-v7` 等完整品牌数字版本名继续兼容，模型名保持原样传递，不加入 GPT/Codex 原生图片模型族。渠道映射与账号映射后都重新校验，OAuth/Setup Token 在出站前拒绝这类型号。只开放已验证的非流式 JSON `/v1/images/generations`，`n=1`（省略也为 1）；拒绝 MJ 编辑、multipart、流式及多组批量。小数 `n`、重复 `n`、`model` 或 `stream` 在出站前拒绝。标准响应 `data` 数组中的多张 `url` 或 `b64_json` 图片按实际张数记录和结算；请求 `n=1` 不将返回的四张缩减为一张，Token 用量为零也不会跳过已配置的按图或按次收费。标准模式的同步与异步 MJ 请求都要求显式图片价格，并在生成前按四张预占，真实少于四张则退回差额；没有定价或资金不足时不发起生成，不确定结果不自动重发，详见[图片资金预占](../domains/media_tasks.md#async_image_billing)。品牌及公开价卡边界见[模型目录与市场](model_catalog_and_marketplace.md)。
 
 Responses WebSocket 的每轮与聚合用量都保留 `image_input_tokens`。图片输入优先使用标准 usage 的 image_tokens，缺少时才读取 `tool_usage.image_gen`；工具输出图片 token 同样只补齐缺失值，不能覆盖标准用量的显式零值或跨轮沿用上一轮图片计数。所有已知 token 字段按精确非负整数验证，单项上限为 `2^40`；字符串、小数、越界数、重复计量键与汇总加法溢出会终止当前转发，不能交付成功终态或按成功结算。已完成回合的合法用量保持不变，失败回合只把此前已经验证的计量交给现有失败结算路径，不重放生成。该补全复用当前图片计价与结算链路。
+
+Responses WebSocket v2 透传与 HTTP 使用同一套 30 分钟和 12 小时缓存写入拆分规则。每轮结算连同总写入量传递上游报告的期限明细。计量错误导致回合中断时，失败结算保留此前已验证的同轮快照。期限明细缺失、格式错误、重复或两档合计与总写入量不符时，该轮使用可信总量按统一写入价计费。会话汇总只有在所有含写入的回合都有完整明细时才提供期限拆分。对应单价规则见[路由与结算](../domains/routing_and_billing.md)。
 
 <a id="images_url_backfill"></a>
 ### 图片结果回填
@@ -95,6 +99,8 @@ Responses 回退已经收到并成功解码的完整图片不会因随后 `respo
 OpenAI 分组支持 Messages、Responses 和 Chat，新建时默认启用 Responses 与 Chat；三项都可关闭。已有分组迁移时仅在旧 `allow_messages_dispatch` 开启时加入 Messages。该旧字段只作为 Messages 的弃用兼容镜像，专用 `messages_dispatch_model_config` 仍只负责 Claude 到 GPT 模型映射；系列和精确映射都只在目标值非空时生效，全部留空时不执行分组层模型映射。Responses WebSocket 是 OpenAI/Grok 的原生传输能力，不因其它平台启用兼容 Responses 而开放。
 
 管理员可在 OpenAI/Composite 分组上设置 `force_openai_fast`。网关在 HTTP Responses、Chat/Messages 转换、passthrough 和 Responses WebSocket 的 `response.create` 中统一把组级强制意图规范化为 `service_tier=priority`，再执行全局 Fast/Flex 策略；全局 `filter`/`block` 以及 API Key `force_off` 不会被绕过。该字段随 API Key 认证快照传递，快照版本变更后旧缓存必须重建；其它平台的值由管理服务清零。
+
+`force_openai_ultrafast` 走同一条 `resolveOpenAIFastModeDecision` 链路，HTTP、Chat/Messages 转换、passthrough 与 WebSocket 一致：支持的模型写 `ultrafast`，其余模型按 `force_openai_fast` 或客户端取值，再交给全局 Fast/Flex 策略裁决。GPT-6.2 订阅账号只在套餐包含时（`gpt62PlanIncludesUltrafast`）才强制 Ultrafast。认证快照升级到 v41 以携带该字段。
 
 `free_openai_fast` 是同一分组的用户计费策略，不会改变出站 `service_tier`。只有 OpenAI 账号实际按 `priority`/`fast` 计费时才生效；网关使用同一模型映射、渠道价卡、峰值和长上下文时刻重新取得 Standard 价格，将其写入用户侧 `ActualCost` 和统一结算的基础金额，同时保留 Fast `TotalCost` 给 Usage Log、账号统计和账号额度。Standard 定价缺失时沿用零成本缺价记录，不能借此绕过原有定价错误边界；非 OpenAI 账号、普通 tier 和不可信认证快照均不适用。该字段也随 API Key 认证快照传递，因此快照版本为 v36，旧 v35 快照必须失效并重建。
 
@@ -226,6 +232,8 @@ turn-state、会话连接和失效密文 lineage 的读写/清理统一使用本
 <a id="responses_large_body"></a>
 ## 大请求内存与语义
 
+OAuth Responses 兼容清洗（Codex 转换、OAuth 透传、compact 与 WebSocket）会删除 input 项上的 `internal_chat_message_metadata_passthrough`：Codex 在自定义 provider 命名为 OpenAI 时附带该字段，ChatGPT 上游会拒绝。只删 input 项本身的该字段，不动同名的用户内容和顶层字段；API Key 路径保持原样。清理逐项进行后一次性重建 input，避免长历史反复复制。
+
 Responses 的普通无改动路径优先检查必要顶层字段、复用原始请求；只需修改 input 元数据时按项处理，未变的图片、工具结果和大数字保留原始 JSON 片段，最后按实际长度组装新请求。legacy 字段转换、非路由/会话控制字段的重复键、异常编码等需要旧解码语义的场景仍回退原流程。`model`、`previous_response_id`、`prompt_cache_key` 重复时在改写前直接拒绝；WS 同时拒绝重复的 `type`、`session` 和 `session.model`，包括转义及仅大小写不同的同名字段，不走兼容回退。公共读体按实际到达数据分块接收，不按不可信的 Content-Length 一次分配整包，也不扩大原有解压和请求大小限制。
 
 原始 byte slice 在整个请求、重试和异步使用期保持不可变。无修改返回原 slice，有修改构造新 slice；智能路由的原请求副本、OpenCode 原始会话 body、审核和必要日志快照不得原地覆盖或提前归还内存池。namespace 仅在实际删除对应字段时组装变更片段，其余输入项的空白、大整数和顺序保留。namespace/Lite、工具调用、账号一次映射、旧/原生压缩及 Images 端点和计费不因减少分配而改写语义。分块组装期间仍可能同时持有分块和最终结果，这不是零拷贝或固定比例的进程内存保证。
@@ -245,7 +253,11 @@ OpenAI OAuth、Setup Token 和订阅影子账号不再调度最终上游目标�
 
 `gpt-6.1-terra` 同样保持独立身份，推理档位与 6 Sol/Luna 一致：支持 `none/low/medium/high/xhigh/max`，`none` 按原生语义保留（兼容后缀、Claude 桥接与 OpenAI API Key 上游均不改成默认档位），`pro` 等未公布后缀不归入 Terra 也不按其它型号计价。`minimal` 不在 Terra 档位内：显式 `minimal`（`reasoning.effort`、`reasoning_effort`、`output_config.effort`）或 `-minimal` 模型后缀在 HTTP 与 WS 现有参数校验路径返回 400，不降级为其它档位，`-minimal` 也不进入 Terra 定价归一。与 6.1 Sol 一样不引入上游“工具调用必须改走 Responses”的拦截，Chat 回退路径的协议选择仍由管理员策略决定、不静默改协议；OAuth 订阅长上下文成本豁免目前只适用于 6.1 Sol。
 
-Astra 的 Ultrafast 为独立服务档，对最终普通 token 价按 6 倍结算，不使用普通 Fast 渠道倍率。上游权威声明降为 Fast/priority/default/Flex 时按更低档计费；OAuth/Codex 的 default 回显仍遵守现有非权威规则，不因此误降档。
+Astra 的 Ultrafast 为独立服务档，对最终普通 token 价按模型专属倍率结算（GPT-6 Astra、GPT-6.1 Sol 为 6 倍；GPT-6.2 在 2027-03-01 08:00 UTC 前 3 倍、之后 6 倍），不使用普通 Fast 渠道倍率，但可由渠道 `ultrafast_multiplier` 显式覆盖。
+
+GPT-6.2 Sol/Astra（同步上游 v0.2.23）：Sol 与 6.1 Sol 同价，Astra 为输入 8、输出 40、缓存写 10、缓存读 0.4 美元/百万 Token，Fast 2 倍，272K 长上下文门槛；推理档位只接受 low 到 max，none/minimal 返回 400；订阅账号的上游成本与 6.1 Sol 一样豁免长上下文费用。
+
+OpenAI 流式空闲超时以最后一次读取时间为准重新计时（不再按 Ticker 周期多等）。模型尚未向客户端输出、也没有可计费结果时空闲超时，换一个账号重试，并计入首字换号预算（最多换号一次）；已有输出时仍返回 `stream_timeout`（同步上游 v0.2.23）。上游权威声明降为 Fast/priority/default/Flex 时按更低档计费；OAuth/Codex 的 default 回显仍遵守现有非权威规则，不因此误降档。
 
 `gpt-6-sol`、`gpt-6-luna` 使用独立模型身份，支持 `none/low/medium/high/xhigh/max`，官方默认 `medium`。原生 Responses 请求中的显式 `none` 在自定义 API Key 上游地址也保持原值；Messages 转换到 Responses 时，两款模型仅在有效档位为 `none` 时保留采样参数。目录和客户端配置扩展不改变旧默认模型，也不改变管理员选择的上游协议。官方要求带工具的 Chat Completions 使用 `reasoning_effort=none`；其余推理档位的工具调用应走 Responses，网关不静默降低推理强度以强行适配 Chat。依据：[Sol 模型说明](https://developers.openai.com/api/docs/models/gpt-6-sol)、[Luna 模型说明](https://developers.openai.com/api/docs/models/gpt-6-luna)。
 

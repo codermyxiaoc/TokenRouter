@@ -32,6 +32,7 @@ func DefaultModels() []Model {
 		{Name: "models/gemini-3.5-flash", SupportedGenerationMethods: methods},
 		{Name: "models/gemini-3.6-flash", SupportedGenerationMethods: methods},
 		{Name: "models/gemini-4-argon", SupportedGenerationMethods: methods},
+		{Name: "models/gemini-4-carbon", SupportedGenerationMethods: methods},
 	}
 }
 

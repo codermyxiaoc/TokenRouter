@@ -43,6 +43,7 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
 ) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
+	SetActualOpenAIUpstreamEndpoint(c, "/v1/messages")
 
 	// 1. 解析 Chat Completions 请求。
 	var ccReq apicompat.ChatCompletionsRequest
@@ -99,6 +100,7 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 	if err != nil {
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
 	}
+	anthropicBody = withChatCompletionsMetadataUserID(body, anthropicBody)
 
 	// 与 /v1/messages 直通路径相同的 pre-filter。
 	anthropicBody = StripEmptyTextBlocks(anthropicBody)
@@ -165,6 +167,8 @@ func (s *OpenAIGatewayService) handleCCBufferedFromNativeAnthropic(
 	reasoningEffort *string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
+	// 观测上游 Anthropic usage.speed，供计费按实际档位只降档。
+	observer := beginUpstreamResponseModelObservation(c)
 	requestID := resp.Header.Get("x-request-id")
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -232,6 +236,7 @@ func (s *OpenAIGatewayService) handleCCBufferedFromNativeAnthropic(
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
 		}
+		observer.ObserveAnthropic([]byte(payload))
 
 		if event.Type == "message_start" && event.Message != nil {
 			finalResp = event.Message
@@ -268,14 +273,7 @@ func (s *OpenAIGatewayService) handleCCBufferedFromNativeAnthropic(
 		return nil, fmt.Errorf("upstream stream ended without response")
 	}
 
-	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
-		finalResp.Usage = apicompat.AnthropicUsage{
-			InputTokens:              usage.InputTokens,
-			OutputTokens:             usage.OutputTokens,
-			CacheCreationInputTokens: usage.CacheCreationInputTokens,
-			CacheReadInputTokens:     usage.CacheReadInputTokens,
-		}
-	}
+	normalizeAnthropicEventUsageForResponses(&apicompat.AnthropicStreamEvent{Message: finalResp}, usage)
 
 	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
 	ccResp := apicompat.ResponsesToChatCompletions(responsesResp, originalModel)
@@ -293,16 +291,17 @@ func (s *OpenAIGatewayService) handleCCBufferedFromNativeAnthropic(
 	}
 
 	return &OpenAIForwardResult{
-		RequestID:        requestID,
-		UpstreamHeaders:  resp.Header,
-		Usage:            claudeUsageToOpenAIUsage(&usage),
-		Model:            originalModel,
-		BillingModel:     billingModel,
-		UpstreamModel:    upstreamModel,
-		UpstreamEndpoint: "/v1/messages",
-		ReasoningEffort:  reasoningEffort,
-		Stream:           false,
-		Duration:         time.Since(startTime),
+		RequestID:                   requestID,
+		UpstreamHeaders:             resp.Header,
+		Usage:                       claudeUsageToOpenAIUsage(&usage),
+		Model:                       originalModel,
+		BillingModel:                billingModel,
+		UpstreamModel:               upstreamModel,
+		UpstreamResponseServiceTier: observer.ServiceTier(),
+		UpstreamEndpoint:            "/v1/messages",
+		ReasoningEffort:             reasoningEffort,
+		Stream:                      false,
+		Duration:                    time.Since(startTime),
 	}, nil
 }
 
@@ -317,6 +316,8 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 	reasoningEffort *string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
+	// 观测上游 Anthropic usage.speed，供计费按实际档位只降档。
+	observer := beginUpstreamResponseModelObservation(c)
 	requestID := resp.Header.Get("x-request-id")
 
 	if s.responseHeaderFilter != nil {
@@ -347,18 +348,19 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 
 	resultWithUsage := func() *OpenAIForwardResult {
 		return &OpenAIForwardResult{
-			RequestID:        requestID,
-			UpstreamHeaders:  resp.Header,
-			Usage:            claudeUsageToOpenAIUsage(&usage),
-			Model:            originalModel,
-			BillingModel:     billingModel,
-			UpstreamModel:    upstreamModel,
-			UpstreamEndpoint: "/v1/messages",
-			ReasoningEffort:  reasoningEffort,
-			Stream:           true,
-			Duration:         time.Since(startTime),
-			FirstTokenMs:     firstTokenMs,
-			ClientDisconnect: clientDisconnected,
+			RequestID:                   requestID,
+			UpstreamHeaders:             resp.Header,
+			Usage:                       claudeUsageToOpenAIUsage(&usage),
+			Model:                       originalModel,
+			BillingModel:                billingModel,
+			UpstreamModel:               upstreamModel,
+			UpstreamResponseServiceTier: observer.ServiceTier(),
+			UpstreamEndpoint:            "/v1/messages",
+			ReasoningEffort:             reasoningEffort,
+			Stream:                      true,
+			Duration:                    time.Since(startTime),
+			FirstTokenMs:                firstTokenMs,
+			ClientDisconnect:            clientDisconnected,
 		}
 	}
 
@@ -398,7 +400,7 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 		if err != nil {
 			return false
 		}
-		out := string(reverseToolNamesIfPresent(c, []byte(sse)))
+		out := reverseToolNamesIfPresentString(c, sse)
 		if _, err := fmt.Fprint(c.Writer, out); err != nil {
 			clientDisconnected = true
 			return false
@@ -475,6 +477,7 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
 		}
+		observer.ObserveAnthropic([]byte(payload))
 
 		// 转换前区分真实零用量与未提供用量；客户端选项不丢弃上游事实。
 		ccState.IncludeUsage = ccState.IncludeUsage || anthropicChatStreamHasUsage(&event, payload)

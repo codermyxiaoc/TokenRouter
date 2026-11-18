@@ -9,6 +9,10 @@ import (
 
 // ValidateSonnet55Request 供各协议桥共用映射后的 Sonnet 5.5 参数边界。
 func ValidateSonnet55Request(body []byte, model string) error {
+	// Fable/Mythos 5.2 与 Haiku 5.5 同样锁定采样参数，共用同一入口校验。
+	if err := claude.ValidateClaude52Request(body, model); err != nil {
+		return err
+	}
 	if err := claude.ValidateHaiku55Request(body, model); err != nil {
 		return err
 	}

@@ -149,7 +149,7 @@ func publicModelDescription(detail ModelDetails) string {
 func (p ChannelModelPricing) IsModelDetailsOnly() bool {
 	return p.Platform == PlatformVideo && len(p.ModelDetails) > 0 &&
 		(p.BillingMode == "" || p.BillingMode == BillingModeToken || isVideoMatrixBillingMode(p.BillingMode)) &&
-		p.PriceMultiplier == nil && p.FastModeMultiplier == nil && p.FastMultiplier == nil && p.FlexMultiplier == nil &&
+		p.PriceMultiplier == nil && p.FastModeMultiplier == nil && p.FastMultiplier == nil && p.FlexMultiplier == nil && p.UltrafastMultiplier == nil &&
 		p.MaxReasoningEffortMultiplier == nil && len(p.ReasoningEffortMultipliers) == 0 &&
 		p.InputPrice == nil && p.OutputPrice == nil && p.CacheWritePrice == nil && p.CacheWrite1hPrice == nil && p.CacheReadPrice == nil &&
 		p.ImageInputPrice == nil && p.ImageOutputPrice == nil && p.PerRequestPrice == nil &&

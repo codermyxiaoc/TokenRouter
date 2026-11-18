@@ -246,7 +246,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// Always capture a compact fingerprint line for later error diagnostics.
 	// We only print it when needed (or when the explicit debug flag is enabled).
 	if c != nil && tokenType == "oauth" {
-		c.Set(claudeMimicDebugInfoKey, buildClaudeMimicDebugLine(req, body, account, tokenType, mimicClaudeCode))
+		c.Set(claudeMimicDebugInfoKey, newClaudeMimicDebugLine(req, body, account, tokenType, mimicClaudeCode))
 	}
 	if s.debugClaudeMimicEnabled() {
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
@@ -430,7 +430,7 @@ func (s *GatewayService) getBetaHeader(modelID string, clientBetaHeader string) 
 
 func requestNeedsBetaFeatures(body []byte) bool {
 	tools := gjson.GetBytes(body, "tools")
-	if tools.Exists() && tools.IsArray() && len(tools.Array()) > 0 {
+	if tools.Exists() && tools.IsArray() && tools.Get("0").Exists() {
 		return true
 	}
 	thinkingType := gjson.GetBytes(body, "thinking.type").String()

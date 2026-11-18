@@ -32,7 +32,7 @@ func TestOpenAIWSPassthroughTurnResultCarriesImageUsage(t *testing.T) {
 
 	upstreamConn := &openAIWSCaptureConn{
 		events: [][]byte{
-			[]byte(`{"type":"response.completed","response":{"id":"resp_ws_image","model":"gpt-5.4","output":[{"id":"ig_ws_1","type":"image_generation_call","status":"completed","result":"final-image"}],"usage":{"input_tokens":120,"output_tokens":70,"input_tokens_details":{"image_tokens":40}},"tool_usage":{"image_gen":{"input_tokens_details":{"image_tokens":900},"output_tokens_details":{"image_tokens":55}}}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_ws_image","model":"gpt-5.4","output":[{"id":"ig_ws_1","type":"image_generation_call","status":"completed","result":"final-image"}],"usage":{"input_tokens":120,"output_tokens":70,"input_tokens_details":{"image_tokens":40,"cache_write_tokens":100,"cache_write_tokens_details":{"ttl_30m_tokens":20,"ttl_12h_tokens":80}}},"tool_usage":{"image_gen":{"input_tokens_details":{"image_tokens":900},"output_tokens_details":{"image_tokens":55}}}}}`),
 		},
 	}
 	svc := &OpenAIGatewayService{
@@ -93,6 +93,9 @@ func TestOpenAIWSPassthroughTurnResultCarriesImageUsage(t *testing.T) {
 
 	select {
 	case result := <-resultCh:
+		require.Equal(t, 100, result.Usage.CacheCreationInputTokens)
+		require.Equal(t, 20, result.Usage.CacheCreation30mInputTokens)
+		require.Equal(t, 80, result.Usage.CacheCreation12hInputTokens)
 		require.Equal(t, 120, result.Usage.InputTokens)
 		require.Equal(t, 40, result.Usage.ImageInputTokens, "usage image input wins over the hosted tool breakdown")
 		require.Equal(t, 55, result.Usage.ImageOutputTokens, "tool_usage.image_gen fills the missing image output counter")

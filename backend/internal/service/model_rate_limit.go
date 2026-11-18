@@ -6,14 +6,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/antigravity"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
 )
 
 const (
 	modelRateLimitsKey                 = "model_rate_limits"
 	antigravityGeminiModelRateLimitKey = "antigravity:gemini"
-	openAIImageGenerationRateLimitKey  = "openai:image_generation"
-	openAICodexSparkRateLimitReason    = "openai_codex_spark_rate_limit"
+	// antigravityArgonModelRateLimitKey 是 Pro 套餐 Gemini 4 Argon 独立配额池的冷却 scope。
+	antigravityArgonModelRateLimitKey = "antigravity:gemini:argon"
+	openAIImageGenerationRateLimitKey = "openai:image_generation"
+	openAICodexSparkRateLimitReason   = "openai_codex_spark_rate_limit"
 	// anthropicFableRateLimitKey 是 Anthropic 7d_oi（Fable 专属 7d 窗口）限流的
 	// 家族级 scope：命中后所有 Fable 变体（含 [1m] 等后缀）都不再调度到该账号。
 	anthropicFableRateLimitKey = "claude-fable-5"
@@ -87,9 +90,7 @@ func (a *Account) modelRateLimitKeysForRequest(ctx context.Context, requestedMod
 			keys = append(keys, wallet)
 		}
 	case PlatformAntigravity:
-		if isAntigravityGeminiModel(modelKey) && !isAntigravityGeminiImageModel(modelKey) && modelKey != antigravityGeminiModelRateLimitKey {
-			keys = append(keys, antigravityGeminiModelRateLimitKey)
-		}
+		return antigravityModelRateLimitKeys(a, modelKey)
 	case PlatformOpenAI:
 		if openAIImageGenerationRateLimitApplies(ctx, requestedModel, modelKey) && modelKey != openAIImageGenerationRateLimitKey {
 			keys = append(keys, openAIImageGenerationRateLimitKey)
@@ -167,14 +168,23 @@ func isAntigravityGeminiModel(model string) bool {
 	return strings.HasPrefix(normalizeAntigravityModelName(model), "gemini-")
 }
 
-func antigravityModelRateLimitKeys(model string) []string {
+func antigravityModelRateLimitKeys(account *Account, model string) []string {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return nil
 	}
 	keys := []string{model}
 	if isAntigravityGeminiModel(model) && !isAntigravityGeminiImageModel(model) && model != antigravityGeminiModelRateLimitKey {
-		keys = append(keys, antigravityGeminiModelRateLimitKey)
+		familyKey := antigravityGeminiModelRateLimitKey
+		// Pro 套餐的 Argon 是独立配额池，冷却不拖累同账号其它 Gemini 模型；
+		// Ultra 与未知套餐仍共享 Gemini scope，Argon 各变体之间一起冷却。
+		if account != nil && strings.EqualFold(strings.TrimSpace(antigravity.TierIDToPlanType(account.GetCredential("plan_type"))), "Pro") {
+			normalized := normalizeAntigravityModelName(model)
+			if normalized == "gemini-4-argon" || strings.HasPrefix(normalized, "gemini-4-argon-") {
+				familyKey = antigravityArgonModelRateLimitKey
+			}
+		}
+		keys = append(keys, familyKey)
 	}
 	return keys
 }
@@ -207,6 +217,17 @@ func (a *Account) modelRateLimitResetAt(scope string) *time.Time {
 	return &resetAt
 }
 
+// modelRateLimitReason 返回指定 scope 模型级限流记录的写入来源，没有记录时返回空串。
+func (a *Account) modelRateLimitReason(scope string) string {
+	if a == nil || a.Extra == nil {
+		return ""
+	}
+	rawLimits, _ := a.Extra[modelRateLimitsKey].(map[string]any)
+	rawLimit, _ := rawLimits[scope].(map[string]any)
+	reason, _ := rawLimit["reason"].(string)
+	return reason
+}
+
 // 限流快照采用写时复制，避免污染其它请求共用的账号元数据。
 func setAccountModelRateLimitSnapshot(account *Account, scope string, resetAt time.Time, reason string, now time.Time) {
 	if account == nil || strings.TrimSpace(scope) == "" {
@@ -226,6 +247,30 @@ func setAccountModelRateLimitSnapshot(account *Account, scope string, resetAt ti
 	limits[scope] = payload
 
 	extra := make(map[string]any, len(account.Extra)+1)
+	maps.Copy(extra, account.Extra)
+	extra[modelRateLimitsKey] = limits
+	account.Extra = extra
+}
+
+// clearAccountModelRateLimitSnapshot 从本账号对象的 Extra 快照中删除指定 scope，
+// 让当前实例立刻停止跳过该模型，而不必等下一次快照重建。
+// 与 setAccountModelRateLimitSnapshot 一样写时复制，不修改可能共享的旧 map。
+func clearAccountModelRateLimitSnapshot(account *Account, scope string) {
+	if account == nil || strings.TrimSpace(scope) == "" {
+		return
+	}
+	oldLimits, ok := account.Extra[modelRateLimitsKey].(map[string]any)
+	if !ok {
+		return
+	}
+	if _, exists := oldLimits[scope]; !exists {
+		return
+	}
+	limits := make(map[string]any, len(oldLimits))
+	maps.Copy(limits, oldLimits)
+	delete(limits, scope)
+
+	extra := make(map[string]any, len(account.Extra))
 	maps.Copy(extra, account.Extra)
 	extra[modelRateLimitsKey] = limits
 	account.Extra = extra

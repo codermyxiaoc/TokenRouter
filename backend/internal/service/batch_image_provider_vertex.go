@@ -569,10 +569,7 @@ func BuildVertexBatchPredictionJobsEndpoint(baseURL, projectID, location string)
 	if strings.TrimSpace(baseURL) != "" {
 		return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "/v1/projects/" + url.PathEscape(projectID) + "/locations/" + url.PathEscape(location) + "/batchPredictionJobs", nil
 	}
-	host := fmt.Sprintf("%s-aiplatform.googleapis.com", location)
-	if location == "global" {
-		host = "aiplatform.googleapis.com"
-	}
+	host := vertexAPIHost(location)
 	return fmt.Sprintf("https://%s/v1/projects/%s/locations/%s/batchPredictionJobs", host, url.PathEscape(projectID), url.PathEscape(location)), nil
 }
 
@@ -784,7 +781,24 @@ func (c *VertexBatchHTTPClient) vertexResourceURL(name string) string {
 	if c.baseURL != "" {
 		return c.baseURL + "/v1/" + name
 	}
-	return "https://aiplatform.googleapis.com/v1/" + name
+	// 资源名形如 projects/{p}/locations/{loc}/batchPredictionJobs/{id}：us/eu 多区域作业只能经
+	// 多区域主机访问，按资源区域选择；其它区域保持原有全局主机行为不变。
+	host := vertexGlobalHost
+	if location := vertexResourceLocation(name); isVertexMultiRegion(location) {
+		host = vertexAPIHost(location)
+	}
+	return "https://" + host + "/v1/" + name
+}
+
+// vertexResourceLocation 从 Vertex 资源名中提取 locations/{loc} 段。
+func vertexResourceLocation(name string) string {
+	parts := strings.Split(name, "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "locations" {
+			return strings.TrimSpace(parts[i+1])
+		}
+	}
+	return ""
 }
 
 type VertexGCSObjectStore struct {

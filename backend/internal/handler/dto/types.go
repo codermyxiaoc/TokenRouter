@@ -243,6 +243,8 @@ type AdminGroup struct {
 	Group
 	// ForceOpenAIFast 仅管理端可见，用于控制 OpenAI/Composite 分组的 Fast 策略。
 	ForceOpenAIFast bool `json:"force_openai_fast"`
+	// ForceOpenAIUltrafast 仅管理端可见：支持的模型强制 service_tier=ultrafast，优先于 ForceOpenAIFast。
+	ForceOpenAIUltrafast bool `json:"force_openai_ultrafast"`
 	// FreeOpenAIFast 仅管理端可见，用于控制 OpenAI/Composite 分组的 Fast 计费。
 	FreeOpenAIFast bool `json:"free_openai_fast"`
 	// SchedulerType 仅管理端可见，用于配置分组调度器。
@@ -579,6 +581,9 @@ type UsageLog struct {
 
 	CacheCreation5mTokens int `json:"cache_creation_5m_tokens"`
 	CacheCreation1hTokens int `json:"cache_creation_1h_tokens"`
+	// OpenAI 30m/12h 缓存写入拆分，仅上游上报时非零。
+	CacheCreation30mTokens int `json:"cache_creation_30m_tokens"`
+	CacheCreation12hTokens int `json:"cache_creation_12h_tokens"`
 
 	InputCost             float64                    `json:"input_cost"`
 	OutputCost            float64                    `json:"output_cost"`

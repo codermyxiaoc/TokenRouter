@@ -1337,6 +1337,8 @@ affiliates: {
         title: 'OpenAI Fast',
         force: '强制使用 Fast 优先级',
         hint: '启用后，此 OpenAI 分组的请求会使用 service_tier=priority；全局 Fast/Flex 策略和 API Key 覆盖仍然有效。',
+        forceUltrafast: '强制使用 Ultra Fast',
+        forceUltrafastHint: '仅对支持的模型（GPT-6 Astra、GPT-6.1 Sol、GPT-6.2 Sol/Astra）写入 service_tier=ultrafast，优先于强制 Fast。GPT-6.2 的订阅账号需套餐包含 Ultra Fast（Pro 仅含 Sol，Pro Max 两者都含），不满足时按强制 Fast 或跟随客户端。GPT-6.2 在太平洋时间 2027 年 2 月 28 日及之前按标准价 3 倍计费，之后 6 倍；GPT-6 Astra 与 GPT-6.1 Sol 为 6 倍。其它模型在开启强制 Fast 时使用 priority，否则跟随客户端。',
         free: '免费 Fast',
         freeHint: '请求仍使用 priority 档位，但客户实际费用按同一请求的 Standard 价格计算。'
       },

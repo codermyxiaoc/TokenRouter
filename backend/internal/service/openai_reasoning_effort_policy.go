@@ -99,11 +99,14 @@ func RequestedReasoningEffortFromContext(ctx context.Context) *string {
 	return &effort
 }
 
+// reasoningEffortSeparatorRemover 复用同一个 Replacer，避免每次标准化都重新构造。
+var reasoningEffortSeparatorRemover = strings.NewReplacer("-", "", "_", "", " ", "")
+
 // NormalizeMaxReasoningEffort 校验并标准化分组策略值。
 // 空字符串表示分组不设置上限。
 func NormalizeMaxReasoningEffort(raw string) string {
 	value := strings.ToLower(strings.TrimSpace(raw))
-	value = strings.NewReplacer("-", "", "_", "", " ", "").Replace(value)
+	value = reasoningEffortSeparatorRemover.Replace(value)
 	switch value {
 	case "":
 		return ""
@@ -439,6 +442,67 @@ func withOpenAIReasoningEffortPolicyForModel(ctx context.Context, maxEffort stri
 }
 
 // ApplyOpenAIReasoningEffortPolicyFromContext 执行先前绑定的请求级策略。
+// WithOpenAIReasoningEffortPolicyForMessages 为 Messages 桥绑定推理强度策略：
+// 客户端显式给出 output_config.effort 时与普通请求一致；缺省时桥接器会补默认强度，
+// 此时不施加上限（保持 fork 只约束显式强度的语义），只保留 from=none 的映射，
+// 让显式关闭思考（thinking.type=disabled）转换出的 none 仍按分组映射，且关闭思考时保留上限。
+func WithOpenAIReasoningEffortPolicyForMessages(ctx context.Context, body []byte, maxEffort string, mappings []ReasoningEffortMapping, overLimit, requestModel string) context.Context {
+	effort := gjson.GetBytes(body, "output_config.effort")
+	if effort.Type != gjson.String || strings.TrimSpace(effort.String()) == "" {
+		if gjson.GetBytes(body, "thinking.type").String() != "disabled" {
+			maxEffort = ""
+		}
+		noneMappings := make([]ReasoningEffortMapping, 0, len(mappings))
+		for _, mapping := range mappings {
+			if normalizeReasoningEffortMappingValue(mapping.From) == "none" {
+				noneMappings = append(noneMappings, mapping)
+			}
+		}
+		mappings = noneMappings
+	}
+	return withOpenAIReasoningEffortPolicyForModel(ctx, maxEffort, mappings, overLimit, requestModel)
+}
+
+// applyOpenAIReasoningEffortPolicyForGLMFromContext 对 GLM 上游先做映射与 GLM 档位归一，
+// 再把分组上限换算成 GLM 实际支持的最高合法档位（GLM-5.3 支持 low/high/max，其它只有 high/max），
+// 避免上限落在 GLM 不支持的档位上被上游拒绝；没有合法档位时按拒绝处理。
+func applyOpenAIReasoningEffortPolicyForGLMFromContext(ctx context.Context, body []byte, model string) ([]byte, bool, error) {
+	if ctx == nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "glm-") {
+		return ApplyOpenAIReasoningEffortPolicyFromContext(ctx, body)
+	}
+	policy, ok := ctx.Value(openAIReasoningEffortPolicyContextKey{}).(openAIReasoningEffortPolicy)
+	if !ok {
+		return body, false, nil
+	}
+	mapped, changed, err := applyOpenAIReasoningEffortPolicy(body, "", policy.mappings, policy.overLimit, policy.requestModel)
+	if err != nil {
+		return body, false, err
+	}
+	normalized, normalizationChanged := NormalizeGLMOpenAIReasoningEffort(mapped, model)
+	maxEffort, overLimit := policy.maxEffort, policy.overLimit
+	if maxRank, hasMax := reasoningEffortRank(maxEffort); hasMax {
+		legalCeiling := ""
+		for _, effort := range []string{"low", "high", "max"} {
+			if effort == "low" && !isGLM53Model(model) {
+				continue
+			}
+			if rank, _ := reasoningEffortRank(effort); rank <= maxRank {
+				legalCeiling = effort
+			}
+		}
+		if legalCeiling == "" {
+			overLimit = ReasoningEffortOverLimitDeny
+		} else if NormalizeMaxReasoningEffortOverLimit(overLimit) != ReasoningEffortOverLimitDeny {
+			maxEffort = legalCeiling
+		}
+	}
+	capped, ceilingChanged, err := applyOpenAIReasoningEffortPolicy(normalized, maxEffort, nil, overLimit, policy.requestModel)
+	if err != nil {
+		return body, false, err
+	}
+	return capped, changed || normalizationChanged || ceilingChanged, nil
+}
+
 func ApplyOpenAIReasoningEffortPolicyFromContext(ctx context.Context, body []byte) ([]byte, bool, error) {
 	if ctx == nil {
 		return body, false, nil

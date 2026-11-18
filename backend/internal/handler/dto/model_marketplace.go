@@ -13,33 +13,36 @@ type ModelMarketplaceStats struct {
 }
 
 type ModelMarketplacePricing struct {
-	ReasoningEffortMultipliers    map[string]float64                `json:"reasoning_effort_multipliers,omitempty"`
-	PricingMode                   string                            `json:"pricing_mode"`
-	PriceStatus                   string                            `json:"price_status"`
-	InputPricePerToken            float64                           `json:"input_price_per_token,omitempty"`
-	ImageInputPricePerToken       float64                           `json:"image_input_price_per_token,omitempty"`
-	OutputPricePerToken           float64                           `json:"output_price_per_token,omitempty"`
-	CacheWritePricePerToken       float64                           `json:"cache_write_price_per_token,omitempty"`
-	CacheWrite1hPricePerToken     float64                           `json:"cache_write_1h_price_per_token,omitempty"`
-	CacheReadPricePerToken        float64                           `json:"cache_read_price_per_token,omitempty"`
-	ImageOutputPricePerToken      float64                           `json:"image_output_price_per_token,omitempty"`
-	FastInputPricePerToken        float64                           `json:"fast_input_price_per_token,omitempty"`
-	FastImageInputPricePerToken   float64                           `json:"fast_image_input_price_per_token,omitempty"`
-	FastOutputPricePerToken       float64                           `json:"fast_output_price_per_token,omitempty"`
-	FastCacheWritePricePerToken   float64                           `json:"fast_cache_write_price_per_token,omitempty"`
-	FastCacheWrite1hPricePerToken float64                           `json:"fast_cache_write_1h_price_per_token,omitempty"`
-	FastCacheReadPricePerToken    float64                           `json:"fast_cache_read_price_per_token,omitempty"`
-	FastImageOutputPricePerToken  float64                           `json:"fast_image_output_price_per_token,omitempty"`
-	ContextIntervals              []ModelMarketplacePricingInterval `json:"context_intervals,omitempty"`
-	ImagePrice1K                  float64                           `json:"image_price_1k,omitempty"`
-	ImagePrice2K                  float64                           `json:"image_price_2k,omitempty"`
-	ImagePrice4K                  float64                           `json:"image_price_4k,omitempty"`
-	VideoPrices                   []ModelMarketplaceVideoPrice      `json:"video_prices,omitempty"`
-	VideoImageInputPricing        *service.VideoImageInputPricing   `json:"video_image_input_pricing,omitempty"`
-	VideoFallbackPrice            *float64                          `json:"video_fallback_price,omitempty"`
-	VideoFallbackPricing          *ModelMarketplaceVideoPrice       `json:"video_fallback_pricing,omitempty"`
-	VideoTokenPrepay              *service.VideoTokenPrepayConfig   `json:"video_token_prepay,omitempty"`
-	AudioPrice                    *ModelMarketplaceAudioPrice       `json:"audio_price,omitempty"`
+	ReasoningEffortMultipliers map[string]float64 `json:"reasoning_effort_multipliers,omitempty"`
+	PricingMode                string             `json:"pricing_mode"`
+	PriceStatus                string             `json:"price_status"`
+	InputPricePerToken         float64            `json:"input_price_per_token,omitempty"`
+	ImageInputPricePerToken    float64            `json:"image_input_price_per_token,omitempty"`
+	OutputPricePerToken        float64            `json:"output_price_per_token,omitempty"`
+	CacheWritePricePerToken    float64            `json:"cache_write_price_per_token,omitempty"`
+	CacheWrite1hPricePerToken  float64            `json:"cache_write_1h_price_per_token,omitempty"`
+	// CacheWrite12hPricePerToken 为 OpenAI 12 小时缓存写入单价；缺省表示未单独定价，显式 0 会输出。
+	CacheWrite12hPricePerToken     *float64                          `json:"cache_write_12h_price_per_token,omitempty"`
+	CacheReadPricePerToken         float64                           `json:"cache_read_price_per_token,omitempty"`
+	ImageOutputPricePerToken       float64                           `json:"image_output_price_per_token,omitempty"`
+	FastInputPricePerToken         float64                           `json:"fast_input_price_per_token,omitempty"`
+	FastImageInputPricePerToken    float64                           `json:"fast_image_input_price_per_token,omitempty"`
+	FastOutputPricePerToken        float64                           `json:"fast_output_price_per_token,omitempty"`
+	FastCacheWritePricePerToken    float64                           `json:"fast_cache_write_price_per_token,omitempty"`
+	FastCacheWrite1hPricePerToken  float64                           `json:"fast_cache_write_1h_price_per_token,omitempty"`
+	FastCacheWrite12hPricePerToken *float64                          `json:"fast_cache_write_12h_price_per_token,omitempty"`
+	FastCacheReadPricePerToken     float64                           `json:"fast_cache_read_price_per_token,omitempty"`
+	FastImageOutputPricePerToken   float64                           `json:"fast_image_output_price_per_token,omitempty"`
+	ContextIntervals               []ModelMarketplacePricingInterval `json:"context_intervals,omitempty"`
+	ImagePrice1K                   float64                           `json:"image_price_1k,omitempty"`
+	ImagePrice2K                   float64                           `json:"image_price_2k,omitempty"`
+	ImagePrice4K                   float64                           `json:"image_price_4k,omitempty"`
+	VideoPrices                    []ModelMarketplaceVideoPrice      `json:"video_prices,omitempty"`
+	VideoImageInputPricing         *service.VideoImageInputPricing   `json:"video_image_input_pricing,omitempty"`
+	VideoFallbackPrice             *float64                          `json:"video_fallback_price,omitempty"`
+	VideoFallbackPricing           *ModelMarketplaceVideoPrice       `json:"video_fallback_pricing,omitempty"`
+	VideoTokenPrepay               *service.VideoTokenPrepayConfig   `json:"video_token_prepay,omitempty"`
+	AudioPrice                     *ModelMarketplaceAudioPrice       `json:"audio_price,omitempty"`
 }
 
 // ModelMarketplaceAudioPrice 明确连续计量单位；零价必须输出，不能显示成未知价格。
@@ -62,22 +65,24 @@ type ModelMarketplaceVideoPrice struct {
 
 // ModelMarketplacePricingInterval 是前端模型广场展示用的上下文区间价格。
 type ModelMarketplacePricingInterval struct {
-	MinTokens                     int     `json:"min_tokens"`
-	MaxTokens                     *int    `json:"max_tokens,omitempty"`
-	InputPricePerToken            float64 `json:"input_price_per_token,omitempty"`
-	ImageInputPricePerToken       float64 `json:"image_input_price_per_token,omitempty"`
-	OutputPricePerToken           float64 `json:"output_price_per_token,omitempty"`
-	CacheWritePricePerToken       float64 `json:"cache_write_price_per_token,omitempty"`
-	CacheWrite1hPricePerToken     float64 `json:"cache_write_1h_price_per_token,omitempty"`
-	CacheReadPricePerToken        float64 `json:"cache_read_price_per_token,omitempty"`
-	ImageOutputPricePerToken      float64 `json:"image_output_price_per_token,omitempty"`
-	FastInputPricePerToken        float64 `json:"fast_input_price_per_token,omitempty"`
-	FastImageInputPricePerToken   float64 `json:"fast_image_input_price_per_token,omitempty"`
-	FastOutputPricePerToken       float64 `json:"fast_output_price_per_token,omitempty"`
-	FastCacheWritePricePerToken   float64 `json:"fast_cache_write_price_per_token,omitempty"`
-	FastCacheWrite1hPricePerToken float64 `json:"fast_cache_write_1h_price_per_token,omitempty"`
-	FastCacheReadPricePerToken    float64 `json:"fast_cache_read_price_per_token,omitempty"`
-	FastImageOutputPricePerToken  float64 `json:"fast_image_output_price_per_token,omitempty"`
+	MinTokens                      int      `json:"min_tokens"`
+	MaxTokens                      *int     `json:"max_tokens,omitempty"`
+	InputPricePerToken             float64  `json:"input_price_per_token,omitempty"`
+	ImageInputPricePerToken        float64  `json:"image_input_price_per_token,omitempty"`
+	OutputPricePerToken            float64  `json:"output_price_per_token,omitempty"`
+	CacheWritePricePerToken        float64  `json:"cache_write_price_per_token,omitempty"`
+	CacheWrite1hPricePerToken      float64  `json:"cache_write_1h_price_per_token,omitempty"`
+	CacheWrite12hPricePerToken     *float64 `json:"cache_write_12h_price_per_token,omitempty"`
+	CacheReadPricePerToken         float64  `json:"cache_read_price_per_token,omitempty"`
+	ImageOutputPricePerToken       float64  `json:"image_output_price_per_token,omitempty"`
+	FastInputPricePerToken         float64  `json:"fast_input_price_per_token,omitempty"`
+	FastImageInputPricePerToken    float64  `json:"fast_image_input_price_per_token,omitempty"`
+	FastOutputPricePerToken        float64  `json:"fast_output_price_per_token,omitempty"`
+	FastCacheWritePricePerToken    float64  `json:"fast_cache_write_price_per_token,omitempty"`
+	FastCacheWrite1hPricePerToken  float64  `json:"fast_cache_write_1h_price_per_token,omitempty"`
+	FastCacheWrite12hPricePerToken *float64 `json:"fast_cache_write_12h_price_per_token,omitempty"`
+	FastCacheReadPricePerToken     float64  `json:"fast_cache_read_price_per_token,omitempty"`
+	FastImageOutputPricePerToken   float64  `json:"fast_image_output_price_per_token,omitempty"`
 }
 
 type ModelMarketplaceModel struct {
@@ -251,53 +256,57 @@ func modelMarketplacePricingFromService(pricing service.ModelDisplayPricing) Mod
 	intervals := make([]ModelMarketplacePricingInterval, 0, len(pricing.ContextIntervals))
 	for _, interval := range pricing.ContextIntervals {
 		intervals = append(intervals, ModelMarketplacePricingInterval{
-			MinTokens:                     interval.MinTokens,
-			MaxTokens:                     interval.MaxTokens,
-			InputPricePerToken:            interval.InputPricePerToken,
-			ImageInputPricePerToken:       interval.ImageInputPricePerToken,
-			OutputPricePerToken:           interval.OutputPricePerToken,
-			CacheWritePricePerToken:       interval.CacheWritePricePerToken,
-			CacheWrite1hPricePerToken:     interval.CacheWrite1hPricePerToken,
-			CacheReadPricePerToken:        interval.CacheReadPricePerToken,
-			ImageOutputPricePerToken:      interval.ImageOutputPricePerToken,
-			FastInputPricePerToken:        interval.FastInputPricePerToken,
-			FastImageInputPricePerToken:   interval.FastImageInputPricePerToken,
-			FastOutputPricePerToken:       interval.FastOutputPricePerToken,
-			FastCacheWritePricePerToken:   interval.FastCacheWritePricePerToken,
-			FastCacheWrite1hPricePerToken: interval.FastCacheWrite1hPricePerToken,
-			FastCacheReadPricePerToken:    interval.FastCacheReadPricePerToken,
-			FastImageOutputPricePerToken:  interval.FastImageOutputPricePerToken,
+			MinTokens:                      interval.MinTokens,
+			MaxTokens:                      interval.MaxTokens,
+			InputPricePerToken:             interval.InputPricePerToken,
+			ImageInputPricePerToken:        interval.ImageInputPricePerToken,
+			OutputPricePerToken:            interval.OutputPricePerToken,
+			CacheWritePricePerToken:        interval.CacheWritePricePerToken,
+			CacheWrite1hPricePerToken:      interval.CacheWrite1hPricePerToken,
+			CacheWrite12hPricePerToken:     interval.CacheWrite12hPricePerToken,
+			CacheReadPricePerToken:         interval.CacheReadPricePerToken,
+			ImageOutputPricePerToken:       interval.ImageOutputPricePerToken,
+			FastInputPricePerToken:         interval.FastInputPricePerToken,
+			FastImageInputPricePerToken:    interval.FastImageInputPricePerToken,
+			FastOutputPricePerToken:        interval.FastOutputPricePerToken,
+			FastCacheWritePricePerToken:    interval.FastCacheWritePricePerToken,
+			FastCacheWrite1hPricePerToken:  interval.FastCacheWrite1hPricePerToken,
+			FastCacheWrite12hPricePerToken: interval.FastCacheWrite12hPricePerToken,
+			FastCacheReadPricePerToken:     interval.FastCacheReadPricePerToken,
+			FastImageOutputPricePerToken:   interval.FastImageOutputPricePerToken,
 		})
 	}
 
 	return ModelMarketplacePricing{
-		ReasoningEffortMultipliers:    pricing.ReasoningEffortMultipliers,
-		PricingMode:                   pricing.PricingMode,
-		PriceStatus:                   pricing.PriceStatus,
-		InputPricePerToken:            pricing.InputPricePerToken,
-		ImageInputPricePerToken:       pricing.ImageInputPricePerToken,
-		OutputPricePerToken:           pricing.OutputPricePerToken,
-		CacheWritePricePerToken:       pricing.CacheWritePricePerToken,
-		CacheWrite1hPricePerToken:     pricing.CacheWrite1hPricePerToken,
-		CacheReadPricePerToken:        pricing.CacheReadPricePerToken,
-		ImageOutputPricePerToken:      pricing.ImageOutputPricePerToken,
-		FastInputPricePerToken:        pricing.FastInputPricePerToken,
-		FastImageInputPricePerToken:   pricing.FastImageInputPricePerToken,
-		FastOutputPricePerToken:       pricing.FastOutputPricePerToken,
-		FastCacheWritePricePerToken:   pricing.FastCacheWritePricePerToken,
-		FastCacheWrite1hPricePerToken: pricing.FastCacheWrite1hPricePerToken,
-		FastCacheReadPricePerToken:    pricing.FastCacheReadPricePerToken,
-		FastImageOutputPricePerToken:  pricing.FastImageOutputPricePerToken,
-		ContextIntervals:              intervals,
-		ImagePrice1K:                  pricing.ImagePrice1K,
-		ImagePrice2K:                  pricing.ImagePrice2K,
-		ImagePrice4K:                  pricing.ImagePrice4K,
-		VideoPrices:                   videoPrices,
-		VideoImageInputPricing:        pricing.VideoImageInputPricing.Clone(),
-		VideoFallbackPrice:            (service.ChannelModelPricing{VideoFallbackPrice: pricing.VideoFallbackPrice}).Clone().VideoFallbackPrice,
-		VideoFallbackPricing:          videoFallbackPricing,
-		VideoTokenPrepay:              pricing.VideoTokenPrepay.Clone(),
-		AudioPrice:                    audioPrice,
+		ReasoningEffortMultipliers:     pricing.ReasoningEffortMultipliers,
+		PricingMode:                    pricing.PricingMode,
+		PriceStatus:                    pricing.PriceStatus,
+		InputPricePerToken:             pricing.InputPricePerToken,
+		ImageInputPricePerToken:        pricing.ImageInputPricePerToken,
+		OutputPricePerToken:            pricing.OutputPricePerToken,
+		CacheWritePricePerToken:        pricing.CacheWritePricePerToken,
+		CacheWrite1hPricePerToken:      pricing.CacheWrite1hPricePerToken,
+		CacheWrite12hPricePerToken:     pricing.CacheWrite12hPricePerToken,
+		CacheReadPricePerToken:         pricing.CacheReadPricePerToken,
+		ImageOutputPricePerToken:       pricing.ImageOutputPricePerToken,
+		FastInputPricePerToken:         pricing.FastInputPricePerToken,
+		FastImageInputPricePerToken:    pricing.FastImageInputPricePerToken,
+		FastOutputPricePerToken:        pricing.FastOutputPricePerToken,
+		FastCacheWritePricePerToken:    pricing.FastCacheWritePricePerToken,
+		FastCacheWrite1hPricePerToken:  pricing.FastCacheWrite1hPricePerToken,
+		FastCacheWrite12hPricePerToken: pricing.FastCacheWrite12hPricePerToken,
+		FastCacheReadPricePerToken:     pricing.FastCacheReadPricePerToken,
+		FastImageOutputPricePerToken:   pricing.FastImageOutputPricePerToken,
+		ContextIntervals:               intervals,
+		ImagePrice1K:                   pricing.ImagePrice1K,
+		ImagePrice2K:                   pricing.ImagePrice2K,
+		ImagePrice4K:                   pricing.ImagePrice4K,
+		VideoPrices:                    videoPrices,
+		VideoImageInputPricing:         pricing.VideoImageInputPricing.Clone(),
+		VideoFallbackPrice:             (service.ChannelModelPricing{VideoFallbackPrice: pricing.VideoFallbackPrice}).Clone().VideoFallbackPrice,
+		VideoFallbackPricing:           videoFallbackPricing,
+		VideoTokenPrepay:               pricing.VideoTokenPrepay.Clone(),
+		AudioPrice:                     audioPrice,
 	}
 }
 

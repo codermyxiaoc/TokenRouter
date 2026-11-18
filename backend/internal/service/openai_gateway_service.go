@@ -240,8 +240,16 @@ type OpenAIUsage struct {
 	ImageCacheReadTokens     int `json:"image_cache_read_tokens,omitempty"`
 	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
-	ImageOutputTokens        int `json:"image_output_tokens,omitempty"`
+	// CacheCreation30m/12hInputTokens 是上游上报的 30 分钟 / 12 小时缓存写入拆分，二者之和等于总写入；
+	// 缺失或不一致时均为 0，按总写入原价计费。
+	CacheCreation5mTokens       int `json:"cache_creation_5m_tokens,omitempty"`
+	CacheCreation1hTokens       int `json:"cache_creation_1h_tokens,omitempty"`
+	CacheCreation30mInputTokens int `json:"cache_creation_30m_input_tokens,omitempty"`
+	CacheCreation12hInputTokens int `json:"cache_creation_12h_input_tokens,omitempty"`
+	CacheReadInputTokens        int `json:"cache_read_input_tokens,omitempty"`
+	ImageOutputTokens           int `json:"image_output_tokens,omitempty"`
+
+	cacheCreationInputTokensPresent bool
 }
 
 // OpenAIForwardResult represents the result of forwarding
@@ -1643,6 +1651,15 @@ func validateOpenAIReasoningEffort(body []byte, requestedModel string, mappedMod
 			for _, effort := range append(efforts, suffixEffort) {
 				if value := strings.ToLower(strings.TrimSpace(effort)); value == "none" || value == "minimal" {
 					return fmt.Errorf("gpt-6.1-sol does not support reasoning effort %q; use low, medium, high, xhigh or max", value)
+				}
+			}
+		}
+		// GPT-6.2 Sol/Astra 同样只接受 low 到 max。
+		if base := openAIGPT62ModelID(model); base != "" {
+			_, suffixEffort, _ := splitOpenAICompatReasoningModel(model)
+			for _, effort := range append(efforts, suffixEffort) {
+				if value := strings.ToLower(strings.TrimSpace(effort)); value == "none" || value == "minimal" {
+					return fmt.Errorf("%s does not support reasoning effort %q; use low, medium, high, xhigh or max", base, value)
 				}
 			}
 		}

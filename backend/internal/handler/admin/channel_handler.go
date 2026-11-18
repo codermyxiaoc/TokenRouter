@@ -59,30 +59,34 @@ type updateChannelRequest struct {
 }
 
 type channelModelPricingRequest struct {
-	Platform                     string                          `json:"platform" binding:"omitempty,max=50"`
-	Models                       []string                        `json:"models" binding:"required,min=1,max=100"`
-	BillingMode                  string                          `json:"billing_mode" binding:"omitempty,oneof=token per_request image video video_token video_per_request"`
-	PriceMultiplier              *float64                        `json:"price_multiplier" binding:"omitempty,min=0"`
-	FastModeMultiplier           *float64                        `json:"fast_mode_multiplier" binding:"omitempty,min=0"`
-	FastMultiplier               *float64                        `json:"fast_multiplier" binding:"omitempty,gt=0"`
-	FlexMultiplier               *float64                        `json:"flex_multiplier" binding:"omitempty,gt=0"`
-	MaxReasoningEffortMultiplier *float64                        `json:"max_reasoning_effort_multiplier" binding:"omitempty,gt=0"`
-	ReasoningEffortMultipliers   map[string]float64              `json:"reasoning_effort_multipliers"`
-	InputPrice                   *float64                        `json:"input_price" binding:"omitempty,min=0"`
-	OutputPrice                  *float64                        `json:"output_price" binding:"omitempty,min=0"`
-	CacheWritePrice              *float64                        `json:"cache_write_price" binding:"omitempty,min=0"`
-	CacheWrite1hPrice            *float64                        `json:"cache_write_1h_price" binding:"omitempty,min=0"`
-	CacheReadPrice               *float64                        `json:"cache_read_price" binding:"omitempty,min=0"`
-	ImageInputPrice              *float64                        `json:"image_input_price" binding:"omitempty,min=0"`
-	ImageOutputPrice             *float64                        `json:"image_output_price" binding:"omitempty,min=0"`
-	PerRequestPrice              *float64                        `json:"per_request_price" binding:"omitempty,min=0"`
-	Intervals                    []pricingIntervalRequest        `json:"intervals"`
-	TimePricing                  *channelTimePricingRequest      `json:"time_pricing"`
-	VideoPrices                  []service.VideoPriceTier        `json:"video_prices"`
-	VideoFallbackPrice           *float64                        `json:"video_fallback_price,omitempty"`
-	VideoTokenPrepay             *service.VideoTokenPrepayConfig `json:"video_token_prepay,omitempty"`
-	VideoImageInputPricing       *service.VideoImageInputPricing `json:"video_image_input_pricing,omitempty"`
-	ModelDetails                 map[string]service.ModelDetails `json:"model_details,omitempty"`
+	Platform           string   `json:"platform" binding:"omitempty,max=50"`
+	Models             []string `json:"models" binding:"required,min=1,max=100"`
+	BillingMode        string   `json:"billing_mode" binding:"omitempty,oneof=token per_request image video video_token video_per_request"`
+	PriceMultiplier    *float64 `json:"price_multiplier" binding:"omitempty,min=0"`
+	FastModeMultiplier *float64 `json:"fast_mode_multiplier" binding:"omitempty,min=0"`
+	FastMultiplier     *float64 `json:"fast_multiplier" binding:"omitempty,gt=0"`
+	FlexMultiplier     *float64 `json:"flex_multiplier" binding:"omitempty,gt=0"`
+	// UltrafastMultiplier 为渠道级 Ultra Fast 倍率，未配置时沿用模型默认倍率。
+	UltrafastMultiplier          *float64           `json:"ultrafast_multiplier" binding:"omitempty,gt=0"`
+	MaxReasoningEffortMultiplier *float64           `json:"max_reasoning_effort_multiplier" binding:"omitempty,gt=0"`
+	ReasoningEffortMultipliers   map[string]float64 `json:"reasoning_effort_multipliers"`
+	InputPrice                   *float64           `json:"input_price" binding:"omitempty,min=0"`
+	OutputPrice                  *float64           `json:"output_price" binding:"omitempty,min=0"`
+	CacheWritePrice              *float64           `json:"cache_write_price" binding:"omitempty,min=0"`
+	CacheWrite1hPrice            *float64           `json:"cache_write_1h_price" binding:"omitempty,min=0"`
+	// CacheWrite12hPrice 是 OpenAI 12 小时缓存写入单价；为空时沿用 cache_write_price。
+	CacheWrite12hPrice     *float64                        `json:"cache_write_12h_price" binding:"omitempty,min=0"`
+	CacheReadPrice         *float64                        `json:"cache_read_price" binding:"omitempty,min=0"`
+	ImageInputPrice        *float64                        `json:"image_input_price" binding:"omitempty,min=0"`
+	ImageOutputPrice       *float64                        `json:"image_output_price" binding:"omitempty,min=0"`
+	PerRequestPrice        *float64                        `json:"per_request_price" binding:"omitempty,min=0"`
+	Intervals              []pricingIntervalRequest        `json:"intervals"`
+	TimePricing            *channelTimePricingRequest      `json:"time_pricing"`
+	VideoPrices            []service.VideoPriceTier        `json:"video_prices"`
+	VideoFallbackPrice     *float64                        `json:"video_fallback_price,omitempty"`
+	VideoTokenPrepay       *service.VideoTokenPrepayConfig `json:"video_token_prepay,omitempty"`
+	VideoImageInputPricing *service.VideoImageInputPricing `json:"video_image_input_pricing,omitempty"`
+	ModelDetails           map[string]service.ModelDetails `json:"model_details,omitempty"`
 }
 
 // channelTimePricingRequest 是管理端提交的每日分时倍率配置。
@@ -106,6 +110,7 @@ type pricingIntervalRequest struct {
 	OutputPrice          *float64 `json:"output_price"`
 	CacheWritePrice      *float64 `json:"cache_write_price"`
 	CacheWrite1hPrice    *float64 `json:"cache_write_1h_price"`
+	CacheWrite12hPrice   *float64 `json:"cache_write_12h_price"`
 	CacheReadPrice       *float64 `json:"cache_read_price"`
 	InputMultiplier      *float64 `json:"input_multiplier" binding:"omitempty,gt=0"`
 	OutputMultiplier     *float64 `json:"output_multiplier" binding:"omitempty,gt=0"`
@@ -149,12 +154,14 @@ type channelModelPricingResponse struct {
 	FastModeMultiplier           *float64                        `json:"fast_mode_multiplier"`
 	FastMultiplier               *float64                        `json:"fast_multiplier"`
 	FlexMultiplier               *float64                        `json:"flex_multiplier"`
+	UltrafastMultiplier          *float64                        `json:"ultrafast_multiplier"`
 	MaxReasoningEffortMultiplier *float64                        `json:"max_reasoning_effort_multiplier"`
 	ReasoningEffortMultipliers   map[string]float64              `json:"reasoning_effort_multipliers,omitempty"`
 	InputPrice                   *float64                        `json:"input_price"`
 	OutputPrice                  *float64                        `json:"output_price"`
 	CacheWritePrice              *float64                        `json:"cache_write_price"`
 	CacheWrite1hPrice            *float64                        `json:"cache_write_1h_price"`
+	CacheWrite12hPrice           *float64                        `json:"cache_write_12h_price"`
 	CacheReadPrice               *float64                        `json:"cache_read_price"`
 	ImageInputPrice              *float64                        `json:"image_input_price"`
 	ImageOutputPrice             *float64                        `json:"image_output_price"`
@@ -189,6 +196,7 @@ type pricingIntervalResponse struct {
 	OutputPrice          *float64 `json:"output_price"`
 	CacheWritePrice      *float64 `json:"cache_write_price"`
 	CacheWrite1hPrice    *float64 `json:"cache_write_1h_price"`
+	CacheWrite12hPrice   *float64 `json:"cache_write_12h_price"`
 	CacheReadPrice       *float64 `json:"cache_read_price"`
 	InputMultiplier      *float64 `json:"input_multiplier"`
 	OutputMultiplier     *float64 `json:"output_multiplier"`
@@ -298,12 +306,14 @@ func pricingToResponse(p *service.ChannelModelPricing) channelModelPricingRespon
 		FastModeMultiplier:           p.FastModeMultiplier,
 		FastMultiplier:               firstNonNilFloat(p.FastMultiplier, p.FastModeMultiplier),
 		FlexMultiplier:               p.FlexMultiplier,
+		UltrafastMultiplier:          p.UltrafastMultiplier,
 		MaxReasoningEffortMultiplier: p.MaxReasoningEffortMultiplier,
 		ReasoningEffortMultipliers:   maps.Clone(p.ReasoningEffortMultipliers),
 		InputPrice:                   p.InputPrice,
 		OutputPrice:                  p.OutputPrice,
 		CacheWritePrice:              p.CacheWritePrice,
 		CacheWrite1hPrice:            p.CacheWrite1hPrice,
+		CacheWrite12hPrice:           p.CacheWrite12hPrice,
 		CacheReadPrice:               p.CacheReadPrice,
 		ImageInputPrice:              p.ImageInputPrice,
 		ImageOutputPrice:             p.ImageOutputPrice,
@@ -347,6 +357,7 @@ func intervalToResponse(iv service.PricingInterval) pricingIntervalResponse {
 		OutputPrice:          iv.OutputPrice,
 		CacheWritePrice:      iv.CacheWritePrice,
 		CacheWrite1hPrice:    iv.CacheWrite1hPrice,
+		CacheWrite12hPrice:   iv.CacheWrite12hPrice,
 		CacheReadPrice:       iv.CacheReadPrice,
 		InputMultiplier:      iv.InputMultiplier,
 		OutputMultiplier:     iv.OutputMultiplier,
@@ -375,6 +386,7 @@ func pricingRequestToService(reqs []channelModelPricingRequest) []service.Channe
 				OutputPrice:          iv.OutputPrice,
 				CacheWritePrice:      iv.CacheWritePrice,
 				CacheWrite1hPrice:    iv.CacheWrite1hPrice,
+				CacheWrite12hPrice:   iv.CacheWrite12hPrice,
 				CacheReadPrice:       iv.CacheReadPrice,
 				InputMultiplier:      iv.InputMultiplier,
 				OutputMultiplier:     iv.OutputMultiplier,
@@ -392,12 +404,14 @@ func pricingRequestToService(reqs []channelModelPricingRequest) []service.Channe
 			FastModeMultiplier:           r.FastModeMultiplier,
 			FastMultiplier:               firstNonNilFloat(r.FastMultiplier, r.FastModeMultiplier),
 			FlexMultiplier:               r.FlexMultiplier,
+			UltrafastMultiplier:          r.UltrafastMultiplier,
 			MaxReasoningEffortMultiplier: r.MaxReasoningEffortMultiplier,
 			ReasoningEffortMultipliers:   maps.Clone(r.ReasoningEffortMultipliers),
 			InputPrice:                   r.InputPrice,
 			OutputPrice:                  r.OutputPrice,
 			CacheWritePrice:              r.CacheWritePrice,
 			CacheWrite1hPrice:            r.CacheWrite1hPrice,
+			CacheWrite12hPrice:           r.CacheWrite12hPrice,
 			CacheReadPrice:               r.CacheReadPrice,
 			ImageInputPrice:              r.ImageInputPrice,
 			ImageOutputPrice:             r.ImageOutputPrice,
@@ -657,11 +671,13 @@ func (h *ChannelHandler) GetModelDefaultPricing(c *gin.Context) {
 		cacheWrite1hPrice = &pricing.CacheCreation1hPrice
 	}
 	response.Success(c, gin.H{
-		"found":                           true,
-		"input_price":                     pricing.InputPricePerToken,
-		"output_price":                    pricing.OutputPricePerToken,
-		"cache_write_price":               cacheWritePrice,
-		"cache_write_1h_price":            cacheWrite1hPrice,
+		"found":                true,
+		"input_price":          pricing.InputPricePerToken,
+		"output_price":         pricing.OutputPricePerToken,
+		"cache_write_price":    cacheWritePrice,
+		"cache_write_1h_price": cacheWrite1hPrice,
+		// OpenAI 12h 缓存写入默认价，供渠道表单回填。
+		"cache_write_12h_price":           pricing.CacheCreation12hPricePerToken,
 		"cache_read_price":                pricing.CacheReadPricePerToken,
 		"max_reasoning_effort_multiplier": pricing.MaxReasoningEffortMultiplier,
 		"reasoning_effort_multipliers":    pricing.ReasoningEffortMultipliers,

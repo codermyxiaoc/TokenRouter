@@ -1,5 +1,5 @@
 <template>
-  <div ref="rootRef" v-if="showUsageWindows">
+  <div ref="rootRef" v-if="showUsageWindows" :aria-busy="loading || activeQueryLoading">
     <!-- Anthropic OAuth and Setup Token accounts: fetch real usage data -->
     <template
       v-if="
@@ -7,8 +7,8 @@
         (account.type === 'oauth' || account.type === 'setup-token')
       "
     >
-      <!-- Loading state -->
-      <div v-if="loading" class="space-y-1.5">
+      <!-- Loading state：刷新时保留已有数据，只在首次加载时显示骨架 -->
+      <div v-if="loading && !usageInfo" class="space-y-1.5">
         <!-- OAuth: 3 rows, Setup Token: 1 row -->
         <div class="flex items-center gap-1">
           <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
@@ -88,13 +88,13 @@
           <button
             type="button"
             class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors"
-            :disabled="activeQueryLoading"
+            :disabled="activeQueryLoading || loading"
             @click="loadActiveUsage"
           >
             <Icon
               name="refresh"
               size="xs"
-              :class="{ 'animate-spin': activeQueryLoading }"
+              :class="{ 'animate-spin': activeQueryLoading || loading }"
               :stroke-width="2"
             />
             {{ t('admin.accounts.usageWindow.activeQuery') }}
@@ -114,11 +114,22 @@
 
     <!-- OpenAI OAuth 账号统一使用 /usage API 数据源 -->
     <template v-else-if="account.platform === 'openai' && account.type === 'oauth'">
+      <!-- 刷新失败时明确提示：有历史观测则说明数值未确认，否则说明额度未知 -->
+      <div
+        v-if="error || usageInfo?.error || usageInfo?.error_code"
+        role="alert"
+        class="mb-1 text-[10px] text-amber-700 dark:text-amber-300"
+      >
+        {{ t(hasOpenAIQuotaObservation
+          ? 'admin.accounts.usageWindow.quotaRefreshFailedCached'
+          : 'admin.accounts.usageWindow.quotaRefreshFailedUnknown') }}
+      </div>
       <div v-if="hasOpenAIUsageFallback" class="space-y-1">
         <UsageProgressBar
           v-if="usageInfo?.five_hour"
           label="5h"
           :utilization="usageInfo.five_hour.utilization"
+          :utilization-unknown="usageInfo.five_hour.utilization_unknown"
           :resets-at="usageInfo.five_hour.resets_at"
           :window-stats="usageInfo.five_hour.window_stats"
           :show-now-when-idle="true"
@@ -128,11 +139,20 @@
           v-if="usageInfo?.seven_day"
           label="7d"
           :utilization="usageInfo.seven_day.utilization"
+          :utilization-unknown="usageInfo.seven_day.utilization_unknown"
           :resets-at="usageInfo.seven_day.resets_at"
           :window-stats="usageInfo.seven_day.window_stats"
           :show-now-when-idle="true"
           color="emerald"
         />
+        <!-- 采样时间取上游观测时间，旧快照没有时间戳时显示未知 -->
+        <div v-if="hasOpenAIQuotaObservation" class="text-[10px] text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.usageWindow.quotaObservedAt') }}
+          <time v-if="usageInfo?.updated_at" :datetime="usageInfo.updated_at">
+            {{ formatDateTime(usageInfo.updated_at) }}
+          </time>
+          <span v-else>{{ t('admin.accounts.usageWindow.quotaObservationUnknown') }}</span>
+        </div>
       </div>
       <div v-else-if="loading" class="space-y-1.5">
         <div class="flex items-center gap-1">
@@ -155,10 +175,10 @@
           <button
             type="button"
             class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30"
-            :disabled="activeQueryLoading"
+            :disabled="activeQueryLoading || loading"
             @click="loadActiveUsage"
           >
-            <Icon name="refresh" size="xs" :class="{ 'animate-spin': activeQueryLoading }" :stroke-width="2" />
+            <Icon name="refresh" size="xs" :class="{ 'animate-spin': activeQueryLoading || loading }" :stroke-width="2" />
             {{ t('admin.accounts.usageWindow.activeQuery') }}
           </button>
         </template>
@@ -312,6 +332,37 @@
         💳 {{ t('admin.accounts.aiCreditsBalance') }}: {{ aiCreditsDisplay }}
       </div>
       <div v-else class="text-xs text-gray-400">-</div>
+
+      <!--
+        Query the upstream now, bypassing the server's usage cache (force=true), like the Claude
+        and OpenAI cells: an account upgraded or reset upstream otherwise shows old figures for
+        the cache TTL. Shown in every state, including errors, where a retry matters most.
+      -->
+      <div v-if="!loading" class="mt-1">
+        <button
+          type="button"
+          class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="antigravity-active-query"
+          :disabled="activeQueryLoading || loading"
+          @click="loadActiveUsage"
+        >
+          <svg
+            class="h-2.5 w-2.5"
+            :class="{ 'animate-spin': activeQueryLoading || loading }"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+            />
+          </svg>
+          {{ t('admin.accounts.usageWindow.activeQuery') }}
+        </button>
+      </div>
     </template>
 
     <!-- Grok OAuth 账号：被动 xAI 额度 header + 本地 Sub2API 用量 -->
@@ -451,13 +502,13 @@
         <button
           type="button"
           class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors"
-          :disabled="activeQueryLoading"
+          :disabled="activeQueryLoading || loading"
           @click="loadActiveUsage"
         >
           <Icon
             name="refresh"
             size="xs"
-            :class="{ 'animate-spin': activeQueryLoading }"
+            :class="{ 'animate-spin': activeQueryLoading || loading }"
             :stroke-width="2"
           />
           {{ t('admin.accounts.usageWindow.activeQuery') }}
@@ -470,13 +521,13 @@
         <button
           type="button"
           class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors"
-          :disabled="activeQueryLoading"
+          :disabled="activeQueryLoading || loading"
           @click="loadActiveUsage"
         >
           <Icon
             name="refresh"
             size="xs"
-            :class="{ 'animate-spin': activeQueryLoading }"
+            :class="{ 'animate-spin': activeQueryLoading || loading }"
             :stroke-width="2"
           />
           {{ t('admin.accounts.usageWindow.activeQuery') }}
@@ -596,7 +647,7 @@
             color="purple"
           />
         </template>
-        <div v-if="loading" class="space-y-1">
+        <div v-if="loading && !usageInfo" class="space-y-1">
           <div class="flex items-center gap-1">
             <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
             <div class="h-1.5 w-8 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
@@ -755,7 +806,7 @@ import type {
 } from '@/types'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
-import { formatCompactNumber } from '@/utils/format'
+import { formatCompactNumber, formatDateTime } from '@/utils/format'
 import { isOfficialGeminiBaseUrl } from '@/utils/geminiExplicitCache'
 import { TABLE_DESKTOP_MEDIA_QUERY } from '@/constants/layout'
 import Icon from '@/components/icons/Icon.vue'
@@ -905,6 +956,12 @@ const geminiUsageAvailable = computed(() => {
 const hasOpenAIUsageFallback = computed(() => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
+})
+
+// 至少一个窗口带有真实的上游使用率（不是仅本地统计）才算有配额观测。
+const hasOpenAIQuotaObservation = computed(() => {
+  const windows = [usageInfo.value?.five_hour, usageInfo.value?.seven_day]
+  return windows.some(window => window && !window.utilization_unknown)
 })
 
 const openAIQuotaAutoPaused = computed(() => {
@@ -1655,6 +1712,9 @@ const loadActiveUsage = async () => {
     usageInfo.value = result
     _usageCache.set(accountID, { data: result, ts: Date.now() })
   } catch (e: any) {
+    if (unmounted.value || generation !== usageRequestGeneration) return
+    // 主动查询失败需要可见提示，而不是继续展示旧数据当作最新结果。
+    error.value = t('common.error')
     console.error('Failed to load active usage:', e)
   } finally {
     if (!unmounted.value && generation === usageRequestGeneration) {

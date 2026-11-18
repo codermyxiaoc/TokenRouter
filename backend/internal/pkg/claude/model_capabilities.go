@@ -20,7 +20,7 @@ func IsHaiku55Model(model string) bool {
 
 // IsClaude55SignedThinkingModel 标识缺省开启思考、需要回传签名历史的型号。
 func IsClaude55SignedThinkingModel(model string) bool {
-	return IsOpus55Model(model) || IsSonnet55Model(model) || IsHaiku55Model(model)
+	return IsOpus55Model(model) || IsSonnet55Model(model) || IsHaiku55Model(model) || IsClaude52Model(model)
 }
 
 func isClaude55Model(model, family string) bool {

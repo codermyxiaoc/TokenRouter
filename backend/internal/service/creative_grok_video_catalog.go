@@ -119,7 +119,7 @@ func (s *CreativePublicService) creativeGrokVideoCandidatesForGroup(ctx context.
 		video, mixed := false, false
 		for i := range eligible {
 			account := &eligible[i]
-			if _, ok := s.TextCatalog.resolveRequestableModel(ctx, &group.ID, channel, []Account{*account}, model.ID); !ok {
+			if _, ok := s.TextCatalog.resolveRequestableModel(ctx, &group.ID, channel, []Account{*account}, model.ID, nil); !ok {
 				continue
 			}
 			for _, final := range s.TextCatalog.resolveAccountUpstreamModelsForListing(ctx, account, routed) {

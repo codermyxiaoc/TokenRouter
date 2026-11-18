@@ -43,6 +43,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 	tlsRouterMatch ...TLSFingerprintRouterMatchResult,
 ) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
+	SetActualOpenAIUpstreamEndpoint(c, "/v1/messages")
 
 	// 1. 把 Codex 客户端工具降级为 Anthropic 可识别的函数工具。
 	adaptedBody, clientToolMapping, err := adaptResponsesClientToolsForAnthropic(body)
@@ -166,6 +167,8 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 	startTime time.Time,
 	clientToolMapping apicompat.ResponsesClientToolMapping,
 ) (*OpenAIForwardResult, error) {
+	// 观测上游 Anthropic usage.speed，供计费按实际档位只降档。
+	observer := beginUpstreamResponseModelObservation(c)
 	requestID := resp.Header.Get("x-request-id")
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -232,6 +235,7 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
 		}
+		observer.ObserveAnthropic([]byte(payload))
 
 		if event.Type == "message_start" && event.Message != nil {
 			finalResp = event.Message
@@ -268,14 +272,7 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 		return nil, fmt.Errorf("upstream stream ended without response")
 	}
 
-	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
-		finalResp.Usage = apicompat.AnthropicUsage{
-			InputTokens:              usage.InputTokens,
-			OutputTokens:             usage.OutputTokens,
-			CacheCreationInputTokens: usage.CacheCreationInputTokens,
-			CacheReadInputTokens:     usage.CacheReadInputTokens,
-		}
-	}
+	normalizeAnthropicEventUsageForResponses(&apicompat.AnthropicStreamEvent{Message: finalResp}, usage)
 
 	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
 	responsesResp.Model = originalModel
@@ -297,16 +294,17 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 	}
 
 	return &OpenAIForwardResult{
-		RequestID:        requestID,
-		UpstreamHeaders:  resp.Header,
-		Usage:            claudeUsageToOpenAIUsage(&usage),
-		Model:            originalModel,
-		BillingModel:     billingModel,
-		UpstreamModel:    upstreamModel,
-		UpstreamEndpoint: "/v1/messages",
-		ReasoningEffort:  reasoningEffort,
-		Stream:           false,
-		Duration:         time.Since(startTime),
+		RequestID:                   requestID,
+		UpstreamHeaders:             resp.Header,
+		Usage:                       claudeUsageToOpenAIUsage(&usage),
+		Model:                       originalModel,
+		BillingModel:                billingModel,
+		UpstreamModel:               upstreamModel,
+		UpstreamResponseServiceTier: observer.ServiceTier(),
+		UpstreamEndpoint:            "/v1/messages",
+		ReasoningEffort:             reasoningEffort,
+		Stream:                      false,
+		Duration:                    time.Since(startTime),
 	}, nil
 }
 
@@ -322,6 +320,8 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 	startTime time.Time,
 	clientToolMapping apicompat.ResponsesClientToolMapping,
 ) (*OpenAIForwardResult, error) {
+	// 观测上游 Anthropic usage.speed，供计费按实际档位只降档。
+	observer := beginUpstreamResponseModelObservation(c)
 	requestID := resp.Header.Get("x-request-id")
 
 	if s.responseHeaderFilter != nil {
@@ -351,18 +351,19 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 
 	resultWithUsage := func() *OpenAIForwardResult {
 		return &OpenAIForwardResult{
-			RequestID:        requestID,
-			UpstreamHeaders:  resp.Header,
-			Usage:            claudeUsageToOpenAIUsage(&usage),
-			Model:            originalModel,
-			BillingModel:     billingModel,
-			UpstreamModel:    upstreamModel,
-			UpstreamEndpoint: "/v1/messages",
-			ReasoningEffort:  reasoningEffort,
-			Stream:           true,
-			Duration:         time.Since(startTime),
-			FirstTokenMs:     firstTokenMs,
-			ClientDisconnect: clientDisconnected,
+			RequestID:                   requestID,
+			UpstreamHeaders:             resp.Header,
+			Usage:                       claudeUsageToOpenAIUsage(&usage),
+			Model:                       originalModel,
+			BillingModel:                billingModel,
+			UpstreamModel:               upstreamModel,
+			UpstreamResponseServiceTier: observer.ServiceTier(),
+			UpstreamEndpoint:            "/v1/messages",
+			ReasoningEffort:             reasoningEffort,
+			Stream:                      true,
+			Duration:                    time.Since(startTime),
+			FirstTokenMs:                firstTokenMs,
+			ClientDisconnect:            clientDisconnected,
 		}
 	}
 
@@ -467,6 +468,7 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
 		}
+		observer.ObserveAnthropic([]byte(payload))
 
 		processAnthropicEvent(&event)
 	}

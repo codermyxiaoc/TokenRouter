@@ -740,10 +740,10 @@ func TestModelMarketplacePrefetchSortsByGlobalAccountPriority(t *testing.T) {
 	}}
 	svc := NewModelMarketplaceService(nil, nil, &GatewayService{accountRepo: accountRepo}, nil, nil, nil, nil)
 
-	accountsByGroup, ok := svc.prefetchPublicGroupAccounts(context.Background())
+	accountsByGroup, ok := svc.prefetchGroupAccounts(context.Background())
 
 	if !ok {
-		t.Fatal("prefetchPublicGroupAccounts should succeed")
+		t.Fatal("prefetchGroupAccounts should succeed")
 	}
 	accounts := accountsByGroup[4101]
 	if len(accounts) != 3 {
@@ -752,6 +752,122 @@ func TestModelMarketplacePrefetchSortsByGlobalAccountPriority(t *testing.T) {
 	if accounts[0].ID != 5101 || accounts[1].ID != 5102 || accounts[2].ID != 5103 {
 		t.Fatalf("prefetched account order = [%d %d %d], want [5101 5102 5103]", accounts[0].ID, accounts[1].ID, accounts[2].ID)
 	}
+}
+
+// 可见专属组使用同一份可调度账号快照，空分组不能列出平台兜底型号。
+func TestPlanPreviewGroupModelCatalog(t *testing.T) {
+	ctx := context.Background()
+	accountRepo := &modelsListAccountRepoStub{all: []Account{
+		{ID: 1, GroupIDs: []int64{10}, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{
+			"model_mapping": map[string]any{"client-model": "upstream-model"},
+		}},
+		{ID: 2, GroupIDs: []int64{11}, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{
+			"model_mapping": map[string]any{"private": "private-target"},
+		}},
+	}}
+	catalog := &ModelMarketplaceService{gatewayService: &GatewayService{accountRepo: accountRepo}}
+	groups := []Group{{ID: 10, Platform: PlatformOpenAI, IsExclusive: true}, {ID: 12, Platform: PlatformOpenAI}}
+	models, err := catalog.ListGroupModelIDs(ctx, groups)
+	require.NoError(t, err)
+	require.Equal(t, map[int64][]string{10: {"client-model"}, 12: {}}, models)
+	require.EqualValues(t, 1, accountRepo.listAllCalls.Load())
+	require.Zero(t, accountRepo.listByGroupCalls.Load())
+	accountRepo.err = context.Canceled
+	_, err = catalog.ListGroupModelIDs(ctx, groups)
+	require.Error(t, err)
+}
+
+// 生图权限作用于整条请求映射路径；只要还有文本目标可用，混合别名仍应展示。
+func TestPlanPreviewGroupImagePolicy(t *testing.T) {
+	const groupID int64 = 10
+	accounts := &modelsListAccountRepoStub{all: []Account{
+		{ID: 1, GroupIDs: []int64{groupID}, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+			Credentials: map[string]any{"model_mapping": map[string]any{
+				"gpt-image-2": "gpt-image-2", "render-engine": "gpt-image-2",
+				"gpt-6.2-sol": "gpt-6.2-sol", "hybrid": "gpt-image-2",
+			}}},
+		{ID: 2, GroupIDs: []int64{groupID}, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+			Credentials: map[string]any{"model_mapping": map[string]any{"hybrid": "gpt-6.2-sol"}}},
+	}}
+	// Responses 按渠道改写后的型号判断意图，旧图片名称也可以被运营者明确改路由到文本型号。
+	channel := Channel{ID: 9, Status: StatusActive, ModelMapping: map[string]map[string]string{
+		PlatformOpenAI: {"store-sketch": "render-engine", "gpt-image-redirected": "gpt-6.2-sol"},
+	}}
+	catalog := &ModelMarketplaceService{gatewayService: &GatewayService{
+		accountRepo: accounts, channelService: newRequestableModelsChannelService(groupID, PlatformOpenAI, channel),
+	}}
+	group := Group{ID: groupID, Platform: PlatformOpenAI}
+
+	disabled, err := catalog.ListGroupModelIDs(context.Background(), []Group{group})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"gpt-6.2-sol", "hybrid", "gpt-image-redirected"}, disabled[groupID])
+
+	group.AllowImageGeneration = true
+	enabled, err := catalog.ListGroupModelIDs(context.Background(), []Group{group})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"gpt-image-2", "render-engine", "store-sketch", "gpt-6.2-sol", "hybrid", "gpt-image-redirected"}, enabled[groupID])
+}
+
+// 生图开关限制各平台的图片输出型号，普通视觉输入模型仍可用于文本请求。
+func TestPlanPreviewImageFamilies(t *testing.T) {
+	for _, tc := range []struct {
+		platform string
+		text     string
+		images   []string
+	}{
+		{PlatformOpenAI, "gpt-4o", []string{"gemini-2.5-flash-image", "mj-v7"}},
+		{PlatformGemini, "gemini-2.5-flash", []string{"gemini-2.5-flash-image"}},
+		{PlatformAntigravity, "gemini-2.5-flash", []string{"gemini-2.5-flash-image"}},
+	} {
+		t.Run(tc.platform, func(t *testing.T) {
+			mapping := map[string]any{tc.text: tc.text}
+			for _, model := range tc.images {
+				mapping[model] = model
+			}
+			accountType := AccountTypeAPIKey
+			if tc.platform == PlatformAntigravity {
+				accountType = AccountTypeOAuth
+			}
+			repo := &modelsListAccountRepoStub{all: []Account{{
+				ID: 1, Platform: tc.platform, Type: accountType, GroupIDs: []int64{1, 2},
+				Credentials: map[string]any{"model_mapping": mapping},
+			}}}
+			groups := []Group{{ID: 1, Platform: tc.platform}, {ID: 2, Platform: tc.platform, AllowImageGeneration: true}}
+			catalog := &ModelMarketplaceService{gatewayService: &GatewayService{accountRepo: repo}}
+			models, err := catalog.ListGroupModelIDs(context.Background(), groups)
+			require.NoError(t, err)
+			require.Contains(t, models[1], tc.text)
+			require.Contains(t, models[2], tc.text)
+			for _, image := range tc.images {
+				require.NotContains(t, models[1], image)
+				require.Contains(t, models[2], image)
+			}
+		})
+	}
+}
+
+// 隐私资格逐个账号判断，同一账号可属于多个组；严格组的过滤不能修改普通组的快照。
+func TestPlanPreviewGroupPrivacyPolicy(t *testing.T) {
+	accounts := &modelsListAccountRepoStub{all: []Account{
+		{ID: 1, GroupIDs: []int64{10, 11, 12}, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+			Credentials: map[string]any{"model_mapping": map[string]any{"unchecked": "gpt-6.2-sol", "shared": "gpt-6.2-sol"}}},
+		{ID: 2, GroupIDs: []int64{10, 12}, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+			Extra:       map[string]any{"privacy_mode": PrivacyModeTrainingOff},
+			Credentials: map[string]any{"model_mapping": map[string]any{"confirmed": "gpt-6.2-sol", "shared": "gpt-6.2-sol"}}},
+	}}
+	groups := []Group{
+		{ID: 10, Platform: PlatformOpenAI, RequirePrivacySet: true},
+		{ID: 11, Platform: PlatformOpenAI, RequirePrivacySet: true},
+		{ID: 12, Platform: PlatformOpenAI},
+	}
+	catalog := &ModelMarketplaceService{gatewayService: &GatewayService{accountRepo: accounts}}
+	models, err := catalog.ListGroupModelIDs(context.Background(), groups)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"confirmed", "shared"}, models[10])
+	require.Contains(t, models, int64(11))
+	require.Empty(t, models[11])
+	require.ElementsMatch(t, []string{"unchecked", "confirmed", "shared"}, models[12])
+	require.EqualValues(t, 1, accounts.listAllCalls.Load())
 }
 
 type marketplaceGroupRepoStub struct {

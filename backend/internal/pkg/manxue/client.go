@@ -19,11 +19,11 @@ import (
 
 const (
 	DefaultBaseURL = "https://manxue.ai"
-	// DrawingModel 是检测服务当前接受的画图模型，不得把其他被测模型静默改写为此值。
-	DrawingModel     = "gpt-6-astra"
-	MaxResponseBytes = 4 << 20
-	MaxHTMLBytes     = 2 << 20
-	defaultTimeout   = 45 * time.Second
+	// DrawingClassifierModel 是鹈鹕骑行分类器的训练型号，其他上游型号也可生成作品。
+	DrawingClassifierModel = "gpt-6-astra"
+	MaxResponseBytes       = 4 << 20
+	MaxHTMLBytes           = 2 << 20
+	defaultTimeout         = 45 * time.Second
 )
 
 var (
@@ -426,8 +426,8 @@ func validateCreate(input CreateRequest, key string) error {
 	if input.Benchmark != "candy" && input.Benchmark != "pelican" {
 		return ErrInvalidRequest
 	}
-	// 画图只支持固定模型；提前拒绝不兼容配置，避免产生注定失败的远端任务。
-	if input.Benchmark == "pelican" && input.Model != DrawingModel {
+	// 鹈鹕骑行按所选上游型号原样提交，避免向远端发送带多余空白的型号。
+	if input.Benchmark == "pelican" && input.Model != strings.TrimSpace(input.Model) {
 		return ErrInvalidRequest
 	}
 	if key != "" && !idempotencyPattern.MatchString(key) {
@@ -554,9 +554,14 @@ func (r *TestResult) Outcome() string {
 			return "unknown"
 		}
 		switch r.Assessment.Quality {
-		case "normal":
-			return "passed"
-		case "degraded", "suspicious":
+		case "normal", "degraded", "suspicious":
+			// 分类器只在训练型号上校准；上游也可明确把本次分类标记为参考。
+			if r.Assessment.Label == "参考" || (r.Model != "" && r.Model != DrawingClassifierModel) {
+				return "reference"
+			}
+			if r.Assessment.Quality == "normal" {
+				return "passed"
+			}
 			return "failed"
 		}
 	}

@@ -366,7 +366,7 @@ func openAIAccountSupportsRoutingModel(ctx context.Context, account *Account, ro
 	if isRetiredOpenAISubscriptionModel(account, resolveOpenAIAccountUpstreamModelForRequest(account, routingModel, requireCompact)) {
 		return false
 	}
-	if openAIHTTPPassthroughRoutingFromContext(ctx) && account != nil && account.IsOpenAIPassthroughEnabled() {
+	if openAIHTTPPassthroughRoutingFromContext(ctx) && account != nil && account.IsOpenAIPassthroughEnabled() && !account.IsOpenAIPassthroughModelFilterEnabled() {
 		return true
 	}
 	return account != nil && account.isModelMappingSupported(routingModel)

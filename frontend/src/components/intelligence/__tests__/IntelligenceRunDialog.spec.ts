@@ -10,6 +10,22 @@ const mountDialog = (run = runFixture()) => mount(IntelligenceRunDialog, {
 })
 
 describe('检测详情保留真实观测', () => {
+  it('其他鹈鹕模型的质量和作品均可查看，判定标明仅供参考', () => {
+    const wrapper = mountDialog(runFixture({ model: 'gpt-6.2-astra', benchmark: 'drawing', verdict: 'reference', assessment_quality: 'suspicious', has_artifact: true }))
+    expect(wrapper.text()).toContain('gpt-6.2-astra')
+    expect(wrapper.text()).toContain('intelligence.statuses.reference')
+    expect(wrapper.text()).toContain('intelligence.qualities.suspicious')
+    expect(wrapper.text()).toContain('intelligence.drawingModelHint')
+    expect(wrapper.text()).toContain('intelligence.previewTitle')
+    wrapper.unmount()
+  })
+  it('旧记录未区分降智和存疑时，仅保留参考标签', () => {
+    const wrapper = mountDialog(runFixture({ model: 'custom-model', benchmark: 'drawing', verdict: 'failed' }))
+    expect(wrapper.text()).toContain('intelligence.statuses.reference')
+    expect(wrapper.text()).not.toContain('intelligence.qualities.degraded')
+    expect(wrapper.text()).not.toContain('intelligence.qualities.suspicious')
+    wrapper.unmount()
+  })
   it('接口没有题目与答案时不显示虚构标题或内容，缺少统计显示未知', () => {
     const wrapper = mountDialog()
     expect(wrapper.text()).toContain('intelligence.noAnswer')

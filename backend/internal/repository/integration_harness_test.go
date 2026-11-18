@@ -23,10 +23,14 @@ import (
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/go-connections/nat"
 	_ "github.com/lib/pq"
 	redisclient "github.com/redis/go-redis/v9"
+	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 const (
@@ -50,6 +54,13 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	// 外部基础设施模式：同时提供 TOKENROUTER_TEST_POSTGRES_DSN 与 TOKENROUTER_TEST_REDIS_ADDR 时
+	// 直接连接（例如在同一 Docker 网络内运行 Linux 测试二进制），不启动 testcontainers。
+	// 用于 Windows 端口转发在高并发下重置连接、导致业务用例无法执行的环境；默认行为不变。
+	if dsn, redisAddr := strings.TrimSpace(os.Getenv("TOKENROUTER_TEST_POSTGRES_DSN")), strings.TrimSpace(os.Getenv("TOKENROUTER_TEST_REDIS_ADDR")); dsn != "" && redisAddr != "" {
+		os.Exit(runIntegrationWithExternalInfra(ctx, m, dsn, redisAddr))
+	}
+
 	if !dockerIsAvailable(ctx) {
 		// In CI we expect Docker to be available so integration tests should fail loudly.
 		if os.Getenv("CI") != "" {
@@ -60,6 +71,9 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
+	// 本机 Docker（尤其 Windows/WSL）冷启动容器可能远超默认 60s，等待时长可通过
+	// TOKENROUTER_TEST_CONTAINER_STARTUP_TIMEOUT（如 10m）放大；CI 默认值不变。
+	startupTimeout := integrationContainerStartupTimeout()
 	postgresImage := selectDockerImage(ctx, postgresImageTag)
 	pgContainer, err := tcpostgres.Run(
 		ctx,
@@ -67,7 +81,14 @@ func TestMain(m *testing.M) {
 		tcpostgres.WithDatabase("sub2api_test"),
 		tcpostgres.WithUsername("postgres"),
 		tcpostgres.WithPassword("postgres"),
-		tcpostgres.BasicWaitStrategies(),
+		// 并发结算类用例会同时打开大量连接，默认 100 在慢速环境下易耗尽导致连接被重置。
+		testcontainers.WithCmd("postgres", "-c", "max_connections=400"),
+		loopbackPortBinding("5432/tcp"),
+		// 与 BasicWaitStrategies 相同的两步等待（日志出现两次就绪 + 端口可连），但使用可配置的超时。
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(startupTimeout),
+			wait.ForListeningPort("5432/tcp").WithStartupTimeout(startupTimeout),
+		),
 	)
 	if err != nil {
 		log.Printf("failed to start postgres container: %v", err)
@@ -78,6 +99,11 @@ func TestMain(m *testing.M) {
 	redisContainer, err := tcredis.Run(
 		ctx,
 		redisImageTag,
+		loopbackPortBinding("6379/tcp"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("Ready to accept connections").WithStartupTimeout(startupTimeout),
+			wait.ForListeningPort("6379/tcp").WithStartupTimeout(startupTimeout),
+		),
 	)
 	if err != nil {
 		log.Printf("failed to start redis container: %v", err)
@@ -91,7 +117,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	integrationDB, err = openSQLWithRetry(ctx, dsn, 30*time.Second)
+	integrationDB, err = openSQLWithRetry(ctx, dsn, max(30*time.Second, startupTimeout/2))
 	if err != nil {
 		log.Printf("failed to open sql db: %v", err)
 		os.Exit(1)
@@ -110,17 +136,30 @@ func TestMain(m *testing.M) {
 		log.Printf("failed to get redis host: %v", err)
 		os.Exit(1)
 	}
+	// 与数据库相同，避免 localhost 解析到 ::1 后被 Docker Desktop 的 IPv6 端口转发重置。
+	if redisHost == "localhost" {
+		redisHost = "127.0.0.1"
+	}
 	redisPort, err := redisContainer.MappedPort(ctx, "6379/tcp")
 	if err != nil {
 		log.Printf("failed to get redis port: %v", err)
 		os.Exit(1)
 	}
 
+	// 并发结算用例会同时发起数十个 Redis 命令；go-redis 默认 3s 读超时与较小连接池在本机慢速
+	// Docker 上会出现 i/o timeout，与业务无关。这里按生产 redis.go 的显式配置放宽，并随启动超时放大。
+	redisIOTimeout := max(10*time.Second, startupTimeout/30)
 	integrationRedis = redisclient.NewClient(&redisclient.Options{
-		Addr: fmt.Sprintf("%s:%d", redisHost, redisPort.Int()),
-		DB:   0,
+		Addr:         fmt.Sprintf("%s:%d", redisHost, redisPort.Int()),
+		DB:           0,
+		PoolSize:     256,
+		DialTimeout:  redisIOTimeout,
+		ReadTimeout:  redisIOTimeout,
+		WriteTimeout: redisIOTimeout,
+		PoolTimeout:  redisIOTimeout + time.Second,
 	})
-	if err := integrationRedis.Ping(ctx).Err(); err != nil {
+	// 端口映射在慢速 Docker 上可能短暂不可用，Ping 带重试直至超时。
+	if err := pingRedisWithRetry(ctx, integrationRedis, max(30*time.Second, startupTimeout/2)); err != nil {
 		log.Printf("failed to ping redis: %v", err)
 		os.Exit(1)
 	}
@@ -132,6 +171,64 @@ func TestMain(m *testing.M) {
 	_ = integrationDB.Close()
 
 	os.Exit(code)
+}
+
+// runIntegrationWithExternalInfra 使用外部 PostgreSQL/Redis 执行与容器模式相同的初始化，返回测试退出码。
+func runIntegrationWithExternalInfra(ctx context.Context, m *testing.M, dsn, redisAddr string) int {
+	var err error
+	integrationDB, err = openSQLWithRetry(ctx, dsn, 2*time.Minute)
+	if err != nil {
+		log.Printf("failed to open external sql db: %v", err)
+		return 1
+	}
+	if err := ApplyMigrations(ctx, integrationDB); err != nil {
+		log.Printf("failed to apply db migrations: %v", err)
+		return 1
+	}
+	integrationEntClient = dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, integrationDB)))
+	integrationRedis = redisclient.NewClient(&redisclient.Options{
+		Addr:         redisAddr,
+		DB:           0,
+		PoolSize:     256,
+		DialTimeout:  10 * time.Second,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		PoolTimeout:  11 * time.Second,
+	})
+	if err := pingRedisWithRetry(ctx, integrationRedis, 2*time.Minute); err != nil {
+		log.Printf("failed to ping external redis: %v", err)
+		return 1
+	}
+	code := m.Run()
+	_ = integrationEntClient.Close()
+	_ = integrationRedis.Close()
+	_ = integrationDB.Close()
+	return code
+}
+
+// integrationContainerStartupTimeout 返回容器就绪等待时长；默认 60s 与 testcontainers 默认一致，
+// 可通过 TOKENROUTER_TEST_CONTAINER_STARTUP_TIMEOUT（Go duration 格式）放大。
+func integrationContainerStartupTimeout() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("TOKENROUTER_TEST_CONTAINER_STARTUP_TIMEOUT")); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			return d
+		}
+		log.Printf("ignoring invalid TOKENROUTER_TEST_CONTAINER_STARTUP_TIMEOUT=%q", raw)
+	}
+	return 60 * time.Second
+}
+
+// pingRedisWithRetry 在超时前重复 Ping，容忍容器端口映射就绪的短暂延迟。
+func pingRedisWithRetry(ctx context.Context, client *redisclient.Client, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if lastErr = client.Ping(ctx).Err(); lastErr == nil {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return lastErr
 }
 
 func dockerIsAvailable(ctx context.Context) bool {
@@ -168,7 +265,30 @@ func dockerImageExists(ctx context.Context, image string) bool {
 	return cmd.Run() == nil
 }
 
+// loopbackPortBinding 把容器端口只发布到 127.0.0.1 的随机端口。
+// 默认的 0.0.0.0 绑定在 Windows 上会与本机其它进程对同一端口的 127.0.0.1 监听冲突，
+// 导致连接被重置；只绑定回环地址后，测试客户端连接的就是容器本身。
+// HostConfigModifier 早于 testcontainers 合并暴露端口执行，因此这里直接声明完整绑定。
+func loopbackPortBinding(ports ...string) testcontainers.CustomizeRequestOption {
+	return testcontainers.WithHostConfigModifier(func(hostConfig *container.HostConfig) {
+		if hostConfig.PortBindings == nil {
+			hostConfig.PortBindings = nat.PortMap{}
+		}
+		for _, port := range ports {
+			hostConfig.PortBindings[nat.Port(port)] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "0"}}
+		}
+	})
+}
+
+// preferIPv4Loopback 把 testcontainers 返回的 localhost 改写为 127.0.0.1。
+// Go 会优先解析 localhost 为 ::1，而 Docker Desktop 的 IPv6 端口转发在 Windows 上会重置连接，
+// 表现为 "connection was forcibly closed"；备份恢复测试早已对容器主机做同样处理。
+func preferIPv4Loopback(dsn string) string {
+	return strings.Replace(dsn, "@localhost:", "@127.0.0.1:", 1)
+}
+
 func openSQLWithRetry(ctx context.Context, dsn string, timeout time.Duration) (*sql.DB, error) {
+	dsn = preferIPv4Loopback(dsn)
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 

@@ -27,8 +27,13 @@ type openAIImagesJSONKeepalive struct {
 }
 
 // StartOpenAIImagesJSONKeepalive 为非流式图片请求启动空白心跳；非正间隔表示禁用。
+// Codex 原生生图客户端依赖 HTTP 状态码区分错误与 ImageResponse JSON；在结果产生前不能提交状态，
+// 否则迟到的错误会变成 HTTP 200，被误报为缺少图片字段（如 "created"），掩盖上游错误。
 func StartOpenAIImagesJSONKeepalive(c *gin.Context, interval time.Duration) func() {
 	if c == nil || c.Writer == nil || interval <= 0 {
+		return func() {}
+	}
+	if c.GetHeader("X-Codex-Image-Turn-Id") != "" {
 		return func() {}
 	}
 	originalWriter := c.Writer

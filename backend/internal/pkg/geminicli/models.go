@@ -27,6 +27,7 @@ var DefaultModels = []Model{
 	{ID: "gemini-3.5-flash", Type: "model", DisplayName: "Gemini 3.5 Flash", CreatedAt: ""},
 	{ID: "gemini-3.6-flash", Type: "model", DisplayName: "Gemini 3.6 Flash", CreatedAt: ""},
 	{ID: "gemini-4-argon", Type: "model", DisplayName: "Gemini 4 Argon", CreatedAt: ""},
+	{ID: "gemini-4-carbon", Type: "model", DisplayName: "Gemini 4 Carbon", CreatedAt: ""},
 }
 
 // GoogleOneModels 是旧版 Google One OAuth 通道对外暴露的保守模型集合。

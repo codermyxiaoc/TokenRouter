@@ -237,6 +237,9 @@ func TestIntelligencePostgresScheduledSingleRunAndConfigLimit(t *testing.T) {
 	runs, err := repo.ListRuns(ctx, c.ID)
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
+	// 定时入队也将管理员选择的模型快照到任务，供历史展示与评估使用。
+	require.Equal(t, c.Model, runs[0].Model)
+	require.Equal(t, c.Benchmark, runs[0].Benchmark)
 	// 管理员仍能看到已删除分组的残留配置并删除，不能产生无法管理的隐藏名额。
 	_, err = integrationDB.ExecContext(ctx, `UPDATE groups SET deleted_at=NOW() WHERE id=$1`, c.GroupID)
 	require.NoError(t, err)

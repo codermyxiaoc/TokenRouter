@@ -117,6 +117,62 @@ func TestTLSFingerprintHTTPSProxyFallsBackWithoutBypassingProxy(t *testing.T) {
 	require.Equal(t, "https://user:pass@proxy.example:8443", resolved.String())
 }
 
+// 从缓存客户端取出真实的跳转策略验证，所有地址仅用于策略判断。
+func TestHTTPUpstreamTLSFingerprintRedirectPolicy(t *testing.T) {
+	request := func(rawURL string) *http.Request {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, rawURL, nil)
+		require.NoError(t, err)
+		return req
+	}
+	first := request("https://93.184.216.34/start")
+	sameHost := request("https://93.184.216.34/next")
+	otherHost := request("https://1.1.1.1/next")
+	down := request("http://93.184.216.34/next")
+	local := request("https://127.0.0.1/next")
+	via := []*http.Request{first}
+	for _, tc := range []struct {
+		name       string
+		proxy      string
+		publicOnly bool
+	}{
+		{name: "direct"},
+		{name: "direct_public_only", publicOnly: true},
+		{name: "http_proxy", proxy: "http://proxy.example:8080"},
+		{name: "https_proxy", proxy: "https://proxy.example:8443"},
+		{name: "socks_proxy", proxy: "socks5h://proxy.example:1080"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Security.URLAllowlist.Enabled = tc.publicOnly
+			upstream := NewHTTPUpstream(cfg).(*httpUpstreamService)
+			entry, err := upstream.getClientEntryWithTLS(tc.proxy, 1, 1, &tlsfingerprint.Profile{}, service.HTTPUpstreamProfileDefault, false, false)
+			require.NoError(t, err)
+			policy := entry.client.CheckRedirect
+			require.NotNil(t, policy)
+			require.NoError(t, policy(sameHost, via))
+			require.NoError(t, policy(otherHost, via))
+			require.ErrorContains(t, policy(down, via), "requires HTTPS")
+			require.ErrorContains(t, policy(sameHost, make([]*http.Request, 10)), "10 redirects")
+			if tc.publicOnly {
+				require.Error(t, policy(local, via))
+			}
+			if tc.proxy == "" {
+				rt := entry.client.Transport.(*http.Transport)
+				require.NotNil(t, rt.DialContext, "直连 TCP 也必须使用受控拨号器")
+			}
+			// 请求级策略只派生临时客户端，同一缓存条目可继续服务下一次普通请求。
+			marked := first.WithContext(service.WithHTTPUpstreamPublicHostsOnly(t.Context()))
+			markedPolicy := httpClientForUpstreamRequest(upstream, entry.client, marked).CheckRedirect
+			require.ErrorContains(t, markedPolicy(down, via), "requires HTTPS")
+			disabled := first.WithContext(service.WithHTTPUpstreamRedirectsDisabled(t.Context()))
+			disabledPolicy := httpClientForUpstreamRequest(upstream, entry.client, disabled).CheckRedirect
+			require.ErrorIs(t, disabledPolicy(sameHost, via), http.ErrUseLastResponse)
+			require.NoError(t, entry.client.CheckRedirect(sameHost, via))
+		})
+	}
+}
+
 func startTestSOCKS5Proxy(t *testing.T) (string, *atomic.Int64) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

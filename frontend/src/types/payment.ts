@@ -185,6 +185,19 @@ export interface SubscriptionPlan {
   sort_order: number
 }
 
+// 购买前按套餐查看当前用户可绑定的分组、订阅倍率和可请求的模型 ID。
+export interface SubscriptionPlanGroupPreview {
+  groups_restricted: boolean
+  groups: Array<{
+    id: number
+    name: string
+    platform: GroupPlatform
+    display_brand?: string | null
+    rate_multiplier: number
+    models: string[]
+  }>
+}
+
 export interface PaymentChannel {
   id: number
   group_id?: number

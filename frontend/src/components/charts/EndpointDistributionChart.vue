@@ -85,6 +85,8 @@
               <th class="pb-2 text-right">{{ t('admin.dashboard.requests') }}</th>
               <th class="pb-2 text-right">{{ t('admin.dashboard.tokens') }}</th>
               <th class="pb-2 text-right">{{ t('admin.dashboard.actual') }}</th>
+              <!-- 账号成本列仅管理员视图展示，用户用量页关闭 -->
+              <th v-if="showAccountCost" class="pb-2 text-right">{{ t('admin.dashboard.accountCost') }}</th>
               <th v-if="showStandardCost" class="pb-2 text-right">{{ t('admin.dashboard.standard') }}</th>
             </tr>
           </thead>
@@ -110,6 +112,9 @@
                 </td>
                 <td class="py-1.5 text-right text-green-600 dark:text-green-400">
                   {{ balanceUnitSymbol }}{{ formatCost(item.actual_cost) }}
+                </td>
+                <td v-if="showAccountCost" class="py-1.5 text-right text-orange-500 dark:text-orange-400">
+                  {{ usdUnitSymbol }}{{ formatCost(item.account_cost ?? 0) }}
                 </td>
                 <td v-if="showStandardCost" class="py-1.5 text-right text-gray-400 dark:text-gray-500">
                   {{ usdUnitSymbol }}{{ formatCost(item.cost) }}
@@ -173,6 +178,8 @@ const props = withDefaults(
     showSourceToggle?: boolean
     enableBreakdown?: boolean
     showStandardCost?: boolean
+    // 是否展示账号成本列（仅管理员接口返回该字段）
+    showAccountCost?: boolean
     startDate?: string
     endDate?: string
     filters?: Record<string, any>
@@ -189,6 +196,7 @@ const props = withDefaults(
     showSourceToggle: false,
     enableBreakdown: true,
     showStandardCost: true,
+    showAccountCost: true,
   }
 )
 
@@ -201,7 +209,8 @@ const expandedKey = ref<string | null>(null)
 const breakdownItems = ref<UserBreakdownItem[]>([])
 const breakdownLoading = ref(false)
 const showStandardCost = computed(() => props.showStandardCost)
-const distributionColspan = computed(() => 4 + (showStandardCost.value ? 1 : 0))
+const showAccountCost = computed(() => props.showAccountCost)
+const distributionColspan = computed(() => 4 + (showAccountCost.value ? 1 : 0) + (showStandardCost.value ? 1 : 0))
 
 const toggleBreakdown = async (endpoint: string) => {
   if (expandedKey.value === endpoint) {

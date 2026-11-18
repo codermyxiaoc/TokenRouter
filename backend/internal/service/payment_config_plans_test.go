@@ -17,6 +17,26 @@ func TestNormalizePlanGroupIDs_DeduplicatesAndPreservesLegacyGroupID(t *testing.
 	require.Equal(t, []int64{3, 2, 4}, got)
 }
 
+// 购买前预览只读在售套餐，金额或管理配置无需进入目录查询。
+func TestPlanPreviewReadsOnlyOnSaleGroupScope(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	plan, err := client.SubscriptionPlan.Create().SetName("预览").SetPrice(10).
+		SetGroupIds([]int64{3, 7}).SetGroupRateMultipliers(map[int64]float64{7: 1.3}).SetForSale(true).Save(ctx)
+	require.NoError(t, err)
+	config := &PaymentConfigService{entClient: client}
+	scope, err := config.GetPlanGroupScopeForSale(ctx, plan.ID)
+	require.NoError(t, err)
+	require.Equal(t, []int64{3, 7}, scope.GroupIDs)
+	require.Equal(t, map[int64]float64{7: 1.3}, scope.GroupRateMultipliers)
+
+	require.NoError(t, client.SubscriptionPlan.UpdateOneID(plan.ID).SetForSale(false).Exec(ctx))
+	for _, id := range []int64{plan.ID, plan.ID + 1} {
+		_, err = config.GetPlanGroupScopeForSale(ctx, id)
+		require.Equal(t, "PLAN_NOT_AVAILABLE", infraerrors.Reason(err))
+	}
+}
+
 func TestNormalizePlanGroupRateMultipliers_FiltersBySelectedGroupsAndKeepsMissingUnconfigured(t *testing.T) {
 	got, err := normalizePlanGroupRateMultipliers([]int64{3, 2, 4}, map[int64]float64{
 		2: 0.5,

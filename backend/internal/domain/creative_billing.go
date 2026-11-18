@@ -21,8 +21,13 @@ type CreativeProviderUsage struct {
 	ImageCacheReadTokens int  `json:"image_cache_read_tokens,omitempty"`
 	OutputTokens         int  `json:"output_tokens,omitempty"`
 	CacheCreationTokens  int  `json:"cache_creation_tokens,omitempty"`
-	CacheReadTokens      int  `json:"cache_read_tokens,omitempty"`
-	ImageOutputTokens    int  `json:"image_output_tokens,omitempty"`
+	// 保留提供方的有效期限明细，重试和恢复后仍能按原用量写日志。
+	CacheCreation5mTokens  int `json:"cache_creation_5m_tokens,omitempty"`
+	CacheCreation1hTokens  int `json:"cache_creation_1h_tokens,omitempty"`
+	CacheCreation30mTokens int `json:"cache_creation_30m_tokens,omitempty"`
+	CacheCreation12hTokens int `json:"cache_creation_12h_tokens,omitempty"`
+	CacheReadTokens        int `json:"cache_read_tokens,omitempty"`
+	ImageOutputTokens      int `json:"image_output_tokens,omitempty"`
 	// TokenBaseAmountUSD 是按 API 同一公式算出的 token 费用；ChargeBaseAmountUSD 是实际扣费基础金额
 	// （不超过预扣上限，缺少用量时等于预扣上限）。
 	TokenBaseAmountUSD  float64 `json:"token_base_amount_usd"`

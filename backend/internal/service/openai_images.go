@@ -660,8 +660,13 @@ func IsMidjourneyImageGenerationModel(model string) bool {
 	return strings.HasPrefix(normalized, "mj") || midjourneyImageModelPattern.MatchString(normalized)
 }
 
+// 这两类 Images 兼容型号只能由 API Key 账号承接。
+func isAPIKeyOnlyImagesModel(model string) bool {
+	return isGeminiCompatibleImageModel(model) || IsMidjourneyImageGenerationModel(model)
+}
+
 func validateCompatibleImagesModel(model string) error {
-	if isGeminiCompatibleImageModel(model) || IsMidjourneyImageGenerationModel(model) {
+	if isAPIKeyOnlyImagesModel(model) {
 		return nil
 	}
 	return validateOpenAIImagesModel(model)
@@ -694,7 +699,7 @@ func classifyOpenAIImagesCapability(req *OpenAIImagesRequest) OpenAIImagesCapabi
 	if req == nil {
 		return OpenAIImagesCapabilityNative
 	}
-	if isGeminiCompatibleImageModel(req.Model) || IsMidjourneyImageGenerationModel(req.Model) {
+	if isAPIKeyOnlyImagesModel(req.Model) {
 		return OpenAIImagesCapabilityAPIKey
 	}
 	if req.ExplicitModel || req.ExplicitSize {
@@ -1548,21 +1553,8 @@ func mergeOpenAIUsage(dst *OpenAIUsage, body []byte) {
 		return
 	}
 	if parsed, ok := extractOpenAIUsageFromJSONBytes(body); ok {
-		if parsed.InputTokens > 0 {
-			dst.InputTokens = parsed.InputTokens
-		}
-		if parsed.OutputTokens > 0 {
-			dst.OutputTokens = parsed.OutputTokens
-		}
-		if parsed.CacheReadInputTokens > 0 {
-			dst.CacheReadInputTokens = parsed.CacheReadInputTokens
-		}
-		if parsed.ImageInputTokens > 0 {
-			dst.ImageInputTokens = parsed.ImageInputTokens
-		}
-		if parsed.ImageOutputTokens > 0 {
-			dst.ImageOutputTokens = parsed.ImageOutputTokens
-		}
+		// 流式图片和 JSON 回退都可能分次报告用量，缓存写入总数与期限一起合并。
+		mergeOpenAIUsageNonZero(dst, parsed)
 	}
 }
 

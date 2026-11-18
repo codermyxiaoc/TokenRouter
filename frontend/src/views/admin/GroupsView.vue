@@ -754,6 +754,21 @@
               <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
                 {{ t("admin.groups.openaiFast.hint") }}
               </p>
+              <!-- 强制 Ultra Fast：只对 GPT-6 Astra、GPT-6.1 Sol 生效，优先于强制 Fast -->
+              <div class="mt-3 flex items-center justify-between">
+                <label class="text-sm text-gray-600 dark:text-gray-400">
+                  {{ t("admin.groups.openaiFast.forceUltrafast") }}
+                </label>
+                <Toggle
+                  :model-value="createForm.force_openai_ultrafast"
+                  data-group-setting="force_openai_ultrafast"
+                  :aria-label="t('admin.groups.openaiFast.forceUltrafast')"
+                  @update:model-value="createForm.force_openai_ultrafast = !createForm.force_openai_ultrafast"
+                />
+              </div>
+              <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                {{ t("admin.groups.openaiFast.forceUltrafastHint") }}
+              </p>
 
             </div>
             <ReasoningEffortPolicyFields
@@ -2504,6 +2519,21 @@
               <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
                 {{ t("admin.groups.openaiFast.hint") }}
               </p>
+              <!-- 强制 Ultra Fast：只对 GPT-6 Astra、GPT-6.1 Sol 生效，优先于强制 Fast -->
+              <div class="mt-3 flex items-center justify-between">
+                <label class="text-sm text-gray-600 dark:text-gray-400">
+                  {{ t("admin.groups.openaiFast.forceUltrafast") }}
+                </label>
+                <Toggle
+                  :model-value="editForm.force_openai_ultrafast"
+                  data-group-setting="force_openai_ultrafast"
+                  :aria-label="t('admin.groups.openaiFast.forceUltrafast')"
+                  @update:model-value="editForm.force_openai_ultrafast = !editForm.force_openai_ultrafast"
+                />
+              </div>
+              <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                {{ t("admin.groups.openaiFast.forceUltrafastHint") }}
+              </p>
 
             </div>
             <ReasoningEffortPolicyFields
@@ -4103,6 +4133,7 @@ const emptyGroupPricing = (platform?: string): PricingFormEntry => ({
   output_price: null,
   cache_write_price: null,
   cache_write_1h_price: null,
+  cache_write_12h_price: null,
   cache_read_price: null,
   image_input_price: null,
   image_output_price: null,
@@ -4129,12 +4160,14 @@ const groupPricingFromAPI = (
     fast_mode_multiplier: entry.fast_mode_multiplier ?? null,
     fast_multiplier: entry.fast_multiplier ?? null,
     flex_multiplier: entry.flex_multiplier ?? null,
+    ultrafast_multiplier: entry.ultrafast_multiplier ?? null,
     max_reasoning_effort_multiplier: entry.max_reasoning_effort_multiplier ?? null,
     reasoning_effort_multipliers: { ...entry.reasoning_effort_multipliers },
     input_price: perTokenToMTok(entry.input_price),
     output_price: perTokenToMTok(entry.output_price),
     cache_write_price: perTokenToMTok(entry.cache_write_price),
     cache_write_1h_price: perTokenToMTok(entry.cache_write_1h_price),
+    cache_write_12h_price: perTokenToMTok(entry.cache_write_12h_price),
     cache_read_price: perTokenToMTok(entry.cache_read_price),
     image_input_price: perTokenToMTok(entry.image_input_price),
     image_output_price: perTokenToMTok(entry.image_output_price),
@@ -4162,12 +4195,14 @@ const groupPricingToAPI = (
       fast_mode_multiplier: toNullableNumber(entry.fast_mode_multiplier),
       fast_multiplier: toNullableNumber(entry.fast_multiplier),
       flex_multiplier: toNullableNumber(entry.flex_multiplier),
+      ultrafast_multiplier: toNullableNumber(entry.ultrafast_multiplier),
       max_reasoning_effort_multiplier: toNullableNumber(entry.max_reasoning_effort_multiplier),
       reasoning_effort_multipliers: reasoningEffortMultipliersToAPI(entry.reasoning_effort_multipliers),
       input_price: mTokToPerToken(entry.input_price),
       output_price: mTokToPerToken(entry.output_price),
       cache_write_price: mTokToPerToken(entry.cache_write_price),
       cache_write_1h_price: mTokToPerToken(entry.cache_write_1h_price),
+      cache_write_12h_price: mTokToPerToken(entry.cache_write_12h_price),
       cache_read_price: mTokToPerToken(entry.cache_read_price),
       image_input_price: mTokToPerToken(entry.image_input_price),
       image_output_price: mTokToPerToken(entry.image_output_price),
@@ -4767,6 +4802,7 @@ const createForm = reactive({
   allow_live: false,
   // OpenAI 分组级 Fast 强制策略
   force_openai_fast: false,
+  force_openai_ultrafast: false,
   // OpenAI 分组级免费 Fast 计费策略
   free_openai_fast: false,
   opus_mapped_model: createMessagesDispatchDefaults.opus_mapped_model,
@@ -5264,6 +5300,7 @@ const editForm = reactive({
   allow_live: false,
   // OpenAI 分组级 Fast 强制策略
   force_openai_fast: false,
+  force_openai_ultrafast: false,
   // OpenAI 分组级免费 Fast 计费策略
   free_openai_fast: false,
   default_mapped_model: '',
@@ -5736,6 +5773,7 @@ const closeCreateModal = () => {
   resetMessagesDispatchFormState(createForm);
   createForm.allow_live = false;
   createForm.force_openai_fast = false;
+  createForm.force_openai_ultrafast = false;
   createForm.free_openai_fast = false;
   createForm.require_oauth_only = false;
   createForm.require_privacy_set = false;
@@ -5840,6 +5878,10 @@ const handleCreateGroup = async () => {
       force_openai_fast: normalizeGroupOpenAIFast(
         createForm.platform,
         createForm.force_openai_fast,
+      ),
+      force_openai_ultrafast: normalizeGroupOpenAIFast(
+        createForm.platform,
+        createForm.force_openai_ultrafast,
       ),
       free_openai_fast: normalizeGroupOpenAIFast(
         createForm.platform,
@@ -6006,6 +6048,10 @@ const handleEdit = async (group: AdminGroup) => {
     group.platform,
     group.force_openai_fast ?? false,
   );
+  editForm.force_openai_ultrafast = normalizeGroupOpenAIFast(
+    group.platform,
+    group.force_openai_ultrafast ?? false,
+  );
   editForm.free_openai_fast = normalizeGroupOpenAIFast(
     group.platform,
     group.free_openai_fast ?? false,
@@ -6089,6 +6135,7 @@ const closeEditModal = () => {
   resetMessagesDispatchFormState(editForm);
   editForm.allow_live = false;
   editForm.force_openai_fast = false;
+  editForm.force_openai_ultrafast = false;
   editForm.free_openai_fast = false;
   resetModelsListState(editModelsListState);
 };
@@ -6133,6 +6180,10 @@ const handleUpdateGroup = async () => {
       force_openai_fast: normalizeGroupOpenAIFast(
         editForm.platform,
         editForm.force_openai_fast,
+      ),
+      force_openai_ultrafast: normalizeGroupOpenAIFast(
+        editForm.platform,
+        editForm.force_openai_ultrafast,
       ),
       free_openai_fast: normalizeGroupOpenAIFast(
         editForm.platform,
@@ -6328,6 +6379,10 @@ watch(
       newVal,
       createForm.force_openai_fast,
     );
+    createForm.force_openai_ultrafast = normalizeGroupOpenAIFast(
+      newVal,
+      createForm.force_openai_ultrafast,
+    );
     createForm.free_openai_fast = normalizeGroupOpenAIFast(
       newVal,
       createForm.free_openai_fast,
@@ -6433,6 +6488,10 @@ watch(
       newVal,
       editForm.force_openai_fast,
     );
+    editForm.force_openai_ultrafast = normalizeGroupOpenAIFast(
+      newVal,
+      editForm.force_openai_ultrafast,
+    );
     editForm.free_openai_fast = normalizeGroupOpenAIFast(
       newVal,
       editForm.free_openai_fast,
@@ -6488,6 +6547,10 @@ watch(
     editForm.force_openai_fast = normalizeGroupOpenAIFast(
       newVal,
       editForm.force_openai_fast,
+    )
+    editForm.force_openai_ultrafast = normalizeGroupOpenAIFast(
+      newVal,
+      editForm.force_openai_ultrafast,
     )
     editForm.free_openai_fast = normalizeGroupOpenAIFast(
       newVal,

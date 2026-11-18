@@ -20,6 +20,7 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 		Type:  "message",
 		Role:  "assistant",
 		Model: model,
+		Usage: anthropicUsageFromResponsesUsage(nil),
 	}
 
 	var blocks []AnthropicContentBlock
@@ -91,7 +92,7 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 
 func anthropicUsageFromResponsesUsage(usage *ResponsesUsage) AnthropicUsage {
 	if usage == nil {
-		return AnthropicUsage{}
+		return AnthropicUsage{CacheCreationInputTokensPresent: true, CacheReadInputTokensPresent: true}
 	}
 
 	cachedTokens := 0
@@ -105,10 +106,12 @@ func anthropicUsageFromResponsesUsage(usage *ResponsesUsage) AnthropicUsage {
 	}
 
 	return AnthropicUsage{
-		InputTokens:              inputTokens,
-		OutputTokens:             usage.OutputTokens,
-		CacheReadInputTokens:     cachedTokens,
-		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		InputTokens:                     inputTokens,
+		OutputTokens:                    usage.OutputTokens,
+		CacheReadInputTokens:            cachedTokens,
+		CacheCreationInputTokens:        usage.CacheCreationInputTokens,
+		CacheCreationInputTokensPresent: true,
+		CacheReadInputTokensPresent:     true,
 	}
 }
 
@@ -186,6 +189,10 @@ type ResponsesEventToAnthropicState struct {
 	// 关闭前通过 signature_delta 发出。
 	PendingThinkingSignature string
 	HasToolCall              bool
+
+	// XAIServerSideSearch 由上游为 xAI 的调用方设置：IsServerSideSearchCall 命中的
+	// custom_tool_call 由 xAI 自行执行，不转换为 tool_use 块。
+	XAIServerSideSearch bool
 
 	// OutputIndexToBlockIdx maps Responses output_index → Anthropic content block index.
 	OutputIndexToBlockIdx map[int]int
@@ -278,10 +285,12 @@ func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []A
 				StopReason: stopReason,
 			},
 			Usage: &AnthropicUsage{
-				InputTokens:              state.InputTokens,
-				OutputTokens:             state.OutputTokens,
-				CacheReadInputTokens:     state.CacheReadInputTokens,
-				CacheCreationInputTokens: state.CacheCreationInputTokens,
+				InputTokens:                     state.InputTokens,
+				OutputTokens:                    state.OutputTokens,
+				CacheReadInputTokens:            state.CacheReadInputTokens,
+				CacheCreationInputTokens:        state.CacheCreationInputTokens,
+				CacheCreationInputTokensPresent: true,
+				CacheReadInputTokensPresent:     true,
 			},
 		},
 		AnthropicStreamEvent{Type: "message_stop"},
@@ -328,8 +337,10 @@ func resToAnthHandleCreated(evt *ResponsesStreamEvent, state *ResponsesEventToAn
 			Model:      state.Model,
 			StopReason: nil,
 			Usage: AnthropicUsage{
-				InputTokens:  0,
-				OutputTokens: 0,
+				InputTokens:                     0,
+				OutputTokens:                    0,
+				CacheCreationInputTokensPresent: true,
+				CacheReadInputTokensPresent:     true,
 			},
 		},
 	}}
@@ -344,6 +355,9 @@ func resToAnthHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 	// function_call 与 custom_tool_call（custom/freeform 工具，如新版 apply_patch）
 	// 同样映射为 Anthropic 的 tool_use 块。
 	case "function_call", "custom_tool_call":
+		if state.XAIServerSideSearch && IsServerSideSearchCall(evt.Item.Type, evt.Item.CallID) {
+			return nil
+		}
 		var events []AnthropicStreamEvent
 		events = append(events, closeCurrentBlock(state)...)
 
@@ -747,10 +761,12 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 				StopReason: stopReason,
 			},
 			Usage: &AnthropicUsage{
-				InputTokens:              state.InputTokens,
-				OutputTokens:             state.OutputTokens,
-				CacheReadInputTokens:     state.CacheReadInputTokens,
-				CacheCreationInputTokens: state.CacheCreationInputTokens,
+				InputTokens:                     state.InputTokens,
+				OutputTokens:                    state.OutputTokens,
+				CacheReadInputTokens:            state.CacheReadInputTokens,
+				CacheCreationInputTokens:        state.CacheCreationInputTokens,
+				CacheCreationInputTokensPresent: true,
+				CacheReadInputTokensPresent:     true,
 			},
 		},
 		AnthropicStreamEvent{Type: "message_stop"},

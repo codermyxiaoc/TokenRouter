@@ -98,7 +98,7 @@ func (s *ModelMarketplaceService) attachMarketplaceVideoEndpoints(ctx context.Co
 				continue
 			}
 			// 单账号解析保留渠道限制（含以上游模型计费）及模型级限流判断。
-			if _, ok := s.gatewayService.resolveRequestableModel(ctx, &group.ID, channel, []Account{*account}, model.ID); !ok {
+			if _, ok := s.gatewayService.resolveRequestableModel(ctx, &group.ID, channel, []Account{*account}, model.ID, nil); !ok {
 				continue
 			}
 			switch group.Platform {

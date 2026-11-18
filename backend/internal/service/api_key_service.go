@@ -1180,6 +1180,7 @@ func (s *APIKeyService) SelectCompositeGroupForRequest(ctx context.Context, apiK
 	if apiKey.User != nil {
 		userCopy := *apiKey.User
 		userCopy.UserGroupRPMOverride = binding.UserGroupRPMOverride
+		userCopy.UserGroupRPMOverrideGroupID = binding.GroupID
 		selected.User = &userCopy
 	}
 	// 智能路由只能使用配置的候选，不允许停用分组回退改变已校验的模型目录。
@@ -1294,12 +1295,14 @@ func (s *APIKeyService) refreshFallbackUserGroupRPMOverride(ctx context.Context,
 		return
 	}
 	apiKey.User.UserGroupRPMOverride = nil
+	apiKey.User.UserGroupRPMOverrideGroupID = 0
 	if s.userGroupRateRepo == nil || apiKey.User.ID <= 0 || groupID <= 0 {
 		return
 	}
 	override, err := s.userGroupRateRepo.GetRPMOverrideByUserAndGroup(ctx, apiKey.User.ID, groupID)
 	if err == nil {
 		apiKey.User.UserGroupRPMOverride = override
+		apiKey.User.UserGroupRPMOverrideGroupID = groupID
 	}
 }
 
@@ -1916,18 +1919,31 @@ func (s *APIKeyService) GetAvailableGroupsForScopeWithSubscription(ctx context.C
 	if err != nil {
 		return nil, err
 	}
+	return groupsForSubscriptionPlan(groups, subscription.Plan), nil
+}
+
+// GetAvailableGroupsForPlan 在购买前以本人已有分组权限预览套餐，和指定订阅的 Key 使用相同的覆盖范围与倍率。
+func (s *APIKeyService) GetAvailableGroupsForPlan(ctx context.Context, userID int64, plan *SubscriptionPlan) ([]Group, error) {
+	groups, err := s.GetAvailableGroups(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return groupsForSubscriptionPlan(groups, plan), nil
+}
+
+func groupsForSubscriptionPlan(groups []Group, plan *SubscriptionPlan) []Group {
 	filtered := make([]Group, 0, len(groups))
 	for i := range groups {
-		if subscriptionPlanIncludesGroup(subscription.Plan, groups[i].ID) {
+		if subscriptionPlanIncludesGroup(plan, groups[i].ID) {
 			// 只修改返回副本，避免将套餐覆盖倍率写回分组或影响其它订阅的展示。
 			group := groups[i]
-			if rateMultiplier, ok := subscriptionPlanGroupRateMultiplier(subscription.Plan, group.ID); ok {
+			if rateMultiplier, ok := subscriptionPlanGroupRateMultiplier(plan, group.ID); ok {
 				group.RateMultiplier = rateMultiplier
 			}
 			filtered = append(filtered, group)
 		}
 	}
-	return filtered, nil
+	return filtered
 }
 
 // ListBillingSubscriptionsForScope 返回当前付款主体可指定的有效订阅。

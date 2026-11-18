@@ -67,6 +67,8 @@ OpenAI 兼容 Messages 在尚未向客户端提交响应时，会把管理员临
 
 OpenAI/Composite 分组可启用 `force_openai_fast`，使可信认证快照中的 OpenAI 请求在没有显式服务层级时也先形成 `service_tier=priority`，并覆盖客户端提交的其它合法 tier。该组级意图仍要经过全局 Fast/Flex 规则，系统过滤或阻断拥有最终裁决权；API Key 的 `force_off` 也可删除组级注入。字段仅对 OpenAI/Composite 分组生效，切换到其它平台或从不可信上下文读取时必须归零/忽略。
 
+同类开关 `force_openai_ultrafast`（同步上游 v0.2.22）只对支持 Ultrafast 的模型（GPT-6 Astra、GPT-6.1 Sol、GPT-6.2 Sol/Astra，判定与计费共用 `openAIModelSupportsUltrafast`）形成 `service_tier=ultrafast`，两个开关可同时开启，优先级为 Ultra Fast > Fast > 客户端：其它模型在同时开启强制 Fast 时使用 priority，否则跟随客户端。GPT-6.2 的订阅（OAuth）账号还需套餐包含 Ultra Fast（`plan_type` 为 Pro 时仅含 Sol，Pro Max 两者都含，同步上游 v0.2.23），不满足时按强制 Fast 或客户端取值；API Key 账号不受此限制。Ultrafast 按模型专属倍率计费：GPT-6 Astra 与 GPT-6.1 Sol 为 6 倍；GPT-6.2 按请求计费时点在 2027-03-01 08:00 UTC 前为 3 倍、之后 6 倍（`openAIUltrafastMultiplier`）。渠道或分组逐模型价可用 `ultrafast_multiplier`（迁移 333）显式覆盖该倍率，留空沿用模型默认；"免费 Fast"只覆盖 priority，不覆盖 Ultrafast。
+
 同一范围的分组还可启用 `free_openai_fast`。当最终使用的是 OpenAI 账号且计费档位为 `priority`/`fast` 时，网关保持发往上游的 Fast 档位不变，只用同一分组、渠道、长上下文和峰值规则重新计算 Standard 用户价格。Usage Log 的 `total_cost`、账号统计和账号额度继续保留 Fast 成本；`actual_cost`、余额/订阅分配和 API Key 配额使用 Standard 价格。缺少 Standard 定价时沿用既有缺价零成本记录路径，不把请求改写成普通上游请求；其它平台、普通档位和不可信认证上下文必须忽略该字段。
 
 OpenAI 分组还可设置 `max_reasoning_effort` 与 `max_reasoning_effort_over_limit`。策略只处理客户端显式提供的 `reasoning.effort`、`reasoning_effort` 或 Messages 的 `output_config.effort`；缺省 effort 不会被桥接器补出的默认值误判为客户端请求。先按分组的模型范围映射（精确、前缀或后缀）得到有效档位，再比较 `minimal < low < medium < high < xhigh < max`：`downgrade`（默认）改写为上限，`deny` 返回本地 403 权限错误并标记为业务限制。推理档位改写仅能来自管理员配置的映射或上限策略，普通转发层不得再隐式改写；`none` 可作为映射和请求审计值，但不参与上限排序。Usage Log 同时保留策略前的请求档位与最终转发档位。复合 Key 在鉴权阶段已经选出具体 OpenAI 分组，因此沿用该分组策略；当前 fork 不重新开放 Composite 分组本身的推理配置。HTTP Responses/Chat、Messages 转换和 Responses WebSocket 的每个请求帧都必须执行同一裁决，且策略快照随 API Key 认证缓存传播。
@@ -102,11 +104,11 @@ GPT-6.1 Sol 的 OAuth 订阅上游成本不再附加长上下文费用，只作�
 
 Gemini 显式缓存创建的输入费和 Token-hour 存储费使用独立持久资金合同；续期仅计算新增存储时间，不形成第二次模型调用价。它复用本站锁内多订阅、余额及团队分配，完整生命周期与不确定结果处理见[显式上下文缓存](../interfaces/gemini_upstream.md#gemini_explicit_cache)。
 
-账号成本基数优先使用 Usage Log 的 `account_stats_cost`，仅在该字段为 `nil` 时回退 `total_cost`；显式 `0` 表示账号成本为零。账号统计和账号 `quota_used` 都把这个基数乘以账号 `rate_multiplier`，从而保持同一成本口径。用户余额、订阅和 API Key 配额始终使用 `ActualCost`，不受账号成本覆盖影响。账号成本回退到模型文件定价时，必须使用 Usage Log 最终记录的服务层级，并与模型长上下文倍率组合计算；自定义账号统计价格以及已经由 `ApplyPricingToAccountStats` 取得的用户计费结果都是最终成本基数，不得再次叠加服务层级倍率。
+账号成本基数优先使用 Usage Log 的 `account_stats_cost`，仅在该字段为 `nil` 时回退 `total_cost`；显式 `0` 表示账号成本为零。账号统计和账号 `quota_used` 都把这个基数乘以账号 `rate_multiplier`，从而保持同一成本口径。用户余额、订阅和 API Key 配额始终使用 `ActualCost`，不受账号成本覆盖影响。用量统计的模型与端点分布中“实际”始终是用户扣费，即使按账号筛选也不替换为账号成本；账号成本通过独立的 `account_cost` 字段返回，只在管理员视图展示，用户用量接口清零不输出。账号成本回退到模型文件定价时，必须使用 Usage Log 最终记录的服务层级，并与模型长上下文倍率组合计算；自定义账号统计价格以及已经由 `ApplyPricingToAccountStats` 取得的用户计费结果都是最终成本基数，不得再次叠加服务层级倍率。
 
 API Key 账号可显式开启[上游声明倍率同步](../interfaces/upstream_billing_probe.md#upstream_billing_rate_sync)，成功探测后以受限的基准声明更新 `rate_multiplier`，不包含上游高峰因子。单独开启探测不改倍率，失败或非法声明也不覆盖原值。同步仍遵守上述账号成本边界，不变更用户价格、调度排序或历史使用记录。
 
-DeepSeek 默认价中的 Flash 输入/输出/缓存读取分别为每百万 token 0.15/0.60/0.003 USD，V4 Pro 保留 0.66/1.98/0.022 USD，再按同一 PricingAt 应用既有峰谷规则。2026-09-15 核对[官方定价说明](https://api-docs.deepseek.com/quick_start/pricing/)后，未采用上游 v0.2.5 已过时的 9 月 14 日 Pro 自动按 Flash 计费规则；后续结算和历史事实分开，不重算既有账单。分组和渠道显式价（含零价）不经过官方默认三价覆盖。现有目录解析尚未区分 `pricing.override_file` 中 DeepSeek 三价的字段来源，不能用该文件代替分组/渠道合同价来保证绕过 DeepSeek 官方默认价策略。
+DeepSeek 默认价中的 Flash 输入/输出/缓存读取分别为每百万 token 0.15/0.60/0.003 USD，V4 Pro 保留 0.66/1.98/0.022 USD，再按同一 PricingAt 应用既有峰谷规则。2026-09-15 核对[官方定价说明](https://api-docs.deepseek.com/quick_start/pricing/)后，未采用上游 v0.2.5 已过时的 9 月 14 日 Pro 自动按 Flash 计费规则；后续结算和历史事实分开，不重算既有账单。分组和渠道显式价（含零价）不经过官方默认三价覆盖。`pricing.override_file` 中显式给出的 DeepSeek 输入/输出/缓存读取价（含 0）按字段视为运营者最终价：既不被官方低谷价覆盖，也不叠加峰值倍率；该文件未给出的字段仍按官方默认价与峰谷规则计费，删除 override 并热重载后恢复官方策略（同步上游 v0.2.22）。
 
 渠道模型定价显式声明计费模式和计费模型来源：
 
@@ -124,6 +126,10 @@ DeepSeek 默认价中的 Flash 输入/输出/缓存读取分别为每百万 toke
 Token 计费支持 `reasoning_effort_multipliers` 按 `none / minimal / low / medium / high / xhigh / max` 配置有限正数倍率，优先使用最终转发档位的显式值。未配置该档位时保持旧规则：旧 `max_reasoning_effort_multiplier` 仍有效，Fable 5.1 的 Max 默认 `3x`，其他档位默认 `1x`；显式 `1` 可以取消加价，未指定档位不等同于显式 `none`。这项扩展不会改变已有显式价格、免费价和旧 Max 字段。倍率作用于全部 token 成本桶，并与当前价格、服务层级、区间及分时倍率组合；按次、图片/视频按次和搜索附加费用不乘此倍率。请求经策略降档或协议转换后按实际出站档位结算；Gemini 只读取最终 thinkingLevel，不从预算 token 数推断档位。账号统计使用模型文件默认价时沿用原有最终档位规则，自定义统计价保持独立最终成本，`ApplyPricingToAccountStats` 复用已算出的 `total_cost`，均不重复叠加。旧渠道字段通过迁移 268 持久化，新映射通过 `287_channel_reasoning_effort_multipliers.sql` 增加空 JSON 字段，不批量改写旧价卡或分组 JSON；账号统计规则继续拒绝配置这两种推理倍率。渠道与分组表单可编辑各档位，模型广场展示配置后的有效倍率。
 
 缓存写入可选地拆成 `cache_write_price`（5 分钟）和 `cache_write_1h_price`（1 小时）两档；1h 列为 NULL 时继续把旧列用于两档，保证历史渠道和账号统计规则的结算不变。该字段同时适用于渠道默认价、token 区间和账号统计价，显式 0 仍表示免费；分档用量缺失时按旧聚合 token 数回退。数据库迁移为 `261_channel_cache_write_1h_pricing.sql`。
+
+Anthropic 用量的缓存写入以聚合的 `cache_creation_input_tokens` 为权威，只有 5m/1h 明细时才由明细求和；流式事件中的 null/0 占位不清空已有快照，兼容供应商的 `prompt_tokens` 总量跨事件保留并据此重算不含缓存的输入量。聚合量大于 5m+1h 明细之和时，多出的未分类缓存写入按 5m 价计费；OpenAI 平台账号接 Claude 原生上游时同样透传 5m/1h 明细（同步上游 v0.2.23 PR #8174）。计费与账号统计共用 `billingUsageTokens` 口径。
+
+OpenAI 缓存写入按上游实际上报的 `cache_write_tokens_details.ttl_30m_tokens / ttl_12h_tokens` 拆成 30 分钟与 12 小时两档（同步上游 v0.2.22），与 Anthropic 5m/1h 分开记录在 `usage_logs.cache_creation_30m_tokens / cache_creation_12h_tokens`，二者互斥、之和等于总写入；明细缺失、只给一项或与总量不一致时不拆分，按总写入原价计费，请求里声明的 TTL 不作为写入证据。30m 按普通缓存写入价，12h 使用 `cache_write_12h_price`（渠道默认价、token 区间、账号统计价均支持，区间缓存写入倍率同样缩放 12h 价）；GPT-5.6 与 GPT-6 系列目录默认 12h 价为输入价 2.5 倍，目录中的普通写入价（含零价）独立于 12h 默认价。只配置了统一 `cache_write_price` 的渠道或区间继续按统一价结算。GPT-6.2、6.1 Sol/Terra 和 6 Sol/Luna 的 `pricing.override_file` 显式设置 `cache_creation_input_token_cost` 时也沿用运营者统一价。Fast/priority 档位按普通缓存写入价到 priority 价的比例换算 12h 价，比例无从推导时用档位倍率。数据库迁移为 `331_openai_cache_write_ttl.sql`。
 
 Grok 媒体、搜索和 Voice 使用独立计价维度。视频按输出秒计价，`video_model_prices` 可按规范模型族与 480p/720p/1080p 覆盖，未命中时依次回退 `video_price_*` 和模型族内置价；异步创建不扣费，首次完成观察才用任务级稳定 request ID 结算。搜索以 `search_price_per_1k` 按调用次数附加在 token 费用之上；独立 `/web_search` 和 `/x_search` 的纯工具请求也可单独结算。Realtime、TTS、STT 分别使用每分钟、每百万字符、每小时价格；Realtime 握手或纯文本会话不出账，只有任一方向观察到非空音频负载后才按该连接的会话时长结算。未知的数字版 Grok 文本模型可以回退到当前默认文本 token 价，但模型 ID 含 `imagine`、`image`、`video`、`audio`、`speech`、`tts`、`transcribe` 或 `realtime` 时必须排除这项兜底；`vision` 多模态对话仍按 token 计费。上述列 `NULL` 表示使用默认值，显式 `0` 表示免费，不能用“缺少 token usage”跳过已确认的媒体或工具用量。
 

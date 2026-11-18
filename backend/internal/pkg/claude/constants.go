@@ -29,7 +29,9 @@ const (
 	BetaRedactThinking              = "redact-thinking-2026-02-12"
 	BetaContextManagement           = "context-management-2025-06-27"
 	BetaMidConversationOutputConfig = "mid-conversation-output-config-2026-07-01"
-	BetaExtendedCacheTTL            = "extended-cache-ttl-2025-04-11"
+	// BetaPerTurnControl 是 Claude Code 请求消息级 output_config 的另一种 beta 写法。
+	BetaPerTurnControl   = "per-turn-control-2026-07-01"
+	BetaExtendedCacheTTL = "extended-cache-ttl-2025-04-11"
 
 	// server-side refusal fallback beta 字段族（beta Messages API 专有）。
 	// 客户端（Claude Code / SDK / OpenCode 等）会默认透传 body.fallbacks /
@@ -85,7 +87,7 @@ const DefaultCacheControlTTL = "5m"
 //
 // ⚠️ 读取实际生效的版本号请用 CLIVersion()，它会叠加 SUB2API_CLAUDE_CLI_VERSION 覆盖。
 // 直接引用本常量只在"表达内置基线"时才正确（例如覆盖值的下限校验）。
-const CLICurrentVersion = "2.1.220"
+const CLICurrentVersion = "2.1.321" // 同步上游 v0.2.21：Fable/Mythos 5.2 需要更新的客户端版本
 
 // FullClaudeCodeMimicryBetas 返回最"像"真实 Claude Code CLI 的完整 beta 列表，
 // 用于 OAuth 账号伪装成 Claude Code 时使用。
@@ -142,6 +144,19 @@ type Model struct {
 
 // DefaultModels Claude Code 客户端支持的默认模型列表
 var DefaultModels = []Model{
+	{
+		ID:          "claude-fable-5-2",
+		Type:        "model",
+		DisplayName: "Claude Fable 5.2",
+		CreatedAt:   "2026-11-09T00:00:00Z",
+	},
+	{
+		// Mythos 5.2 需要 Anthropic 授予访问资格，列出不代表账号已开通。
+		ID:          "claude-mythos-5-2",
+		Type:        "model",
+		DisplayName: "Claude Mythos 5.2",
+		CreatedAt:   "2026-11-09T00:00:00Z",
+	},
 	{
 		ID:          "claude-fable-5-1",
 		Type:        "model",
@@ -239,7 +254,7 @@ func DefaultModelIDs() []string {
 }
 
 // DefaultTestModel 测试时使用的默认模型
-const DefaultTestModel = "claude-sonnet-4-5-20250929"
+const DefaultTestModel = "claude-sonnet-4-6"
 
 // ModelIDOverrides Claude OAuth 请求需要的模型 ID 映射
 var ModelIDOverrides = map[string]string{

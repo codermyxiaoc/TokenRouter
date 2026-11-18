@@ -61,8 +61,6 @@ const (
 	// 上游域名被解析到 443 不可达的 IP 时（DNS 污染/路由异常），单个账号就要卡满
 	// 内核超时；而多账号故障转移是串行的，一次请求会阻塞数分钟且不写中间错误。
 	defaultUpstreamDialTimeout = 10 * time.Second
-	// defaultUpstreamDialKeepAlive: TCP keepalive 探测间隔，与 Go 默认值保持一致
-	defaultUpstreamDialKeepAlive = 30 * time.Second
 	// defaultUpstreamTLSHandshakeTimeout: TLS 握手超时（10秒）
 	// 与建连超时同量级，避免 TCP 已连通但对端不推进握手时无限等待
 	defaultUpstreamTLSHandshakeTimeout = 10 * time.Second
@@ -632,16 +630,13 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 
 	// 创建带 TLS 指纹的 Transport
 	slog.Debug("tls_fingerprint_creating_new_client", "account_id", accountID, "cache_key", cacheKey, "proxy", proxyKey)
-	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profile, protocolMode)
+	transport, err := buildUpstreamTransportWithTLSFingerprintGuard(settings, parsedProxy, profile, protocolMode, s.shouldValidateResolvedIP())
 	if err != nil {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("build TLS fingerprint transport: %w", err)
 	}
 
-	client := &http.Client{Transport: transport}
-	if s.shouldValidateResolvedIP() {
-		client.CheckRedirect = s.redirectChecker
-	}
+	client := &http.Client{Transport: transport, CheckRedirect: s.tlsFingerprintRedirectChecker}
 
 	entry := &upstreamClientEntry{
 		client:       client,
@@ -694,6 +689,14 @@ func (s *httpUpstreamService) redirectChecker(req *http.Request, via []*http.Req
 		return errors.New("stopped after 10 redirects")
 	}
 	return s.validateRequestHost(req)
+}
+
+// 指纹客户端只接收 HTTPS 请求。后续每一跳也必须使用 TLS，保留代理路径和已有的目标校验。
+func (s *httpUpstreamService) tlsFingerprintRedirectChecker(req *http.Request, via []*http.Request) error {
+	if !strings.EqualFold(req.URL.Scheme, "https") {
+		return errors.New("TLS fingerprint redirect requires HTTPS")
+	}
+	return s.redirectChecker(req, via)
 }
 
 // acquireClient 获取或创建客户端，并标记为进行中请求
@@ -787,7 +790,7 @@ func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, a
 	}
 
 	// 缓存未命中或需要重建，创建新客户端
-	transport, err := buildUpstreamTransport(settings, parsedProxy, protocolMode)
+	transport, err := buildUpstreamTransportWithGuard(settings, parsedProxy, protocolMode, s.shouldValidateResolvedIP())
 	if err != nil {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("build transport: %w", err)
@@ -1384,9 +1387,28 @@ func defaultPoolSettings(cfg *config.Config) poolSettings {
 // 必须显式提供：http.Transport 的 DialContext 为 nil 时使用零值 net.Dialer，
 // 建连没有任何超时上限，只能等内核 TCP 重传耗尽（Linux 约 130 秒）。
 func newUpstreamDialer() *net.Dialer {
+	return newUpstreamDialerWithGuard(false)
+}
+
+// newUpstreamDialerWithGuard 构建上游直连拨号器，并在套接字连接前按请求校验实际目标 IP
+// （防 DNS Rebinding，见 upstreamDialControlContext）。alwaysPublicOnly 对应全局 URL 白名单禁止私网。
+func newUpstreamDialerWithGuard(alwaysPublicOnly bool) *net.Dialer {
+	dialer := newUpstreamDialerBase()
+	dialer.Control = nil
+	dialer.ControlContext = upstreamDialControlContext(alwaysPublicOnly)
+	return dialer
+}
+
+func newUpstreamDialerBase() *net.Dialer {
 	return &net.Dialer{
-		Timeout:   defaultUpstreamDialTimeout,
-		KeepAlive: defaultUpstreamDialKeepAlive,
+		Timeout: defaultUpstreamDialTimeout,
+		KeepAliveConfig: net.KeepAliveConfig{
+			Enable:   true,
+			Idle:     upstreamKeepAliveIdle,
+			Interval: upstreamKeepAliveInterval,
+			Count:    upstreamKeepAliveCount,
+		},
+		Control: upstreamDialControl,
 	}
 }
 
@@ -1410,8 +1432,20 @@ func newUpstreamDialer() *net.Dialer {
 //   - IdleConnTimeout: 空闲连接超时（超时后关闭）
 //   - ResponseHeaderTimeout: 等待响应头超时（不影响流式传输）
 func buildUpstreamTransport(settings poolSettings, proxyURL *url.URL, protocolMode string) (*http.Transport, error) {
+	return buildUpstreamTransportWithGuard(settings, proxyURL, protocolMode, false)
+}
+
+// buildUpstreamTransportWithGuard 与 buildUpstreamTransport 相同，alwaysPublicOnly 为全局公网限定开关。
+// 直连拨号始终带按请求生效的拨号校验；走代理时实际连接的是代理地址，由代理访问目标。
+func buildUpstreamTransportWithGuard(settings poolSettings, proxyURL *url.URL, protocolMode string, alwaysPublicOnly bool) (*http.Transport, error) {
+	// 只有直连才在拨号时校验目标 IP；HTTP 代理会复用此拨号器去连接代理本身，
+	// 校验代理地址会误拦运营者部署在内网的代理。
+	dialer := newUpstreamDialerBase()
+	if proxyURL == nil {
+		dialer = newUpstreamDialerWithGuard(alwaysPublicOnly)
+	}
 	transport := &http.Transport{
-		DialContext:           newUpstreamDialer().DialContext,
+		DialContext:           dialer.DialContext,
 		TLSHandshakeTimeout:   defaultUpstreamTLSHandshakeTimeout,
 		MaxIdleConns:          settings.maxIdleConns,
 		MaxIdleConnsPerHost:   settings.maxIdleConnsPerHost,
@@ -1475,6 +1509,12 @@ func enableOpenAIHTTP2KeepAlive(transport *http.Transport) (*http2.Transport, er
 //   - https: 指纹拨号器不支持 TLS 代理，回退普通 transport
 //   - socks5: SOCKS5 代理，使用 SOCKS5ProxyDialer（SOCKS5 隧道 + utls 握手）
 func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile, protocolMode string) (http.RoundTripper, error) {
+	return buildUpstreamTransportWithTLSFingerprintGuard(settings, proxyURL, profile, protocolMode, false)
+}
+
+// buildUpstreamTransportWithTLSFingerprintGuard 与 buildUpstreamTransportWithTLSFingerprint 相同，
+// 直连时 TCP 拨号同样带公网校验钩子；alwaysPublicOnly 为全局公网限定开关。
+func buildUpstreamTransportWithTLSFingerprintGuard(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile, protocolMode string, alwaysPublicOnly bool) (http.RoundTripper, error) {
 	useHTTP2 := protocolMode == upstreamProtocolModeOpenAIH2 && tlsfingerprint.SupportsHTTP2(profile)
 	transport := &http.Transport{
 		MaxIdleConns:          settings.maxIdleConns,
@@ -1491,7 +1531,9 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 	if proxyURL == nil {
 		// 直连：使用 TLSFingerprintDialer
 		slog.Debug("tls_fingerprint_transport_direct")
-		dialer := tlsfingerprint.NewDialer(profile, nil)
+		// 普通 TCP 与指纹握手共用同一受控拨号器，TLS 仍按原始主机名握手与校验证书。
+		transport.DialContext = newUpstreamDialerWithGuard(alwaysPublicOnly).DialContext
+		dialer := tlsfingerprint.NewDialer(profile, transport.DialContext)
 		dialTLSContext = dialer.DialTLSContext
 	} else {
 		scheme := strings.ToLower(proxyURL.Scheme)
@@ -1503,7 +1545,7 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 			dialTLSContext = socks5Dialer.DialTLSContext
 		case "https":
 			// 指纹拨号器发送明文 CONNECT 前导，无法与 HTTPS 代理建 TLS，因此保留普通代理路由。
-			return buildUpstreamTransport(settings, proxyURL, upstreamProtocolModeDefault)
+			return buildUpstreamTransportWithGuard(settings, proxyURL, upstreamProtocolModeDefault, alwaysPublicOnly)
 		case "http":
 			// HTTP/HTTPS 代理：使用 HTTPProxyDialer（CONNECT 隧道）
 			slog.Debug("tls_fingerprint_transport_http_connect", "proxy", proxyURL.Host)

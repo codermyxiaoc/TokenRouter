@@ -361,3 +361,7 @@ func TestGroupIsolation_SimpleMode_GroupedAccountAlsoSchedulable(t *testing.T) {
 	require.NotNil(t, acc)
 	require.Equal(t, int64(1), acc.ID, "SimpleMode 应能调度已分组账号")
 }
+
+func (r *groupAwareMockAccountRepo) ClearModelRateLimit(context.Context, int64, string) error {
+	return nil
+}

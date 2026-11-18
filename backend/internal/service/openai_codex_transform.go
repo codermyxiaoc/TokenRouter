@@ -9,9 +9,13 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 var codexModelMap = map[string]string{
+	"gpt-6.2-sol":                "gpt-6.2-sol",
+	"gpt-6.2-astra":              "gpt-6.2-astra",
 	"gpt-6-sol":                  "gpt-6-sol",
 	"gpt-6-luna":                 "gpt-6-luna",
 	"gpt-6.1-terra":              "gpt-6.1-terra",
@@ -67,6 +71,8 @@ var codexVersionModelPrefixes = []struct {
 	prefix string
 	target string
 }{
+	{prefix: "gpt-6.2-sol", target: "gpt-6.2-sol"},
+	{prefix: "gpt-6.2-astra", target: "gpt-6.2-astra"},
 	{prefix: "gpt-5.6-sol", target: "gpt-5.6-sol"},
 	{prefix: "gpt-5.6-terra", target: "gpt-5.6-terra"},
 	{prefix: "gpt-5.6-luna", target: "gpt-5.6-luna"},
@@ -1647,7 +1653,85 @@ func codexInputCallIDs(input []any) map[string]struct{} {
 	return callIDs
 }
 
+// normalizeCodexAdditionalToolsID 只压缩 UUID 形态的工具声明 ID（at_xxxxxxxx-xxxx-...），
+// 其它供应商 ID 视为不透明值原样保留。
+func normalizeCodexAdditionalToolsID(id string) string {
+	if len(id) != 39 || !strings.HasPrefix(id, "at_") ||
+		id[11] != '-' || id[16] != '-' || id[21] != '-' || id[26] != '-' {
+		return id
+	}
+	compactUUID := strings.ReplaceAll(id[3:], "-", "")
+	if len(compactUUID) != 32 {
+		return id
+	}
+	if _, err := hex.DecodeString(compactUUID); err != nil {
+		return id
+	}
+	return "at_" + compactUUID
+}
+
+// codexAdditionalToolsIDMappings 收集本次请求中需要压缩的 additional_tools 声明 ID。
+func codexAdditionalToolsIDMappings(input []any) map[string]string {
+	mappings := make(map[string]string)
+	for _, rawItem := range input {
+		item, ok := rawItem.(map[string]any)
+		if !ok || item["type"] != "additional_tools" {
+			continue
+		}
+		if id, ok := item["id"].(string); ok {
+			if normalizedID := normalizeCodexAdditionalToolsID(id); normalizedID != id {
+				mappings[id] = normalizedID
+			}
+		}
+	}
+	return mappings
+}
+
+// normalizeCodexAdditionalToolsIDsBody 用于透传/WebSocket 兼容路径：不整体解码重编码请求，
+// 只局部改写声明 ID 以及引用这些声明的 item_reference。
+func normalizeCodexAdditionalToolsIDsBody(body []byte) ([]byte, bool, error) {
+	input := parseRawJSONView(body).Get("input")
+	if !input.IsArray() {
+		return body, false, nil
+	}
+	mappings := make(map[string]string)
+	input.ForEach(func(_, item gjson.Result) bool {
+		if id := item.Get("id"); item.Get("type").String() == "additional_tools" && id.Type == gjson.String {
+			if normalizedID := normalizeCodexAdditionalToolsID(id.Str); normalizedID != id.Str {
+				mappings[id.Str] = normalizedID
+			}
+		}
+		return true
+	})
+	if len(mappings) == 0 {
+		return body, false, nil
+	}
+	items := make([]string, 0)
+	var patchErr error
+	input.ForEach(func(_, item gjson.Result) bool {
+		raw := item.Raw
+		if typ := item.Get("type").String(); typ == "additional_tools" || typ == "item_reference" {
+			if id := item.Get("id"); id.Type == gjson.String {
+				if normalizedID, mapped := mappings[id.Str]; mapped {
+					raw, patchErr = sjson.Set(raw, "id", normalizedID)
+					if patchErr != nil {
+						return false
+					}
+				}
+			}
+		}
+		items = append(items, raw)
+		return true
+	})
+	if patchErr != nil {
+		return body, false, fmt.Errorf("normalize additional_tools ID: %w", patchErr)
+	}
+	return replaceOpenAIRawInput(body, input, items), true, nil
+}
+
 func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []any {
+	// additional_tools 声明 ID 的压缩映射，声明与 item_reference 引用同步改写。
+	additionalToolsIDMappings := codexAdditionalToolsIDMappings(input)
 	filtered := make([]any, 0, len(input))
 	referenceIDMappings := codexItemReferenceIDMappings(input, opts.PreserveCallIDs)
 	inputItemIDs := codexInputItemIDs(input)
@@ -1711,6 +1795,11 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 			newItem := make(map[string]any, len(m))
 			for key, value := range m {
 				newItem[key] = value
+			}
+			if id, ok := newItem["id"].(string); ok {
+				if normalizedID, mapped := additionalToolsIDMappings[id]; mapped {
+					newItem["id"] = normalizedID
+				}
 			}
 			if id, ok := newItem["id"].(string); ok && strings.HasPrefix(strings.TrimSpace(id), "call_") {
 				trimmedID := strings.TrimSpace(id)
@@ -1794,7 +1883,16 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 			}
 		}
 
-		if !opts.PreserveReferences {
+		// additional_tools 的 ID 标识本次请求携带的工具声明，不是存储的历史引用；
+		// 删除后原生工具发现会退化为普通 function call，即使 store=false 也要保留。
+		if typ == "additional_tools" {
+			if id, ok := m["id"].(string); ok {
+				if normalizedID, mapped := additionalToolsIDMappings[id]; mapped {
+					ensureCopy()
+					newItem["id"] = normalizedID
+				}
+			}
+		} else if !opts.PreserveReferences {
 			ensureCopy()
 			delete(newItem, "id")
 		} else if id, ok := m["id"].(string); ok && shouldStripOpenAIResponsesInputItemID(typ, id) {

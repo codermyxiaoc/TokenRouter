@@ -223,6 +223,26 @@ describe('CreateAccountModal OpenAI account options', () => {
       .mockResolvedValue({ credentials: { model_whitelist: [] }, extra: {} })
   })
 
+  it('can create a passthrough account with model filtering enabled', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('filtered passthrough')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('synthetic-key')
+    await wrapper.get('[data-testid="create-openai-passthrough-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="create-openai-passthrough-model-filter"]').setValue(true)
+    wrapper.getComponent(ModelWhitelistSelectorStub).vm.$emit('update:modelValue', ['qwen3.8-max'])
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const payload = createAccountMock.mock.calls[0]?.[0]
+    expect(payload.extra.openai_passthrough).toBe(true)
+    expect(payload.extra.openai_passthrough_model_filter).toBe(true)
+    // fork 将请求侧映射与最终白名单拆开持久化，纯白名单只写入 model_whitelist。
+    expect(payload.credentials.model_whitelist).toEqual(['qwen3.8-max'])
+    wrapper.unmount()
+  })
+
   // Video 使用真实提交路径，防止平台选择后仍带入 Claude 默认端点或 OAuth 类型。
   // 新账号默认关闭，只在管理员显式选择后提交开关联动。
   it('creates API key accounts with explicitly selected upstream rate sync', async () => {

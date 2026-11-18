@@ -67,11 +67,11 @@ func TestRelayUsagePreservesExplicitZeroAndExactExponent(t *testing.T) {
 
 // 每个聚合字段都先查溢出，失败不能损坏此前已经完成回合的统计。
 func TestRelayUsageAggregationIsAtomicOnOverflow(t *testing.T) {
-	for field := range 6 {
+	for field := range 8 {
 		previous := Usage{InputTokens: 10, OutputTokens: 20}
 		next := Usage{InputTokens: 1, OutputTokens: 2}
 		fields := func(usage *Usage) []*int {
-			return []*int{&usage.InputTokens, &usage.OutputTokens, &usage.ImageInputTokens, &usage.ImageOutputTokens, &usage.CacheCreationInputTokens, &usage.CacheReadInputTokens}
+			return []*int{&usage.InputTokens, &usage.OutputTokens, &usage.ImageInputTokens, &usage.ImageOutputTokens, &usage.CacheCreationInputTokens, &usage.CacheReadInputTokens, &usage.CacheCreation30mInputTokens, &usage.CacheCreation12hInputTokens}
 		}
 		*fields(&previous)[field] = math.MaxInt - 1
 		*fields(&next)[field] = 2
@@ -79,6 +79,55 @@ func TestRelayUsageAggregationIsAtomicOnOverflow(t *testing.T) {
 		require.Zero(t, finalizeRelayTurnUsage(state))
 		require.Error(t, state.usageError)
 		require.Equal(t, previous, state.usage)
+	}
+}
+
+// 期限只随同源总量更新，跨轮汇总遇到缺失明细时仍可使用总写入量结算。
+func TestRelayCacheWriteTTLTracksUsageSnapshots(t *testing.T) {
+	state := &relayState{}
+	observe := func(eventType, details string) {
+		message := []byte(`{"usage":{"input_tokens":10,"output_tokens":1,"prompt_tokens_details":` + details + `}}`)
+		parseUsageAndAccumulate(state, message, eventType, nil)
+		require.NoError(t, state.usageError)
+	}
+	observe("response.completed", `{"cache_write_tokens":10,"cache_write_tokens_details":{"ttl_30m_tokens":1,"ttl_12h_tokens":9}}`)
+	first := finalizeRelayTurnUsage(state)
+	require.Equal(t, 1, first.CacheCreation30mInputTokens)
+	require.Equal(t, 9, first.CacheCreation12hInputTokens)
+	observe("response.completed", `{"cache_write_tokens":10,"cache_write_tokens_details":{"ttl_30m_tokens":0,"ttl_12h_tokens":10}}`)
+	finalizeRelayTurnUsage(state)
+	require.Equal(t, 20, state.usage.CacheCreationInputTokens)
+	require.Equal(t, 1, state.usage.CacheCreation30mInputTokens)
+	require.Equal(t, 19, state.usage.CacheCreation12hInputTokens)
+
+	observe("response.in_progress", `{"cache_write_tokens":5,"cache_write_tokens_details":{"ttl_30m_tokens":2,"ttl_12h_tokens":3}}`)
+	observe("response.in_progress", `{"cache_write_tokens":7,"cache_write_tokens_details":{"ttl_12h_tokens":3}}`)
+	require.Zero(t, state.turnUsage.CacheCreation30mInputTokens)
+	require.Zero(t, state.turnUsage.CacheCreation12hInputTokens)
+	observe("response.completed", `{"cache_write_tokens":7,"cache_write_tokens_details":{"ttl_30m_tokens":2,"ttl_12h_tokens":3}}`)
+	turn := finalizeRelayTurnUsage(state)
+	require.Equal(t, 7, turn.CacheCreationInputTokens)
+	require.Zero(t, turn.CacheCreation30mInputTokens)
+	require.Zero(t, turn.CacheCreation12hInputTokens)
+	require.Equal(t, 27, state.usage.CacheCreationInputTokens)
+	require.Zero(t, state.usage.CacheCreation30mInputTokens)
+	require.Zero(t, state.usage.CacheCreation12hInputTokens)
+}
+
+// 上游提供了可信总量时，可选明细损坏只影响期限折算，成功回合仍保留全部用量。
+func TestRelayCacheWriteInvalidTTLRetainsAggregate(t *testing.T) {
+	for _, details := range []string{
+		`null`,
+		`"unsupported"`,
+		`{"ttl_30m_tokens":2,"ttl_12h_tokens":"8"}`,
+		`{"ttl_30m_tokens":1.5,"ttl_12h_tokens":8.5}`,
+		`{"ttl_30m_tokens":2,"ttl_12h_tokens":8,"ttl_12h_tokens":0}`,
+	} {
+		state := &relayState{}
+		message := []byte(`{"usage":{"input_tokens":10,"output_tokens":3,"input_tokens_details":{"cache_write_tokens":10,"cache_write_tokens_details":` + details + `}}}`)
+		parseUsageAndAccumulate(state, message, "response.completed", nil)
+		require.NoError(t, state.usageError, details)
+		require.Equal(t, Usage{InputTokens: 10, OutputTokens: 3, CacheCreationInputTokens: 10}, finalizeRelayTurnUsage(state), details)
 	}
 }
 

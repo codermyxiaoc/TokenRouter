@@ -295,7 +295,8 @@ func (r *usageLogRepository) getInboundEndpointStatsFromAnalytics(ctx context.Co
 		SELECT COALESCE(NULLIF(TRIM(inbound_endpoint), ''), 'unknown'),
 		       COALESCE(SUM(total_requests), 0),
 		       COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0),
-		       COALESCE(SUM(total_cost), 0), COALESCE(SUM(actual_cost), 0)
+		       COALESCE(SUM(total_cost), 0), COALESCE(SUM(actual_cost), 0),
+		       COALESCE(SUM(account_cost), 0)
 		FROM combined `+query.where+`
 		GROUP BY 1 ORDER BY 2 DESC`, query.args...)
 	if err != nil {
@@ -305,7 +306,8 @@ func (r *usageLogRepository) getInboundEndpointStatsFromAnalytics(ctx context.Co
 	results := make([]EndpointStat, 0)
 	for rows.Next() {
 		var row EndpointStat
-		if err := rows.Scan(&row.Endpoint, &row.Requests, &row.TotalTokens, &row.Cost, &row.ActualCost); err != nil {
+		// 账号成本只供管理员端点分布展示，用户接口在 handler 层清零。
+		if err := rows.Scan(&row.Endpoint, &row.Requests, &row.TotalTokens, &row.Cost, &row.ActualCost, &row.AccountCost); err != nil {
 			return nil, false, err
 		}
 		results = append(results, row)

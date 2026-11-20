@@ -191,3 +191,79 @@ func TestSmartRoutingNativeErrorEnvelopes(t *testing.T) {
 		require.True(t, c.IsAborted())
 	}
 }
+
+// 普通与复合 Key 改写的是顶层请求模型；附加工具模型继续执行原有规则。
+func TestGatewayKeyLongContextAuthentication(t *testing.T) {
+	svc := service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, nil)
+	for _, composite := range []bool{false, true} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		source := "review[1m]"
+		key := &service.APIKey{Group: &service.Group{Platform: service.PlatformAnthropic}}
+		if composite {
+			source = "Claude/" + source
+			key = compositeMiddlewareMultiGroupTestKey()
+		}
+		key.ModelMapping = map[string]string{"review": "real", "review*": "wild"}
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"`+source+`","tools":[{"type":"image_generation","model":"review[1m]"}]}`))
+		if composite {
+			// 复合分组只使用相同组的附加模型声明；此用例只检查主模型。
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"`+source+`","messages":[]}`))
+			var err error
+			key, err = resolveCompositeAPIKeyRequest(c, svc, key)
+			require.NoError(t, err)
+		}
+		applyAPIKeyModelRedirect(c, key)
+		body, err := io.ReadAll(c.Request.Body)
+		require.NoError(t, err)
+		require.Equal(t, "real[1m]", gjson.GetBytes(body, "model").String())
+		if !composite {
+			require.Equal(t, "wild", gjson.GetBytes(body, "tools.0.model").String())
+		}
+	}
+}
+
+// 智能 Key 的不同平台候选采用各自的映射语义，选组与随后写入的模型必须一致。
+func TestSmartGatewayKeyLongContextMappingPerCandidate(t *testing.T) {
+	for _, pickAnthropic := range []bool{true, false} {
+		key := smartRoutingTestKey()
+		key.ModelMapping = map[string]string{"review": "long", "review*": "legacy"}
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"review[1m]","messages":[]}`))
+		var models []string
+		c.Set(smartRoutingResolverContextKey, smartRoutingResolverStub{check: func(_ context.Context, g *service.Group, model, endpoint string) (service.SmartRoutingGroupAvailability, error) {
+			models = append(models, model)
+			ok := g.Platform == service.PlatformOpenAI || pickAnthropic
+			return service.SmartRoutingGroupAvailability{HasModel: ok, Schedulable: ok}, nil
+		}})
+		selected, err := resolveSmartRoutingAPIKeyRequest(c, service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, nil), key)
+		require.NoError(t, err)
+		applyAPIKeyModelRedirect(c, selected)
+		body, err := io.ReadAll(c.Request.Body)
+		require.NoError(t, err)
+		if pickAnthropic {
+			require.Equal(t, []string{"long[1m]"}, models)
+		} else {
+			require.Equal(t, []string{"long[1m]", "legacy"}, models)
+		}
+		require.Equal(t, models[len(models)-1], gjson.GetBytes(body, "model").String())
+	}
+}
+
+// 未分组的原生 Messages 仍保留选择器；强制平台沿用其普通名称规则。
+func TestGatewayKeyLongContextUngroupedAndForcedPlatform(t *testing.T) {
+	for _, platform := range []string{"", service.PlatformAntigravity} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"review[1m]"}`))
+		if platform != "" {
+			c.Set(string(ContextKeyForcePlatform), platform)
+		}
+		applyAPIKeyModelRedirect(c, &service.APIKey{ModelMapping: map[string]string{"review*": "target"}})
+		body, err := io.ReadAll(c.Request.Body)
+		require.NoError(t, err)
+		expected := "target[1m]"
+		if platform != "" {
+			expected = "target"
+		}
+		require.Equal(t, expected, gjson.GetBytes(body, "model").String())
+	}
+}

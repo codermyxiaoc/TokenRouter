@@ -29,7 +29,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 	// 计数入口也必须按最终模型校验，避免相同请求在两个端点呈现不同能力。
 	if account != nil && account.Platform == PlatformAnthropic {
-		if err := ValidateSonnet55Request(parsed.Body.Bytes(), resolveAccountUpstreamModel(ctx, account, parsed.Model)); err != nil {
+		if err := prepareRoutedClaudeRequest(ctx, account, parsed); err != nil {
 			MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
 			s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return err

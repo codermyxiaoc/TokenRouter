@@ -659,13 +659,7 @@ func sanitizeBedrockThinking(body []byte, modelID string) []byte {
 	}
 	// 仅 CC 兼容开关授权转换旧参数，普通原生请求由统一校验直接拒绝。
 	if claude.IsSonnet55Model(modelID) {
-		switch thinkingType {
-		case "enabled":
-			body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
-			body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
-		case "disabled":
-			body, _ = sjson.SetBytes(body, "thinking.type", "between_tools")
-		}
+		body, _ = adaptClaude55LegacyThinking(body, modelID)
 		return body
 	}
 

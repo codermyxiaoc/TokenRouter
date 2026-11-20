@@ -239,12 +239,17 @@ func (s *OpenAIGatewayService) modelRoutedUpstreamProtocol(ctx context.Context, 
 	}
 }
 
-// 原生 Jev 只走结构化协议；模型映射不能改变平台边界。
-func (a *Account) supportsSystemOneModel(model string) bool {
-	if a.IsTypeSafe() {
-		return strings.TrimSpace(model) == DefaultTypeSafeModel
+// TypeSafe 的公开 Jev 型号与账号的私有投递名分开。渠道中间名须有对应的账号映射，
+// 最终白名单仍按真实目标判断。私有标识保留上游使用的大小写和前缀。
+// @project-doc docs/interfaces/aggregator_upstreams.md#provider_protocols
+func (a *Account) typeSafeSystemOneTarget(routingModel string) (string, bool) {
+	routingModel = strings.TrimSpace(routingModel)
+	target, matched := a.ResolveMappedModel(routingModel)
+	target = strings.TrimSpace(target)
+	if routingModel == "" || target == "" || (!matched && routingModel != DefaultTypeSafeModel) {
+		return "", false
 	}
-	return a.IsOpenCodeZen() && IsOpenCodeSystemOneModel(model)
+	return target, a.isFinalModelWhitelisted(target)
 }
 
 // 官方账户查询不接受同名中继主机或 HTTP，避免把密钥发往错误站点。

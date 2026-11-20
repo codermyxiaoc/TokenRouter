@@ -97,6 +97,9 @@ func (s *GatewayService) resolveRequestableModelsFromSnapshot(
 			// 账号快照有效，渠道读取失败也不能借默认目录或价格条目扩大该账号声明。
 			fallback := RequestableModelsResult{HadExplicitAccountModels: hadExplicitAccountModels}
 			for _, model := range fallbackModels {
+				if platform == PlatformAnthropic && normalizeClaudeCodeLongContextModel(model) != model {
+					continue
+				}
 				if resolved, ok := s.resolveRequestableModel(ctx, groupID, nil, accounts, model, previewGroup); ok {
 					fallback.Models = append(fallback.Models, resolved)
 				}
@@ -120,11 +123,21 @@ func (s *GatewayService) resolveRequestableModelsFromSnapshot(
 	}
 
 	result.Models = make([]RequestableModel, 0, len(candidates))
+	scopes := s.anthropicWindowAccounts(accounts, platform, groupID)
+	var variants []string
 	for _, requestedModel := range candidates {
+		if len(scopes) > 0 && normalizeClaudeCodeLongContextModel(requestedModel) != requestedModel {
+			variants = append(variants, requestedModel)
+			continue
+		}
 		if resolved, ok := s.resolveRequestableModel(ctx, groupID, channel, accounts, requestedModel, previewGroup); ok {
 			result.Models = append(result.Models, resolved)
+			if len(scopes) > 0 {
+				variants = append(variants, requestedModel+claudeCodeLongContextModelSuffix)
+			}
 		}
 	}
+	result.Models = s.expandAnthropicWindows(ctx, groupID, channel, accounts, scopes, previewGroup, result.Models, variants)
 	// 账号已明确排除全部候选时，未绑定分组的入口也不能复活平台默认型号。
 	if len(result.Models) == 0 {
 		result.Restricted = true
@@ -192,6 +205,10 @@ func filterRequestableModelAccounts(accounts []Account, platform string) []Accou
 // mergeRequestableModelCandidates 按既有候选、渠道配置、账号配置和默认模型的顺序合并候选。
 // 通配符只参与后续匹配，不会作为模型 ID 返回。
 func mergeRequestableModelCandidates(baseModels []string, accounts []Account, channel *Channel, platform string) []string {
+	if platform == PlatformTypeSafe {
+		// 账号映射名可指向私有部署。客户端只能从公开 Jev 型号进入结构化协议。
+		return []string{DefaultTypeSafeModel}
+	}
 	candidates := make([]string, 0, len(baseModels)+16)
 	seen := make(map[string]struct{}, len(baseModels)+16)
 	appendModels := func(models ...string) {
@@ -312,6 +329,10 @@ func accountHasUnrestrictedModelScope(account *Account) bool {
 }
 
 func requestableModelsFallback(models []string, platform string) RequestableModelsResult {
+	if platform == PlatformTypeSafe {
+		// 调度数据暂不可读时不能把缓存中的私有映射目标当成公开型号。
+		return RequestableModelsResult{Restricted: true}
+	}
 	// OpenAI 非 nil 空目录是账号过滤的权威结果，区别于未知目录的默认回退。
 	if len(models) == 0 && !(platform == PlatformOpenAI && models != nil) {
 		models = defaultRequestModelIDsForPlatform(platform)
@@ -323,7 +344,7 @@ func requestableModelsFallback(models []string, platform string) RequestableMode
 	seen := make(map[string]struct{}, len(models))
 	for _, model := range models {
 		model = strings.TrimSpace(model)
-		if model == "" || strings.Contains(model, "*") {
+		if model == "" || strings.Contains(model, "*") || (platform == PlatformAnthropic && normalizeClaudeCodeLongContextModel(model) != model) {
 			continue
 		}
 		key := strings.ToLower(model)
@@ -373,6 +394,9 @@ func (s *GatewayService) resolveRequestableModel(
 	upstreamModels := make([]string, 0, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
+		if account.IsTypeSafe() && requestedModel != DefaultTypeSafeModel {
+			continue
+		}
 		if !accountDeclaresChannelCatalogModel(account, channelMappedModel, channelMapped) ||
 			!s.isRoutingModelSupportedByAccountWithContext(ctx, account, channelMappedModel) {
 			continue
@@ -389,6 +413,10 @@ func (s *GatewayService) resolveRequestableModel(
 			if channel != nil && channel.RestrictModels && billingSource == BillingModelSourceUpstream &&
 				s.requestableModelRestricted(ctx, groupID, upstreamModel) {
 				continue
+			}
+			if account.IsTypeSafe() {
+				// 与真实结算使用同一公开价目；先完成上面的渠道、账号准入检查。
+				return RequestableModel{ID: requestedModel, PricingModel: DefaultTypeSafeModel}, true
 			}
 			upstreamModels = append(upstreamModels, upstreamModel)
 		}

@@ -170,6 +170,14 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 		return
 	}
+	if parsedReq.ClaudeLongContext {
+		ctx, selectErr := h.gatewayService.WithAnthropicWindowSelection(c.Request.Context(), apiKey.Group, parsedReq)
+		if selectErr != nil {
+			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Unable to resolve long-context accounts")
+			return
+		}
+		c.Request = c.Request.WithContext(ctx)
+	}
 	body = parsedReq.Body.Bytes()
 	reqModel := parsedReq.Model
 	if policyBody, changed, policyErr := applyAnthropicReasoningEffortPolicyForRequest(c, apiKey, body); policyErr != nil {
@@ -900,7 +908,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				// 将故障转移后的缓存计费语义传给同步响应改写逻辑。
 				requestCtx = service.WithForceCacheBilling(requestCtx)
 			}
-			if channelMapping.Mapped {
+			if attemptChannelMapping.Mapped {
 				// 选号按客户端模型，转发按渠道映射后的模型：模型级账号状态按选号模型记录。
 				requestCtx = service.WithGatewaySchedulingModel(requestCtx, reqModel)
 			}
@@ -1158,17 +1166,21 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 
 	// 统一按渠道映射、账号映射和渠道限制解析真实可请求模型。
-	resolution := h.gatewayService.ResolveRequestableModels(c.Request.Context(), groupID, platform)
+	ctx := c.Request.Context()
+	if apiKey != nil && apiKey.Group != nil {
+		ctx = context.WithValue(ctx, ctxkey.Group, apiKey.Group)
+	}
+	resolution := h.gatewayService.ResolveRequestableModels(ctx, groupID, platform)
 	availableModels := service.RequestableModelIDs(resolution.Models)
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
 		// 自定义列表只能与已通过渠道和账号校验的模型取交集，不能重新加入被拒绝的模型。
 		availableModels = filterModelsByCustomList(availableModels, nil, apiKey.Group.ModelsListConfig.Models)
-		availableModels = service.AppendAPIKeyModelAliases(availableModels, apiKey.ModelMapping)
+		availableModels = service.ProjectGatewayKeyModels(availableModels, apiKey.ModelMapping, platform)
 		writeCustomModelsList(c, platform, availableModels)
 		return
 	}
 	if apiKey != nil {
-		availableModels = service.AppendAPIKeyModelAliases(availableModels, apiKey.ModelMapping)
+		availableModels = service.ProjectGatewayKeyModels(availableModels, apiKey.ModelMapping, platform)
 	}
 
 	if len(availableModels) > 0 {
@@ -1193,7 +1205,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	// 未绑定分组时保留旧版默认模型，并按默认可请求集合追加精确别名。
 	fallbackModels := defaultModelIDsForPlatform(platform)
 	if apiKey != nil {
-		fallbackModels = service.AppendAPIKeyModelAliases(fallbackModels, apiKey.ModelMapping)
+		fallbackModels = service.ProjectGatewayKeyModels(fallbackModels, apiKey.ModelMapping, platform)
 	}
 	writeDefaultModelsList(c, platform, fallbackModels)
 }
@@ -1226,7 +1238,7 @@ func (h *GatewayHandler) compositeRequestableModels(c *gin.Context, apiKey *serv
 				continue
 			}
 		} else {
-			resolution := h.gatewayService.ResolveRequestableModels(ctx, &groupID, group.Platform)
+			resolution := h.gatewayService.ResolveRequestableModels(context.WithValue(ctx, ctxkey.Group, group), &groupID, group.Platform)
 			available = service.RequestableModelIDs(resolution.Models)
 		}
 		if group.CustomModelsListEnabled() {
@@ -1236,7 +1248,7 @@ func (h *GatewayHandler) compositeRequestableModels(c *gin.Context, apiKey *serv
 		if (requiredPlatform == service.PlatformGemini || len(geminiNativeOnly) > 0 && geminiNativeOnly[0]) && group.Platform == service.PlatformAntigravity {
 			available = h.gatewayService.FilterAntigravityGeminiModels(ctx, &groupID, available)
 		}
-		available = service.AppendAPIKeyModelAliases(available, apiKey.ModelMapping)
+		available = service.ProjectGatewayKeyModels(available, apiKey.ModelMapping, group.Platform)
 		for _, model := range available {
 			prefixed := model
 			// 智能路由公开原始模型并按候选顺序去重，复合 Key 继续保留前缀。
@@ -2338,6 +2350,14 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	}
 	body = parsedReq.Body.Bytes()
 	// count_tokens 走 messages 严格校验时，复用已解析请求，避免二次反序列化。
+	if parsedReq.ClaudeLongContext {
+		ctx, selectErr := h.gatewayService.WithAnthropicWindowSelection(c.Request.Context(), apiKey.Group, parsedReq)
+		if selectErr != nil {
+			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Unable to resolve long-context accounts")
+			return
+		}
+		c.Request = c.Request.WithContext(ctx)
+	}
 	SetClaudeCodeClientContext(c, body, parsedReq)
 	reqLog = reqLog.With(zap.String("model", parsedReq.Model), zap.Bool("stream", parsedReq.Stream))
 	// 在请求上下文中记录 thinking 状态，供 Antigravity 最终模型 key 推导/模型维度限流使用
@@ -2403,7 +2423,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		// 渠道映射只写入本次转发副本，避免重试时重复改写原始请求。
-		attemptParsedReq, _, prepareErr := h.prepareGatewayAttemptRequest(
+		attemptParsedReq, mapping, prepareErr := h.prepareGatewayAttemptRequest(
 			c.Request.Context(), parsedReq, parsedReq.Body.Bytes(), apiKey, parsedReq.Model,
 		)
 		if prepareErr != nil {
@@ -2411,7 +2431,11 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 			return
 		}
 
-		forwardErr := h.gatewayService.ForwardCountTokens(c.Request.Context(), c, account, attemptParsedReq)
+		requestCtx := c.Request.Context()
+		if mapping.Mapped {
+			requestCtx = service.WithGatewaySchedulingModel(requestCtx, parsedReq.Model)
+		}
+		forwardErr := h.gatewayService.ForwardCountTokens(requestCtx, c, account, attemptParsedReq)
 		if forwardErr == nil {
 			return
 		}

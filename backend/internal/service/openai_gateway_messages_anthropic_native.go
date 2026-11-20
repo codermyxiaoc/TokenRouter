@@ -54,7 +54,8 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
-	// 原生 Messages 的兼容供应商入口同样按最终型号执行 Sonnet 参数校验。
+	// 原生 Messages 的兼容供应商入口使用最终型号执行相同的思考转换及参数校验。
+	body, _ = adaptMappedClaudeThinking(ctx, account, body, originalModel, upstreamModel)
 	if err := ValidateSonnet55Request(body, upstreamModel); err != nil {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())

@@ -139,3 +139,32 @@ func mustAPIKeyResponseModels(t *testing.T, ctx context.Context) []string {
 	require.True(t, ok)
 	return trace.ResponseModels()
 }
+
+// 长窗口别名使用与实际 Messages 相同的单跳解析，目录不得在通配重定向后承诺短窗口目标。
+func TestGatewayKeyLongContextMappingAndProjection(t *testing.T) {
+	key := &APIKey{ModelMapping: map[string]string{
+		"alias": "long", "alias*": "short",
+		"special": "short", "special[1m]": "long",
+		"old*": "short", "old-long*": "long[1m]",
+	}}
+	for _, tc := range []struct{ source, want string }{
+		{"alias[1m]", "long[1m]"}, {"alias[1M][1m]", "long[1m]"},
+		{"special[1m]", "long[1m]"}, {"old-id[1m]", "short[1m]"},
+		{"old-long-a[1m]", "long[1m]"},
+	} {
+		for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens", "/messages/count_tokens"} {
+			got, ok := key.ResolveGatewayModelMapping(tc.source, PlatformAnthropic, path)
+			require.True(t, ok)
+			require.Equal(t, tc.want, got)
+		}
+	}
+	for _, tc := range []struct{ platform, path string }{{PlatformOpenAI, "/v1/messages"}, {PlatformGemini, "/v1/messages"}, {PlatformAnthropic, "/v1/responses"}} {
+		got, ok := key.ResolveGatewayModelMapping("alias[1m]", tc.platform, tc.path)
+		require.True(t, ok)
+		require.Equal(t, "short", got)
+	}
+	available := []string{"long", "long[1m]", "short", "old-id", "old-id[1m]", "old-long-a"}
+	models := ProjectGatewayKeyModels(available, key.ModelMapping, PlatformAnthropic)
+	require.ElementsMatch(t, []string{"long", "long[1m]", "short", "old-id", "old-long-a", "alias", "alias[1m]", "special", "special[1m]", "old-long-a[1m]"}, models)
+	require.Equal(t, AppendAPIKeyModelAliases(available, key.ModelMapping), ProjectGatewayKeyModels(available, key.ModelMapping, PlatformOpenAI))
+}

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
 	"log/slog"
 	"math"
 	"sort"
@@ -682,7 +683,7 @@ func (s *ModelMarketplaceService) qoderMarketplacePricingModels(ctx context.Cont
 func (s *ModelMarketplaceService) resolveGroupModels(ctx context.Context, group *Group) []marketplaceModelDef {
 	if s.gatewayService != nil && group != nil {
 		groupID := group.ID
-		resolution := s.gatewayService.ResolveRequestableModels(ctx, &groupID, group.Platform)
+		resolution := s.gatewayService.ResolveRequestableModels(context.WithValue(ctx, ctxkey.Group, group), &groupID, group.Platform)
 		if len(resolution.Models) > 0 {
 			return buildMarketplaceModelDefsFromRequestable(resolution.Models, group.Platform)
 		}
@@ -703,7 +704,7 @@ func (s *ModelMarketplaceService) resolveGroupModelsWithAccounts(ctx context.Con
 	}
 	groupID := group.ID
 	baseModels := configuredRequestModelsFromAccounts(accounts, group.Platform)
-	resolution := s.gatewayService.resolveRequestableModelsWithAccounts(ctx, &groupID, group.Platform, baseModels, accounts)
+	resolution := s.gatewayService.resolveRequestableModelsWithAccounts(context.WithValue(ctx, ctxkey.Group, group), &groupID, group.Platform, baseModels, accounts)
 	if len(resolution.Models) == 0 {
 		return nil
 	}

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// UpstreamModelMetadata 只保存模型目录声明的能力，不参与模型授权、收费或参数改写。
+// UpstreamModelMetadata 保存目录声明的能力。Anthropic 可用常规窗口筛选账号，授权和计价分别使用既有规则。
 type UpstreamModelMetadata struct {
 	DisplayName              string   `json:"display_name,omitempty"`
 	Reasoning                *bool    `json:"reasoning,omitempty"`
@@ -21,6 +21,7 @@ type UpstreamModelMetadata struct {
 
 // UpstreamModelMetadataSnapshot 与账号其他extra键独立更新，禁止把原始上游正文落库。
 type UpstreamModelMetadataSnapshot struct {
+	Binding   string                           `json:"binding,omitempty"` // Anthropic 能力只对同步时的账号身份及目标站点有效。
 	Source    string                           `json:"source"`
 	UpdatedAt time.Time                        `json:"updated_at"`
 	Models    map[string]UpstreamModelMetadata `json:"models"`
@@ -57,18 +58,24 @@ func (a *Account) GetUpstreamModelMetadataSnapshot() *UpstreamModelMetadataSnaps
 	return &snapshot
 }
 
-// SyncUpstreamModelCatalog 只扩展Antigravity原生账号的管理员同步，不改变现有ID接口和其它平台。
+// SyncUpstreamModelCatalog 读取账号实际模型目录，并在可识别的平台保存能力快照。
 func (s *AccountTestService) SyncUpstreamModelCatalog(ctx context.Context, account *Account) (*UpstreamModelCatalog, error) {
 	if account == nil || s == nil {
 		return nil, newUpstreamModelSyncConfigError("Account is required", nil)
+	}
+	if account.IsAnthropic() && !account.IsBedrock() && (account.Type == AccountTypeAPIKey || account.IsOAuth()) {
+		if err := validateModelSyncProxy(account); err != nil {
+			return nil, err
+		}
+		return s.syncAnthropicModelCatalog(ctx, account)
 	}
 	if account.Platform != PlatformAntigravity || account.Type == AccountTypeAPIKey {
 		models, err := s.FetchUpstreamSupportedModels(ctx, account)
 		return &UpstreamModelCatalog{Models: models}, err
 	}
 	// 目录查询与原接口保持相同代理门禁，不能因能力扩展绕过管理员代理配置。
-	if account.ProxyID != nil && (account.Proxy == nil || account.Proxy.ID != *account.ProxyID || !account.Proxy.IsActive() || account.Proxy.IsExpired(time.Now())) {
-		return nil, newUpstreamModelSyncConfigError("Configured proxy is unavailable", nil)
+	if err := validateModelSyncProxy(account); err != nil {
+		return nil, err
 	}
 	models, body, err := s.fetchAntigravityOAuthUpstreamModels(ctx, account)
 	if err != nil {
@@ -89,14 +96,19 @@ func (s *AccountTestService) SyncUpstreamModelCatalog(ctx context.Context, accou
 		}
 	}
 	snapshot := UpstreamModelMetadataSnapshot{Source: "upstream", UpdatedAt: time.Now().UTC(), Models: metadata}
+	return result, s.saveUpstreamMetadataSnapshot(ctx, account, snapshot)
+}
+
+// saveUpstreamMetadataSnapshot 只更新服务端维护的元数据，并同步当前账号视图。
+func (s *AccountTestService) saveUpstreamMetadataSnapshot(ctx context.Context, account *Account, snapshot UpstreamModelMetadataSnapshot) error {
 	encoded, _ := json.Marshal(snapshot)
 	var value map[string]any
 	if err := json.Unmarshal(encoded, &value); err != nil {
-		return nil, err
+		return err
 	}
 	if s.accountRepo != nil && account.ID > 0 {
 		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{UpstreamModelMetadataExtraKey: value}); err != nil {
-			return nil, fmt.Errorf("save upstream model metadata: %w", err)
+			return fmt.Errorf("save upstream model metadata: %w", err)
 		}
 	}
 	// 仅替换调用方账号副本的extra，数据库使用按键更新，不覆盖其它配置。
@@ -106,7 +118,7 @@ func (s *AccountTestService) SyncUpstreamModelCatalog(ctx context.Context, accou
 	}
 	extra[UpstreamModelMetadataExtraKey] = value
 	account.Extra = extra
-	return result, nil
+	return nil
 }
 
 // configuredUpstreamModelsForCapabilitySync 排除运行时补齐项，保留管理员明确配置的模型目标。

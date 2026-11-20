@@ -59,6 +59,11 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 		platform = PlatformAnthropic
 	}
 
+	var windowErr error
+	ctx, windowErr = s.refreshAnthropicWindowGroup(ctx, resolvedGroup, requestedModel)
+	if windowErr != nil {
+		return nil, windowErr
+	}
 	// count_tokens 与可用性探测不占并发槽，但高级分组仍必须复用与主请求相同的
 	// 最终分组、硬过滤和评分逻辑，不能退回基础排序。
 	if resolvedGroup != nil && resolvedGroup.UsesAdvancedScheduler() {
@@ -134,6 +139,10 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		return nil, err
 	}
 	ctx = s.withGroupContext(ctx, group)
+	ctx, err = s.refreshAnthropicWindowGroup(ctx, group, requestedModel)
+	if err != nil {
+		return nil, err
+	}
 	usesAdvancedScheduler := group != nil && group.UsesAdvancedScheduler()
 	// 高级调度开启粘性加权后，旧硬粘性不能抢在评分前返回；否则 session
 	// 粘性不会作为统一候选评分的一部分。关闭加权时保留原有硬粘性语义。
@@ -2855,6 +2864,12 @@ func (s *GatewayService) isModelSupportedByAccountWithContext(ctx context.Contex
 func (s *GatewayService) isRoutingModelSupportedByAccountWithContext(ctx context.Context, account *Account, routingModel string) bool {
 	if account == nil {
 		return false
+	}
+	if selected, _ := ctx.Value(anthropicWindowSelectionKey{}).(map[int64]string); selected != nil {
+		model, allowed := selected[account.ID]
+		if !allowed || !account.IsAnthropic() || model != resolveAnthropicAccountUpstreamModel(account, resolveAccountMappedModelForForward(account, routingModel)) {
+			return false
+		}
 	}
 	if account.Platform == PlatformAntigravity {
 		// 原生 Gemini 必须在候选、粘性和等槽前按最终上游模型过滤，不能先选中 Claude 再报错。

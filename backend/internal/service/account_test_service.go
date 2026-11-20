@@ -178,6 +178,7 @@ func isOpenAIImageModel(model string) bool {
 
 // AccountTestService handles account testing operations
 type AccountTestService struct {
+	anthropicRegistry         anthropicWindowRegistry
 	pluginManager             *PluginManager
 	accountRepo               AccountRepository
 	geminiTokenProvider       *GeminiTokenProvider

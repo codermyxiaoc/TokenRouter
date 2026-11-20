@@ -73,6 +73,41 @@ func (k *APIKey) ResolveModelMapping(requestedModel string) (string, bool) {
 	return ResolveModelMapping(k.ModelMapping, requestedModel)
 }
 
+// ResolveGatewayModelMapping 在 Anthropic Messages 与计数入口将长窗口选择器随单跳映射交给实际目标。
+// @project-doc docs/domains/api_key_model_redirects.md#redirect_order
+func (k *APIKey) ResolveGatewayModelMapping(model, platform, path string) (string, bool) {
+	if k != nil && platform == PlatformAnthropic {
+		switch path {
+		case "/v1/messages", "/messages", "/v1/messages/count_tokens", "/messages/count_tokens":
+			return resolveAnthropicKeyModel(k.ModelMapping, model)
+		}
+	}
+	return k.ResolveModelMapping(model)
+}
+
+func resolveAnthropicKeyModel(mapping map[string]string, model string) (string, bool) {
+	model = strings.TrimSpace(model)
+	base := normalizeClaudeCodeLongContextModel(model)
+	if base == model || len(mapping) == 0 {
+		return ResolveModelMapping(mapping, model)
+	}
+	// 先匹配完整名称（含规范选择器），再匹配基础精确名，最后取最长通配前缀。
+	target, found := mapping[model]
+	if !found {
+		target, found = mapping[base+claudeCodeLongContextModelSuffix]
+	}
+	if !found {
+		target, found = mapping[base]
+	}
+	if !found {
+		target, found = matchWildcardMappingResult(mapping, model)
+	}
+	if !found {
+		return model, false
+	}
+	return normalizeClaudeCodeLongContextModel(target) + claudeCodeLongContextModelSuffix, true
+}
+
 // CloneModelMapping 返回可安全写入缓存或响应的独立副本。
 func CloneModelMapping(mapping map[string]string) map[string]string {
 	cloned := make(map[string]string, len(mapping))
@@ -128,6 +163,47 @@ func AvailableAPIKeyModelAliases(models []string, mapping map[string]string) []s
 	}
 	sort.Strings(aliases)
 	return aliases
+}
+
+// ProjectGatewayKeyModels 按当前组的实际目标能力投影长窗口名称；通配规则只过滤或映射已有具体名称。
+// @project-doc docs/domains/api_key_model_redirects.md#model_list_projection
+func ProjectGatewayKeyModels(models []string, mapping map[string]string, platform string) []string {
+	if platform != PlatformAnthropic || len(mapping) == 0 {
+		return AppendAPIKeyModelAliases(models, mapping)
+	}
+	available := make(map[string]bool, len(models))
+	for _, model := range models {
+		available[model] = true
+	}
+	list := AppendAPIKeyModelAliases(models, mapping)
+	seen := make(map[string]bool, len(list))
+	result := make([]string, 0, len(list))
+	add := func(name string) {
+		if seen[name] {
+			return
+		}
+		target, _ := resolveAnthropicKeyModel(mapping, name)
+		if normalizeClaudeCodeLongContextModel(target) != target && !available[target] {
+			return
+		}
+		seen[name] = true
+		result = append(result, name)
+	}
+	for _, name := range list {
+		add(name)
+	}
+	// 可从已有基础名及管理员配置的精确来源推导选择器名称，均须重新验证实际长窗口目标。
+	for _, name := range models {
+		if normalizeClaudeCodeLongContextModel(name) == name {
+			add(name + claudeCodeLongContextModelSuffix)
+		}
+	}
+	for _, name := range sortedModelMappingSources(mapping) {
+		if !strings.Contains(name, "*") {
+			add(normalizeClaudeCodeLongContextModel(name) + claudeCodeLongContextModelSuffix)
+		}
+	}
+	return result
 }
 
 // RewriteAPIKeyAdditionalModels 重定向 Responses 工具声明中的附加模型。

@@ -67,14 +67,12 @@ func resolveSmartRoutingAPIKeyRequest(c *gin.Context, apiKeyService *service.API
 	if !smartRoutingModelEndpoint(c) {
 		return nil, infraerrors.BadRequest("SMART_ROUTING_ENDPOINT_UNSUPPORTED", "Smart routing requires a supported model request")
 	}
-	model, err := smartRoutingRequestModel(c)
+	requestedModel, err := smartRoutingRequestModel(c)
 	if err != nil {
 		return nil, err
 	}
 	// 这里只计算一跳目标用于目录匹配；原始请求留给统一重定向流程改写并恢复响应别名。
-	if target, matched := apiKey.ResolveModelMapping(model); matched {
-		model = target
-	}
+	model, _ := apiKey.ResolveModelMapping(requestedModel)
 	execution := prepareSmartRoutingExecution(c, apiKey)
 	requestCtx := service.WithSmartRoutingScope(c.Request.Context())
 	if strings.Contains(c.Request.URL.Path, "/responses") {
@@ -136,7 +134,13 @@ func resolveSmartRoutingAPIKeyRequest(c *gin.Context, apiKeyService *service.API
 			if execution != nil && execution.visited[group.ID] {
 				continue
 			}
-			availability, checkErr := resolver.EvaluateSmartRoutingGroup(requestCtx, group, model, c.Request.URL.Path)
+			// 候选可跨协议平台。长窗口仅按该候选的 Messages 规则映射，实际鉴权改写沿用同一结果。
+			candidateModel, _ := apiKey.ResolveGatewayModelMapping(requestedModel, group.Platform, c.Request.URL.Path)
+			candidateCtx := requestCtx
+			if execution != nil && candidateModel != model {
+				candidateCtx = service.WithSmartRoutingAccountCooldown(requestCtx, apiKey.ID, execution.cooldown, candidateModel, c.Request.URL.Path)
+			}
+			availability, checkErr := resolver.EvaluateSmartRoutingGroup(candidateCtx, group, candidateModel, c.Request.URL.Path)
 			if checkErr != nil {
 				// 基础设施故障不能冒充无账号，否则会意外切换计费分组。
 				return nil, infraerrors.New(http.StatusServiceUnavailable, "SMART_ROUTING_UNAVAILABLE", "Unable to check routing candidates")
@@ -203,9 +207,10 @@ func resolveSmartRoutingAPIKeyRequest(c *gin.Context, apiKeyService *service.API
 			if selectErr != nil {
 				return nil, selectErr
 			}
-			c.Request = c.Request.WithContext(service.WithSmartRoutingScope(requestCtx))
+			c.Request = c.Request.WithContext(service.WithSmartRoutingScope(candidateCtx))
 			if execution != nil {
 				execution.groupID = group.ID
+				execution.model = candidateModel
 			}
 			return selected, nil
 		}

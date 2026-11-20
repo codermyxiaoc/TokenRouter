@@ -246,6 +246,8 @@ Responses 的普通无改动路径优先检查必要顶层字段、复用原始�
 
 客户端模型先经过 Key、渠道和账号层映射。OpenAI 内置别名、reasoning effort 归一化、旧版 Compact 端点支持、图像/embedding 能力和传输能力会影响候选账号；模型列表只公开当前分组可请求的结果。
 
+普通 OpenAI OAuth 按渠道、Messages 分组派发和账号映射之后的实际目标判断能否调度：最终目标为 `claude-*` 时跳过该账号，混合分组仍可选择支持该型号的 API Key 账号。明确映射到可用 GPT 型号的 Claude 别名可以继续使用。OAuth / Setup Token 的透传仍使用独立的模型筛选配置。
+
 <a id="openai_model_retirement"></a>
 ### 订阅模型退役与别名
 

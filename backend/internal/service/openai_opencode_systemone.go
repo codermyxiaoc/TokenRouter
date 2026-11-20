@@ -17,10 +17,10 @@ import (
 
 const maxOpenCodeSystemOneResponseBytes = 16 << 20
 
-// OpenAIEndpointCapabilitySystemOne 仅供 OpenCode Zen 原生结构化端点调度。
+// OpenAIEndpointCapabilitySystemOne 用于 TypeSafe 与 OpenCode Zen 原生结构化端点调度。
 const OpenAIEndpointCapabilitySystemOne OpenAIEndpointCapability = "systemone"
 
-// ForwardOpenCodeSystemOne 将 Zen Jev 请求原样转发到 System One。
+// ForwardOpenCodeSystemOne 将 TypeSafe 或 Zen 的 Jev 请求转发到 System One。
 // Jev 不是 Chat/Responses 的文本协议，必须保留结构化 state/questions，且只
 // 在整个 JSON 响应读完后写给客户端，才能在输出前触发智能路由故障转移。
 func (s *OpenAIGatewayService) ForwardOpenCodeSystemOne(
@@ -30,15 +30,29 @@ func (s *OpenAIGatewayService) ForwardOpenCodeSystemOne(
 	body []byte,
 ) (*OpenAIForwardResult, error) {
 	if !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilitySystemOne) {
-		return nil, fmt.Errorf("OpenCode System One requires a Zen account")
+		return nil, fmt.Errorf("System One requires a TypeSafe or OpenCode Zen account")
 	}
 
-	originalModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-	model := normalizeOpenCodeGoModelID(account.GetMappedModel(originalModel))
-	if !account.supportsSystemOneModel(model) {
-		return nil, fmt.Errorf("model %q is not supported by OpenCode System One", model)
+	routingModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	publicModel := routingModel
+	var model, billingModel string
+	if account.IsTypeSafe() {
+		target, supported := account.typeSafeSystemOneTarget(routingModel)
+		if !supported {
+			return nil, fmt.Errorf("model %q is not supported by TypeSafe System One", routingModel)
+		}
+		publicModel = DefaultTypeSafeModel
+		model, billingModel = target, publicModel
+		// Key 别名恢复器需要认识最终投递名，结构化 state/questions 中的同名内容保持原样。
+		RegisterAPIKeyModelRedirectStage(ctx, model)
+	} else {
+		model = normalizeOpenCodeGoModelID(account.GetMappedModel(routingModel))
+		if !IsOpenCodeSystemOneModel(model) {
+			return nil, fmt.Errorf("model %q is not supported by OpenCode System One", model)
+		}
+		billingModel = model
 	}
-	if model != originalModel {
+	if model != routingModel {
 		body = ReplaceModelInBody(body, model)
 	}
 	apiKey := strings.TrimSpace(account.GetOpenAIProtocolAPIKey())
@@ -122,8 +136,8 @@ func (s *OpenAIGatewayService) ForwardOpenCodeSystemOne(
 		UpstreamHeaders:  resp.Header.Clone(),
 		ResponseHeaders:  resp.Header.Clone(),
 		Usage:            usage,
-		Model:            originalModel,
-		BillingModel:     model,
+		Model:            publicModel,
+		BillingModel:     billingModel,
 		UpstreamModel:    model,
 		UpstreamEndpoint: "/v1/systemone",
 		Duration:         time.Since(start),

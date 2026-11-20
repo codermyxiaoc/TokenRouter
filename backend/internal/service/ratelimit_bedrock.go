@@ -24,8 +24,7 @@ const (
 
 type gatewaySchedulingModelContextKey struct{}
 
-// WithGatewaySchedulingModel 记录选号时使用的客户端模型。请求经渠道模型映射改写模型后转发时，
-// Bedrock 账号的模型级状态按该模型推导调度器读取的键。
+// WithGatewaySchedulingModel 记录本次选号时的模型，供渠道改写后的原生思考适配和 Bedrock 模型级状态使用。
 func WithGatewaySchedulingModel(ctx context.Context, model string) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
@@ -33,16 +32,20 @@ func WithGatewaySchedulingModel(ctx context.Context, model string) context.Conte
 	return context.WithValue(ctx, gatewaySchedulingModelContextKey{}, strings.TrimSpace(model))
 }
 
+// gatewaySchedulingModel 读取渠道改写之前的型号，未经过渠道映射时使用当前请求型号。
+func gatewaySchedulingModel(ctx context.Context, forwardModel string) string {
+	if ctx != nil {
+		if model, _ := ctx.Value(gatewaySchedulingModelContextKey{}).(string); model != "" {
+			return model
+		}
+	}
+	return forwardModel
+}
+
 // bedrockSchedulingModelKey 返回调度器按模型隔离账号状态时读取的键：账号映射后的选号模型；
 // 上下文未记录选号模型时用本次转发的模型。键不是发往上游的 Bedrock 模型 ID。
 func bedrockSchedulingModelKey(ctx context.Context, account *Account, forwardModel string) string {
-	model := forwardModel
-	if ctx != nil {
-		if scheduling, _ := ctx.Value(gatewaySchedulingModelContextKey{}).(string); scheduling != "" {
-			model = scheduling
-		}
-	}
-	return account.GetMappedModel(model)
+	return account.GetMappedModel(gatewaySchedulingModel(ctx, forwardModel))
 }
 
 // handleBedrockUpstreamError 处理 Bedrock 账号特有的错误语义，handled=false 时交回通用逻辑。

@@ -13,6 +13,8 @@
 | Cline | `https://api.cline.bot/api/v1` | Chat Completions；本站 Messages/Responses 使用现有转换链 | `deepseek/deepseek-v4-flash`，有效 ClinePass 快照优先其模型 |
 | Command Code | `https://api.commandcode.ai/provider/v1` | 自适应或固定 Chat、Responses、Messages | `deepseek/deepseek-v4-flash` |
 
+TypeSafe 公开的 System One 型号为 `jev-latest`。管理员可将它或对应的渠道中间名映射到账号的私有部署名。网关按配置的大小写和前缀发送顶层 `model`，保留嵌套业务字段。手动与定时账号测试使用同一映射，管理员仍可按账号配置的别名或私有部署名诊断。用户调用和公开目录另行执行账号最终白名单及渠道准入。模型市场和套餐预览展示公开型号，用户费用按 `jev-latest` 的渠道或平台价目结算；用量映射链和 Ops 单独记录实际投递名。即使部署名与免费型号同名，也按公开 Jev 价目结算。
+
 TypeSafe 分组不提供文本入站协议开关或 OAuth 配置。Jev 请求校验拒绝重复键、保留字段大小写混淆、非法问题结构和流式参数；`state` 与完整问题对象均进入内容审核，响应强制安全 JSON Content-Type；必须含合法非负整数输入/输出计量，缺失计量不能作为零费用成功。响应中的 `usage` 和计量字段不得重复（包括大小写与转义同名键），数值按十进制精确验证，不经浮点舍入；数字字符串和数学上为整数的指数写法继续兼容，单项上限保持 `2^40`。旧 OpenCode Zen `jev-1.13` / `jev-1.13-free` 与 TypeSafe `jev-latest` 互不串用。免费 Jev 的零价语义保留。内容审核客户端同时兼容未带 `/v1` 和已带 `/v1` 的配置，以及数字/数字字符串用量。
 
 Command Code 的 `api_protocol` 默认 `adaptive`。`api_base_urls` 可分别覆盖三协议；空覆盖继承当前 Base URL，不能将中继 Key 自动发送到官方。Messages 在未单独覆盖时去掉根地址末尾 `/v1` 后拼接原生路径。显式固定协议优先；存在 `protocol_rules` 时按管理员规则选择，显式空数组表示 Chat 兜底；未配置规则才查询协议目录与内置模型族规则。Command Code 不启用 OpenAI 专属历史裁剪或续接缓存。Cline 非流式 `{success,data}` 封装在三类入站统一解包，每个 choice 必须有可解析的消息结构；只有 null、索引或空对象的 choices、重复结构字段以及失败封装不能返回空答案并计费。合法工具调用、拒绝、思考和显式空完成继续保留。模型映射后再选择协议，Claude 等带供应商前缀的模型在计费与转发之间保持一致。

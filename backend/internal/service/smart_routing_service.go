@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -63,13 +64,21 @@ func (s *SmartRoutingService) EvaluateSmartRoutingGroup(ctx context.Context, gro
 	}
 	useMixed := forcePlatform == "" && (platform == PlatformAnthropic || platform == PlatformGemini)
 	// 固定本次绑定分组，simple 模式也不能扩大到其他分组的账号。
-	accounts, err := s.listSmartRoutingCatalogAccounts(ctx, group, useMixed)
+	accounts, windows, err := s.listSmartRoutingCatalogAccounts(ctx, group, useMixed, normalizeClaudeCodeLongContextModel(requestedModel) != requestedModel)
 	if err != nil {
 		return result, fmt.Errorf("load smart routing accounts: %w", err)
 	}
 	ctx = context.WithValue(ctx, ctxkey.Group, group)
 	if strings.Contains(endpoint, "/images/") && !strings.Contains(endpoint, "/images/batches") {
 		ctx = WithOpenAIImageGenerationIntent(ctx)
+	}
+	// 智能 Key 在协议处理器之前选组，使用与实际调度相同的长窗口账号集合。
+	if base := normalizeClaudeCodeLongContextModel(requestedModel); base != requestedModel && platform == PlatformAnthropic {
+		mapped := s.gateway.channelMappedModelForGroup(ctx, &group.ID, base)
+		if selected := longContextSelection(windows, group, mapped); selected != nil {
+			ctx = context.WithValue(ctx, anthropicWindowSelectionKey{}, selected)
+			requestedModel = base
+		}
 	}
 	routingModel := requestedModel
 	channelMapped := false
@@ -237,7 +246,7 @@ func (s *SmartRoutingService) ResolveSmartRoutingModels(ctx context.Context, gro
 	}
 	ctx = context.WithValue(ctx, ctxkey.Group, group)
 	useMixed := forcePlatform == "" && (group.Platform == PlatformAnthropic || group.Platform == PlatformGemini)
-	accounts, err := s.listSmartRoutingCatalogAccounts(ctx, group, useMixed)
+	accounts, windows, err := s.listSmartRoutingCatalogAccounts(ctx, group, useMixed, true)
 	if err != nil {
 		return nil, fmt.Errorf("load smart routing model catalog: %w", err)
 	}
@@ -256,7 +265,17 @@ func (s *SmartRoutingService) ResolveSmartRoutingModels(ctx context.Context, gro
 	}
 	candidates := mergeRequestableModelCandidates(baseModels, accounts, channel, group.Platform)
 	models := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
+	var variants []string
+	for _, listed := range candidates {
+		candidate := listed
+		explicit := false
+		if len(windows) > 0 && normalizeClaudeCodeLongContextModel(listed) != listed {
+			candidate = normalizeClaudeCodeLongContextModel(listed)
+			if !strings.EqualFold(listed, candidate+claudeCodeLongContextModelSuffix) {
+				continue
+			}
+			explicit = true
+		}
 		routingModel := candidate
 		channelMapped := false
 		billingSource := BillingModelSourceRequested
@@ -272,6 +291,8 @@ func (s *SmartRoutingService) ResolveSmartRoutingModels(ctx context.Context, gro
 				continue
 			}
 		}
+		selected := longContextSelection(windows, group, routingModel)
+		found := false
 		for i := range accounts {
 			account := &accounts[i]
 			if !smartRoutingAccountCatalogContains(account, routingModel, channelMapped) ||
@@ -282,8 +303,36 @@ func (s *SmartRoutingService) ResolveSmartRoutingModels(ctx context.Context, gro
 				s.gateway.requestableModelRestricted(ctx, &group.ID, resolveAccountUpstreamModel(ctx, account, routingModel)) {
 				continue
 			}
+			found = true
+			if len(selected) == 0 {
+				break
+			}
+			if _, ok := selected[account.ID]; ok && account.IsSchedulable() && account.modelRateLimitAllowsScheduling(ctx, routingModel) && normalizeClaudeCodeLongContextModel(candidate) == candidate {
+				variant := candidate + claudeCodeLongContextModelSuffix
+				if explicit {
+					variant = listed
+				}
+				if !group.CustomModelsListEnabled() || slices.Contains(group.ModelsListConfig.Models, variant) {
+					variants = append(variants, variant)
+				}
+				break
+			}
+		}
+		if found && !explicit {
 			models = append(models, candidate)
-			break
+		}
+	}
+	if len(variants) > 0 {
+		seen := make(map[string]bool, len(models))
+		for _, m := range models {
+			seen[strings.ToLower(m)] = true
+		}
+		for _, m := range variants {
+			key := strings.ToLower(m)
+			if !seen[key] {
+				models = append(models, m)
+				seen[key] = true
+			}
 		}
 	}
 	return models, ctx.Err()
@@ -291,7 +340,7 @@ func (s *SmartRoutingService) ResolveSmartRoutingModels(ctx context.Context, gro
 
 // listSmartRoutingCatalogAccounts 仅读取当前分组的配置目录，错误/暂停不会把已知模型变成未知型号。
 // 显式 disabled 账号仍不参与目录，实际派发继续要求 active、schedulable 及全部运行时门禁。
-func (s *SmartRoutingService) listSmartRoutingCatalogAccounts(ctx context.Context, group *Group, useMixed bool) ([]Account, error) {
+func (s *SmartRoutingService) listSmartRoutingCatalogAccounts(ctx context.Context, group *Group, useMixed, loadWindows bool) ([]Account, []anthropicWindowAccount, error) {
 	platform := group.Platform
 	if useMixed {
 		platform = ""
@@ -299,7 +348,7 @@ func (s *SmartRoutingService) listSmartRoutingCatalogAccounts(ctx context.Contex
 	// 共享模型诊断查询要求 active+schedulable；这里使用固定分组配置查询，避免改变其它诊断契约。
 	accounts, err := s.gateway.accountRepo.ListAllWithFilters(ctx, platform, "", "", "", group.ID, "")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	filtered := make([]Account, 0, len(accounts))
 	for i := range accounts {
@@ -316,7 +365,11 @@ func (s *SmartRoutingService) listSmartRoutingCatalogAccounts(ctx context.Contex
 		}
 		return filtered[i].ID < filtered[j].ID
 	})
-	return filtered, nil
+	var windows []anthropicWindowAccount
+	if loadWindows {
+		windows = s.gateway.anthropicWindowAccounts(accounts, group.Platform, &group.ID)
+	}
+	return filtered, windows, nil
 }
 
 // smartRoutingGroupEndpointEligible 对齐公开路由分派，防止探针或媒体请求选中无法承接端点的平台。

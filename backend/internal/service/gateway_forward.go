@@ -125,7 +125,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 	// 使用账号映射后的型号，原生与兼容入口执行相同的 Sonnet 参数约束。
 	if account != nil && account.Platform == PlatformAnthropic {
-		if err := ValidateSonnet55Request(parsed.Body.Bytes(), resolveAccountUpstreamModel(ctx, account, parsed.Model)); err != nil {
+		if err := prepareRoutedClaudeRequest(ctx, account, parsed); err != nil {
 			MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
 			if c != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": err.Error()}})

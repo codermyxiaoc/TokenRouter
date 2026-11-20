@@ -1,11 +1,59 @@
 package service
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
+
+// prepareRoutedClaudeRequest 根据本次尝试的最终模型转换旧式思考模式，然后执行原生参数校验。
+// @project-doc docs/interfaces/anthropic_upstream.md#anthropic_model_policy
+func prepareRoutedClaudeRequest(ctx context.Context, account *Account, parsed *ParsedRequest) error {
+	target := resolveAccountUpstreamModel(ctx, account, parsed.Model)
+	if !account.IsBedrock() {
+		if body, changed := adaptMappedClaudeThinking(ctx, account, parsed.Body.Bytes(), parsed.Model, target); changed {
+			if err := parsed.ReplaceBody(body); err != nil {
+				return err
+			}
+		}
+	}
+	return ValidateSonnet55Request(parsed.Body.Bytes(), target)
+}
+
+// adaptMappedClaudeThinking 比较模型映射两端；剥离分组前缀、上下文选择器或规范化同一型号均不改变思考模式。
+func adaptMappedClaudeThinking(ctx context.Context, account *Account, body []byte, source, target string) ([]byte, bool) {
+	source = gatewaySchedulingModel(ctx, source)
+	if trace, ok := APIKeyModelRedirectTraceFromContext(ctx); ok {
+		// SourceModel 已剥离复合 Key 的选组前缀，能与真实模型比较。
+		source = trace.SourceModel
+	}
+	if source == target || resolveAnthropicAccountUpstreamModel(account, normalizeClaudeCodeLongContextModel(source)) == target {
+		return body, false
+	}
+	if !claude.IsSonnet55Model(target) && !claude.IsOpus55Model(target) && !claude.IsHaiku55Model(target) {
+		return body, false
+	}
+	return adaptClaude55LegacyThinking(body, target)
+}
+
+// adaptClaude55LegacyThinking 只替换目标 5.5 型号不接受的旧模式；其它思考参数交由目标型号校验。
+func adaptClaude55LegacyThinking(body []byte, model string) ([]byte, bool) {
+	switch gjson.GetBytes(body, "thinking.type").String() {
+	case "enabled":
+		body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
+		body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
+		return body, true
+	case "disabled":
+		if claude.IsSonnet55Model(model) {
+			body, _ = sjson.SetBytes(body, "thinking.type", "between_tools")
+			return body, true
+		}
+	}
+	return body, false
+}
 
 // ValidateSonnet55Request 供各协议桥共用映射后的 Sonnet 5.5 参数边界。
 func ValidateSonnet55Request(body []byte, model string) error {

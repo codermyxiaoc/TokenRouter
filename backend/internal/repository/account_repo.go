@@ -626,7 +626,12 @@ func lockAndMergeAccountManagedExtra(ctx context.Context, client *dbent.Client, 
 			extra -> 'upstream_billing_probe',
 			rate_multiplier,
 			extra -> 'grok_observed_models',
-			extra -> 'upstream_model_metadata'
+			-- 管理员换绑 OAuth 凭据时即使新的授权未携带身份字段，也不能沿用原账号窗口。
+			-- 自动续期使用独立的 UpdateCredentials；普通编辑映射则保留已同步的窗口。
+			CASE WHEN platform='anthropic' AND type IN ('oauth','setup-token') AND extra ? 'upstream_model_metadata'
+				AND (credentials -> 'access_token' IS DISTINCT FROM $4::jsonb -> 'access_token'
+					OR credentials -> 'refresh_token' IS DISTINCT FROM $4::jsonb -> 'refresh_token')
+				THEN jsonb_build_object('source', 'upstream', 'models', '{}'::jsonb) ELSE extra -> 'upstream_model_metadata' END
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE

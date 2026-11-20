@@ -280,15 +280,18 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	videoMultiplier := resolveVideoSubscriptionRateMultiplier(apiKey, subscription, baseMultiplier)
 
 	var cost *CostBreakdown
-	billingModel := openAIUsageBillingModel(result, input.ChannelUsageFields)
-	billingModels := usageBillingModelCandidates(
-		billingModel,
-		result.BillingModel,
-		input.ChannelMappedModel,
-		input.OriginalModel,
-		result.UpstreamModel,
-		result.Model,
-	)
+	var billingModels []string
+	if account.IsTypeSafe() {
+		// 私有路由名可能正好与免费或其它有价产品同名。TypeSafe 只按公开 Jev SKU 查价，
+		// 原始别名、渠道中间名及实际投递目标仍进入用量映射链和账号成本统计。
+		billingModels = []string{DefaultTypeSafeModel}
+	} else {
+		billingModels = usageBillingModelCandidates(
+			openAIUsageBillingModel(result, input.ChannelUsageFields),
+			result.BillingModel, input.ChannelMappedModel, input.OriginalModel,
+			result.UpstreamModel, result.Model,
+		)
+	}
 	billingModels = s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, billingModels, result.UpstreamModel)
 	serviceTier := ""
 	if result.ServiceTier != nil {
@@ -297,7 +300,6 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if input.ImageQuote != nil {
 		// 最终数量/尺寸使用冻结价卡；账号故障转移或管理员改价不能改变已预占的合同。
 		cost, err = input.ImageQuote.settledCost(result.ImageSize, result.ImageCount, input.ImageReservation)
-		billingModel = input.ImageQuote.BillingModel
 	} else {
 		cost, err = s.calculateOpenAIRecordUsageCostAt(
 			ctx,

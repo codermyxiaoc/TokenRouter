@@ -1455,7 +1455,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			if err := h.gatewayService.EnforceOpenAIClientPolicyForRequest(c.Request.Context(), c, account, forwardBody, tlsRouterMatch); err != nil {
 				return nil, err
 			}
-			return h.gatewayService.ForwardAsAnthropic(c.Request.Context(), c, account, forwardBody, promptCacheKey, accountLayerModel, tlsRouterMatch)
+			requestCtx := c.Request.Context()
+			if channelMappingMsg.Mapped {
+				requestCtx = service.WithGatewaySchedulingModel(requestCtx, reqModel)
+			}
+			return h.gatewayService.ForwardAsAnthropic(requestCtx, c, account, forwardBody, promptCacheKey, accountLayerModel, tlsRouterMatch)
 		}()
 		var cyberBlockBodyMsg []byte
 		if service.GetOpsCyberPolicy(c) != nil {

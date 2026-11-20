@@ -58,7 +58,10 @@ Responses 请求转换为 Anthropic Messages 时，只发送 Anthropic 入站协
 
 Responses 工具参数转换为 Anthropic `input_schema` 时，会把根节点的 `oneOf`、`anyOf`、`allOf` 归一为单一 object，避免上游拒绝顶层联合。对象分支的属性合并保留；`oneOf`/`anyOf` 的必填字段取分支交集，`allOf` 和原根节点的必填字段取并集。同名属性的备选约束使用嵌套 `anyOf`，必须同时满足的根约束或 `allOf` 分支使用嵌套 `allOf`；本就位于属性内部的 schema 联合保持原有结构。该步骤是目标协议的兼容归一化，不承诺完整保留根 `oneOf` 的互斥性或所有跨属性分支约束；原生 Anthropic 请求不经过此转换。
 
+<a id="anthropic_model_policy"></a>
 ## 模型与请求策略
+
+原生 Messages 和 count_tokens 在选出账号后比较客户端选择的模型与最终目标。Key、渠道或账号映射将模型切换到 Claude Opus、Sonnet 或 Haiku 5.5 时，旧式 `thinking.type=enabled` 转为 `adaptive` 并移除 `budget_tokens`，Sonnet 5.5 还将 `disabled` 转为 `between_tools`。多协议账号实际将 Messages 转发至原生 Anthropic 端点时，同样检查最终型号。其余字段继续执行目标模型校验。仅剥离复合 Key 分组前缀、选择智能路由分组或规范化同一模型名时，沿用客户端原参数。Bedrock 继续由其 CC 兼容开关控制转换。每次换账号均按本次目标重新判断。
 
 强制 1 小时的 OAuth 缓存策略遇到 Claude Code 摘要压缩请求时，将已有临时缓存块设为 5 分钟。管理员连接测试向 Opus 4.7、4.8、5.5、Fable 5.2 和 Mythos 5.2 发送的请求省略 `temperature`，Bedrock 探测同样处理。
 
@@ -68,9 +71,9 @@ Haiku/Sonnet/Opus 5.5 在 Responses 往返中使用带格式标识的 Anthropic 
 
 模型依次经过 Key 重定向、渠道映射和账号映射；可请求列表是分组策略、渠道和当前账号能力的交集，不是默认模型常量的直接输出。Bedrock/Vertex 的供应商模型标识可与客户端 Anthropic 名称不同，计费模型也可以由渠道单独指定。
 
-原生 Anthropic 目录新增 `claude-opus-5-5`（Claude Opus 5.5），不替换 Opus 5 或其他旧模型，也不推断 Antigravity、OpenCode 或 Bedrock 地域路由可用性。该型号始终启用 adaptive thinking、默认 effort 为 `medium`；兼容入口为最终映射目标生成 thinking 时使用 adaptive，缺省 thinking 不能被当成关闭思考而删掉合法历史块。客户端显式 `thinking=disabled/enabled`、强制工具选择等不合法原生字段保留上游校验语义，不偷偷改成其他工具策略。旧思考签名与模型、对话绑定，跨模型历史不能凭模型目录扩展保证复用。官方迁移约束见 [Opus 5.5 迁移指南](https://platform.claude.com/docs/zh-CN/models/opus-5-5/migration-guide)，价格与缓存独立条目见[模型目录与市场](model_catalog_and_marketplace.md)。
+原生 Anthropic 目录新增 `claude-opus-5-5`（Claude Opus 5.5），不替换 Opus 5 或其他旧模型，也不推断 Antigravity、OpenCode 或 Bedrock 地域路由可用性。该型号始终启用 adaptive thinking、默认 effort 为 `medium`；兼容入口为最终映射目标生成 thinking 时使用 adaptive，缺省 thinking 不能被当成关闭思考而删掉合法历史块。客户端直接指定 Opus 5.5 时，显式 `thinking=disabled/enabled` 由上游校验。强制工具选择等字段继续沿用原生校验。旧思考签名与模型、对话绑定，跨模型历史不能凭模型目录扩展保证复用。官方迁移约束见 [Opus 5.5 迁移指南](https://platform.claude.com/docs/zh-CN/models/opus-5-5/migration-guide)，价格与缓存独立条目见[模型目录与市场](model_catalog_and_marketplace.md)。
 
-Sonnet 5.5 原生与协议桥按最终账号映射型号校验：拒绝 `thinking=enabled/disabled`、强制工具选择、非默认采样参数（只接受 temperature 1、top_p 0.99 至 1，不接受 top_k）。Responses/Chat 转换缺省使用 adaptive/high，`reasoning.effort=none` 转为 between_tools/low；between_tools 仅支持 low/medium/high 且不接受 display、budget_tokens、block_binding。合法原生思考签名可回传，任一历史签名非法则移除该次请求全部历史思考块，重试仍保留显式 between_tools。旧 Opus 的参数及局部历史清理策略不变；Responses 的不透明 encrypted_content 仍不重放为 Claude 签名。
+Sonnet 5.5 原生与协议桥按最终账号映射型号校验，原生映射场景先执行上述旧模式转换。随后拒绝 `thinking=enabled/disabled`、强制工具选择、非默认采样参数（只接受 temperature 1、top_p 0.99 至 1，不接受 top_k）。Responses/Chat 转换缺省使用 adaptive/high，`reasoning.effort=none` 转为 between_tools/low；between_tools 仅支持 low/medium/high 且不接受 display、budget_tokens、block_binding。合法原生思考签名可回传，任一历史签名非法则移除该次请求全部历史思考块，重试仍保留显式 between_tools。旧 Opus 的参数及局部历史清理策略不变；Responses 的不透明 encrypted_content 仍不重放为 Claude 签名。
 
 Sonnet 5.5 的稳定 computer/browser toolset 会移除旧 fine-grained-tool-streaming beta，工具自身 eager_input_streaming 保留；此约束覆盖最终 Header override、计数、Vertex 和 Bedrock。Bedrock CC 兼容开启时才将 enabled/disabled 转为 adaptive/between_tools；Sonnet 5.5 的 output_config.effort 保留，结构化 format 沿用内联 schema 转换。区域路由仍要求已核实规则，本轮不新增未经核实的 Sonnet 5.5 默认区域映射；显式完整供应商 ID 继续按现有边界透传。
 

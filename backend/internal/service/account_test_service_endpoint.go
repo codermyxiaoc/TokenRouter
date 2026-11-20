@@ -207,8 +207,9 @@ func (s *AccountTestService) testSelectedAPIKeyEndpoint(c *gin.Context, account 
 	}
 	modelID = account.GetMappedModel(modelID)
 	if account.IsTypeSafe() {
-		if protocol != APIProtocolSystemOne || !account.supportsSystemOneModel(modelID) {
-			return s.sendErrorAndEnd(c, "TypeSafe requires the jev-latest System One endpoint")
+		// 管理员可按配置来源或直接部署名检查账号；诊断不参与用户调度或平台计费。
+		if protocol != APIProtocolSystemOne || strings.TrimSpace(modelID) == "" {
+			return s.sendErrorAndEnd(c, "TypeSafe requires a model on the System One test endpoint")
 		}
 		return s.testOpenCodeSystemOneConnection(c, account, modelID, prompt, apiKey)
 	}

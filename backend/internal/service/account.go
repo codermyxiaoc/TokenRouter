@@ -1040,8 +1040,9 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 
 // 保留 fork 的最终白名单和各平台模型规则，不用上游映射语义覆盖。
 func (a *Account) isModelMappingSupported(requestedModel string) bool {
-	if a.IsTypeSafe() && !a.supportsSystemOneModel(a.GetMappedModel(requestedModel)) {
-		return false
+	if a.IsTypeSafe() {
+		_, supported := a.typeSafeSystemOneTarget(requestedModel)
+		return supported
 	}
 	// 仅限制 OpenCode GO 的 Jev 能力，仍保留 Zen 的显式白名单与其它平台语义。
 	if a.IsOpenCodeGoPlan() && IsOpenCodeSystemOneModel(a.GetMappedModel(requestedModel)) {
@@ -1092,9 +1093,6 @@ func (a *Account) isModelMappingSupported(requestedModel string) bool {
 	if len(mapping) == 0 {
 		if !isModelInFinalWhitelist(a.Platform, requestedModel, whitelist) {
 			return false
-		}
-		if a.IsOpenAIOAuth() && !a.IsOpenAIPassthroughEnabled() {
-			return isOpenAIOAuthServableModel(requestedModel)
 		}
 		// DeepSeek 未配置有效白名单或映射时采用固定平台目录；显式白名单保留自定义模型。
 		if a.Platform == PlatformDeepseek && len(whitelist) == 0 {

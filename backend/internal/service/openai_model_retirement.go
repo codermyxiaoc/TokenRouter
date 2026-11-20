@@ -45,12 +45,17 @@ func FilterRetiredOpenAIModelIDs(accounts []Account, models []string) []string {
 	return filtered
 }
 
+// 在所有模型改写完成后检查，调度与 compact 回退都必须能把同一目标发送给选中的账号。
+func isUnavailableOpenAISubscriptionTarget(account *Account, target string) bool {
+	return account != nil && (isRetiredOpenAISubscriptionModel(account, target) || !account.isOpenAIOAuthServableModel(target))
+}
+
 // 支持 compact 专用映射，同时继续执行当前项目的最终白名单和平台能力校验。
 func supportsOpenAIRequestModel(account *Account, requestedModel string, requireCompact bool) bool {
 	if account == nil {
 		return false
 	}
-	if account.IsOpenAI() && isRetiredOpenAISubscriptionModel(account, resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)) {
+	if account.IsOpenAI() && isUnavailableOpenAISubscriptionTarget(account, resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)) {
 		return false
 	}
 	return account.isModelMappingSupported(requestedModel)

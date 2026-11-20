@@ -24,7 +24,15 @@ func applyAPIKeyModelRedirect(c *gin.Context, apiKey *service.APIKey) {
 		_ = rewriteAPIKeyAdditionalModels(c.Request, apiKey)
 		return
 	}
-	targetModel, matched := apiKey.ResolveModelMapping(sourceModel)
+	// 允许未分组 Key 的旧配置在 Messages 入口默认走 Anthropic 网关。
+	platform := service.PlatformAnthropic
+	if apiKey.Group != nil {
+		platform = apiKey.Group.Platform
+	}
+	if forced, ok := GetForcePlatformFromContext(c); ok {
+		platform = forced
+	}
+	targetModel, matched := apiKey.ResolveGatewayModelMapping(sourceModel, platform, c.Request.URL.Path)
 	if !matched {
 		_ = rewriteAPIKeyAdditionalModels(c.Request, apiKey)
 		return

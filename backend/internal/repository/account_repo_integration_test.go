@@ -1759,3 +1759,45 @@ func idsOfAccounts(accounts []service.Account) []int64 {
 	}
 	return out
 }
+
+// 已同步账号的常规编辑与自动续期保留窗口；管理员重新授权后仍能区分“未知”与“从未同步”。
+func TestAnthropicWindowSnapshotAfterAccountEdit(t *testing.T) {
+	for _, kind := range []string{service.AccountTypeOAuth, service.AccountTypeSetupToken} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := t.Context()
+			tx := testEntTx(t)
+			repo := newAccountRepositoryWithSQL(tx.Client(), tx, nil)
+			acc := mustCreateAccount(t, tx.Client(), &service.Account{
+				Name:        "window-test-" + kind,
+				Platform:    service.PlatformAnthropic,
+				Type:        kind,
+				Credentials: map[string]any{"access_token": "test-old", "refresh_token": "test-old-refresh"},
+			})
+			load := func() *service.Account {
+				t.Helper()
+				current, err := repo.GetByID(ctx, acc.ID)
+				require.NoError(t, err)
+				return current
+			}
+			require.Nil(t, load().GetUpstreamModelMetadataSnapshot())
+			snapshot := map[string]any{"source": "upstream", "binding": "test-identity", "models": map[string]any{"claude-test": map[string]any{"context_window": 1000000}}}
+			require.NoError(t, repo.UpdateExtra(ctx, acc.ID, map[string]any{service.UpstreamModelMetadataExtraKey: snapshot}))
+			edit := load()
+			edit.Credentials["model_mapping"] = map[string]any{"public": "claude-test"}
+			edit.Extra = map[string]any{}
+			require.NoError(t, repo.Update(ctx, edit))
+			current := load()
+			require.Equal(t, int64(1000000), current.GetUpstreamModelMetadataSnapshot().Models["claude-test"].ContextWindow)
+			current.Credentials["access_token"] = "test-renewed"
+			require.NoError(t, repo.UpdateCredentials(ctx, acc.ID, current.Credentials))
+			edit = load()
+			require.Equal(t, "test-identity", edit.GetUpstreamModelMetadataSnapshot().Binding)
+			edit.Credentials["refresh_token"] = "different-identity"
+			require.NoError(t, repo.Update(ctx, edit))
+			cleared := load().GetUpstreamModelMetadataSnapshot()
+			require.NotNil(t, cleared)
+			require.Empty(t, cleared.Binding)
+			require.Empty(t, cleared.Models)
+		})
+	}
+}

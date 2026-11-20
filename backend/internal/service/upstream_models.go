@@ -82,6 +82,15 @@ func newUpstreamModelSyncUpstreamError(message string, err error) error {
 	return &UpstreamModelSyncError{Kind: UpstreamModelSyncErrorUpstream, Message: message, Err: err}
 }
 
+// validateModelSyncProxy 确保模型与能力请求都遵守账号指定的代理。
+func validateModelSyncProxy(account *Account) error {
+	if account.ProxyID != nil && (account.Proxy == nil || account.Proxy.ID != *account.ProxyID ||
+		!account.Proxy.IsActive() || account.Proxy.IsExpired(time.Now())) {
+		return newUpstreamModelSyncConfigError("Configured proxy is unavailable", nil)
+	}
+	return nil
+}
+
 // FetchUpstreamSupportedModels 根据账号的上游 API 形态拉取实时支持模型列表。
 func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, account *Account) ([]string, error) {
 	if s == nil {
@@ -91,9 +100,8 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 		return nil, newUpstreamModelSyncConfigError("Account is required", nil)
 	}
 	// 必须在令牌刷新和模型请求之前检查代理，禁止已配置的代理失效后静默直连。
-	if account.ProxyID != nil && (account.Proxy == nil || account.Proxy.ID != *account.ProxyID ||
-		!account.Proxy.IsActive() || account.Proxy.IsExpired(time.Now())) {
-		return nil, newUpstreamModelSyncConfigError("Configured proxy is unavailable", nil)
+	if err := validateModelSyncProxy(account); err != nil {
+		return nil, err
 	}
 
 	if account.Platform == PlatformAntigravity && account.Type != AccountTypeAPIKey {
@@ -351,7 +359,7 @@ func (s *AccountTestService) buildAnthropicUpstreamModelsRequest(ctx context.Con
 		if apiKey == "" {
 			return nil, newUpstreamModelSyncConfigError("No Anthropic API key is available", nil)
 		}
-		baseURL = account.GetBaseURL()
+		baseURL = getAnthropicGatewayBaseURL(account)
 		if strings.TrimSpace(baseURL) == "" {
 			baseURL = "https://api.anthropic.com"
 		}

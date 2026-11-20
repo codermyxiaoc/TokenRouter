@@ -2,6 +2,7 @@ package routes
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -658,5 +659,32 @@ func TestGatewayRoutesOpenAICompatibleCountTokensPathIsRegistered(t *testing.T) 
 			router.ServeHTTP(w, req)
 			require.NotEqual(t, http.StatusNotFound, w.Code)
 		})
+	}
+}
+
+// 让测试鉴权在入口第一次读体，覆盖根路径、版本路径以及 Codex 三类文本上限。
+func TestGatewayTextBodyLimitBeforeAuthentication(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.MaxBodySize, cfg.Gateway.TextMaxBodySize = 128, 8
+	router := gin.New()
+	auth := servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+		_, err := io.ReadAll(c.Request.Body)
+		var limit *http.MaxBytesError
+		if errors.As(err, &limit) {
+			c.AbortWithStatus(http.StatusRequestEntityTooLarge)
+			return
+		}
+		require.NoError(t, err)
+		c.AbortWithStatus(http.StatusNoContent)
+	})
+	RegisterGatewayRoutes(router, &handler.Handlers{Gateway: &handler.GatewayHandler{}, OpenAIGateway: &handler.OpenAIGatewayHandler{}}, auth, nil, nil, nil, nil, cfg)
+	for _, path := range []string{"/v1/alpha/search", "/alpha/search", "/backend-api/codex/alpha/search", "/v1/systemone", "/systemone", "/v1/embeddings", "/embeddings", "/v1/responses"} {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader("123456789")))
+		want := http.StatusRequestEntityTooLarge
+		if path == "/v1/responses" {
+			want = http.StatusNoContent
+		}
+		require.Equal(t, want, w.Code, path)
 	}
 }

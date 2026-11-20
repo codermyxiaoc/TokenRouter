@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	pkghttputil "github.com/TokenFlux/TokenRouter/internal/pkg/httputil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ip"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
@@ -467,7 +468,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
-		logRequestBodyReadFailure(reqLog, c.Request, err)
+		pkghttputil.LogRequestBodyReadFailure(reqLog, c.Request, err)
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		return
 	}
@@ -2487,7 +2488,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 	// 首帧先拒绝重复模型，避免改写消除歧义后按错误模型选账号或计费。
-	if err := jsonutil.ValidateUniqueFields(firstMessage, "model", "type", "session", "previous_response_id", "prompt_cache_key"); err != nil {
+	if err := jsonutil.ValidateGatewayFrame(firstMessage); err != nil {
+		if errors.Is(err, jsonutil.ErrDuplicateField) {
+			middleware2.MarkIngressRejected(c, middleware2.IngressRejectConflictingRequestFields)
+		}
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "duplicate model or websocket control field")
 		return
 	}
@@ -2916,7 +2920,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if !gjson.ValidBytes(payload) {
 					return payload, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
 				}
-				if err := jsonutil.ValidateUniqueFields(payload, "model", "type", "session", "previous_response_id", "prompt_cache_key"); err != nil {
+				if err := jsonutil.ValidateGatewayFrame(payload); err != nil {
+					if errors.Is(err, jsonutil.ErrDuplicateField) {
+						middleware2.MarkIngressRejected(c, middleware2.IngressRejectConflictingRequestFields)
+					}
 					return payload, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "duplicate model or websocket control field", err)
 				}
 				rewrittenPayload, rewriteErr := service.RewriteAPIKeyAdditionalModels(payload, apiKey.ModelMapping)

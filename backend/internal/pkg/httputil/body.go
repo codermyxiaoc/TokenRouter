@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/jsonutil"
@@ -23,11 +25,74 @@ const (
 	maxDecompressedBodySize = 64 << 20
 )
 
+// prereadBody 保存已解压的正文，供选组、模型映射与业务处理器共享读取。
+type prereadBody struct {
+	*bytes.Reader
+	data []byte
+}
+
+func (p *prereadBody) Close() error { return nil }
+
+// PrereadRequestBytes 返回上一步已回填的正文；流式调用方仍可以通过 Body 顺序读取。
+func PrereadRequestBytes(req *http.Request) ([]byte, bool) {
+	body, ok := req.Body.(*prereadBody)
+	if !ok {
+		return nil, false
+	}
+	return body.data, true
+}
+
+// ResetRequestBody 用已读取的完整正文重置请求，并同步传输长度。
+func ResetRequestBody(req *http.Request, data []byte) {
+	req.Body = &prereadBody{Reader: bytes.NewReader(data), data: data}
+	req.ContentLength = int64(len(data))
+	req.Header.Set("Content-Length", strconv.Itoa(len(data)))
+}
+
+// PrepareGatewayRequestBody 在任何路由改写前按实际协议检查并回填原始正文。
+// 无需解析自由文本或二进制，JSON 的 BOM 仅在确定为 JSON 时移除。
+func PrepareGatewayRequestBody(req *http.Request, limit int64) error {
+	data, err := readRequestBodyWithPrealloc(req, limit)
+	if err != nil {
+		return err
+	}
+	if limit > 0 && int64(len(data)) > limit {
+		return &http.MaxBytesError{Limit: limit}
+	}
+	doc := jsonutil.TrimUTF8BOM(data)
+	if len(doc) != len(data) && jsonutil.LooksLikeJSON(doc) {
+		data = doc
+	}
+	contentType := req.Header.Get("Content-Type")
+	batchMetadata := req.URL != nil && req.URL.Path == "/v1/images/batches"
+	if _, conflict := jsonutil.ConflictingField(contentType, data, batchMetadata); conflict {
+		return jsonutil.ErrDuplicateField
+	}
+	// 声明为表单但正文确为 JSON 的客户端也必须先走 JSON 选组和模型映射。
+	// 真正的表单含有独立 part；有双重解读的正文已在上面被拒绝。
+	if jsonutil.LooksLikeJSON(data) && strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "multipart/") {
+		if mediaType, _, _ := mime.ParseMediaType(contentType); strings.HasPrefix(mediaType, "multipart/") {
+			req.Header.Set("Content-Type", "application/json")
+		}
+	}
+	ResetRequestBody(req, data)
+	return nil
+}
+
+// BodyTooLargeMessage 让提前准入与业务处理器使用同一上限提示。
+func BodyTooLargeMessage(limit int64) string {
+	const mb = 1 << 20
+	if limit >= mb {
+		return fmt.Sprintf("Request body too large, limit is %dMB", limit/mb)
+	}
+	return fmt.Sprintf("Request body too large, limit is %dB", limit)
+}
+
 // ReadRequestBodyWithPrealloc reads request body with preallocated buffer based
 // on content length, transparently decoding any Content-Encoding the upstream
 // client used to compress the body (zstd, gzip, deflate).
 func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
-	body, err := readRequestBodyWithPrealloc(req)
+	body, err := readRequestBodyWithPrealloc(req, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -35,9 +100,13 @@ func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 }
 
 // 读取与解压不自行规范化；调用方在最终解析边界校验，避免宽容入口对同一正文重复复制。
-func readRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
+func readRequestBodyWithPrealloc(req *http.Request, decodedLimit int64) ([]byte, error) {
 	if req == nil || req.Body == nil {
 		return nil, nil
+	}
+
+	if data, ok := PrereadRequestBytes(req); ok {
+		return data, nil
 	}
 
 	capHint := requestBodyReadInitCap
@@ -62,7 +131,10 @@ func readRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 		return raw, nil
 	}
 
-	decoded, err := decompressRequestBody(enc, raw)
+	if decodedLimit <= 0 || decodedLimit > maxDecompressedBodySize {
+		decodedLimit = maxDecompressedBodySize
+	}
+	decoded, err := decompressRequestBody(enc, raw, decodedLimit)
 	if err != nil {
 		return nil, fmt.Errorf("decode Content-Encoding %q: %w", enc, err)
 	}
@@ -134,14 +206,14 @@ func readRequestBodyChunks(reader io.Reader, initialCapacity int, contentLength 
 // ReadLenientJSONRequestBodyWithPrealloc 读取请求体，并在严格 JSON
 // 校验前转义字符串中的原始控制字节。
 func ReadLenientJSONRequestBodyWithPrealloc(req *http.Request, maxNormalizedBytes int64) ([]byte, error) {
-	body, err := readRequestBodyWithPrealloc(req)
+	body, err := readRequestBodyWithPrealloc(req, 0)
 	if err != nil {
 		return nil, err
 	}
 	return NormalizeLenientJSONRequestBody(body, maxNormalizedBytes)
 }
 
-func decompressRequestBody(encoding string, raw []byte) ([]byte, error) {
+func decompressRequestBody(encoding string, raw []byte, limit int64) ([]byte, error) {
 	switch encoding {
 	case "zstd":
 		dec, err := zstd.NewReader(bytes.NewReader(raw))
@@ -149,24 +221,33 @@ func decompressRequestBody(encoding string, raw []byte) ([]byte, error) {
 			return nil, err
 		}
 		defer dec.Close()
-		return io.ReadAll(io.LimitReader(dec, maxDecompressedBodySize))
+		return readDecodedBody(dec, limit)
 	case "gzip", "x-gzip":
 		gr, err := gzip.NewReader(bytes.NewReader(raw))
 		if err != nil {
 			return nil, err
 		}
 		defer func() { _ = gr.Close() }()
-		return io.ReadAll(io.LimitReader(gr, maxDecompressedBodySize))
+		return readDecodedBody(gr, limit)
 	case "deflate":
 		zr, err := zlib.NewReader(bytes.NewReader(raw))
 		if err != nil {
 			return nil, err
 		}
 		defer func() { _ = zr.Close() }()
-		return io.ReadAll(io.LimitReader(zr, maxDecompressedBodySize))
+		return readDecodedBody(zr, limit)
 	default:
 		return nil, errors.New("unsupported Content-Encoding")
 	}
+}
+
+// readDecodedBody 额外读取一个字节区分恰好到达上限与正文被截断。
+func readDecodedBody(reader io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err == nil && int64(len(data)) > limit {
+		return nil, &http.MaxBytesError{Limit: limit}
+	}
+	return data, err
 }
 
 // NormalizeLenientJSONRequestBody 转义部分异常 OpenAI 兼容客户端

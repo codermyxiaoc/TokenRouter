@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/TokenFlux/TokenRouter/internal/domain"
@@ -376,4 +377,50 @@ func TestApplyOpenAIReasoningEffortPolicy(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCanonicalRequestedReasoningEffortFromConfigurationUpdates(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{"current turn", `[{"role":"user","content":"hi"},{"type":"configuration_update","reasoning":{"effort":"high"}}]`, "high"},
+		{"history and partial updates", `[{"type":"configuration_update","reasoning":{"effort":"high"}},{"type":"configuration_update","reasoning":{"effort":"MAX"}},{"type":"configuration_update","text":{"verbosity":"low"}},{"role":"user","content":"next"}]`, "max"},
+		{"thinking off", `[{"type":"configuration_update","reasoning":{"effort":"none"}}]`, "none"},
+		{"escaped type", `[{"type":"configuration\u005fupdate","reasoning":{"effort":"low"}}]`, "low"},
+		{"no effort selected", `[{"type":"configuration_update","text":{"verbosity":"low"}}]`, "medium"},
+		{"non-string effort", `[{"type":"configuration_update","reasoning":{"effort":123}}]`, "medium"},
+		{"nested in message", `[{"role":"user","content":[{"type":"configuration_update","reasoning":{"effort":"low"}}]}]`, "medium"},
+		{"non-array input", `{"item":{"type":"configuration_update","reasoning":{"effort":"low"}}}`, "medium"},
+		{"unknown explicit effort", `[{"type":"configuration_update","reasoning":{"effort":"unknown"}}]`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"model":"gpt-6.1-sol","reasoning":{"effort":"medium"},"input":` + tc.input + `}`)
+			var parsed map[string]any
+			require.NoError(t, json.Unmarshal(body, &parsed))
+			for _, got := range []*string{CanonicalRequestedReasoningEffort(body), CanonicalRequestedReasoningEffortFromReqBody(parsed)} {
+				if tc.want == "" {
+					require.Nil(t, got)
+				} else {
+					require.NotNil(t, got)
+					require.Equal(t, tc.want, *got)
+				}
+			}
+		})
+	}
+}
+
+func TestConfigurationUpdateRespectsGroupEffortPolicy(t *testing.T) {
+	body := []byte(`{"reasoning":{"effort":"low"},"input":[{"type":"configuration_update","reasoning":{"effort":"high"}},{"role":"user","content":"hello"},{"type":"configuration_update","reasoning":{"effort":"xhigh"}}]}`)
+	updated, changed, err := ApplyOpenAIReasoningEffortPolicy(body, "medium", nil, ReasoningEffortOverLimitDowngrade)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "high", gjson.GetBytes(updated, "input.0.reasoning.effort").Str)
+	require.Equal(t, "medium", gjson.GetBytes(updated, "input.2.reasoning.effort").Str)
+	require.Equal(t, "xhigh", *CanonicalRequestedReasoningEffort(body))
+	require.Equal(t, "medium", *extractEffectiveOpenAIReasoningEffortFromBody(updated, body))
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(updated, &decoded))
+	require.Equal(t, "medium", *extractOpenAIReasoningEffort(decoded))
+	_, _, err = ApplyOpenAIReasoningEffortPolicy(body, "medium", nil, ReasoningEffortOverLimitDeny)
+	require.ErrorAs(t, err, new(*ReasoningEffortOverLimitError))
 }

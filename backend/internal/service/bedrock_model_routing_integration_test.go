@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -76,6 +77,15 @@ func TestBedrockRegionRouting_ForwardAndAccountTestUseSameRoute(t *testing.T) {
 				accountTester := &AccountTestService{httpUpstream: testUpstream, cfg: testConfig()}
 				err = accountTester.testBedrockAccountConnection(newBedrockRoutingTestContext(), context.Background(), &account, tc.model, "hello")
 				require.NoError(t, err)
+				// 普通与 Bedrock 连接测试须遵循所选模型的采样能力。
+				claudeProbe, err := createTestPayloadWithPrompt(tc.model, "hello")
+				require.NoError(t, err)
+				_, hasTemperature := claudeProbe["temperature"]
+				require.Equal(t, !claude.RejectsTemperature(tc.model), hasTemperature)
+				var bedrockProbe map[string]any
+				require.NoError(t, json.Unmarshal(testUpstream.lastBody, &bedrockProbe))
+				_, hasTemperature = bedrockProbe["temperature"]
+				require.Equal(t, !claude.RejectsTemperature(tc.wantID), hasTemperature)
 				for _, upstream := range []*httpUpstreamRecorder{forwardUpstream, testUpstream} {
 					require.Len(t, upstream.requests, 1)
 					require.Equal(t, "bedrock-runtime."+strings.TrimSpace(tc.region)+".amazonaws.com", upstream.lastReq.URL.Host)

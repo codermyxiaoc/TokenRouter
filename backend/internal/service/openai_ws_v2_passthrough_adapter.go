@@ -1748,11 +1748,7 @@ func validateOpenAIWSPassthroughModelFields(payload []byte) error {
 	if !gjson.ValidBytes(payload) {
 		return nil
 	}
-	if err := jsonutil.ValidateUniqueFields(payload, "type", "model", "session", "previous_response_id", "prompt_cache_key"); err != nil {
-		return err
-	}
-	// 不能依据首个 type 决定是否校验 session，后端解析器可能采用另一个同名 type。
-	return jsonutil.ValidateRoutingModel([]byte(gjson.GetBytes(payload, "session").Raw))
+	return jsonutil.ValidateGatewayFrame(payload)
 }
 
 func markOpenAIWSV2PassthroughCyberPolicy(c *gin.Context, payload []byte) bool {

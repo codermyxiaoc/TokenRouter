@@ -89,6 +89,8 @@ setup 使用 `DATA_DIR > 可写 /app/data > 当前目录` 选择 `config.yaml` �
 
 ## 数据库运行时设置
 
+搜索模拟支持 Brave、Tavily 和 Exa。Exa 使用专用 API Key，按已有供应商配置选择代理和用量上限，向固定搜索接口请求摘要。
+
 `chanshui_enabled` 是仅管理员可见的掺水检测总开关，默认关闭；不进入公开设置、HTML 注入或普通用户菜单。关闭隐藏管理员检测入口与页面，阻止新提交、自动停用与自动恢复；已提交任务继续在后台查询，配置和历史保留，重新开启后可查看。检测按上游账号配置模型、协议、定时与停用阈值，不借用用户 API Key 或分组；详见[掺水检测](../domains/chanshui_tests.md)。
 
 媒体任务后台设置 `media_task_reconciliation_timeout_minutes` 控制失败待核对账本的自动释放期限，默认 60 分钟，范围 1–10080；管理员设置使用可选整数进行部分更新，省略或 null 保留原值。维护器每轮动态读取，缺键使用默认，读取失败或非法持久值跳过处理；只作用于失败且尚有待处理资金合同的任务，与图片保存期无关。修改对历史失败待核对任务同样生效，详见[失败任务账务处理](../domains/media_tasks.md#media_task_reconciliation)。

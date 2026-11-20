@@ -47,15 +47,18 @@
           :utilization="usageInfo.five_hour.utilization"
           :resets-at="usageInfo.five_hour.resets_at"
           :window-stats="usageInfo.five_hour.window_stats"
+          :estimated-total-cost="estimateWindowTotalCost(usageInfo.five_hour)"
           color="indigo"
         />
 
-        <!-- 7d Window (OAuth only) -->
+        <!-- OAuth 和 Setup Token 共享被动采样的七日窗口。 -->
         <UsageProgressBar
           v-if="usageInfo.seven_day"
           label="7d"
           :utilization="usageInfo.seven_day.utilization"
           :resets-at="usageInfo.seven_day.resets_at"
+          :window-stats="usageInfo.seven_day.window_stats"
+          :estimated-total-cost="estimateWindowTotalCost(usageInfo.seven_day)"
           color="emerald"
         />
 
@@ -804,7 +807,7 @@ import type {
   UpstreamUsageQueryError,
   UpstreamUsageQueryResult
 } from '@/types'
-import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
+import { buildAccountUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber, formatDateTime } from '@/utils/format'
 import { isOfficialGeminiBaseUrl } from '@/utils/geminiExplicitCache'
@@ -821,7 +824,7 @@ import AccountUpstreamUsageQueryButton from './AccountUpstreamUsageQueryButton.v
 import { isUpstreamUsageQueryEnabled } from '@/utils/upstreamUsage'
 
 // 模块级缓存供所有 AccountUsageCell 实例共享
-const _usageCache = new Map<number, { data: AccountUsageInfo; ts: number }>()
+const _usageCache = new Map<number, { data: AccountUsageInfo; ts: number; refreshKey: string }>()
 const USAGE_CACHE_TTL = 5 * 60 * 1000 // 5 分钟
 
 const props = withDefaults(
@@ -969,7 +972,27 @@ const openAIQuotaAutoPaused = computed(() => {
   return usageInfo.value?.quota_auto_paused ?? props.account.quota_auto_paused ?? false
 })
 
-const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))
+// 同一配额窗口的账号成本按观测到的使用比例折算，缺少有效样本时不展示。
+function estimateWindowTotalCost(window?: AccountUsageInfo['seven_day']) {
+  const utilization = window?.utilization
+  const currentCost = window?.window_stats?.cost
+  if (
+    window?.utilization_unknown ||
+    typeof utilization !== 'number' ||
+    typeof currentCost !== 'number' ||
+    !Number.isFinite(utilization) ||
+    !Number.isFinite(currentCost) ||
+    utilization <= 0 ||
+    currentCost <= 0
+  ) {
+    return null
+  }
+
+  const estimate = (currentCost * 100) / utilization
+  return Number.isFinite(estimate) && estimate > 0 ? estimate : null
+}
+
+const usageRefreshKey = computed(() => buildAccountUsageRefreshKey(props.account))
 
 const shouldAutoLoadUsageOnMount = computed(() => {
   return shouldFetchUsage.value
@@ -1617,7 +1640,7 @@ const loadUsage = async (options?: { source?: 'passive' | 'active'; bypassCache?
   // 命中缓存时复用上次请求结果，避免列表批量渲染时重复打接口
   if (!options?.bypassCache) {
     const cached = _usageCache.get(props.account.id)
-    if (cached && Date.now() - cached.ts < USAGE_CACHE_TTL) {
+    if (cached && cached.refreshKey === usageRefreshKey.value && Date.now() - cached.ts < USAGE_CACHE_TTL) {
       usageInfo.value = cached.data
       loading.value = false
       return
@@ -1629,6 +1652,7 @@ const loadUsage = async (options?: { source?: 'passive' | 'active'; bypassCache?
   activeQueryLoading.value = false
   loading.value = true
   error.value = null
+  const refreshKey = usageRefreshKey.value
 
   try {
     const fetchFn = () =>
@@ -1638,7 +1662,7 @@ const loadUsage = async (options?: { source?: 'passive' | 'active'; bypassCache?
     const result = await enqueueUsageRequest(account, fetchFn)
     if (!unmounted.value && generation === usageRequestGeneration) {
       usageInfo.value = result
-      _usageCache.set(account.id, { data: result, ts: Date.now() })
+      _usageCache.set(account.id, { data: result, ts: Date.now(), refreshKey })
     }
   } catch (e: any) {
     if (!unmounted.value && generation === usageRequestGeneration) {
@@ -1702,6 +1726,7 @@ const attachVisibilityObserver = () => {
 
 const loadActiveUsage = async () => {
   if (activeQueryLoading.value) return
+  const refreshKey = usageRefreshKey.value
   const accountID = props.account.id
   const generation = ++usageRequestGeneration
   activeQueryLoading.value = true
@@ -1710,7 +1735,7 @@ const loadActiveUsage = async () => {
     const result = await adminAPI.accounts.getUsage(accountID, 'active', true)
     if (unmounted.value || generation !== usageRequestGeneration) return
     usageInfo.value = result
-    _usageCache.set(accountID, { data: result, ts: Date.now() })
+    _usageCache.set(accountID, { data: result, ts: Date.now(), refreshKey })
   } catch (e: any) {
     if (unmounted.value || generation !== usageRequestGeneration) return
     // 主动查询失败需要可见提示，而不是继续展示旧数据当作最新结果。
@@ -1733,7 +1758,7 @@ const handleOpenAIQuotaReset = async (result: OpenAIQuotaResetResult) => {
   staleResetBatchedUsage = props.batchedUsage
   activeQueryLoading.value = false
   // 账号投影沿用列表更新入口；跳过该次 prop 更新的普通刷新，随后只做一次强制查询。
-  resetAccountRefreshKey = result.account ? buildOpenAIUsageRefreshKey(result.account) : null
+  resetAccountRefreshKey = result.account ? buildAccountUsageRefreshKey(result.account) : null
   if (result.account) emit('account-updated', result.account)
   await nextTick()
   resetAccountRefreshKey = null
@@ -1905,14 +1930,18 @@ watch(
   { flush: 'sync' }
 )
 
-watch(openAIUsageRefreshKey, (nextKey, prevKey) => {
-  if (!prevKey || nextKey === prevKey) return
-  if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return
+watch(usageRefreshKey, (nextKey, prevKey) => {
+  if (!prevKey || nextKey === prevKey || !shouldFetchUsage.value) return
   if (nextKey === resetAccountRefreshKey) return
 
-	_usageCache.delete(props.account.id)
-	usageInfo.value = null
-	requestAutoLoad()
+  _usageCache.delete(props.account.id)
+  usageInfo.value = null
+  // 定时列表的快照更新沿用普通批量读取，主动上游查询由管理员单独触发。
+  if (isBatchManaged.value) {
+    requestParentBatchUsage()
+    return
+  }
+  requestAutoLoad(isAnthropicOAuthOrSetupToken.value ? 'passive' : undefined)
 })
 
 watch(

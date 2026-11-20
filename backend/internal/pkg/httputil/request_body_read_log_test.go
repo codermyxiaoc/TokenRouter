@@ -1,6 +1,6 @@
 //go:build unit
 
-package handler
+package httputil
 
 import (
 	"errors"
@@ -11,16 +11,19 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestLogRequestBodyReadFailureClassifiesWithoutPayload(t *testing.T) {
-	log, logs := newObservedLogger(t)
+	core, logs := observer.New(zap.WarnLevel)
+	log := zap.New(core)
 	req, err := http.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader("secret-payload-marker"))
 	require.NoError(t, err)
 	req.Header.Set("Content-Encoding", "gzip")
 	req.ContentLength = 21
 
-	logRequestBodyReadFailure(log, req, errors.New(`decode Content-Encoding "gzip": unexpected EOF secret-payload-marker`))
+	LogRequestBodyReadFailure(log, req, errors.New(`decode Content-Encoding "gzip": unexpected EOF secret-payload-marker`))
 
 	entries := logs.All()
 	require.Len(t, entries, 1)

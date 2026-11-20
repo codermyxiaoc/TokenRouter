@@ -125,7 +125,7 @@ export default {
         table: {
           model: '模型',
           requestCount: '请求数',
-          avgTokensPerSec: '平均 Tokens/秒',
+          avgTokensPerSec: '平均 Tokens/秒（按耗时加权）',
           avgFirstTokenMs: '平均首 Token 延迟(ms)',
           totalOutputTokens: '输出 Token 总数',
           avgDurationMs: '平均时长(ms)',

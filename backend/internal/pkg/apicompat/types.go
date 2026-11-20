@@ -80,6 +80,8 @@ type AnthropicContentBlock struct {
 	Input json.RawMessage `json:"input,omitempty"`
 
 	// type=tool_result
+	// 工具搜索结果通过 tool_reference 引用延迟声明的工具。
+	ToolName  string          `json:"tool_name,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"` // string or []AnthropicContentBlock
 	IsError   bool            `json:"is_error,omitempty"`
@@ -128,6 +130,8 @@ type AnthropicTool struct {
 	Description  string                 `json:"description,omitempty"`
 	InputSchema  json.RawMessage        `json:"input_schema,omitempty"` // JSON Schema object
 	CacheControl *AnthropicCacheControl `json:"cache_control,omitempty"`
+	// Claude 通过工具搜索公开标记为延迟加载的声明。
+	DeferLoading bool `json:"defer_loading,omitempty"`
 }
 
 // AnthropicCacheControl 对应 Anthropic API 的 cache_control 字段。
@@ -347,6 +351,10 @@ type ResponsesRequest struct {
 	ServiceTier        string              `json:"service_tier,omitempty"`
 	PromptCacheKey     string              `json:"prompt_cache_key,omitempty"`
 	PreviousResponseID string              `json:"previous_response_id,omitempty"`
+	// Stop 在 Chat Completions 里是原生字段，Responses 协议本身没有。这里保留原样
+	// （string 或 []string），仅在降级到 Chat Completions 时透传，避免客户端设的
+	// 停止序列在转换层被静默丢弃。
+	Stop json.RawMessage `json:"stop,omitempty"`
 }
 
 // ResponsesReasoning configures reasoning effort in the Responses API.
@@ -432,6 +440,8 @@ type ResponsesTool struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
+	// client 表示由调用方执行工具搜索。
+	Execution string `json:"execution,omitempty"`
 
 	// type=namespace 的子工具列表（tools 与 children 二选一，语义相同）。
 	Tools    []ResponsesTool `json:"tools,omitempty"`
@@ -480,6 +490,12 @@ type ResponsesResponse struct {
 
 	// Error is present when status="failed"
 	Error *ResponsesError `json:"error,omitempty"`
+
+	// 从流式事件重建的输出可还原自定义工具调用。
+	RenderCustomToolCalls bool `json:"-"`
+
+	// 重建 xAI 输出时区分服务端搜索与客户端工具。
+	XAIServerSideSearch bool `json:"-"`
 }
 
 // ResponsesError describes an error in a failed response.
@@ -589,6 +605,9 @@ func (o *ResponsesOutput) UnmarshalJSON(data []byte) error {
 type WebSearchAction struct {
 	Type  string `json:"type,omitempty"`  // "search"
 	Query string `json:"query,omitempty"` // primary search query
+	// 保留来源原始 JSON，兼容字段形态变化。
+	URL     json.RawMessage `json:"url,omitempty"` // 打开或查找页面时使用的目标地址
+	Sources json.RawMessage `json:"sources,omitempty"`
 }
 
 // ResponsesSummary is a summary text block inside a reasoning output.
@@ -599,10 +618,12 @@ type ResponsesSummary struct {
 
 // ResponsesUsage holds token counts in Responses API format.
 type ResponsesUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	TotalTokens              int `json:"total_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	// 保留 xAI 的服务端工具计量，兼容格式转换后仍可按成功次数结算。
+	ServerSideToolUsageDetails json.RawMessage `json:"server_side_tool_usage_details,omitempty"`
+	InputTokens                int             `json:"input_tokens"`
+	OutputTokens               int             `json:"output_tokens"`
+	TotalTokens                int             `json:"total_tokens"`
+	CacheCreationInputTokens   int             `json:"cache_creation_input_tokens,omitempty"`
 
 	// Optional detailed breakdown
 	InputTokensDetails  *ResponsesInputTokensDetails  `json:"input_tokens_details,omitempty"`

@@ -79,3 +79,14 @@ func foldJSONFieldName(name string) string {
 		return canonical
 	}, name)
 }
+
+// ValidateGatewayFrame 在 WebSocket 首帧和后续应用帧进入策略前检查对象及嵌套字段。
+func ValidateGatewayFrame(body []byte) error {
+	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
+		return errors.New("expected a valid JSON object")
+	}
+	if _, conflict := ConflictingField("", body, false); conflict {
+		return ErrDuplicateField
+	}
+	return nil
+}

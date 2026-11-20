@@ -26,8 +26,9 @@ func openAIWSImageIntentForRoutingModel(routingModel, upstreamModel string, body
 	if routingModel != upstreamModel {
 		imageIntentBody = ReplaceModelInBody(body, routingModel)
 	}
-	imageIntent := IsImageGenerationIntentForPlatform(openAIResponsesEndpoint, routingModel, imageIntentBody, platform)
-	explicitImageIntent := IsExplicitImageGenerationIntent(openAIResponsesEndpoint, routingModel, imageIntentBody)
+	// WS 入口已校验整份 JSON，渠道模型替换仍生成合法 JSON。
+	imageIntent := IsImageGenerationIntentForPlatformValidated(openAIResponsesEndpoint, routingModel, imageIntentBody, platform)
+	explicitImageIntent := openAIImageGenerationIntent(openAIResponsesEndpoint, routingModel, imageIntentBody, true, false)
 	return imageIntentBody, imageIntent, explicitImageIntent
 }
 
@@ -232,7 +233,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
 		}
 		// HTTP Bridge 与非透传模式也在任何帧改写之前校验模型唯一性。
-		if err := jsonutil.ValidateUniqueFields(trimmed, "model", "type", "session", "previous_response_id", "prompt_cache_key"); err != nil {
+		if err := jsonutil.ValidateGatewayFrame(trimmed); err != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "duplicate model or websocket control field", err)
 		}
 		if applyUserPromptReplacement {

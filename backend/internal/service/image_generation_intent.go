@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -38,22 +39,89 @@ func GroupAllowsImageGeneration(group *Group) bool {
 	return group == nil || group.AllowImageGeneration
 }
 
-// IsImageGenerationIntent classifies requests that can produce generated images.
-func IsImageGenerationIntent(endpoint string, requestedModel string, body []byte) bool {
-	if IsImageGenerationEndpoint(endpoint) {
-		return true
-	}
-	if isOpenAIImageGenerationModel(requestedModel) {
-		return true
-	}
-	if len(body) == 0 || !gjson.ValidBytes(body) {
+var (
+	// imageGenLiteralBytes 覆盖扫描侧的全部非模型分支：tool type image_generation
+	// 自带该前缀，namespace / tool_choice / 函数引用的名字都是 image_gen。
+	imageGenLiteralBytes = []byte("image_gen")
+	// imageModelFoldBytes 覆盖 model 分支：gpt-image-* 与 grok-imagine* 都含 mag，
+	// 模型名按 ToLower 比较，这里做 ASCII 折叠匹配。
+	imageModelFoldBytes = []byte("mag")
+)
+
+// 工具名含 image_gen，生图模型含 mag（这三个字母不受特殊 Unicode 大小写折叠影响）。
+// JSON Unicode 转义可能隐藏任意标记，此时必须进行完整扫描。
+func openAIBodyMayDeclareImageGeneration(body []byte) bool {
+	if len(body) == 0 {
 		return false
 	}
+	if bytes.Contains(body, imageGenLiteralBytes) {
+		return true
+	}
+	if containsASCIIFold(body, imageModelFoldBytes) {
+		return true
+	}
+	return bytes.Contains(body, jsonUnicodeEscapeBytes)
+}
 
+// IsImageGenerationIntent 判断请求是否声明生图能力。
+func IsImageGenerationIntent(endpoint string, requestedModel string, body []byte) bool {
+	return openAIImageGenerationIntent(endpoint, requestedModel, body, false, true)
+}
+
+// IsExplicitImageGenerationIntent 仅检测原生 image_generation 工具、图片模型和显式 tool_choice，
+// 不检测被动的 image_gen namespace 声明。用于 capability 路由决策——被动 namespace 不应
+// 强制要求原生 Responses 能力，否则 Chat Completions-only 账号会被误过滤（#4476）。
+func IsExplicitImageGenerationIntent(endpoint string, requestedModel string, body []byte) bool {
+	return openAIImageGenerationIntent(endpoint, requestedModel, body, true, true)
+}
+
+// IsImageGenerationIntentForPlatform 按平台区分普通意图与显式生图意图。
+func IsImageGenerationIntentForPlatform(endpoint string, requestedModel string, body []byte, platform string) bool {
+	return openAIImageGenerationIntentForPlatform(endpoint, requestedModel, body, platform, true)
+}
+
+// IsImageGenerationIntentForPlatformValidated 与 IsImageGenerationIntentForPlatform 判定相同，
+// 但要求调用方已经确认 body 是合法 JSON（例如 handler 已对同一份字节做过 gjson.ValidBytes）。
+// 它跳过这次全量校验——大 body 上这一项占判定耗时的六成以上。非法 JSON 的语义与未校验
+// 版本不同，只允许在校验过同一份字节、且后续改写只经由 sjson / json.Marshal 的调用点使用。
+func IsImageGenerationIntentForPlatformValidated(endpoint string, requestedModel string, body []byte, platform string) bool {
+	return openAIImageGenerationIntentForPlatform(endpoint, requestedModel, body, platform, false)
+}
+
+func openAIImageGenerationIntentForPlatform(endpoint string, requestedModel string, body []byte, platform string, validate bool) bool {
+	if !strings.EqualFold(strings.TrimSpace(platform), PlatformGrok) {
+		return openAIImageGenerationIntent(endpoint, requestedModel, body, false, validate)
+	}
+	// Grok 移除被动命名空间目录，仅显式选用生图能力的请求属于生图意图。
+	return openAIImageGenerationIntent(endpoint, requestedModel, body, true, validate)
+}
+
+// openAIImageGenerationIntent 统一入口：先做 O(1) 端点/模型判断，再用字节级预检查
+// 挡住不可能命中扫描的 body，最后才按需校验并遍历根对象。
+func openAIImageGenerationIntent(endpoint string, requestedModel string, body []byte, explicit bool, validate bool) bool {
+	if IsImageGenerationEndpoint(endpoint) || isOpenAIImageGenerationModel(requestedModel) {
+		return true
+	}
+	if !openAIBodyMayDeclareImageGeneration(body) {
+		return false
+	}
+	if validate && !gjson.ValidBytes(body) {
+		return false
+	}
+	root := parseRawJSONView(body)
+	if explicit {
+		return explicitImageGenerationDeclarationsFromRoot(root)
+	}
+	return imageGenerationDeclarationsFromRoot(root)
+}
+
+// imageGenerationDeclarationsFromRoot 走一遍根对象，保留「重复键取第一个」语义，
+// 覆盖 model、tools、input.additional_tools 与 tool_choice。调用方负责 JSON 合法性。
+func imageGenerationDeclarationsFromRoot(root gjson.Result) bool {
 	var modelSeen, toolsSeen, inputSeen, toolChoiceSeen bool
 	imageIntent := false
-	parseRawJSONView(body).ForEach(func(key, value gjson.Result) bool {
-		// 保持 GetBytes 对重复字段取首个值的语义，同时只遍历一次根对象。
+	root.ForEach(func(key, value gjson.Result) bool {
+		// 根对象只遍历一次，重复字段沿用首个值。
 		switch key.Str {
 		case "model":
 			if !modelSeen {
@@ -81,19 +149,12 @@ func IsImageGenerationIntent(endpoint string, requestedModel string, body []byte
 	return imageIntent
 }
 
-// IsExplicitImageGenerationIntent 仅检测原生 image_generation 工具、图片模型和显式 tool_choice，
-// 不检测被动的 image_gen namespace 声明。用于 capability 路由决策，被动 namespace 不应
-// 强制要求原生 Responses 能力，否则 Chat Completions-only 账号会被误过滤（#4476）。
-func IsExplicitImageGenerationIntent(endpoint string, requestedModel string, body []byte) bool {
-	if IsImageGenerationEndpoint(endpoint) || isOpenAIImageGenerationModel(requestedModel) {
-		return true
-	}
-	if len(body) == 0 || !gjson.ValidBytes(body) {
-		return false
-	}
+// explicitImageGenerationDeclarationsFromRoot 只认原生 image_generation 工具、图片模型
+// 与显式 tool_choice，不认被动的 image_gen namespace 声明。
+func explicitImageGenerationDeclarationsFromRoot(root gjson.Result) bool {
 	var modelSeen, toolsSeen, toolChoiceSeen bool
 	imageIntent := false
-	parseRawJSONView(body).ForEach(func(key, value gjson.Result) bool {
+	root.ForEach(func(key, value gjson.Result) bool {
 		switch key.Str {
 		case "model":
 			if !modelSeen {
@@ -114,19 +175,6 @@ func IsExplicitImageGenerationIntent(endpoint string, requestedModel string, bod
 		return !imageIntent && (!modelSeen || !toolsSeen || !toolChoiceSeen)
 	})
 	return imageIntent
-}
-
-// IsImageGenerationIntentForPlatform 按平台应用生图意图判定规则。
-//
-// Codex 会在普通 Responses 请求中声明 image_gen 命名空间，供模型按需调用。
-// Grok 转发前会移除命名空间和 Responses Lite additional_tools 声明，因此仅有
-// 这些被动声明时不能把所有 Codex 请求都判为生图请求。原生 image_generation
-// 工具、显式生图选择和生图模型仍属于生图意图；其他平台保持原有声明语义。
-func IsImageGenerationIntentForPlatform(endpoint string, requestedModel string, body []byte, platform string) bool {
-	if !strings.EqualFold(strings.TrimSpace(platform), PlatformGrok) {
-		return IsImageGenerationIntent(endpoint, requestedModel, body)
-	}
-	return IsExplicitImageGenerationIntent(endpoint, requestedModel, body)
 }
 
 // IsImageGenerationIntentMap 在服务层修改请求后，使用 map 结构判断宽泛生图意图。
@@ -270,7 +318,7 @@ func openAIJSONInputContainsImageGenTool(input gjson.Result) bool {
 }
 
 func openAIRequestBodyHasImageGenerationDeclaration(body []byte) bool {
-	if len(body) == 0 || !gjson.ValidBytes(body) {
+	if !openAIBodyMayDeclareImageGeneration(body) || !gjson.ValidBytes(body) {
 		return false
 	}
 	return openAIJSONToolsContainImageGeneration(gjson.GetBytes(body, "tools")) ||
@@ -279,7 +327,7 @@ func openAIRequestBodyHasImageGenerationDeclaration(body []byte) bool {
 }
 
 func openAIRequestBodyImageGenerationToolNeedsNormalization(body []byte) bool {
-	if len(body) == 0 || !gjson.ValidBytes(body) {
+	if !openAIBodyMayDeclareImageGeneration(body) || !gjson.ValidBytes(body) {
 		return false
 	}
 	tools := gjson.GetBytes(body, "tools")

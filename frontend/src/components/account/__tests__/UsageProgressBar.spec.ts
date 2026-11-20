@@ -7,7 +7,7 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key
+      t: (key: string, args?: { cost?: string }) => args?.cost ?? key
     })
   }
 })
@@ -20,6 +20,19 @@ describe('UsageProgressBar', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('满额估算按账号美元成本展示，未提供估算时隐藏', async () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: {
+        label: '5h', color: 'indigo', utilization: 25, estimatedTotalCost: 8,
+        windowStats: { requests: 1, tokens: 100, cost: 2, standard_cost: 2, user_cost: 20 }
+      }
+    })
+    expect(wrapper.get('[data-test="estimated-total-cost"]').text()).toBe('$8.00')
+    await wrapper.setProps({ estimatedTotalCost: null })
+    expect(wrapper.find('[data-test="estimated-total-cost"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('showNowWhenIdle=true 且利用率为 0 时显示“现在”', () => {

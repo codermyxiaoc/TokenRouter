@@ -709,6 +709,7 @@ type adminServiceImpl struct {
 	affiliateService     adminRechargeAffiliateAccruer
 	// 分组平台变更后失效渠道缓存；可为 nil，此时缓存会在 TTL 到期后自然重建。
 	channelCacheInvalidator ChannelCacheInvalidator
+	userPlatformQuotaRepo   UserPlatformQuotaRepository
 }
 
 // ChannelCacheInvalidator 失效渠道缓存。
@@ -750,6 +751,7 @@ func NewAdminService(
 	tlsFPProfileService *TLSFingerprintProfileService,
 	affiliateService *AffiliateService,
 	channelCacheInvalidator ChannelCacheInvalidator,
+	userPlatformQuotaRepo UserPlatformQuotaRepository,
 ) AdminService {
 	return &adminServiceImpl{
 		userRepo:             userRepo,
@@ -778,6 +780,7 @@ func NewAdminService(
 		affiliateService:     affiliateService,
 
 		channelCacheInvalidator: channelCacheInvalidator,
+		userPlatformQuotaRepo:   userPlatformQuotaRepo,
 	}
 }
 

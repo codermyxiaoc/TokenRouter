@@ -34,7 +34,7 @@ const (
 	GrokMediaEndpointVideoContent      GrokMediaEndpoint = "video_content"
 
 	// xAI Imagine 官方图片编辑数量上限。
-	grokMediaMaxEditSourceImages = 3
+	grokMediaMaxEditSourceImages = 5
 )
 
 func (e GrokMediaEndpoint) RequiresRequestBody() bool {
@@ -1233,6 +1233,19 @@ func isGrokCLIProxyTarget(rawURL string) bool {
 	return err == nil && strings.EqualFold(parsed.Hostname(), "cli-chat-proxy.grok.com")
 }
 
+// GrokMediaInputValidationError 表示转发前即可判定的客户端输入错误。
+type GrokMediaInputValidationError struct{ Reason string }
+
+func (e *GrokMediaInputValidationError) Error() string { return e.Reason }
+
+// ValidateEditSourceCount 在调度与费用预占前检查源图数量，遮罩单独计算。
+func (r GrokMediaRequestInfo) ValidateEditSourceCount() error {
+	if len(r.InputImageURLs)+len(r.Uploads) > grokMediaMaxEditSourceImages {
+		return &GrokMediaInputValidationError{Reason: fmt.Sprintf("a maximum of %d source images is supported for image edits", grokMediaMaxEditSourceImages)}
+	}
+	return nil
+}
+
 func prepareGrokMediaForwardBody(endpoint GrokMediaEndpoint, body []byte, contentType string) ([]byte, string, error) {
 	if endpoint != GrokMediaEndpointImagesEdits {
 		return body, contentType, nil
@@ -1247,6 +1260,9 @@ func prepareGrokMediaForwardBody(endpoint GrokMediaEndpoint, body []byte, conten
 	}
 
 	info := ParseGrokMediaRequest(contentType, body)
+	if err := info.ValidateEditSourceCount(); err != nil {
+		return nil, "", err
+	}
 	payload := make(map[string]any)
 	if info.Model != "" {
 		payload["model"] = info.Model
@@ -1280,9 +1296,6 @@ func prepareGrokMediaForwardBody(endpoint GrokMediaEndpoint, body []byte, conten
 		}
 		images = append(images, grokMediaImageObject(dataURL))
 	}
-	if len(images) > grokMediaMaxEditSourceImages {
-		return nil, "", fmt.Errorf("a maximum of %d source images is supported for image edits", grokMediaMaxEditSourceImages)
-	}
 	if len(images) > 0 {
 		payload["image"] = images[0]
 		if len(images) > 1 {
@@ -1311,8 +1324,8 @@ func prepareGrokMediaForwardBody(endpoint GrokMediaEndpoint, body []byte, conten
 
 func normalizeGrokMediaJSONImageRefs(body []byte) ([]byte, error) {
 	info := ParseGrokMediaRequest("application/json", body)
-	if len(info.InputImageURLs) > grokMediaMaxEditSourceImages {
-		return nil, fmt.Errorf("a maximum of %d source images is supported for image edits", grokMediaMaxEditSourceImages)
+	if err := info.ValidateEditSourceCount(); err != nil {
+		return nil, err
 	}
 	out := body
 	var err error

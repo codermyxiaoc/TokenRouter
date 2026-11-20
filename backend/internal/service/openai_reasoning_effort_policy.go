@@ -567,7 +567,12 @@ func applyOpenAIReasoningEffortPolicy(body []byte, maxEffort string, mappings []
 	canonicalMax := NormalizeMaxReasoningEffort(maxEffort)
 	result := body
 	changed := false
-	for _, path := range []string{"reasoning.effort", "reasoning_effort", "output_config.effort"} {
+	paths := []string{"reasoning.effort", "reasoning_effort", "output_config.effort"}
+	// 限制本轮会生效的配置更新，保留历史轮次的缓存前缀。
+	if _, index := latestResponsesInputEffort(body); index >= 0 {
+		paths = append(paths, fmt.Sprintf("input.%d.reasoning.effort", index))
+	}
+	for _, path := range paths {
 		field := gjson.GetBytes(result, path)
 		if !field.Exists() || field.Type != gjson.String {
 			continue

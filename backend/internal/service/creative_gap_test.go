@@ -504,6 +504,7 @@ func TestCreativeListModelsFallbacks(t *testing.T) {
 	// gemini 无映射回退：固定 1K 模型只开放 1K，支持高分辨率的模型开放三档尺寸。
 	require.Len(t, byGroup[22], 3)
 	require.Equal(t, []string{"1K"}, byModel(byGroup[22], "gemini-2.5-flash-image").ImageSizes)
+	require.Equal(t, 3, byModel(byGroup[22], "gemini-2.5-flash-image").MaxReferenceImages)
 	require.Equal(t, []string{"1K", "2K", "4K"}, byModel(byGroup[22], "gemini-3-pro-image").ImageSizes)
 	flash31 := byModel(byGroup[22], "gemini-3.1-flash-image")
 	require.Equal(t, []string{"512", "1K", "2K", "4K"}, flash31.ImageSizes)
@@ -517,6 +518,7 @@ func TestCreativeListModelsFallbacks(t *testing.T) {
 	grok1 := byModel(byGroup[23], "grok-imagine-image-1.0")
 	require.Equal(t, []string{"1K", "2K"}, grok1.ImageSizes)
 	require.Empty(t, grok1.Qualities)
+	require.Equal(t, 5, grok1.MaxReferenceImages)
 	require.Equal(t, []string{"generate", "edit"}, grok1.Operations)
 	grok2 := byModel(byGroup[23], "grok-imagine-image-2.0")
 	require.Equal(t, []string{"low", "medium"}, grok2.Qualities)
@@ -524,7 +526,7 @@ func TestCreativeListModelsFallbacks(t *testing.T) {
 	require.Contains(t, grok2.AspectRatios, "5:2")
 	require.Contains(t, grok2.AspectRatios, "auto")
 	require.Equal(t, 1, grok2.MaxOutputCount)
-	require.Equal(t, 3, grok2.MaxReferenceImages)
+	require.Equal(t, 5, grok2.MaxReferenceImages)
 
 	// GPT Image 2 即使未配置 4K 覆盖价，也开放 4K 并回退默认价格。
 	require.Len(t, byGroup[24], 1)

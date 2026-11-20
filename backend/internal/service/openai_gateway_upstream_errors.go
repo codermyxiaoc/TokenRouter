@@ -345,6 +345,12 @@ func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool 
 }
 
 func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	// 共享协议分类也用于媒体和实时连接，没有文本请求上下文时沿用原有切换条件。
+	return s.shouldFailoverTextHTTPResponse(nil, nil, statusCode, upstreamMsg, upstreamBody)
+}
+
+// 只有 OpenAI 平台的文本 HTTP 408 默认可以切号；其他平台及图片重放有独立契约。
+func (s *OpenAIGatewayService) shouldFailoverTextHTTPResponse(ctx context.Context, account *Account, statusCode int, upstreamMsg string, upstreamBody []byte) bool {
 	// cyber_policy is request-scoped even when an intermediary wraps the
 	// provider response in a retryable 5xx status. Never punish or rotate the
 	// selected credential for it.
@@ -361,6 +367,9 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode i
 		return true
 	}
 	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, upstreamBody) {
+		return true
+	}
+	if statusCode == http.StatusRequestTimeout && account != nil && account.IsOpenAI() && !ImageAttemptHasPolicy(ctx) {
 		return true
 	}
 	if s.shouldFailoverUpstreamError(statusCode) {
@@ -771,7 +780,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	}
 
 	kind := "http_error"
-	defaultFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, body)
+	defaultFailover := s.shouldFailoverTextHTTPResponse(ctx, account, resp.StatusCode, upstreamMsg, body)
 	if account != nil && account.Platform == PlatformGrok {
 		defaultFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, body)
 	}
@@ -1004,7 +1013,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 	}
 
 	kind := "http_error"
-	defaultFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, body)
+	defaultFailover := s.shouldFailoverTextHTTPResponse(c.Request.Context(), account, resp.StatusCode, upstreamMsg, body)
 	if account.Platform == PlatformGrok {
 		defaultFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, body)
 	}

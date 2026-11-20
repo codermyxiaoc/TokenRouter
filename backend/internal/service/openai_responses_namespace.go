@@ -12,6 +12,8 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+var openAIResponsesNamespaceFieldBytes = []byte(`"namespace"`)
+
 const openAIResponsesNamespaceNamesContextKey = "openai_responses_namespace_names"
 
 // shouldFlattenOpenAIResponsesNamespaces 判定原生 Responses 转发前是否摊平
@@ -137,7 +139,7 @@ func isOpenAIResponsesToolCallItemType(itemType string) bool {
 }
 
 func flattenOpenAIResponsesNamespaces(c *gin.Context, body []byte) ([]byte, error) {
-	if !bytes.Contains(body, []byte(`"namespace"`)) {
+	if !bytes.Contains(body, openAIResponsesNamespaceFieldBytes) {
 		return body, nil
 	}
 	var requestBody map[string]any
@@ -163,19 +165,21 @@ func flattenOpenAIResponsesNamespaces(c *gin.Context, body []byte) ([]byte, erro
 // 保留工具声明和嵌套内容中的同名字段。keepToolCallNamespaces 为 true 时，调用项
 // 保留 namespace。一次性重建 input 数组可让长历史记录保持线性处理。
 func stripOpenAIResponsesInputNamespaces(body []byte, keepToolCallNamespaces bool) ([]byte, error) {
-	if !bytes.Contains(body, []byte(`"namespace"`)) {
+	if !bytes.Contains(body, openAIResponsesNamespaceFieldBytes) {
 		return body, nil
 	}
-	// Zero-copy view: input.Raw aliases body and is only read below; the
-	// rebuilt array is written into a fresh buffer.
 	input := parseRawJSONView(body).Get("input")
 	if !input.IsArray() {
 		return body, nil
 	}
+	// inputStart/inputEnd 是 input 数组在 body 里的字节区间。
+	inputStart := input.Index
+	inputEnd := inputStart + len(input.Raw)
 
-	var rebuilt bytes.Buffer
-	changed := false
-	// 偏移相对于 input 原始片段，首次真正修改时才分配缓冲区。
+	// 输出缓冲只在首次真正改写时分配，容量按整个 body 预留，prefix + 改写后的数组 +
+	// suffix 一次写完，不再额外走一遍 sjson.SetRawBytes（那会再拷一份完整 body）。
+	var out []byte
+	// 下标相对于 input 原始片段。
 	copyFrom := 0
 	var stripErr error
 	input.ForEach(func(_, item gjson.Result) bool {
@@ -183,33 +187,30 @@ func stripOpenAIResponsesInputNamespaces(body []byte, keepToolCallNamespaces boo
 			(keepToolCallNamespaces && isOpenAIResponsesToolCallItemType(item.Get("type").String())) {
 			return true
 		}
-		itemBody, err := sjson.DeleteBytes([]byte(item.Raw), "namespace")
+		itemBody, err := sjson.Delete(item.Raw, "namespace")
 		if err != nil {
 			stripErr = err
 			return false
 		}
-		if !changed {
-			rebuilt.Grow(len(input.Raw))
-			changed = true
+		if out == nil {
+			out = make([]byte, 0, len(body))
+			out = append(out, body[:inputStart]...)
 		}
 		itemStart := item.Index - input.Index
-		_, _ = rebuilt.WriteString(input.Raw[copyFrom:itemStart])
-		_, _ = rebuilt.Write(itemBody)
+		out = append(out, input.Raw[copyFrom:itemStart]...)
+		out = append(out, itemBody...)
 		copyFrom = itemStart + len(item.Raw)
 		return true
 	})
 	if stripErr != nil {
 		return body, fmt.Errorf("delete OpenAI input namespace: %w", stripErr)
 	}
-	if !changed {
+	if out == nil {
 		return body, nil
 	}
-	_, _ = rebuilt.WriteString(input.Raw[copyFrom:])
-	stripped, err := sjson.SetRawBytes(body, "input", rebuilt.Bytes())
-	if err != nil {
-		return body, fmt.Errorf("replace OpenAI input after namespace deletion: %w", err)
-	}
-	return stripped, nil
+	out = append(out, input.Raw[copyFrom:]...)
+	out = append(out, body[inputEnd:]...)
+	return out, nil
 }
 
 func setOpenAIResponsesNamespaceNames(c *gin.Context, names map[string]apicompat.ResponsesNamespaceName) {

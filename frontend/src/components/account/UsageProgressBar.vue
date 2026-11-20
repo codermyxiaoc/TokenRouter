@@ -22,6 +22,14 @@
         >
           U {{ formatUserCost }}
         </span>
+        <span
+          v-if="estimatedTotalCost != null"
+          class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800"
+          data-test="estimated-total-cost"
+          :title="t('admin.accounts.usageWindow.estimatedTotalCostTooltip')"
+        >
+          {{ t('admin.accounts.usageWindow.estimatedTotalCost', { cost: formatUsdAmount(estimatedTotalCost, { fractionDigits: 2 }) }) }}
+        </span>
       </div>
     </div>
 
@@ -80,6 +88,7 @@ const props = withDefaults(
     resetsAt?: string | null
     color: 'indigo' | 'emerald' | 'purple' | 'amber'
     windowStats?: WindowStats | null
+    estimatedTotalCost?: number | null
     showNowWhenIdle?: boolean
     remainingCapacity?: boolean
     wideLabel?: boolean

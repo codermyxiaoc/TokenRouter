@@ -24,20 +24,52 @@ import (
 	"go.uber.org/zap"
 )
 
-// cursorResponsesUnsupportedFields are top-level Responses API parameters that
-// Codex upstreams reject with "Unsupported parameter: ...". They must be
-// stripped when forwarding a raw client body through the Responses-shape
-// short-circuit in ForwardAsChatCompletions (see isResponsesShape branch).
-// The normal Chat Completions → Responses conversion path is unaffected
-// because ChatCompletionsRequest has no fields for these parameters — unknown
-// fields are dropped naturally by json.Unmarshal. Kept semantically in sync
-// with the list in openai_gateway_service.go:2034 used by the /v1/responses
-// passthrough path.
+// 原始 Responses 快捷路径应移除对应上游不支持的 Chat 参数。
 var cursorResponsesUnsupportedFields = []string{
 	"prompt_cache_retention",
 	"safety_identifier",
 	"metadata",
 	"stream_options",
+	"stop",
+}
+
+// Kimi 的 system 消息可追加工具声明。桥接时合并到当前请求工具列表，原生 Chat 路径沿用原消息。
+func parseChatRequestForBridge(body []byte, platform string, req *apicompat.ChatCompletionsRequest) error {
+	if platform != PlatformKimi {
+		return json.Unmarshal(body, req)
+	}
+	var wire struct {
+		*apicompat.ChatCompletionsRequest
+		Messages []struct {
+			apicompat.ChatMessage
+			Tools json.RawMessage `json:"tools"`
+		} `json:"messages"`
+	}
+	wire.ChatCompletionsRequest = req
+	if err := json.Unmarshal(body, &wire); err != nil {
+		return err
+	}
+	req.Messages = make([]apicompat.ChatMessage, 0, len(wire.Messages))
+	for i, msg := range wire.Messages {
+		if msg.Role != "system" || msg.Tools == nil {
+			req.Messages = append(req.Messages, msg.ChatMessage)
+			continue
+		}
+		if msg.Content != nil {
+			return fmt.Errorf("messages[%d]: Kimi system tools cannot be used with content", i)
+		}
+		var tools []apicompat.ChatTool
+		if err := json.Unmarshal(msg.Tools, &tools); err != nil {
+			return fmt.Errorf("messages[%d].tools: %w", i, err)
+		}
+		for j, tool := range tools {
+			if tool.Type != "function" || tool.Function == nil || strings.TrimSpace(tool.Function.Name) == "" {
+				return fmt.Errorf("messages[%d].tools[%d]: expected a named function", i, j)
+			}
+		}
+		req.Tools = append(req.Tools, tools...)
+	}
+	return nil
 }
 
 // ForwardAsChatCompletions accepts a Chat Completions request body, converts it
@@ -220,7 +252,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	// 1. Parse Chat Completions request
 	var chatReq apicompat.ChatCompletionsRequest
-	if err := json.Unmarshal(body, &chatReq); err != nil {
+	if err := parseChatRequestForBridge(body, account.Platform, &chatReq); err != nil {
+		if account.Platform == PlatformKimi {
+			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		}
 		return nil, fmt.Errorf("parse chat completions request: %w", err)
 	}
 	originalModel := chatReq.Model
@@ -298,6 +333,8 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		if err != nil {
 			return nil, fmt.Errorf("marshal responses request: %w", err)
 		}
+		// 流结束后计费只需标量，此处释放请求转换产生的大字段。
+		responsesReq.Input = nil
 	}
 
 	logFields := []zap.Field{
@@ -779,6 +816,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 		if countSearch {
 			searchCount += countGrokNativeSearchCallsInSSEDataDedup([]byte(payload), streamSearchSeen)
+			searchCount = grokSearchCountWithTerminalUsage(searchCount, []byte(payload))
 		}
 
 		var event apicompat.ResponsesStreamEvent

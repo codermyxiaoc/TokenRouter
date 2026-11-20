@@ -158,7 +158,8 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 
 	// Parse request for session hash
 	bodyRef := service.NewRequestBodyRef(body)
-	parsedReq, _ := service.ParseGatewayRequest(bodyRef, "chat_completions")
+	// 入口已校验 JSON，此后仅通过 JSON 字段改写更新请求。
+	parsedReq, _ := service.ParseGatewayRequestValidated(bodyRef, "chat_completions")
 	if parsedReq == nil {
 		parsedReq = &service.ParsedRequest{Model: reqModel, Stream: reqStream, Body: bodyRef}
 	}

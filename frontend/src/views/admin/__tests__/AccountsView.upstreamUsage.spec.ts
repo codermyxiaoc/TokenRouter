@@ -8,6 +8,7 @@ const {
   listAccounts,
   listWithEtag,
   getBatchTodayStats,
+  getBatchUsage,
   getById,
   getUsage,
   queryUpstreamUsage,
@@ -23,6 +24,7 @@ const {
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
   getBatchTodayStats: vi.fn(),
+  getBatchUsage: vi.fn(),
   getById: vi.fn(),
   getUsage: vi.fn(),
   queryUpstreamUsage: vi.fn(),
@@ -42,6 +44,7 @@ vi.mock('@/api/admin', () => ({
       list: listAccounts,
       listWithEtag,
       getBatchTodayStats,
+      getBatchUsage,
       getById,
       getUsage,
       queryUpstreamUsage,
@@ -143,7 +146,7 @@ const result = (id: number) => ({
   balance: { remaining: 12.5 }
 })
 
-const mountView = () => mount(AccountsView, {
+const mountView = (realUsageCell = false) => mount(AccountsView, {
   global: {
     stubs: {
       AppLayout: { template: '<div><slot /></div>' },
@@ -173,7 +176,7 @@ const mountView = () => mount(AccountsView, {
       AccountStatusIndicator: true,
       AccountTodayStatsCell: true,
       AccountGroupsCell: true,
-      AccountUsageCell: AccountUsageCellStub,
+      AccountUsageCell: realUsageCell ? false : AccountUsageCellStub,
       UpstreamBillingRateCell: {
         props: ['account', 'probing'], emits: ['probe'],
         template: '<div><span data-test="declared-rate">{{ account.extra?.upstream_billing_probe?.data?.resolved_rate_multiplier }}</span><span data-test="account-rate">{{ account.rate_multiplier }}</span><button data-test="probe-rate" :disabled="probing" @click="$emit(\'probe\')">probe</button></div>'
@@ -252,6 +255,61 @@ describe('admin AccountsView upstream usage', () => {
     expect(wrapper.get('[data-test="account-rate"]').text()).toBe('2')
     expect(wrapper.get('[data-test="declared-rate"]').text()).toBe('')
     wrapper.unmount()
+  })
+
+  it('重复手动刷新只提醒当前账号，仍然执行刷新', async () => {
+    const original = account(1)
+    const other = account(2)
+    listAccounts.mockResolvedValue({ items: [original, other], total: 2, page: 1, page_size: 20, pages: 1 })
+    refreshCredentials.mockResolvedValue({ account: original })
+    const wrapper = mountView()
+    await flushPromises()
+    const menu = wrapper.findComponent({ name: 'AccountActionMenu' })
+    for (const row of [original, other, original]) {
+      menu.vm.$emit('refresh-token', row)
+      await flushPromises()
+    }
+    expect(refreshCredentials.mock.calls.map(([id]) => id)).toEqual([1, 2, 1])
+    expect(showWarning.mock.calls).toEqual([['admin.accounts.refreshTokenFrequentWarning']])
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['anthropic', 'oauth'], ['anthropic', 'setup-token'], ['gemini', 'oauth']
+  ])('定时列表刷新 %s %s 用量快照并复用新结果', async (platform, type) => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+    vi.spyOn(window, 'matchMedia').mockImplementation(() => ({
+      matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn()
+    }) as unknown as MediaQueryList)
+    localStorage.setItem('account-auto-refresh', JSON.stringify({ enabled: true, interval_seconds: 5 }))
+    const initial = { ...account(42), platform, type, extra: {} }
+    listAccounts.mockResolvedValue({ items: [initial], total: 1, page: 1, page_size: 20, pages: 1 })
+    const response = (value: number) => ({ usage: { '42': { seven_day: { utilization: value } } }, errors: {} })
+    getBatchUsage.mockResolvedValue(response(20))
+    const wrapper = mountView(true)
+    try {
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1)
+      await flushPromises()
+      expect(getBatchUsage.mock.calls).toEqual([[[42], false]])
+      const next = { ...initial, last_used_at: '2026-11-16T10:00:00Z' }
+      getBatchUsage.mockResolvedValue(response(54))
+      listWithEtag.mockResolvedValue({ notModified: false, etag: 'updated', data: { items: [next], total: 1, pages: 1 } })
+      await vi.advanceTimersByTimeAsync(6000)
+      await flushPromises()
+      expect(getBatchUsage.mock.calls).toEqual([[[42], false], [[42], false]])
+      const cell = wrapper.findComponent({ name: 'AccountUsageCell' })
+      expect(cell.props('batchedUsage').seven_day.utilization).toBe(54)
+      cell.props('requestBatchedUsage')(cell.props('account'))
+      await vi.advanceTimersByTimeAsync(1)
+      expect(getBatchUsage).toHaveBeenCalledTimes(2)
+      expect(queryUpstreamUsage).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      vi.restoreAllMocks()
+      vi.useRealTimers()
+    }
   })
 
   it('部分刷新成功显示警告并更新账号，仍清理旧上游用量缓存', async () => {

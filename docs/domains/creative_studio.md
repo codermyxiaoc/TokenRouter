@@ -79,7 +79,7 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 
 - 单文件（源图）不超过 `max_asset_bytes`（默认 32 MiB），mask 不超过 4 MiB，单次任务输入总量（全部源图 + mask）不超过 `max_total_input_bytes`（默认 64 MiB）；multipart 使用配置上限加 1 字节检测，不会静默截断。
 - 上传文件 MIME 只接受 `image/png`、`image/jpeg`、`image/webp`，缺失或非法时按字节魔数嗅探。
-- `edit` 必须至少携带一张源图，源图数量不得超过模型目录返回的 `max_reference_images`；Grok 上限为 3，Gemini 3.1 图片模型为 14，OpenAI GPT Image 为 16。`inpaint` 仅 OpenAI 支持，必须携带源图和 PNG mask，且 mask 尺寸必须与第一张源图一致；非 `inpaint` 操作携带 mask 直接拒绝。
+- `edit` 必须至少携带一张源图，源图数量不得超过模型目录返回的 `max_reference_images`；Grok 上限为 5，Gemini 2.5 Flash Image 为 3，Gemini 3.1 图片模型为 14，OpenAI GPT Image 为 16。`inpaint` 仅 OpenAI 支持，必须携带源图和 PNG mask，且 mask 尺寸必须与第一张源图一致；非 `inpaint` 操作携带 mask 直接拒绝。
 - 除 `group_id` 外的字段缺失或非法返回 `400` 系列业务错误（如 `CREATIVE_INVALID_PARAMS`、`CREATIVE_MASK_REQUIRED`、`CREATIVE_MASK_SIZE_MISMATCH`）；文件或总输入超限返回 `413 CREATIVE_ASSET_TOO_LARGE`/`CREATIVE_INPUT_TOO_LARGE`；分组不可用返回 `403`；余额不足以预占返回 `402 CREATIVE_INSUFFICIENT_BALANCE`；审核命中返回 `403 CREATIVE_CONTENT_BLOCKED`。
 - `Idempotency-Key` 请求头可选，最长 255 字符，语义见[幂等](#幂等)；幂等范围为当前用户与当前浏览器工作区。
 
@@ -225,7 +225,7 @@ creative_settle:{run_id}    写 usage_logs 的结算记录 ID
 执行器按分组平台直接构造上游 HTTP 请求，不经过本地 HTTP 回环；图片任务首次执行及备用账号共享 `creative.execute_timeout_seconds` 总时限（默认 300 秒）。单张输出不超过 32 MiB，同一任务内按 sha256 去重重复输出：
 
 - `openai`（GPT Image）：`generate` 走 `/v1/images/generations`（JSON）；`edit`/`inpaint` 走 `/v1/images/edits`（multipart，多源图 + mask）。内部默认 `output_format: "png"`（模型开放且用户选择 gif 时为 `"gif"`）、单张 `n=1`；仅 DALL-E 路径发送 `response_format: "b64_json"`，GPT Image 路径省略该字段。
-- `grok`：`generate` 走 `/v1/images/generations`；`edit` 走 `/v1/images/edits` 的 JSON 契约，单张源图放入 `image: {type: "image_url", url: "data:image/...;base64,..."}`，多张放入 `images` 数组，最多 3 张；两条路径都透传分辨率、比例和 `grok-imagine-image-2.0` 的质量，并固定请求单张 `n=1` 与 `response_format: "b64_json"`；`inpaint` 直接拒绝。
+- `grok`：`generate` 走 `/v1/images/generations`；`edit` 走 `/v1/images/edits` 的 JSON 契约，单张源图放入 `image: {type: "image_url", url: "data:image/...;base64,..."}`，多张放入 `images` 数组，最多 5 张；两条路径都透传分辨率、比例和 `grok-imagine-image-2.0` 的质量，并固定请求单张 `n=1` 与 `response_format: "b64_json"`；`inpaint` 直接拒绝。
 - `gemini`：`generate` 与普通参考图 `edit` 统一使用原生 `generateContent`，prompt 与源图以 inlineData 放入 parts，不发送独立 mask；图片尺寸与比例位于 `generationConfig.imageConfig`，支持的 3.1 图片模型可附加 `generationConfig.thinkingConfig`，`includeThoughts` 固定为 false；执行器取最后一个图片 part 作为最终输出。凭据按账号类型选择：API Key 账号用 `x-goog-api-key`，Vertex 服务账号与 OAuth 用 Bearer token。
 
 OpenAI API Key 与 Grok 图片结果同时接受 `data[].b64_json`、`data[].url` 及图片 Base64 data URI。有效内联图片优先，同项内联编码无效时可读取其 URL；普通模型仍只交付首张有效图片，不能借多项响应突破原单张报价。URL 复用仅公网下载器，不携带生成请求的鉴权或 Cookie，限制重定向、私网地址、每张 32 MiB 和像素预算，并完整解码验证，拒绝 HTML/SVG 与截断图片。临时网络故障只重试 GET 同一产物，不能重发付费生成。无有效图片、下载失败或响应超过 64 MiB 均视为结果不可用，按[结果未知即释放](#creative_unconfirmed_release)失败并释放预占，不重发生成；普通响应读取多取一字节确认越界，不把截断内容当作完整成功。

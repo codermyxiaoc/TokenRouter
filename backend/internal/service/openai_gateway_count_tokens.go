@@ -188,7 +188,7 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 			writeAnthropicCountTokensError(c, http.StatusInternalServerError, "upstream_error", "Upstream gateway error")
 			return fmt.Errorf("input_tokens upstream error: %d (not in custom error codes)", resp.StatusCode)
 		}
-		defaultFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
+		defaultFailover := s.shouldFailoverTextHTTPResponse(ctx, account, resp.StatusCode, upstreamMsg, respBody)
 		if account.Platform == PlatformGrok {
 			defaultFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
 		}

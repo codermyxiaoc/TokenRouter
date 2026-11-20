@@ -48,7 +48,7 @@ func (adminBalanceCommitObserver) InvalidateAuthCacheByGroupID(context.Context, 
 
 func newAdminBalanceTestService(users service.UserRepository, codes service.RedeemCodeRepository, invalidator service.APIKeyAuthCacheInvalidator) service.AdminService {
 	return service.NewAdminService(users, nil, nil, nil, nil, codes, nil, nil, nil, nil, nil,
-		invalidator, integrationEntClient, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		invalidator, integrationEntClient, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
 func TestAdminBalancePostgresAdjustmentCommitsHistoryAndCredit(t *testing.T) {

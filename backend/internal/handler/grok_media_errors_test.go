@@ -85,3 +85,42 @@ func TestGrokImagesPreservesUpstreamErrorOnSyncAndAsyncRoutes(t *testing.T) {
 		}
 	}
 }
+
+// 超出源图上限应由同步或异步入口处理，且不会触发账号资格探测及预占。
+func TestGrokEditSourceLimitBeforeScheduling(t *testing.T) {
+	for _, async := range []bool{false, true} {
+		t.Run(map[bool]string{false: "sync", true: "async"}[async], func(t *testing.T) {
+			h, slots, _, upstream := newGrokMediaSlotHandler(t, false, false)
+			c, rec := grokMediaSlotContext(context.Background(), true)
+			path := "/v1/images/edits"
+			if async {
+				path += "/async"
+			}
+			c.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"grok-imagine-image","prompt":"edit","images":["https://example.test/1","https://example.test/2","https://example.test/3","https://example.test/4","https://example.test/5","https://example.test/6"]}`))
+			c.Request.Header.Set("Content-Type", "application/json")
+			if async {
+				store := &asyncImageMemoryStore{tasks: make(map[string]*service.ImageTaskRecord)}
+				tasks := service.NewImageTaskServiceWithUploader(store, nil, time.Hour, time.Minute)
+				asyncHandler := NewAsyncImageHandler(tasks, h)
+				asyncHandler.Submit(c)
+				require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+				taskID := gjson.GetBytes(rec.Body.Bytes(), "task_id").String()
+				owner := service.ImageTaskOwner{UserID: 10, APIKeyID: 20}
+				require.Eventually(t, func() bool {
+					task, err := tasks.Get(context.Background(), owner, taskID)
+					return err == nil && task.Status == service.ImageTaskStatusFailed
+				}, time.Second, 10*time.Millisecond)
+				poll, res := grokMediaSlotContext(context.Background(), false)
+				poll.Params[0].Key, poll.Params[0].Value = "task_id", taskID
+				asyncHandler.Get(poll)
+				require.Contains(t, res.Body.String(), "maximum of 5 source images")
+			} else {
+				h.GrokImages(c)
+				require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+				require.Equal(t, "invalid_request_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+			}
+			require.Zero(t, upstream.calls)
+			slots.assertReleased(t)
+		})
+	}
+}

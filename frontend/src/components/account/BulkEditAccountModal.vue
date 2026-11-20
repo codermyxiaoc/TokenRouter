@@ -79,20 +79,50 @@
               ]"
             />
           </button>
-          <label v-if="openaiPassthroughEnabled" class="mt-3 flex items-start gap-2">
+        </div>
+      </div>
+
+      <!-- 单独选择要修改的筛选字段，保留各账号已有设置。 -->
+      <div
+        v-if="allOpenAIPassthroughCapable"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="mb-3 flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label
+              id="bulk-edit-openai-passthrough-model-filter-label"
+              class="input-label mb-0"
+              for="bulk-edit-openai-passthrough-model-filter-enabled"
+            >
+              {{ t('admin.accounts.openai.passthroughModelFilter') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.passthroughModelFilterDesc') }}
+            </p>
+          </div>
+          <input
+            v-model="enableOpenAIPassthroughModelFilter"
+            id="bulk-edit-openai-passthrough-model-filter-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-openai-passthrough-model-filter-body"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-openai-passthrough-model-filter-body"
+          :class="!enableOpenAIPassthroughModelFilter && 'pointer-events-none opacity-50'"
+          role="group"
+          aria-labelledby="bulk-edit-openai-passthrough-model-filter-label"
+        >
+          <label class="flex items-center gap-2 text-sm">
             <input
               v-model="openaiPassthroughModelFilterEnabled"
               type="checkbox"
               data-testid="bulk-openai-passthrough-model-filter"
-              :disabled="!enableOpenAIPassthrough"
-              class="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              :disabled="!enableOpenAIPassthroughModelFilter"
+              class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
             />
-            <span class="text-sm">
-              {{ t('admin.accounts.openai.passthroughModelFilter') }}
-              <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.accounts.openai.passthroughModelFilterDesc') }}
-              </span>
-            </span>
+            {{ t('common.enabled') }}
           </label>
         </div>
       </div>
@@ -1939,6 +1969,7 @@ const enableRateMultiplier = ref(false)
 const enableStatus = ref(false)
 const enableGroups = ref(false)
 const enableOpenAIPassthrough = ref(false)
+const enableOpenAIPassthroughModelFilter = ref(false)
 const enableOpenAIFlattenNamespaces = ref(false)
 const enableCodexImageToolMode = ref(false)
 const enableOpenAIWorkloadCapabilities = ref(false)
@@ -2060,6 +2091,7 @@ const isOpenAIModelRestrictionDisabled = computed(
     allOpenAIPassthroughCapable.value &&
     enableOpenAIPassthrough.value &&
     openaiPassthroughEnabled.value &&
+    enableOpenAIPassthroughModelFilter.value &&
     !openaiPassthroughModelFilterEnabled.value
 )
 
@@ -2458,10 +2490,14 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   if (enableOpenAIPassthrough.value) {
     const extra = ensureExtra()
     extra.openai_passthrough = openaiPassthroughEnabled.value
-    extra.openai_passthrough_model_filter = openaiPassthroughEnabled.value && openaiPassthroughModelFilterEnabled.value
     if (!openaiPassthroughEnabled.value) {
       extra.openai_oauth_passthrough = false
     }
+  }
+
+  // extra 按键合并；未勾选修改时省略该键，保留各账号原有的筛选设置。
+  if (enableOpenAIPassthroughModelFilter.value && allOpenAIPassthroughCapable.value) {
+    ensureExtra().openai_passthrough_model_filter = openaiPassthroughModelFilterEnabled.value
   }
 
   // 可见性也参与校验，防止目标筛选变更后把 OAuth 专属字段写到其他账号。
@@ -2708,6 +2744,7 @@ const handleSubmit = async () => {
   const hasAnyFieldEnabled =
     enableBaseUrl.value ||
     enableOpenAIPassthrough.value ||
+    (enableOpenAIPassthroughModelFilter.value && allOpenAIPassthroughCapable.value) ||
     enableOpenAIFlattenNamespaces.value ||
     enableCodexImageToolMode.value ||
     enableOpenAIWorkloadCapabilities.value ||
@@ -2868,6 +2905,7 @@ const resetBulkEditFormState = () => {
   enableStatus.value = false
   enableGroups.value = false
   enableOpenAIPassthrough.value = false
+  enableOpenAIPassthroughModelFilter.value = false
   enableOpenAIFlattenNamespaces.value = false
   enableCodexImageToolMode.value = false
   enableOpenAIWorkloadCapabilities.value = false

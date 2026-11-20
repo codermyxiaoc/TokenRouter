@@ -928,7 +928,7 @@ func TestValidateCreateParams(t *testing.T) {
 		require.ErrorIs(t, err, ErrCreativeOperationUnsupported)
 	})
 
-	t.Run("grok edit 支持单图且最多三张源图", func(t *testing.T) {
+	t.Run("grok edit 支持单图且最多五张源图", func(t *testing.T) {
 		svc := newCreativeTestService()
 		group := newCreativeTestGroup()
 		group.Platform = PlatformGrok
@@ -944,12 +944,12 @@ func TestValidateCreateParams(t *testing.T) {
 		_, err := svc.validateCreateParams(context.Background(), 7, &params)
 		require.NoError(t, err)
 
-		params.SourceImages = []CreativeInputImage{
-			{Bytes: makeTestPNG(t, 2, 2), Mime: "image/png"},
-			{Bytes: makeTestPNG(t, 2, 2), Mime: "image/png"},
-			{Bytes: makeTestPNG(t, 2, 2), Mime: "image/png"},
-			{Bytes: makeTestPNG(t, 2, 2), Mime: "image/png"},
+		for len(params.SourceImages) < 5 {
+			params.SourceImages = append(params.SourceImages, params.SourceImages[0])
 		}
+		_, err = svc.validateCreateParams(context.Background(), 7, &params)
+		require.NoError(t, err)
+		params.SourceImages = append(params.SourceImages, params.SourceImages[0])
 		_, err = svc.validateCreateParams(context.Background(), 7, &params)
 		require.ErrorIs(t, err, ErrCreativeInvalidParams)
 	})

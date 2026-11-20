@@ -207,7 +207,7 @@ func (s *OpenAIGatewayService) handleResponsesInputTokensUpstreamError(
 		writeOpenAIResponsesInputTokensError(c, http.StatusInternalServerError, "upstream_error", "Upstream gateway error")
 		return fmt.Errorf("responses input_tokens: upstream error %d (custom policy)", resp.StatusCode)
 	}
-	defaultFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, body)
+	defaultFailover := s.shouldFailoverTextHTTPResponse(ctx, account, resp.StatusCode, upstreamMsg, body)
 	if account.Platform == PlatformGrok {
 		defaultFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, body)
 	}

@@ -341,6 +341,10 @@ func readAndRestoreRequestBody(request *http.Request) ([]byte, error) {
 	if request == nil || request.Body == nil {
 		return nil, service.ErrCompositeKeyPrefixRequired
 	}
+	if data, ok := pkghttputil.PrereadRequestBytes(request); ok && request.Header.Get("Content-Encoding") == "" {
+		setRequestBody(request, data)
+		return data, jsonutil.ValidateRoutingModel(data)
+	}
 	rawBody, err := io.ReadAll(request.Body)
 	if err != nil {
 		return nil, err
@@ -370,9 +374,7 @@ func readAndRestoreRequestBody(request *http.Request) ([]byte, error) {
 }
 
 func setRequestBody(request *http.Request, body []byte) {
-	request.Body = io.NopCloser(bytes.NewReader(body))
-	request.ContentLength = int64(len(body))
-	request.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	pkghttputil.ResetRequestBody(request, body)
 }
 
 func multipartModel(request *http.Request) (string, error) {

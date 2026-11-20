@@ -1088,7 +1088,12 @@ func enforceCacheControlLimit(body []byte) []byte {
 		}
 		return normalizeCacheControlTTLOrder(body)
 	}
-	return normalizeCacheControlTTLOrder(enforceCacheControlBlockLimit(body))
+	out := enforceCacheControlBlockLimit(body)
+	// 已在前面处理 Unicode 转义；删除缓存键后未出现 1h 时，可跳过第二次遍历。
+	if !bytes.Contains(body, cacheTTL1hJSONBytes) {
+		return out
+	}
+	return normalizeCacheControlTTLOrder(out)
 }
 
 // enforceCacheControlBlockLimit 强制执行 cache_control 块数量限制（最多 4 个）
@@ -1212,8 +1217,49 @@ func normalizeCacheControlTTLOrder(body []byte) []byte {
 
 // injectAnthropicCacheControlTTL1h 将已有 ephemeral cache_control 块的 ttl 强制写为 1h。
 // 仅修改已经存在的 cache_control，不新增缓存断点。
+//
+// 摘要压缩后不再重复读取原长上下文，将现有缓存断点改为 5 分钟。
 func injectAnthropicCacheControlTTL1h(body []byte) []byte {
+	if isClaudeCodeCompactionRequest(body) {
+		return forceEphemeralCacheControlTTL(body, cacheTTLTarget5m)
+	}
 	return forceEphemeralCacheControlTTL(body, cacheTTLTarget1h)
+}
+
+// Claude Code 完整或部分摘要提示共有此前缀。
+const claudeCodeCompactPreamble = "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n\n"
+
+// 工具调用期间摘要提示可能与 tool_result 同处最后一条用户消息。
+func isClaudeCodeCompactionRequest(body []byte) bool {
+	return claudeLastUserTextHasPrefix(body, claudeCodeCompactPreamble)
+}
+
+// 检查最后一条用户消息的字符串或文本块是否包含目标前缀。
+func claudeLastUserTextHasPrefix(body []byte, prefixes ...string) bool {
+	hasPrefix := func(s string) bool {
+		for _, p := range prefixes {
+			if strings.HasPrefix(s, p) {
+				return true
+			}
+		}
+		return false
+	}
+	var last gjson.Result
+	gjson.GetBytes(body, "messages").ForEach(func(_, msg gjson.Result) bool {
+		if msg.Get("role").String() == "user" {
+			last = msg.Get("content")
+		}
+		return true
+	})
+	if last.Type == gjson.String {
+		return hasPrefix(last.Str)
+	}
+	found := false
+	last.ForEach(func(_, block gjson.Result) bool {
+		found = block.Get("type").String() == "text" && hasPrefix(block.Get("text").String())
+		return !found
+	})
+	return found
 }
 
 func forceEphemeralCacheControlTTL(body []byte, ttl string) []byte {

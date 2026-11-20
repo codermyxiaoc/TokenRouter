@@ -692,9 +692,14 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 		requestScopedError := detectOpenAIWSHTTPBridgeRequestScopedError(account, resp.StatusCode, upstreamMsg, respBody)
 		decision := UpstreamErrorDecision{Policy: ErrorPolicyNone}
-		defaultFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
-		if account.Platform == PlatformGrok {
+		var defaultFailover bool
+		switch {
+		case account.Platform == PlatformGrok:
 			defaultFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
+		case imageBillingModel != "":
+			defaultFailover = s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
+		default:
+			defaultFailover = s.shouldFailoverTextHTTPResponse(ctx, account, resp.StatusCode, upstreamMsg, respBody)
 		}
 		if !requestScopedError {
 			if account.Platform == PlatformGrok {
@@ -766,7 +771,6 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			UpstreamResponseServiceTier: responseModelObserver.ServiceTier(),
 			ServiceTier:                 resolvedOpenAIUpstreamServiceTierFromObserver(responseModelObserver, extractOpenAIServiceTierFromBody(body)),
 			ReasoningEffort:             ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(body, mappedModel, originalModel), body, mappedModel),
-			RequestedReasoningEffort:    CanonicalRequestedReasoningEffort(body, originalModel, mappedModel),
 			Stream:                      reqStream,
 			OpenAIWSMode:                true,
 			UpstreamTerminalEvent:       upstreamTerminalEvent,

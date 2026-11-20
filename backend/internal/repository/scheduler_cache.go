@@ -1184,11 +1184,15 @@ func newSchedulerAccountMetaRevision() string {
 }
 
 func marshalSchedulerCacheAccount(account service.Account) ([]byte, []byte, error) {
+	// 两种缓存共用分组关系的轻量投影，完整缓存仍保留全部账号配置。
+	metadata := buildSchedulerMetadataAccount(account)
+	account.Groups = nil
+	account.AccountGroups = metadata.AccountGroups
 	fullPayload, err := json.Marshal(account)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal account: %w", err)
 	}
-	metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(account))
+	metaPayload, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal account metadata: %w", err)
 	}

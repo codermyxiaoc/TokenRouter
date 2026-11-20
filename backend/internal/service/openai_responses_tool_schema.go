@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -86,7 +87,7 @@ func sanitizeOpenAIResponsesToolSchemaPatterns(body []byte) ([]byte, bool, error
 // oneOf/anyOf. Other missing types and nested property schemas are left
 // unchanged.
 func sanitizeOpenAIResponsesToolParameterTypes(body []byte) ([]byte, bool, error) {
-	if len(body) == 0 {
+	if len(body) == 0 || !openAIResponsesBodyMayNeedToolParameterRepair(body) {
 		return body, false, nil
 	}
 	return sanitizeOpenAIResponsesToolSchemas(body, openAIResponsesToolSchemaOptions{
@@ -96,31 +97,67 @@ func sanitizeOpenAIResponsesToolParameterTypes(body []byte) ([]byte, bool, error
 	})
 }
 
+var (
+	openAIResponsesNullLiteral = []byte("null")
+	// 短标记便于快速判断常见请求是否需要完整扫描。
+	openAIResponsesOneOfHint         = []byte("oneOf")
+	openAIResponsesAnyOfHint         = []byte("anyOf")
+	openAIResponsesRegexGroupBytes   = []byte("(?")
+	openAIResponsesJSONUnicodeEscape = []byte(`\u`)
+	// ASCII 字母转义均以反斜杠及 u00 开头。
+	openAIResponsesUnicodeLetterEscape = []byte(`\u00`)
+	openAIResponsesJSONBackslashPair   = []byte(`\\`)
+)
+
+// 仅在可能出现空值或联合类型时扫描工具参数。
+func openAIResponsesBodyMayNeedToolParameterRepair(body []byte) bool {
+	return bytes.Contains(body, openAIResponsesNullLiteral) ||
+		bytes.Contains(body, openAIResponsesOneOfHint) ||
+		bytes.Contains(body, openAIResponsesAnyOfHint) ||
+		bytes.Contains(body, openAIResponsesUnicodeLetterEscape)
+}
+
+// 只在原始数据可能含不兼容正则表达式时扫描，跳过普通正文中的括号。
 func openAIResponsesBodyMayContainUnsupportedRegex(body []byte) bool {
-	// An opening parenthesis may be literal or encoded as JSON's canonical
-	// Unicode escape. A backslash inside a JSON string is escaped as \\, so the
-	// sequence \\<letter> exposes the decoded regex escape without parsing.
-	if bytes.Contains(body, []byte("(")) || bytes.Contains(body, []byte(`\u0028`)) ||
-		bytes.Contains(body, []byte(`\u005c`)) || bytes.Contains(body, []byte(`\u005C`)) {
+	// hasUnsupportedOpenAIRegexPattern 只有三种触发方式，这里逐一给出必要字节条件：
+	//
+	//   1. 一个反斜杠后跟了非白名单的字母；
+	//   2. 字符串以反斜杠结尾；
+	//   3. 分组语法 "(?"。
+	//
+	// 前两种都需要解码后的反斜杠，而 JSON 里它只能写成 "\\" 或 \u005c。
+	// 第三种里 "(" 和 "?" 各自都可能是转义写法。
+	if bytes.Contains(body, openAIResponsesJSONBackslashPair) {
 		return true
 	}
-	for i := 0; i+2 < len(body); i++ {
-		if body[i] != '\\' || body[i+1] != '\\' {
-			continue
-		}
-		escaped := body[i+2]
-		if isASCIILetter(escaped) && !pythonRegexEscapeAllowed(escaped) {
-			return true
-		}
+	if bytes.Contains(body, openAIResponsesRegexGroupBytes) {
+		return true
 	}
-	return false
+	if !bytes.Contains(body, openAIResponsesJSONUnicodeEscape) {
+		return false
+	}
+	// 任何 \u00XX 转义都可能写成上述三种形态里的括号、问号或反斜杠。
+	return bytes.Contains(body, openAIResponsesUnicodeLetterEscape)
+}
+
+// 没有转义的 JSON 正则片段直接检查，避免每个模式都需要解码。
+func openAIResponsesJSONPatternIsUnsupported(raw []byte) bool {
+	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return false
+	}
+	inner := raw[1 : len(raw)-1]
+	if bytes.IndexByte(inner, '\\') < 0 {
+		return hasUnsupportedOpenAIRegexPattern(inner)
+	}
+	decoded, err := decodeOpenAIResponsesJSONString(raw)
+	return err == nil && hasUnsupportedOpenAIRegexPattern([]byte(decoded))
 }
 
 // hasUnsupportedOpenAIRegexPattern reports whether Python re rejects pattern.
 // OpenAI validates tool-schema patterns with Python re, which supports neither
 // lookaround nor the .NET/Java (?<name>...) and (?'name'...) group forms, and
 // reserves unknown ASCII-letter escapes such as \p and \R.
-func hasUnsupportedOpenAIRegexPattern(pattern string) bool {
+func hasUnsupportedOpenAIRegexPattern(pattern []byte) bool {
 	inCharacterClass := false
 	for i := 0; i < len(pattern); i++ {
 		switch pattern[i] {
@@ -231,10 +268,8 @@ func sanitizeOpenAIResponsesToolSchemas(
 	if p.pos != len(body) {
 		return nil, false, fmt.Errorf("sanitize OpenAI Responses tool schemas: trailing data at byte %d", p.pos)
 	}
-	if !json.Valid(body) {
-		return nil, false, fmt.Errorf("sanitize OpenAI Responses tool schemas: invalid JSON")
-	}
 	if len(p.edits) == 0 {
+		// 没有改写时已完成语法校验，存在改写时验证生成结果。
 		return body, false, nil
 	}
 	return applyOpenAIResponsesToolSchemaEdits(body, p.edits)
@@ -269,7 +304,9 @@ func (p *openAIResponsesToolSchemaParser) parseValue(
 		case "additional_tools":
 			context = openAIResponsesToolSchemaToolCarrier
 		default:
-			context = openAIResponsesToolSchemaSkip
+			// 该条目确定无需编辑时，直接复用探测结束位置。
+			p.pos = probe.pos
+			return nil
 		}
 	}
 	switch p.body[p.pos] {
@@ -319,7 +356,7 @@ func (p *openAIResponsesToolSchemaParser) parseObject(
 		if err != nil {
 			return err
 		}
-		key := p.body[keyStart:keyEnd]
+		key := newOpenAIResponsesJSONKey(p.body[keyStart:keyEnd])
 		p.skipWhitespace()
 		if !p.consume(':') {
 			return p.syntaxError("expected colon")
@@ -335,26 +372,26 @@ func (p *openAIResponsesToolSchemaParser) parseObject(
 		p.skipWhitespace()
 
 		deleteMember := false
-		if context == openAIResponsesToolSchemaTypeProbe && openAIResponsesJSONStringEquals(key, "type") {
+		if context == openAIResponsesToolSchemaTypeProbe && key.is("type") {
 			if value, ok := decodeOpenAIResponsesJSONStringValue(p.body[valueStart:valueEnd]); ok {
 				p.probeType = strings.TrimSpace(value)
 			}
 		}
 		if (context == openAIResponsesToolSchemaTool || context == openAIResponsesToolSchemaFunction) &&
-			openAIResponsesJSONStringEquals(key, "parameters") {
+			key.is("parameters") {
 			parameterCount++
 			parameterValueStart = valueStart
 			parameterValueEnd = valueEnd
 		}
 		if p.options.removeUnsupportedRegexPatterns {
-			if context == openAIResponsesToolSchema && openAIResponsesJSONStringEquals(key, "patternProperties") {
+			if context == openAIResponsesToolSchema && key.is("patternProperties") {
 				// The child parser records how many keys it had to remove. A
 				// closed sibling object must be reopened in that case.
 				if p.patternPropertiesDrops[valueStart] > 0 {
 					lostPatternProperty = true
 				}
 			}
-			if context == openAIResponsesToolSchema && openAIResponsesJSONStringEquals(key, "additionalProperties") &&
+			if context == openAIResponsesToolSchema && key.is("additionalProperties") &&
 				!bytes.Equal(p.body[valueStart:valueEnd], []byte("true")) {
 				// Defer the edit: patternProperties may appear after this
 				// member, and only actual key removal requires reopening.
@@ -364,24 +401,23 @@ func (p *openAIResponsesToolSchemaParser) parseObject(
 					replacement: "true",
 				})
 			}
-			if context == openAIResponsesToolSchema && openAIResponsesJSONStringEquals(key, "pattern") {
-				if pattern, ok := decodeOpenAIResponsesJSONStringValue(p.body[valueStart:valueEnd]); ok && hasUnsupportedOpenAIRegexPattern(pattern) {
+			if context == openAIResponsesToolSchema && key.is("pattern") {
+				if openAIResponsesJSONPatternIsUnsupported(p.body[valueStart:valueEnd]) {
 					deleteMember = true
 				}
 			}
-			if context == openAIResponsesToolSchemaPatternPropertiesMap {
-				if pattern, ok := decodeOpenAIResponsesJSONStringValue(key); ok && hasUnsupportedOpenAIRegexPattern(pattern) {
-					deleteMember = true
-				}
+			if context == openAIResponsesToolSchemaPatternPropertiesMap &&
+				openAIResponsesJSONPatternIsUnsupported(key.raw) {
+				deleteMember = true
 			}
 		}
 		// required 必须为数组；删除等价于空数组的 null，兼容严格的上游校验。
 		if context == openAIResponsesToolSchema && p.options.dropNullRequired &&
-			openAIResponsesJSONStringEquals(key, "required") &&
+			key.is("required") &&
 			bytes.Equal(p.body[valueStart:valueEnd], []byte("null")) {
 			deleteMember = true
 		}
-		if context == openAIResponsesToolSchema && schemaRoot && openAIResponsesJSONStringEquals(key, "type") {
+		if context == openAIResponsesToolSchema && schemaRoot && key.is("type") {
 			// Duplicate JSON keys have parser-dependent effective values. Repair a
 			// root type only when it is unique rather than choosing a winner and
 			// potentially changing the client's effective schema.
@@ -567,51 +603,89 @@ func (p *openAIResponsesToolSchemaParser) parseArray(
 	}
 }
 
+// 预先判断对象键是否有转义，避免与多个字段名比较时重复扫描。
+type openAIResponsesJSONKey struct {
+	raw   []byte
+	inner []byte
+	plain bool
+}
+
+func newOpenAIResponsesJSONKey(raw []byte) openAIResponsesJSONKey {
+	key := openAIResponsesJSONKey{raw: raw}
+	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return key
+	}
+	key.inner = raw[1 : len(raw)-1]
+	key.plain = bytes.IndexByte(key.inner, '\\') < 0
+	return key
+}
+
+// 无转义键直接比较字节，需要转义时才解码。
+func (k openAIResponsesJSONKey) is(want string) bool {
+	if k.inner == nil {
+		return false
+	}
+	if k.plain {
+		return len(k.inner) == len(want) && string(k.inner) == want
+	}
+	decoded, err := decodeOpenAIResponsesJSONString(k.raw)
+	return err == nil && decoded == want
+}
+
+func (k openAIResponsesJSONKey) isAny(candidates ...string) bool {
+	for _, candidate := range candidates {
+		if k.is(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
 func openAIResponsesToolSchemaChildContext(
-	context openAIResponsesToolSchemaContext, key []byte,
+	context openAIResponsesToolSchemaContext, key openAIResponsesJSONKey,
 ) (openAIResponsesToolSchemaContext, bool) {
 	switch context {
 	case openAIResponsesToolSchemaDocument:
 		switch {
-		case openAIResponsesJSONStringEquals(key, "tools"):
+		case key.is("tools"):
 			return openAIResponsesToolSchemaTools, false
-		case openAIResponsesJSONStringEquals(key, "input"):
+		case key.is("input"):
 			return openAIResponsesToolSchemaInput, false
 		}
 	case openAIResponsesToolSchemaTool:
 		switch {
 		// Messages 的同类 Schema 位于 input_schema，也需要经过相同清洗。
-		case openAIResponsesJSONStringMatchesAny(key, "parameters", "input_schema"):
+		case key.isAny("parameters", "input_schema"):
 			return openAIResponsesToolSchema, true
-		case openAIResponsesJSONStringEquals(key, "function"):
+		case key.is("function"):
 			return openAIResponsesToolSchemaFunction, false
-		case openAIResponsesJSONStringEquals(key, "tools"):
+		case key.is("tools"):
 			return openAIResponsesToolSchemaTools, false
 		}
 	case openAIResponsesToolSchemaToolCarrier:
-		if openAIResponsesJSONStringEquals(key, "tools") {
+		if key.is("tools") {
 			return openAIResponsesToolSchemaTools, false
 		}
 	case openAIResponsesToolSchemaFunction:
 		switch {
-		case openAIResponsesJSONStringEquals(key, "parameters"):
+		case key.is("parameters"):
 			return openAIResponsesToolSchema, true
-		case openAIResponsesJSONStringEquals(key, "tools"):
+		case key.is("tools"):
 			return openAIResponsesToolSchemaTools, false
 		}
 	case openAIResponsesToolSchema:
 		switch {
-		case openAIResponsesJSONStringMatchesAny(key,
+		case key.isAny(
 			"additionalProperties", "additionalItems", "contains", "not", "if", "then", "else",
 			"propertyNames", "unevaluatedProperties", "unevaluatedItems", "contentSchema"):
 			return openAIResponsesToolSchema, false
-		case openAIResponsesJSONStringEquals(key, "items"):
+		case key.is("items"):
 			return openAIResponsesToolSchemaOrArray, false
-		case openAIResponsesJSONStringMatchesAny(key, "anyOf", "oneOf", "allOf", "prefixItems"):
+		case key.isAny("anyOf", "oneOf", "allOf", "prefixItems"):
 			return openAIResponsesToolSchemaArray, false
-		case openAIResponsesJSONStringEquals(key, "patternProperties"):
+		case key.is("patternProperties"):
 			return openAIResponsesToolSchemaPatternPropertiesMap, false
-		case openAIResponsesJSONStringMatchesAny(key,
+		case key.isAny(
 			"properties", "$defs", "definitions", "dependentSchemas", "dependencies"):
 			return openAIResponsesToolSchemaMap, false
 		}
@@ -627,7 +701,12 @@ func (p *openAIResponsesToolSchemaParser) parseString() (int, int, error) {
 	}
 	start := p.pos
 	p.pos++
-	for p.pos < len(p.body) {
+	for {
+		// 按机器字检查普通字符串段，在特殊字节处恢复逐字节处理。
+		p.pos += openAIResponsesJSONPlainStringRun(p.body[p.pos:])
+		if p.pos >= len(p.body) {
+			return 0, 0, p.syntaxError("unterminated string")
+		}
 		switch p.body[p.pos] {
 		case '"':
 			p.pos++
@@ -648,20 +727,47 @@ func (p *openAIResponsesToolSchemaParser) parseString() (int, int, error) {
 					}
 				}
 				p.pos += 5
-				continue
 			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
 				p.pos++
 			default:
 				return 0, 0, p.syntaxError("invalid string escape")
 			}
 		default:
-			if p.body[p.pos] < 0x20 {
-				return 0, 0, p.syntaxError("control character in string")
-			}
-			p.pos++
+			// 遇到其它特殊字节时按 JSON 控制字符处理。
+			return 0, 0, p.syntaxError("control character in string")
 		}
 	}
-	return 0, 0, p.syntaxError("unterminated string")
+}
+
+const (
+	openAIResponsesSWARByteOnes = 0x0101010101010101
+	openAIResponsesSWARHighBits = 0x8080808080808080
+)
+
+// 检测机器字内是否有零字节。
+func openAIResponsesJSONWordHasZeroByte(word uint64) bool {
+	return (word-openAIResponsesSWARByteOnes)&^word&openAIResponsesSWARHighBits != 0
+}
+
+// 返回开头连续普通字符串字节的长度。
+func openAIResponsesJSONPlainStringRun(bulk []byte) int {
+	offset := 0
+	for ; offset+8 <= len(bulk); offset += 8 {
+		word := binary.LittleEndian.Uint64(bulk[offset:])
+		// 按位异或检测引号和反斜杠，逐字节确认准确位置。
+		if openAIResponsesJSONWordHasZeroByte(word^0x2222222222222222) ||
+			openAIResponsesJSONWordHasZeroByte(word^0x5c5c5c5c5c5c5c5c) ||
+			openAIResponsesJSONWordHasZeroByte(word&0xe0e0e0e0e0e0e0e0) {
+			break
+		}
+	}
+	for ; offset < len(bulk); offset++ {
+		value := bulk[offset]
+		if value == '"' || value == '\\' || value < 0x20 {
+			break
+		}
+	}
+	return offset
 }
 
 func isOpenAIResponsesJSONHexDigit(value byte) bool {
@@ -761,26 +867,6 @@ func decodeOpenAIResponsesJSONString(raw []byte) (string, error) {
 		return "", err
 	}
 	return decoded, nil
-}
-
-func openAIResponsesJSONStringEquals(raw []byte, want string) bool {
-	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
-		return false
-	}
-	if !bytes.Contains(raw, []byte{'\\'}) {
-		return bytes.Equal(raw[1:len(raw)-1], []byte(want))
-	}
-	decoded, err := decodeOpenAIResponsesJSONString(raw)
-	return err == nil && decoded == want
-}
-
-func openAIResponsesJSONStringMatchesAny(raw []byte, candidates ...string) bool {
-	for _, candidate := range candidates {
-		if openAIResponsesJSONStringEquals(raw, candidate) {
-			return true
-		}
-	}
-	return false
 }
 
 func decodeOpenAIResponsesJSONStringValue(raw []byte) (string, bool) {

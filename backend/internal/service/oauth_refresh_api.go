@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,10 +33,17 @@ type GrokOAuthRefreshSuccessRepository interface {
 	) (bool, error)
 }
 
+type OpenAIOAuthRefreshSuccessRepository interface {
+	UpdateOpenAIOAuthCredentialsIfUnchanged(ctx context.Context, id int64, expectedCredentials map[string]any, expectedProxyID *int64, credentials map[string]any) (bool, error)
+}
+
 const (
 	defaultRefreshLockTTL                   = 60 * time.Second
 	defaultRefreshLockReleaseTimeout        = 2 * time.Second
 	defaultRefreshPostPersistCleanupTimeout = 2 * time.Second
+	defaultOpenAIRefreshPersistTimeout      = 10 * time.Second
+	// 条件更新后的快照传播使用独立的有界上下文。
+	defaultRefreshRepositorySyncTimeout = 2 * time.Second
 )
 
 var (
@@ -202,6 +210,16 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			return &OAuthRefreshResult{LockHeld: true}, nil
 		} else {
 			defer api.releaseRefreshLock(ctx, cacheKey)
+			if account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
+				// 在锁租期内为令牌落库、调度同步和清理预留时间。
+				budget := api.lockTTL - defaultOpenAIRefreshPersistTimeout - defaultRefreshRepositorySyncTimeout - defaultRefreshPostPersistCleanupTimeout - defaultRefreshLockReleaseTimeout - maxTokenRefreshLockSafetyMargin
+				if budget <= 0 {
+					return nil, &providerConfigurationRefreshError{err: errors.New("OpenAI OAuth refresh lock lease is too short for credential persistence")}
+				}
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, budget)
+				defer cancel()
+			}
 		}
 	}
 
@@ -254,6 +272,25 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	// 4. 执行平台特定刷新逻辑
 	attemptedAccount := snapshotOAuthRefreshAccount(freshAccount)
 	newCredentials, refreshErr := executor.Refresh(ctx, freshAccount)
+	if refreshErr == nil && hasOpenAIRefreshCredentials(attemptedAccount, newCredentials) {
+		// 上游已发放新凭据，先在有界上下文内条件持久化，防止再次消费旧令牌。
+		durableAccount, applied, persistErr := persistOpenAIRefreshCredentials(ctx, api.accountRepo, attemptedAccount, newCredentials)
+		if applied && api.tokenCache != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRefreshPostPersistCleanupTimeout)
+			defer cancel()
+			if err := api.tokenCache.DeleteAccessToken(cleanupCtx, cacheKey); err != nil {
+				slog.Warn("oauth_refresh_post_persist_cache_delete_failed", "account_id", account.ID, "error", err)
+			}
+		}
+		if persistErr != nil {
+			return nil, persistErr
+		}
+		result := &OAuthRefreshResult{Refreshed: applied, Account: durableAccount}
+		if applied {
+			result.NewCredentials = shallowCopyMap(durableAccount.Credentials)
+		}
+		return result, nil
+	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		// 上游实现可能忽略取消并延迟返回凭据，超过尝试或周期边界后不得持久化。
 		return nil, ctxErr
@@ -367,6 +404,66 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		NewCredentials: newCredentials,
 		Account:        freshAccount,
 	}, nil
+}
+
+func hasOpenAIRefreshCredentials(account *Account, credentials map[string]any) bool {
+	if account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth ||
+		account.IsCredentialShadow() || account.IsOpenAIPersonalAccessToken() {
+		return false
+	}
+	accessToken, _ := credentials["access_token"].(string)
+	refreshToken, _ := credentials["refresh_token"].(string)
+	return strings.TrimSpace(accessToken) != "" && strings.TrimSpace(refreshToken) != ""
+}
+
+func persistOpenAIRefreshCredentials(parent context.Context, repo AccountRepository, attempted *Account, credentials map[string]any) (*Account, bool, error) {
+	conditionalRepo, ok := repo.(OpenAIOAuthRefreshSuccessRepository)
+	if !ok {
+		return nil, false, &providerConfigurationRefreshError{err: errors.New("OpenAI OAuth refresh success CAS repository is not configured")}
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), defaultOpenAIRefreshPersistTimeout)
+	defer cancel()
+	// 执行器可能复用返回的 map，生成单独快照后再写版本号。
+	credentials = shallowCopyMap(credentials)
+	credentials["_token_version"] = time.Now().UnixMilli()
+	expected := attempted
+	replacement := credentials
+	for saveAttempt := 0; saveAttempt < 3; saveAttempt++ {
+		applied, err := conditionalRepo.UpdateOpenAIOAuthCredentialsIfUnchanged(ctx, attempted.ID, expected.Credentials, expected.ProxyID, replacement)
+		if err != nil {
+			return nil, false, &providerCycleContainmentRefreshError{err: fmt.Errorf("%w: %v", errOAuthRefreshCredentialPersist, err)}
+		}
+		// 回读持久化后的账号，避免过期调度快照覆盖新状态。
+		current, err := repo.GetByID(ctx, attempted.ID)
+		if err != nil || current == nil || current.ID != attempted.ID {
+			return nil, applied, &providerCycleContainmentRefreshError{err: fmt.Errorf("%w: durable account unavailable after OpenAI refresh", errOAuthRefreshCredentialPersist)}
+		}
+		if applied {
+			return current, true, nil
+		}
+		if current.Platform != PlatformOpenAI || current.Type != AccountTypeOAuth ||
+			current.IsCredentialShadow() || current.IsOpenAIPersonalAccessToken() ||
+			current.GetCredential("refresh_token") != attempted.GetCredential("refresh_token") ||
+			current.GetCredential("access_token") != attempted.GetCredential("access_token") ||
+			current.GetCredentialAsInt64("_token_version") != attempted.GetCredentialAsInt64("_token_version") {
+			return current, false, nil
+		}
+		// 仅修改代理或其它配置时，将已完成的令牌轮换合并到最新凭据。
+		expected = snapshotOAuthRefreshAccount(current)
+		replacement = shallowCopyMap(current.Credentials)
+		for key, value := range credentials {
+			previous, exists := attempted.Credentials[key]
+			if !exists || !reflect.DeepEqual(previous, value) {
+				replacement[key] = value
+			}
+		}
+		for key := range attempted.Credentials {
+			if _, exists := credentials[key]; !exists {
+				delete(replacement, key)
+			}
+		}
+	}
+	return nil, false, &providerCycleContainmentRefreshError{err: fmt.Errorf("%w: OpenAI credentials changed repeatedly during persistence", errOAuthRefreshCredentialPersist)}
 }
 
 func (api *OAuthRefreshAPI) releaseRefreshLock(parent context.Context, cacheKey string) {

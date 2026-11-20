@@ -1,6 +1,7 @@
 package service
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -14,6 +15,11 @@ import (
 func countGrokNativeSearchCallsFromJSONBytes(body []byte) int {
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return 0
+	}
+	for _, path := range []string{"response.usage", "usage"} {
+		if count, ok := grokSearchCountFromUsage(gjson.GetBytes(body, path)); ok {
+			return count
+		}
 	}
 	// 兼容层可能同时保留顶层 output 和 response.output；优先规范嵌套响应，避免重复计费。
 	if nested := gjson.GetBytes(body, "response.output"); nested.IsArray() {
@@ -30,7 +36,41 @@ func countGrokNativeSearchCallsFromSSEBody(body string) int {
 	total := 0
 	forEachOpenAISSEDataPayload(body, func(data []byte) {
 		total += countGrokNativeSearchCallsInSSEDataDedup(data, seen)
+		total = grokSearchCountWithTerminalUsage(total, data)
 	})
+	return total
+}
+
+// xAI 终态提供各类成功次数。其显式零值优先于输出条目计数。
+func grokSearchCountFromUsage(usage gjson.Result) (int, bool) {
+	details := usage.Get("server_side_tool_usage_details")
+	if !details.IsObject() {
+		return 0, false
+	}
+	total := 0
+	for _, key := range []string{"web_search_calls", "x_search_calls", "document_search_calls"} {
+		field := details.Get(key)
+		if !field.Exists() {
+			continue
+		}
+		// 中继返回畸形或溢出计数时沿用条目去重结果，避免截断为零或产生负费用。
+		count, err := strconv.Atoi(field.String())
+		if err != nil || count < 0 || count > math.MaxInt-total {
+			return 0, false
+		}
+		total += count
+	}
+	return total, true
+}
+
+// 仅终态用量可替代流式条目的累计值。
+func grokSearchCountWithTerminalUsage(total int, data []byte) int {
+	switch strings.TrimSpace(gjson.GetBytes(data, "type").String()) {
+	case "response.completed", "response.incomplete", "response.done":
+		if n, ok := grokSearchCountFromUsage(gjson.GetBytes(data, "response.usage")); ok {
+			return n
+		}
+	}
 	return total
 }
 

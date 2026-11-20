@@ -58,7 +58,7 @@ OAuth 访问令牌 JWT 的数字或字符串 `tier` 是账号档位的首选信�
 
 JSON 图片编辑和视频生成请求可在 `image`、`images`、`reference_images` 与 `mask` 对象中提供参考图片。与 xAI 直接兼容的请求应使用 `url` 字段；历史 `image_url` 字段仍可使用，TokenRouter 会在转发前把它规范化为 `url`。如果两者同时存在，则保留非空的 `url`；空白 `url` 会回退使用 `image_url`。multipart 图片编辑中的上传文件也会转换为 `url` 形式的 data URL。
 
-创作台的 Grok 图片 `edit` 使用 xAI 官方 JSON `POST /v1/images/edits`，而不是 OpenAI 风格 multipart：单图请求使用 `image: {"type":"image_url","url":"data:image/png;base64,..."}`，多图请求使用 `images` 数组，最多 3 张源图；请求保留 `model`、`prompt`、`resolution`、`aspect_ratio`，并设置 `response_format: "b64_json"`，响应从 `data[].b64_json` 解析为创作台输出。`generate` 仍使用 `/v1/images/generations`。
+创作台的 Grok 图片 `edit` 使用 xAI 官方 JSON `POST /v1/images/edits`，而不是 OpenAI 风格 multipart：单图请求使用 `image: {"type":"image_url","url":"data:image/png;base64,..."}`，多图请求使用 `images` 数组，最多 5 张源图，遮罩单独计算；请求保留 `model`、`prompt`、`resolution`、`aspect_ratio`，并设置 `response_format: "b64_json"`，响应从 `data[].b64_json` 解析为创作台输出。`generate` 仍使用 `/v1/images/generations`。
 
 创作台 Grok 视频使用专用目录端点 `grok`，通过进程内私有桥调用原正式视频生成路径；参考图来自已鉴权的画布私有素材，最多一张，以 `image: {"type":"image_url","url":"data:..."}` 发送。模型、提示词、时长和分辨率沿用正式参数，明确比例发送为 `aspect_ratio`，画布自动比例则省略该字段。该入口只提供视频生成，不扩展为编辑或延长；候选、管理员配置与参数约定见[画布视频模型设置](cloud_canvas.md#video_model_settings)。
 
@@ -73,6 +73,8 @@ Grok 兼容账号对所选端点返回 HTTP `405` 时，表示该账号不支持
 媒体错误分类中的硬额度或账户资格不足优先于池模式重试配置，不能因 pool 允许该状态码而在同一账号反复重试；请求级瞬时容量限制仍保留原有有界同号重试。视频创建完整错误响应若已有任务 ID，先保存原账号归属并返回该错误，不再换号；仅明确拒绝且无 ID 的创建允许按既有故障策略恢复，受理不明、通用错误与传输中断不重发生成。
 
 ## 搜索与语音
+
+Grok Responses 及其 Chat、Messages 桥优先使用终态 `usage.server_side_tool_usage_details` 的 Web 搜索、X 搜索和文档搜索成功次数计费。显式零次也生效。缺少该对象时按完成的搜索条目去重计数。
 
 `POST /v1/web_search` 和 `POST /v1/x_search` 只允许 Grok 分组，接收查询或 `input` 和最多 20 条结果。两者在选择账号前进入共同内容审计，随后复用常规 Grok 账号资格、并发等待和最多四次账号尝试。`web_search` 使用原生 Responses `web_search` 工具；`x_search` 强制使用 `x_search`，并接受 `allowed_x_handles`、`excluded_x_handles`、`from_date`、`to_date` 及图片/视频理解开关。两者只返回实际工具来源 URL 对应的结果，分别以 `grok-web-search` 和 `grok-x-search` 记录计费模型。每次调用使用独立服务端 request ID 作为结算幂等键；不得用查询、IP 或 User-Agent 哈希合并相同搜索。Responses/Chat 路径会保留原生 `x_search` 工具字段，并从上游 usage 或工具事件恢复 `SearchCount` 作为 token 费用之外的附加费。
 

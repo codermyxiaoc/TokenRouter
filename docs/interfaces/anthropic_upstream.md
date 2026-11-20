@@ -60,6 +60,8 @@ Responses 工具参数转换为 Anthropic `input_schema` 时，会把根节点�
 
 ## 模型与请求策略
 
+强制 1 小时的 OAuth 缓存策略遇到 Claude Code 摘要压缩请求时，将已有临时缓存块设为 5 分钟。管理员连接测试向 Opus 4.7、4.8、5.5、Fable 5.2 和 Mythos 5.2 发送的请求省略 `temperature`，Bedrock 探测同样处理。
+
 Haiku 5.5 纳入默认模型、思考参数、Responses 桥和定价路径，支持 `none/low/medium/high/xhigh/max`；只允许默认采样边界，拒绝 `top_k`、同时设置 `temperature/top_p` 以及旧式 `enabled/between_tools` 思考。显式关闭思考不能再使用 `xhigh/max`。默认价超过 100K 输入上下文时使用该模型自己的阶梯，渠道显式价格与免费配置继续优先。
 
 Haiku/Sonnet/Opus 5.5 在 Responses 往返中使用带格式标识的 Anthropic 思考信封保留原生签名或遮蔽数据，流式和非流式一致。仅识别本桥的合法结构，不把任意 OpenAI `encrypted_content` 当成 Claude 签名，不替换上游本身的签名验证；工具调用配对与历史顺序仍遵守原转换规则。

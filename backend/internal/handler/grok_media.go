@@ -173,6 +173,12 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 
 	contentType := c.GetHeader("Content-Type")
 	requestInfo := service.ParseGrokMediaRequest(contentType, body)
+	if endpoint == service.GrokMediaEndpointImagesEdits {
+		if err := requestInfo.ValidateEditSourceCount(); err != nil {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
+	}
 	if endpoint == service.SeedanceEndpointDelete && h.gatewayService.HasLegacyVideoRecovery() {
 		// 删除只发送一次，成功响应须等原任务删除事实写入后再提交。
 		service.DeferSeedanceResponse(c)

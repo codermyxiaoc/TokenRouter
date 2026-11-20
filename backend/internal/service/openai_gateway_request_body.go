@@ -1032,6 +1032,10 @@ func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any) (value string, 
 		return "", false
 	}
 
+	if latest := latestResponsesInputEffortFromMap(reqBody); latest != "" {
+		return normalizeOpenAIReasoningEffort(latest), true
+	}
+
 	// Primary: reasoning.effort
 	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
 		if effort, ok := reasoning["effort"].(string); ok {
@@ -1124,12 +1128,13 @@ func newOpenAIRequestView(body []byte) openAIRequestView {
 
 	view := openAIRequestView{body: body}
 	var seen uint8
-	// 直接读取原始请求体，避免为大 input/contents 复制整段 JSON；视图持有 body 保证字符串有效。
+	// 异步计费可能持有单个标量，克隆短字段避免同时保留整份请求体。
+	field := func(value gjson.Result) string { return strings.Clone(strings.TrimSpace(value.String())) }
 	parseRawJSONView(body).ForEach(func(key, value gjson.Result) bool {
 		switch key.Str {
 		case "model":
 			if seen&modelField == 0 {
-				view.Model = strings.TrimSpace(value.String())
+				view.Model = field(value)
 				seen |= modelField
 			}
 		case "stream":
@@ -1139,23 +1144,23 @@ func newOpenAIRequestView(body []byte) openAIRequestView {
 			}
 		case "prompt_cache_key":
 			if seen&promptCacheKeyField == 0 {
-				view.PromptCacheKey = strings.TrimSpace(value.String())
+				view.PromptCacheKey = field(value)
 				seen |= promptCacheKeyField
 			}
 		case "previous_response_id":
 			if seen&previousResponseIDField == 0 {
-				view.PreviousResponseID = strings.TrimSpace(value.String())
+				view.PreviousResponseID = field(value)
 				seen |= previousResponseIDField
 			}
 		case "service_tier":
 			if seen&serviceTierField == 0 {
-				view.ServiceTier = strings.TrimSpace(value.String())
+				view.ServiceTier = field(value)
 				view.HasServiceTier = value.Exists()
 				seen |= serviceTierField
 			}
 		case "reasoning":
 			if seen&reasoningField == 0 {
-				view.ReasoningEffort = strings.TrimSpace(value.Get("effort").String())
+				view.ReasoningEffort = field(value.Get("effort"))
 				seen |= reasoningField
 			}
 		}
@@ -1748,6 +1753,9 @@ func extractOpenAIReasoningEffortFromBody(body []byte, modelCandidates ...string
 	if reasoningEffort == "" {
 		reasoningEffort = strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
 	}
+	if latest, _ := latestResponsesInputEffort(body); latest != "" {
+		reasoningEffort = latest
+	}
 	if reasoningEffort != "" {
 		normalized := normalizeOpenAIReasoningEffort(reasoningEffort)
 		if normalized == "" {
@@ -1763,6 +1771,46 @@ func extractOpenAIReasoningEffortFromBody(body []byte, modelCandidates ...string
 	return &value
 }
 
+const responsesConfigurationUpdate = "configuration_update"
+
+// 客户端可固定顶层档位以命中缓存，请求日志优先采用本轮最后一次有效配置更新。
+func latestResponsesInputEffort(body []byte) (string, int) {
+	if !bytes.Contains(body, []byte(responsesConfigurationUpdate)) && !JSONMayEscapePlainASCII(body) {
+		return "", -1
+	}
+	input := parseRawJSONView(body).Get("input")
+	if !input.IsArray() {
+		return "", -1
+	}
+	var latest string
+	index := -1
+	input.ForEach(func(key, item gjson.Result) bool {
+		if item.Get("type").Str == responsesConfigurationUpdate {
+			if effort := strings.TrimSpace(item.Get("reasoning.effort").Str); effort != "" {
+				latest, index = effort, int(key.Int())
+			}
+		}
+		return true
+	})
+	return latest, index
+}
+
+// 解码后的请求遵循与原始 JSON 相同的配置更新优先级。
+func latestResponsesInputEffortFromMap(reqBody map[string]any) string {
+	items, _ := reqBody["input"].([]any)
+	for i := len(items) - 1; i >= 0; i-- {
+		item, _ := items[i].(map[string]any)
+		if kind, _ := item["type"].(string); kind != responsesConfigurationUpdate {
+			continue
+		}
+		reasoning, _ := item["reasoning"].(map[string]any)
+		if effort, _ := reasoning["effort"].(string); strings.TrimSpace(effort) != "" {
+			return strings.TrimSpace(effort)
+		}
+	}
+	return ""
+}
+
 // CanonicalRequestedReasoningEffort 提取策略改写前客户端请求的推理档位。
 // 显式字段优先（包括 none）；缺失显式字段时再从模型名末尾的档位后缀推导。
 func CanonicalRequestedReasoningEffort(body []byte, modelCandidates ...string) *string {
@@ -1772,6 +1820,9 @@ func CanonicalRequestedReasoningEffort(body []byte, modelCandidates ...string) *
 	}
 	if raw == "" {
 		raw = strings.TrimSpace(gjson.GetBytes(body, "output_config.effort").String())
+	}
+	if latest, _ := latestResponsesInputEffort(body); latest != "" {
+		raw = latest
 	}
 	if raw != "" {
 		canonical := normalizeRequestedOpenAIReasoningEffort(raw)
@@ -1814,7 +1865,8 @@ func canonicalReasoningEffortFromModelSuffix(model string) string {
 // 原请求提供非空 effort、但最终请求体已不再携带时，不允许再从模型后缀补值；
 // 空字符串、空白字符串和 null 沿用既有语义，视为未提供。
 func extractEffectiveOpenAIReasoningEffortFromBody(upstreamBody, originalBody []byte, modelCandidates ...string) *string {
-	if strings.TrimSpace(gjson.GetBytes(originalBody, "reasoning.effort").String()) != "" ||
+	latest, _ := latestResponsesInputEffort(originalBody)
+	if latest != "" || strings.TrimSpace(gjson.GetBytes(originalBody, "reasoning.effort").String()) != "" ||
 		strings.TrimSpace(gjson.GetBytes(originalBody, "reasoning_effort").String()) != "" {
 		return extractOpenAIReasoningEffortFromBody(upstreamBody)
 	}
@@ -2622,6 +2674,9 @@ func CanonicalRequestedReasoningEffortFromReqBody(reqBody map[string]any, modelC
 				raw = strings.TrimSpace(effort)
 			}
 		}
+	}
+	if latest := latestResponsesInputEffortFromMap(reqBody); latest != "" {
+		raw = latest
 	}
 	if raw != "" {
 		canonical := normalizeRequestedOpenAIReasoningEffort(raw)

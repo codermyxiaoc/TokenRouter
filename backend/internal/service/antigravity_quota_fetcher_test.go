@@ -555,3 +555,32 @@ func TestExtractValidationURL(t *testing.T) {
 		})
 	}
 }
+
+// 订阅配额按转发端点独立计量；两个服务返回不同模型以验证读取来源。
+func TestFetchQuotaFollowsForwardEndpoint(t *testing.T) {
+	newServer := func(model string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/v1internal:fetchAvailableModels" {
+				_, _ = w.Write([]byte(`{"models":{"` + model + `":{"quotaInfo":{"remainingFraction":0.5}}}}`))
+			} else {
+				_, _ = w.Write([]byte(`{}`))
+			}
+		}))
+	}
+	prod, daily := newServer("prod-model"), newServer("daily-model")
+	defer prod.Close()
+	defer daily.Close()
+	oldURLs := antigravity.BaseURLs
+	t.Cleanup(func() { antigravity.BaseURLs = oldURLs })
+	antigravity.BaseURLs = []string{prod.URL, daily.URL}
+	for _, tc := range []struct{ plan, override, model string }{{"Ultra", "", "daily-model"}, {"Free", "", "prod-model"}, {"Ultra", "prod", "prod-model"}, {"Free", "daily", "daily-model"}} {
+		t.Run(tc.plan+tc.override, func(t *testing.T) {
+			t.Setenv(antigravityForwardBaseURLEnv, tc.override)
+			acct := &Account{Platform: PlatformAntigravity, Type: AccountTypeOAuth, Credentials: map[string]any{"access_token": "token", "project_id": "project", "plan_type": tc.plan}}
+			result, err := NewAntigravityQuotaFetcher(nil, nil).FetchQuota(context.Background(), acct, "")
+			require.NoError(t, err)
+			require.Contains(t, result.Raw["models"], tc.model)
+		})
+	}
+}

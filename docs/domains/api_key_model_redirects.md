@@ -69,7 +69,10 @@ API Key 查询与列表响应会返回完整的 `model_mapping` 对象。
 
 `codex-auto-review` 会得到 `gpt-5.6-luna`，不会继续变成 `another-model`。
 
+<a id="gateway_field_validation"></a>
 ## 请求与响应
+
+网关在基础鉴权后、复合 Key 或智能 Key 选组及模型改写前，先检查解压后的请求体。JSON 对象与 multipart 标量有重复声明时返回协议原生的 400，Responses WebSocket 的首帧及后续应用帧执行同一检查。工具参数及 JSON Schema 的自定义键保留大小写，多图字段允许重复。纯文本端点在首次读体时就使用各自的大小上限，超过上限返回 413。
 
 重定向发生在 API Key 鉴权和复合 Key 选组之后、渠道与账号映射之前。JSON、multipart、Gemini URL、Responses 工具模型、异步媒体、批量图片、WebSocket 每轮模型及 Live `session.model` 使用相同规则。
 

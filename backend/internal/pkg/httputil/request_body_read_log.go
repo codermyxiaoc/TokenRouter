@@ -1,4 +1,4 @@
-package handler
+package httputil
 
 import (
 	"context"
@@ -12,11 +12,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// logRequestBodyReadFailure records a bounded, payload-free reason for a body
-// read failure. Clients continue to receive the stable generic error message;
-// operators get enough information to distinguish compression failures from a
-// disconnected/truncated upload without logging request content.
-func logRequestBodyReadFailure(reqLog *zap.Logger, req *http.Request, err error) {
+// LogRequestBodyReadFailure 只记录有限分类和长度，避免请求正文或传输错误中的敏感信息进入日志。
+func LogRequestBodyReadFailure(reqLog *zap.Logger, req *http.Request, err error) {
 	if reqLog == nil || err == nil {
 		return
 	}

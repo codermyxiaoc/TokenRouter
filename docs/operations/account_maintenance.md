@@ -13,9 +13,13 @@
 <a id="account_credential_refresh"></a>
 ## 凭据刷新
 
+账号菜单连续一分钟内重复手动刷新同一账号的凭据时会提示令牌轮换风险，仍可继续刷新。
+
 `TokenRefreshService` 分页读取需要维护的账号，按平台 refresher 判断资格，并对每个 provider 应用独立并发/QPS 门槛、单次 attempt 超时、周期总超时和有界退避。OAuth、Setup Token 和 Qoder COSY 的候选规则不同；API Key、Bedrock 和 Service Account 通常由各自请求路径或签名 provider 管理，不应统一假设有 refresh token。
 
 刷新成功后要原子更新凭据/过期时间，清理可恢复错误，并同步账号缓存与调度快照。OpenAI/Antigravity 还可在刷新后确保 privacy 状态。刷新失败按失败阈值记录，不立即把一次瞬时网络错误等同于永久禁用；凭据明确撤销或账号归属失效时才进入需要重新授权的状态。
+
+OpenAI OAuth 已取得新的访问令牌和刷新令牌时，请求内刷新与后台任务均在独立的有界上下文内落库。数据库条件更新校验原凭据和代理，同时写入调度变更通知。账号已重新授权时保留新授权，仅发生代理或其它配置编辑时则用最新快照合并已轮换的令牌。
 
 管理员重新授权合并新认证字段与已有 credentials 后再清理敏感废弃字段，保留模型映射和账号设置。OpenAI 用量查询可能命中缓存，因此查询成功不得清除刷新令牌失效错误；恢复由真实认证或凭据刷新流程确认。
 
@@ -53,6 +57,8 @@ Video 账号仅提供管理员主动视频测试，先选择模型与其已配�
 文字测试可在账号支持的范围内选择 `test_endpoint`，显式选择只验证当前协议；默认自动仍使用原有账号协议及自适应诊断流程。选项不写入账号配置，不改变用户路由、计费和定时测试。OAuth、Bedrock、Vertex 等凭据只开放其原生协议；不支持的组合直接报错，不能静默改测其他端点。详细参数与协议矩阵见 [管理员账号连接测试](../interfaces/http_api.md#account_connection_tests)。
 
 ## 额度与能力探测
+
+管理列表根据 Claude OAuth、Setup Token 与 Gemini 的用量快照变化刷新显示。Claude 使用被动读取；配置为手动查询的 API Key 上游余额仍由管理员触发。Claude 的五小时和七日总窗口各自按上游重置时间关联本站账号成本，再按观测使用率估算满额费用。缺少有效窗口、成本或使用率时不显示估算。
 
 平台可维护独立的上游额度快照：OpenAI/Codex 窗口、Gemini tier/model quota、Antigravity credits、Grok 计费/媒体资格、Qoder Credits，以及 Kimi/Zhipu/DeepSeek/MiniMax 的统一用量监控快照等。快照用于调度、容量展示和诊断，不是 TokenRouter 用户余额或订阅账本。
 

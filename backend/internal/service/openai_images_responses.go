@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -299,6 +300,11 @@ func buildOpenAIImagesStreamCompletedPayload(
 		payload, _ = sjson.SetBytes(payload, "model", img.Model)
 	}
 	if len(usageRaw) > 0 && gjson.ValidBytes(usageRaw) {
+		// 上游可返回多行 JSON，嵌入 SSE 前压缩为一行。
+		var compact bytes.Buffer
+		if json.Compact(&compact, usageRaw) == nil {
+			usageRaw = compact.Bytes()
+		}
 		payload, _ = sjson.SetRawBytes(payload, "usage", usageRaw)
 	}
 	return payload

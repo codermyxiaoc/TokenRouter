@@ -31,6 +31,8 @@ Code Assist/Google One 需要有效 project；AI Studio 的 project 可选并使
 <a id="gemini_protocol_dispatch"></a>
 ## 协议分派
 
+Claude Messages 转 Gemini 时，最后一个工具结果后的文本或图片独立作为后续用户消息，保留顺序，避免上游拒收混合的最后一轮。
+
 Gemini、Antigravity 及混合分组的原生与 Messages/Chat/Responses 兼容入口统一执行 `allow_image_generation`，识别请求的图片响应模态及映射后的图片型号，关闭时返回客户端协议形状的 400 并在上游调用前拒绝。已绑定缓存或智能/复合 Key 仍按实际选组检查，不能借模型别名绕过。同步保留 fork 现有分组默认值及管理员已保存值，不采用上游 246 将所有 Gemini/Antigravity 分组重新开启的回填；需要图片能力时由管理员显式开启。
 
 Gemini SDK/CLI 使用 `/v1beta/models`、`/v1beta/models/{model}` 和 `{model}:{action}` 形状，保持 Google 请求、流和错误语义。Anthropic Messages、Count Tokens、OpenAI Responses 与 Chat Completions 入口则先归一化，再由 Gemini 兼容服务转换为上游请求，响应恢复为原客户端协议。

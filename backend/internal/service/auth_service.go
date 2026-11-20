@@ -2073,40 +2073,11 @@ func resolvedTokenVersion(user *User) int64 {
 // snapshotPlatformQuotaDefaults 把 plan.PlatformQuotas（全部允许 platform × 3 window）以
 // BulkInsertInitial 形式写入 user_platform_quotas 表。失败 fail-open（仅 warn log）。
 func (s *AuthService) snapshotPlatformQuotaDefaults(ctx context.Context, userID int64, plan *signupGrantPlan) error {
-	if s.userPlatformQuotaRepo == nil || plan == nil || len(plan.PlatformQuotas) == 0 {
+	if plan == nil {
 		return nil
 	}
-	// 平台配额快照是 best-effort，必须脱离调用方事务执行。
-	// 否则某平台违反 user_platform_quotas 的 CHECK 约束时，PostgreSQL 会把整笔注册事务标记为 aborted。
-	ctx = dbent.WithoutTx(ctx)
-	records := make([]UserPlatformQuotaRecord, 0, len(plan.PlatformQuotas))
-	for platform, q := range plan.PlatformQuotas {
-		rec := UserPlatformQuotaRecord{
-			UserID:   userID,
-			Platform: platform,
-		}
-		if q != nil {
-			rec.DailyLimitUSD = q.DailyLimitUSD
-			rec.WeeklyLimitUSD = q.WeeklyLimitUSD
-			rec.MonthlyLimitUSD = q.MonthlyLimitUSD
-		}
-		// 未配置限额的平台无需持久化空行；零限额是有效的禁用配置。
-		if rec.DailyLimitUSD == nil && rec.WeeklyLimitUSD == nil && rec.MonthlyLimitUSD == nil {
-			continue
-		}
-
-		records = append(records, rec)
-	}
-
-	if len(records) == 0 {
-		return nil
-	}
-
-	if err := s.runFailOpenDBStep(ctx, "auth_platform_quota_snapshot", func(stepCtx context.Context) error {
-		return s.userPlatformQuotaRepo.BulkInsertInitial(stepCtx, records)
-	}); err != nil {
+	if err := snapshotUserPlatformQuotaDefaults(ctx, s.userPlatformQuotaRepo, userID, plan.PlatformQuotas); err != nil {
 		logger.LegacyPrintf("service.auth", "[Auth] Warning: snapshot platform quota failed user=%d: %v (fail-open)", userID, err)
-		return nil // fail-open：返回 nil，让调用方继续
 	}
 	return nil
 }

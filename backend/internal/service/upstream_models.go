@@ -122,6 +122,14 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 	if err != nil {
 		return nil, err
 	}
+	if account.IsAnthropic() {
+		// 未保存账号的预览同样读取所有页，只返回 ID，不更新能力快照。
+		catalog, err := s.readAnthropicModelCatalog(req, account)
+		if err != nil {
+			return nil, err
+		}
+		return catalog.Models, nil
+	}
 
 	models, err := s.fetchUpstreamModelsWithRequest(req, account)
 	var nativeErr *UpstreamModelSyncError
@@ -183,6 +191,11 @@ func (s *AccountTestService) fetchUpstreamModelsWithRequest(req *http.Request, a
 
 // readUpstreamModelsResponse 保留第三方网关兼容判断并限制响应大小。
 func (s *AccountTestService) readUpstreamModelsResponse(req *http.Request, account *Account) ([]byte, error) {
+	return s.readUpstreamModelsResponseWithLimit(req, account, resolveModelsListReadLimit(s.cfg))
+}
+
+// 分页同步传入整份目录的剩余预算，仍由同一传输路径处理代理、认证和响应错误。
+func (s *AccountTestService) readUpstreamModelsResponseWithLimit(req *http.Request, account *Account, bodyLimit int64) ([]byte, error) {
 	proxyURL := upstreamModelsProxyURL(account)
 	resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
 	if err != nil {
@@ -190,7 +203,6 @@ func (s *AccountTestService) readUpstreamModelsResponse(req *http.Request, accou
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	bodyLimit := resolveModelsListReadLimit(s.cfg)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, bodyLimit+1))
 	if err != nil {
 		return nil, newUpstreamModelSyncUpstreamError("Failed to read upstream model list", err)

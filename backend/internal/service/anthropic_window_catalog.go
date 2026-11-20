@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -75,60 +76,123 @@ func (s *AccountTestService) syncAnthropicModelCatalog(ctx context.Context, acco
 	if err != nil {
 		return nil, err
 	}
-	body, err := s.readUpstreamModelsResponse(req, account)
+	catalog, err := s.readAnthropicModelCatalog(req, account)
 	if err != nil {
 		return nil, err
 	}
-	models, err := extractUpstreamModelIDs(body)
-	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
-	}
-	if len(models) == 0 {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
-	}
-	catalog := &UpstreamModelCatalog{Models: models}
 	binding := anthropicCatalogBinding(account)
 	if binding == "" {
+		catalog.Metadata = nil
 		return catalog, nil
 	}
-	windows := make(map[string]UpstreamModelMetadata)
-	root := gjson.ParseBytes(body)
-	lists := []gjson.Result{root.Get("data"), root.Get("models")}
-	if root.IsArray() {
-		lists = []gjson.Result{root}
-	}
-	for _, list := range lists {
-		list.ForEach(func(_, entry gjson.Result) bool {
-			// 复用 ID 接口的精确身份，不把厂商最大实验窗口当成该账号的常规窗口。
-			id := upstreamModelEntryID(upstreamModelEntry{ID: entry.Get("id").String(), Slug: entry.Get("slug").String(), Name: entry.Get("name").String()})
-			window := entry.Get("context_window").Int()
-			if window <= 0 {
-				window = entry.Get("limit.context").Int()
-			}
-			if maxInput := entry.Get("max_input_tokens").Int(); maxInput > 0 && (window <= 0 || maxInput < window) {
-				window = maxInput
-			}
-			if id != "" && window > 0 {
-				windows[id] = UpstreamModelMetadata{ContextWindow: window}
-			}
-			return true
-		})
-	}
-	if len(windows) < len(models) && req.URL.Scheme == "https" && strings.EqualFold(req.URL.Host, "api.anthropic.com") && req.URL.Path == "/v1/models" {
+	if len(catalog.Metadata) < len(catalog.Models) && req.URL.Scheme == "https" && strings.EqualFold(req.URL.Host, "api.anthropic.com") && req.URL.Path == "/v1/models" {
 		registry, regErr := s.fetchAnthropicWindowRegistry(ctx, account)
 		if regErr != nil {
 			catalog.Warnings = append(catalog.Warnings, "Anthropic context window catalog unavailable; only directly reported windows were used.")
 		}
-		for _, id := range models {
-			if _, present := windows[id]; !present && registry[id] > 0 {
-				windows[id] = UpstreamModelMetadata{ContextWindow: registry[id]}
+		for _, id := range catalog.Models {
+			if _, present := catalog.Metadata[id]; !present && registry[id] > 0 {
+				catalog.Metadata[id] = UpstreamModelMetadata{ContextWindow: registry[id]}
 			}
 		}
 	}
-	catalog.Metadata = windows
-	// 一次成功的目录刷新完整替换旧快照；已移除的模型或明确缩短的窗口随即失效。
-	err = s.saveUpstreamMetadataSnapshot(ctx, account, UpstreamModelMetadataSnapshot{Source: "upstream", Binding: binding, UpdatedAt: time.Now().UTC(), Models: windows})
-	return catalog, err
+	// 全部页成功后只写一次；合法空目录同样覆盖旧快照，撤销最后一个型号的资格。
+	if err := s.saveUpstreamMetadataSnapshot(ctx, account, UpstreamModelMetadataSnapshot{Source: "upstream", Binding: binding, UpdatedAt: time.Now().UTC(), Models: catalog.Metadata}); err != nil {
+		return nil, err
+	}
+	return catalog, nil
+}
+
+// readAnthropicModelCatalog 为保存同步和只读预览收集完整目录，游标只用于原端点的查询参数。
+func (s *AccountTestService) readAnthropicModelCatalog(req *http.Request, account *Account) (*UpstreamModelCatalog, error) {
+	catalog := &UpstreamModelCatalog{Metadata: make(map[string]UpstreamModelMetadata)}
+	seenCursors := make(map[string]bool)
+	remaining := resolveModelsListReadLimit(s.cfg)
+	for {
+		body, err := s.readUpstreamModelsResponseWithLimit(req, account, remaining)
+		if err != nil {
+			return nil, err
+		}
+		remaining -= int64(len(body))
+		next, err := appendAnthropicModelPage(catalog, body)
+		if err != nil {
+			return nil, newUpstreamModelSyncUpstreamError("Invalid upstream model list page", err)
+		}
+		if next == "" {
+			catalog.Models = dedupeAndSortModelIDs(catalog.Models)
+			return catalog, nil
+		}
+		if seenCursors[next] {
+			return nil, newUpstreamModelSyncUpstreamError("Upstream model list cursor repeated", nil)
+		}
+		seenCursors[next] = true
+		req = req.Clone(req.Context())
+		query := req.URL.Query()
+		query.Set("after_id", next)
+		req.URL.RawQuery = query.Encode()
+	}
+}
+
+// appendAnthropicModelPage 兼容 data、models 和裸数组；只有明确的空数组可以作为空目录。
+func appendAnthropicModelPage(catalog *UpstreamModelCatalog, body []byte) (string, error) {
+	type entry struct {
+		upstreamModelEntry
+		ContextWindow  json.RawMessage `json:"context_window"`
+		MaxInputTokens json.RawMessage `json:"max_input_tokens"`
+		Limit          json.RawMessage `json:"limit"`
+	}
+	var page struct {
+		Data    []entry         `json:"data"`
+		Models  []entry         `json:"models"`
+		HasMore json.RawMessage `json:"has_more"`
+		LastID  json.RawMessage `json:"last_id"`
+	}
+	body = bytes.TrimLeft(body, " \t\r\n")
+	var dst any = &page
+	if len(body) > 0 && body[0] == '[' {
+		dst = &page.Data
+	}
+	if err := json.Unmarshal(body, dst); err != nil {
+		return "", err
+	}
+	if page.Data == nil && page.Models == nil {
+		return "", fmt.Errorf("missing model list")
+	}
+	before := len(catalog.Models)
+	for _, list := range [][]entry{page.Data, page.Models} {
+		for _, model := range list {
+			id := upstreamModelEntryID(model.upstreamModelEntry)
+			if id == "" {
+				continue
+			}
+			catalog.Models = append(catalog.Models, id)
+			// 只采信常规窗口。同一型号重复出现时采用已声明窗口中较小的值。
+			window := gjson.ParseBytes(model.ContextWindow).Int()
+			if window <= 0 {
+				window = gjson.GetBytes(model.Limit, "context").Int()
+			}
+			if input := gjson.ParseBytes(model.MaxInputTokens).Int(); input > 0 && (window <= 0 || input < window) {
+				window = input
+			}
+			prior := catalog.Metadata[id].ContextWindow
+			if window > 0 && (prior == 0 || window < prior) {
+				catalog.Metadata[id] = UpstreamModelMetadata{ContextWindow: window}
+			}
+		}
+	}
+	if len(page.Data)+len(page.Models) > 0 && len(catalog.Models) == before {
+		return "", fmt.Errorf("model list contains no usable IDs")
+	}
+	switch string(page.HasMore) {
+	case "", "false":
+		return "", nil
+	case "true":
+		var cursor string
+		if json.Unmarshal(page.LastID, &cursor) == nil && strings.TrimSpace(cursor) != "" {
+			return cursor, nil
+		}
+	}
+	return "", fmt.Errorf("invalid model list pagination")
 }
 
 func (s *AccountTestService) fetchAnthropicWindowRegistry(ctx context.Context, account *Account) (map[string]int64, error) {

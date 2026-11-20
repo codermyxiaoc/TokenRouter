@@ -77,6 +77,125 @@ func TestAnthropicWindowCatalogSync(t *testing.T) {
 	require.Equal(t, int64(300000), catalog.Metadata["native"].ContextWindow)
 }
 
+// 每次从已发布的长窗口快照开始刷新，验证管理同步只在完整目录就绪后更新存储和选号资格。
+func TestAnthropicWindowCatalogRefreshPages(t *testing.T) {
+	type page struct {
+		after  string
+		status int
+		body   string
+	}
+	const (
+		oldCatalog = `{"data":[{"id":"old","context_window":1000000}]}`
+		firstPage  = `{"data":[{"id":"short","context_window":200000},{"id":"cursor/+1","context_window":100000}],"has_more":true,"last_id":"cursor/+1"}`
+		readLimit  = 512
+	)
+	for _, tc := range []struct {
+		name    string
+		pages   []page
+		windows map[string]int64 // nil 表示同步应失败，保留旧快照。
+	}{
+		{"empty-data", []page{{"", 200, `{"data":[],"has_more":false,"last_id":null}`}}, map[string]int64{}},
+		{"empty-models", []page{{"", 200, `{"models":[]}`}}, map[string]int64{}},
+		{"empty-array", []page{{"", 200, `[]`}}, map[string]int64{}},
+		{"multiple-pages", []page{
+			{"", 200, firstPage},
+			{"cursor/+1", 200, `{"data":[{"id":"short","context_window":1000000},{"id":"long","max_input_tokens":1000000}],"has_more":false}`},
+		}, map[string]int64{"short": 200000, "cursor/+1": 100000, "long": 1000000}},
+		{"models-envelope", []page{{"", 200, `{"models":[{"slug":"legacy","limit":{"context":1000000}}],"last_id":15}`}}, map[string]int64{"legacy": 1000000}},
+		{"bare-array", []page{{"", 200, `[{"name":"models/native","context_window":900000}]`}}, map[string]int64{"native": 900000}},
+		{"later-http-error", []page{{"", 200, firstPage}, {"cursor/+1", 503, `{"error":"unavailable"}`}}, nil},
+		{"later-invalid-envelope", []page{{"", 200, firstPage}, {"cursor/+1", 200, `{"unexpected":[]}`}}, nil},
+		{"combined-size-exceeds-limit", []page{
+			{"", 200, strings.Repeat(" ", readLimit/2) + firstPage},
+			{"cursor/+1", 200, strings.Repeat(" ", readLimit/2) + `{"data":[]}`},
+		}, nil},
+		{"missing-id", []page{{"", 200, `{"data":[{}]}`}}, nil},
+		{"invalid-has-more", []page{{"", 200, `{"data":[{"id":"partial"}],"has_more":"invalid"}`}}, nil},
+		{"missing-cursor", []page{{"", 200, `{"data":[{"id":"partial"}],"has_more":true}`}}, nil},
+		{"repeated-cursor", []page{{"", 200, firstPage}, {"cursor/+1", 200, firstPage}}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := &Account{
+				ID: 19, Type: AccountTypeAPIKey, Platform: PlatformAnthropic,
+				Credentials: map[string]any{"api_key": "key", "base_url": "https://relay.example"},
+			}
+			repo := &upstreamModelMetadataRepoStub{}
+			// 先走实际同步入口建立旧资格，后续响应逐页返回。
+			upstream := &queuedHTTPUpstreamStub{}
+			pages := append([]page{{"", 200, oldCatalog}}, tc.pages...)
+			for _, p := range pages {
+				upstream.responses = append(upstream.responses, &http.Response{
+					StatusCode: p.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(p.body)),
+				})
+			}
+			upstream.onCall = func(req *http.Request, stub *queuedHTTPUpstreamStub) {
+				require.LessOrEqual(t, stub.callCount, len(pages), "游标必须前进，终页不能继续翻页")
+				require.Equal(t, pages[stub.callCount-1].after, req.URL.Query().Get("after_id"))
+				require.Equal(t, "relay.example", req.URL.Host)
+				require.Equal(t, "/v1/models", req.URL.Path)
+				require.Equal(t, "key", getHeaderRaw(req.Header, "x-api-key"))
+				require.True(t, HTTPUpstreamRedirectsDisabled(req.Context()))
+				require.Nil(t, repo.updates, "尚有页面未完成时不能发布快照")
+			}
+			cfg := upstreamModelSyncTestConfig()
+			cfg.Gateway.ModelsListReadMaxBytes = readLimit
+			svc := &AccountTestService{cfg: cfg, httpUpstream: upstream, accountRepo: repo}
+			_, err := svc.SyncUpstreamModelCatalog(t.Context(), account)
+			require.NoError(t, err)
+			old := account.GetUpstreamModelMetadataSnapshot()
+			require.Equal(t, int64(1000000), old.Models["old"].ContextWindow)
+			repo.updates = nil
+
+			catalog, err := svc.SyncUpstreamModelCatalog(t.Context(), account)
+			require.Equal(t, len(pages), upstream.callCount)
+			if tc.windows == nil {
+				require.Error(t, err)
+				require.Nil(t, repo.updates)
+				require.Equal(t, old, account.GetUpstreamModelMetadataSnapshot())
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, catalog.Models)
+			require.Len(t, catalog.Models, len(tc.windows))
+			for id, window := range tc.windows {
+				require.Contains(t, catalog.Models, id)
+				require.Equal(t, window, catalog.Metadata[id].ContextWindow)
+			}
+			stored := (&Account{Extra: repo.updates}).GetUpstreamModelMetadataSnapshot()
+			require.NotNil(t, stored)
+			require.NotEmpty(t, stored.Binding)
+			require.Equal(t, catalog.Metadata, stored.Models)
+			require.Equal(t, stored, account.GetUpstreamModelMetadataSnapshot())
+			scopes := (&GatewayService{}).anthropicWindowAccounts([]Account{*account}, PlatformAnthropic, nil)
+			selection := longContextSelection(scopes, nil, "old")
+			require.NotNil(t, selection, "同步后的空快照必须有别于从未同步")
+			require.Empty(t, selection, "旧型号必须退出可选账号集合")
+		})
+	}
+}
+
+// 账号预览同样取完全部页面，只返回型号。即使未提供窗口，也不会查询公共注册表或保存快照。
+func TestAnthropicModelPreviewReadsAllPagesWithoutWriting(t *testing.T) {
+	upstream := &queuedHTTPUpstreamStub{}
+	for _, body := range []string{
+		`{"data":[{"id":"first"}],"has_more":true,"last_id":"first"}`,
+		`{"data":[{"id":"second"}],"has_more":false}`,
+	} {
+		upstream.responses = append(upstream.responses, &http.Response{
+			StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)),
+		})
+	}
+	repo := &upstreamModelMetadataRepoStub{}
+	account := &Account{ID: 19, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "key"}}
+	svc := &AccountTestService{cfg: upstreamModelSyncTestConfig(), httpUpstream: upstream, accountRepo: repo}
+	models, err := svc.FetchUpstreamSupportedModels(t.Context(), account)
+	require.NoError(t, err)
+	require.Equal(t, []string{"first", "second"}, models)
+	require.Equal(t, 2, upstream.callCount)
+	require.Nil(t, repo.updates)
+	require.Nil(t, account.GetUpstreamModelMetadataSnapshot())
+}
+
 // 真实转发、列表、广场及购买预览均走相同的分组/渠道/账号别名。
 func TestAnthropicWindowCatalogAndRouting(t *testing.T) {
 	group := Group{ID: 21, Platform: PlatformAnthropic, Status: StatusActive, Hydrated: true}

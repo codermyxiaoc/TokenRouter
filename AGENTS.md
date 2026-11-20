@@ -28,3 +28,15 @@
 
 - 如果上游在 `backend/migrations/` 下新增迁移，不得原样照搬文件名；必须根据当前 fork 的最新迁移 ID 递增后，替换文件名前缀 ID。
 - 如果上游在 `README.md` 中新增文档，必须将内容并入 `docs/` 下合适的文档；没有合适文档时新建一篇，不要直接写入 `README.md`，保持其简洁。
+
+## Cursor Cloud specific instructions
+
+Cloud Agent 启动后会拉起本机开发栈。不要改用 `deploy/docker-compose.dev.yml`，那个文件默认把出站流量转到不存在的本机代理。
+
+- Go `1.27.2` 在 `/usr/local/go/bin`，并链接到 `/usr/local/bin/go`。
+- Node.js `24.22.1` 和 pnpm `9.15.9` 在 `/usr/local/node/bin`。登录壳里更靠前的 `/exec-daemon/node` 仍是 Node 22，运行前端前把 `/usr/local/node/bin` 放到 `PATH` 前面。
+- PostgreSQL 18 监听 `127.0.0.1:5432`。本地角色和数据库都叫 `tokenrouter`，只允许本机 trust 连接。
+- Redis 使用 Ubuntu 的 7.0 包，监听 `127.0.0.1:6379`，没有密码。
+- 后端是 `http://127.0.0.1:8080`，数据目录是 `/var/lib/tokenrouter-dev`。首次启动会自动初始化；生成的管理员邮箱和一次性密码写在该目录的 `backend.log`。
+- 前端 Vite 是 `http://127.0.0.1:3000`，画布开发服务是 `http://127.0.0.1:5174`，并由前端的 `/canvas-app` 反代。
+- 两个服务分别在 tmux 会话 `tokenrouter-backend` 和 `tokenrouter-frontend`。端口已经可访问时，启动脚本不会重启它们。

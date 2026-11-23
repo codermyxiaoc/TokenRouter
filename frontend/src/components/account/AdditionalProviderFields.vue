@@ -1,6 +1,6 @@
 <template>
   <div class="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-dark-600">
-    <p class="text-sm text-gray-600 dark:text-gray-300">{{ platform === 'typesafe' ? 'System One · /v1/systemone · jev-latest' : platform === 'cline' ? 'Chat Completions · /chat/completions' : 'Command Code' }}</p>
+    <p class="text-sm text-gray-600 dark:text-gray-300">{{ platform === 'typesafe' ? 'System One · /v1/systemone' : platform === 'cline' ? 'Chat Completions · /chat/completions' : 'Command Code' }}</p>
     <template v-if="platform === 'command_code'">
       <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.title') }}</label>
       <Select v-model="form.protocol" :options="protocolOptions" />

@@ -50,7 +50,7 @@ export default {
         batchCompleted: '已完成 {count} 个账号的倍率探测',
         batchPartial: '倍率探测部分完成：成功 {success} 个，失败 {failed} 个'
       },
-      additionalProviders: { systemOneDescription: 'TypeSafe 使用独立的 SystemOne 结构化判断接口。', systemOneNote: '请根据业务调整 state 与 questions；此平台不提供普通对话接口。', inheritBaseUrl: '留空继承账号 Base URL', customRules: '自定义模型协议规则', catalogHint: '默认按上游模型目录适配协议；开启自定义后按规则匹配，未命中使用 Chat Completions。' },
+      additionalProviders: { systemOneDescription: 'TypeSafe 使用独立的 SystemOne 结构化判断接口。', systemOneNote: '请将示例中的 model 换成该分组的公开模型 ID，并按业务填写 state 和 questions。', inheritBaseUrl: '留空继承账号 Base URL', customRules: '自定义模型协议规则', catalogHint: '默认按上游模型目录适配协议；开启自定义后按规则匹配，未命中使用 Chat Completions。' },
       video: {
   "adapters": {
     "compat_openai": "OpenAI 官方参数格式",

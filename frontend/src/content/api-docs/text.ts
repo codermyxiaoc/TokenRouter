@@ -231,7 +231,7 @@ export const textEndpoints: ApiDocEndpoint[] = [
     id: 'opencode-systemone', category: 'tools', title: 'TypeSafe / Jev System One', summary: 'TypeSafe 或 OpenCode Zen Jev 的同步结构化决策接口，使用 state 和 questions，保持原生结果。',
     platforms: ['opencode_go', 'typesafe'], method: 'POST', path: '/v1/systemone', aliases: ['/systemone'], auth: 'bearer', contentType: 'application/json',
     parameters: [
-      { name: 'model', type: 'string', required: true, description: 'Body · TypeSafe 分组使用 jev-latest；OpenCode Zen 分组使用 jev-1.13 或 jev-1.13-free；GO 账号不支持。' },
+      { name: 'model', type: 'string', required: true, description: 'Body · TypeSafe 请填写该分组模型广场中的公开模型 ID；默认型号为 jev-latest。OpenCode Zen 支持 jev-1.13 或 jev-1.13-free；GO 账号不支持。' },
       { name: 'state', type: 'JSON 值', required: true, description: 'Body · 必须提供待判断的状态内容，具体数据结构遵循 System One 上游规范。' },
       { name: 'questions', type: 'object', required: true, description: 'Body · 非空问题对象，键为问题 ID；type 支持 noul、choice、score；choice 的 criteria 为对象，score 为非空档位数组。重复键、大小写混淆与非法结构会在请求前拒绝。' },
       { name: 'stream', type: 'boolean', required: false, description: 'Body · 只允许 false 或省略；不支持流式。' }

@@ -1851,11 +1851,44 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerForRouting(
 	}
 	ctx = resolvedCtx
 	groupID = resolvedGroupID
+	var fallbackMapping *ChannelMappingResult
+	isTypeSafeSystemOne := platform == PlatformTypeSafe && requiredCapability == OpenAIEndpointCapabilitySystemOne
 	if derefGroupID(groupID) != originalGroupID {
-		// 回退后的分组可能有不同渠道映射，必须重新解析账号层模型。
-		routingModel = s.resolveChannelRoutingModel(ctx, groupID, requestedModel)
+		// 回退后的分组可能有不同渠道映射，选号、实际 JSON 和账单链须使用同一结果。
+		if isTypeSafeSystemOne {
+			mapping, _ := s.ResolveChannelMappingAndRestrict(ctx, groupID, requestedModel)
+			routingModel = mapping.MappedModel
+			fallbackMapping = &mapping
+		} else {
+			routingModel = s.resolveChannelRoutingModel(ctx, groupID, requestedModel)
+		}
+	}
+	// 仅在最终 TypeSafe 组检查客户端公开身份，组内选路和粘性重选仍依据真实路由目标。
+	var declaration *typeSafeModelDeclaration
+	if isTypeSafeSystemOne {
+		var channel *Channel
+		if s.channelService != nil && groupID != nil {
+			channel, err = s.channelService.GetChannelForGroup(ctx, *groupID)
+			if err != nil {
+				return nil, OpenAIAccountScheduleDecision{}, fmt.Errorf("%w: %w", ErrTypeSafeModelCatalogUnavailable, err)
+			}
+		}
+		rule := typeSafeDeclaration(channel, requestedModel)
+		if !rule.publicChannelSource {
+			declaration = &rule
+			ctx = context.WithValue(ctx, typeSafeModelDeclarationKey{}, declaration)
+		}
 	}
 	selection, decision, err := s.selectAccountWithSchedulerForRoutingOnce(ctx, groupID, previousResponseID, sessionHash, requestedModel, routingModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove)
+	if err == nil && selection != nil && fallbackMapping != nil {
+		selection.TypeSafeFallbackMapping = fallbackMapping
+	}
+	if err != nil && declaration != nil && (selection == nil || selection.Account == nil) {
+		// 仅在失败分支查询持久账号配置，避免把临时冷却/停调错报为未声明。
+		if declarationErr := s.diagnoseTypeSafeDeclaration(ctx, groupID, declaration); declarationErr != nil {
+			return selection, decision, declarationErr
+		}
+	}
 	if err == nil || openAIProxyStreamQuarantineBypassed(ctx) {
 		return selection, decision, err
 	}

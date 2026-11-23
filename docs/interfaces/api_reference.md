@@ -294,11 +294,11 @@ x-goog-api-key: <tokenrouter_api_key>
 
 请求体使用 Gemini 原生 `contents`、`systemInstruction`、`generationConfig`、`tools` 和 `safetySettings` 字段，响应使用 Google `candidates`、`usageMetadata` 和 `promptFeedback` 字段。`streamGenerateContent` 返回 Gemini SSE/JSON 流，不转换为 OpenAI envelope。
 
-### OpenCode Zen Jev System One
+### TypeSafe 与 OpenCode Zen System One
 
 #### `POST /v1/systemone`
 
-只允许 OpenCode Zen 分组和 `jev-1.13`、`jev-1.13-free` 模型，不支持 `stream=true`。请求体：
+TypeSafe 分组的 `model` 填写该组公开的模型 ID。未单独配置型号时沿用 `jev-latest`。OpenCode Zen 分组支持 `jev-1.13`、`jev-1.13-free`。此接口使用同步请求，示例如下。
 
 ```json
 {

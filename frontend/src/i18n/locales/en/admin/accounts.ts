@@ -50,7 +50,7 @@ export default {
         batchCompleted: 'Probed {count} account(s)',
         batchPartial: 'Probe partially completed: {success} succeeded, {failed} failed'
       },
-      additionalProviders: { systemOneDescription: 'TypeSafe uses the dedicated SystemOne structured evaluation endpoint.', systemOneNote: 'Adapt state and questions to your task. This platform does not provide standard chat endpoints.', inheritBaseUrl: 'Leave empty to use the account Base URL', customRules: 'Custom model protocol rules', catalogHint: 'Protocols follow the upstream model catalog by default. Custom rules override the catalog; unmatched models use Chat Completions.' },
+      additionalProviders: { systemOneDescription: 'TypeSafe uses the dedicated SystemOne structured evaluation endpoint.', systemOneNote: 'Set model to a public model ID from this group, then adapt state and questions to your task.', inheritBaseUrl: 'Leave empty to use the account Base URL', customRules: 'Custom model protocol rules', catalogHint: 'Protocols follow the upstream model catalog by default. Custom rules override the catalog; unmatched models use Chat Completions.' },
       video: {
   "adapters": {
     "compat_openai": "OpenAI official parameter format",

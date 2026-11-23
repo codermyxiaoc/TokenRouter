@@ -613,6 +613,8 @@ type AccountSelectionResult struct {
 	AdvancedScheduler bool             // 仅内部转发链路使用，不对外序列化。
 	// AdvancedSchedulerFeedback 保存本次请求应使用的反馈 EWMA 系数。
 	AdvancedSchedulerFeedback *advancedSchedulerFeedbackConfig
+	// TypeSafe 后备分组的实际映射供结构化请求转发和结算复用。
+	TypeSafeFallbackMapping *ChannelMappingResult `json:"-"`
 }
 
 // ClaudeUsage 表示Claude API返回的usage信息

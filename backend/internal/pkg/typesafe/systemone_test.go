@@ -21,7 +21,7 @@ func TestSystemOneRejectsAmbiguousJSON(t *testing.T) {
 		_, err := ValidateSystemOneRequest([]byte(body))
 		require.Error(t, err, body)
 	}
-	for _, model := range []string{"jev-latest", "jev-1.13", "jev-1.13-free"} {
+	for _, model := range []string{"jev-latest", "jev-1.13", "jev-1.13-free", "jev-1.14", "gemini-decision-1", "gpt-6-luna-decision"} {
 		got, err := ValidateSystemOneRequest([]byte(`{"model":"` + model + `","state":{"messages":["x"]},"questions":{"q":{"type":"choice","criteria":{}}}}`))
 		require.NoError(t, err)
 		require.Equal(t, model, got)

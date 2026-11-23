@@ -22,6 +22,7 @@ var (
 	systemOneQuestionFields = []string{"type", "instructions", "criteria"}
 )
 
+// ValidateSystemOneRequest 校验同步决策协议；公开型号的准入由分组与账号配置决定。
 func ValidateSystemOneRequest(body []byte) (string, error) {
 	var envelope systemOneEnvelope
 	if err := json.Unmarshal(body, &envelope); err != nil {
@@ -36,9 +37,6 @@ func ValidateSystemOneRequest(body []byte) (string, error) {
 	model, err := requiredString(envelope.Model, "model")
 	if err != nil {
 		return "", err
-	}
-	if model != "jev-latest" && model != "jev-1.13" && model != "jev-1.13-free" {
-		return "", errors.New("unsupported System One model")
 	}
 	if err := validateStringObjectOrArray(envelope.State, "state"); err != nil {
 		return "", err

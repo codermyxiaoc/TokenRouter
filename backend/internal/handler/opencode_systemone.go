@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// SystemOne 转发 OpenCode Zen Jev 的原生结构化决策请求。
+// SystemOne 转发 TypeSafe 和 OpenCode Zen 的原生结构化决策请求。
 // Jev 不走文本协议桥，复用认证、并发、账号重试与结算管线。
 func (h *OpenAIGatewayHandler) SystemOne(c *gin.Context) {
 	streamStarted := false
@@ -76,12 +76,19 @@ func (h *OpenAIGatewayHandler) SystemOne(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", validationErr.Error())
 		return
 	}
-	requestedModel = strings.TrimSpace(requestedModel)
-	if (apiKey.Group.Platform == service.PlatformTypeSafe && requestedModel != service.DefaultTypeSafeModel) ||
-		(apiKey.Group.Platform == service.PlatformOpenCodeGo && !service.IsOpenCodeSystemOneModel(requestedModel)) {
-		h.errorResponse(c, http.StatusNotFound, "model_not_found", "The requested model is not available on OpenCode System One")
-		return
+	// Zen 仅接收既有两个公开型号；TypeSafe 的型号须在实际调度分组中获得授权。
+	if apiKey.Group.Platform == service.PlatformOpenCodeGo {
+		switch requestedModel {
+		case "jev-1.13", "jev-1.13-free":
+		case service.DefaultTypeSafeModel:
+			h.errorResponse(c, http.StatusNotFound, "model_not_found", "The requested model is not available on OpenCode System One")
+			return
+		default:
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "unsupported System One model")
+			return
+		}
 	}
+	requestedModel = strings.TrimSpace(requestedModel)
 	reqLog = reqLog.With(zap.String("model", requestedModel))
 	// 结构化决策中的 state、题目与扩展字段同样属于用户输入。
 	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolSystemOne, requestedModel, body); decision != nil && decision.Blocked {
@@ -125,12 +132,13 @@ func (h *OpenAIGatewayHandler) SystemOne(c *gin.Context) {
 	routingStart := time.Now()
 
 	for {
-		selection, _, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
+		selection, _, err := h.gatewayService.SelectAccountWithSchedulerForCapabilityAndRoutingModel(
 			c.Request.Context(),
 			apiKey.GroupID,
 			"",
 			sessionHash,
 			requestedModel,
+			channelMapping.MappedModel,
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportHTTPSSE,
 			service.OpenAIEndpointCapabilitySystemOne,
@@ -141,6 +149,15 @@ func (h *OpenAIGatewayHandler) SystemOne(c *gin.Context) {
 		if err != nil || selection == nil || selection.Account == nil {
 			if failoverClientGone(c) {
 				reqLog.Info("openai_systemone.account_select_aborted_client_disconnected", zap.Error(err))
+				return
+			}
+			if errors.Is(err, service.ErrTypeSafeModelNotDeclared) {
+				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalModelConfiguration)
+				h.errorResponse(c, http.StatusNotFound, "model_not_found", "The requested model is not available in this TypeSafe group")
+				return
+			}
+			if errors.Is(err, service.ErrTypeSafeModelCatalogUnavailable) {
+				h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "TypeSafe model catalog is temporarily unavailable")
 				return
 			}
 			if len(failedAccountIDs) == 0 {
@@ -163,6 +180,11 @@ func (h *OpenAIGatewayHandler) SystemOne(c *gin.Context) {
 		}
 
 		account := selection.Account
+		attemptMapping := channelMapping
+		if selection.TypeSafeFallbackMapping != nil {
+			// 账号按实际后备组的渠道型号选出，转发与用量映射链必须沿用同一份结果。
+			attemptMapping = *selection.TypeSafeFallbackMapping
+		}
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 		accountRelease, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, false, &streamStarted, reqLog)
 		if !acquired {
@@ -176,14 +198,14 @@ func (h *OpenAIGatewayHandler) SystemOne(c *gin.Context) {
 			if accountRelease != nil {
 				defer accountRelease()
 			}
-			return h.gatewayService.ForwardOpenCodeSystemOne(c.Request.Context(), c, account, forwardBody)
+			return h.gatewayService.ForwardOpenCodeSystemOne(c.Request.Context(), c, account, body, attemptMapping.MappedModel)
 		}()
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, time.Since(forwardStart).Milliseconds())
 
 		if err == nil {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestedModel, false, result), true, nil)
 			if result != nil {
-				h.recordSystemOneUsage(c, apiKey, account, subscription, channelMapping, requestedModel, body, result, subject.UserID)
+				h.recordSystemOneUsage(c, apiKey, account, subscription, attemptMapping, requestedModel, body, result, subject.UserID)
 			}
 			return
 		}

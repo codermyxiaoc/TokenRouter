@@ -363,6 +363,11 @@ func openAIAccountSupportsRoutingModel(ctx context.Context, account *Account, ro
 	if routingModel == "" {
 		return true
 	}
+	if account != nil && account.IsTypeSafe() {
+		if rule, _ := ctx.Value(typeSafeModelDeclarationKey{}).(*typeSafeModelDeclaration); rule != nil && !rule.accepts(account) {
+			return false
+		}
+	}
 	if isUnavailableOpenAISubscriptionTarget(account, resolveOpenAIAccountUpstreamModelForRequest(account, routingModel, requireCompact)) {
 		return false
 	}

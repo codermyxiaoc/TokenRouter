@@ -491,6 +491,27 @@ describe('ModelMarketplaceView', () => {
     expect(copyToClipboard).toHaveBeenCalledWith('gpt-5.5')
   })
 
+  it('TypeSafe 分组按公开型号分别展示价格、复制 ID 并支持搜索', async () => {
+    const ids = ['jev-1.13', 'jev-1.14', 'gemini-decision-1', 'gpt-6-luna-decision']
+    const models = ids.map((id, index) => marketplaceModel(id, id, {
+      pricing_mode: 'token', price_status: 'priced', input_price_per_token: (index + 1) / 1_000_000,
+    }))
+    getMarketplaceModels.mockResolvedValue([{
+      ...marketplaceGroup(1, '决策模型', models), platform: 'typesafe', display_brand: 'TypeSafe',
+    }])
+    const wrapper = await mountMarketplace()
+    await wrapper.get('[data-testid="marketplace-group-pricing-toggle"]').trigger('click')
+    const cards = wrapper.findAll('article')
+    expect(cards.map(card => card.get('h3').text())).toEqual(ids)
+    for (const [index, card] of cards.entries()) {
+      expect(card.get('dd').text()).toContain((index + 1).toFixed(2))
+      await card.get('[data-testid="model-id-copy"]').trigger('click')
+      expect(copyToClipboard).toHaveBeenLastCalledWith(ids[index])
+    }
+    await wrapper.get('[data-testid="marketplace-search"]').setValue('gpt-6-luna-decision')
+    expect(wrapper.findAll('article').map(card => card.get('h3').text())).toEqual(['gpt-6-luna-decision'])
+  })
+
   it('模型卡片右上角展示输入输出能力标签', async () => {
     const wrapper = await mountMarketplace()
 

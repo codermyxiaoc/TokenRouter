@@ -239,17 +239,23 @@ func (s *OpenAIGatewayService) modelRoutedUpstreamProtocol(ctx context.Context, 
 	}
 }
 
-// TypeSafe 的公开 Jev 型号与账号的私有投递名分开。渠道中间名须有对应的账号映射，
-// 最终白名单仍按真实目标判断。私有标识保留上游使用的大小写和前缀。
+// TypeSafe 接受传统 Jev、显式账号映射源和最终白名单中的具体部署名。
+// 未设置白名单时，普通映射的目标本身不产生新的公开输入名。
 // @project-doc docs/interfaces/aggregator_upstreams.md#provider_protocols
 func (a *Account) typeSafeSystemOneTarget(routingModel string) (string, bool) {
 	routingModel = strings.TrimSpace(routingModel)
-	target, matched := a.ResolveMappedModel(routingModel)
-	target = strings.TrimSpace(target)
-	if routingModel == "" || target == "" || (!matched && routingModel != DefaultTypeSafeModel) {
+	if routingModel == "" || strings.Contains(routingModel, "*") {
 		return "", false
 	}
-	return target, a.isFinalModelWhitelisted(target)
+	mapping := a.GetModelMapping()
+	target, matched := resolveRequestedModelInMapping(mapping, routingModel)
+	target = strings.TrimSpace(target)
+	whitelist, _ := resolveFinalModelWhitelist(a.Platform, a.Credentials, mapping)
+	_, direct := whitelist[routingModel]
+	if target == "" || (!matched && !direct && routingModel != DefaultTypeSafeModel) {
+		return "", false
+	}
+	return target, isModelInFinalWhitelist(a.Platform, target, whitelist)
 }
 
 // 官方账户查询不接受同名中继主机或 HTTP，避免把密钥发往错误站点。

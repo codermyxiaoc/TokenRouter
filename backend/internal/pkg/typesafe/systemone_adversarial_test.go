@@ -2,10 +2,11 @@ package typesafe
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
-// 模糊测试只生成本地字节串；成功解析必须返回已允许模型且保持完整 JSON。
+// 模糊测试只生成本地字节串；成功解析必须返回请求内的非空模型且保持完整 JSON。
 func FuzzSystemOneAdversarialRequest(f *testing.F) {
 	for _, body := range []string{
 		`{"model":"jev-latest","state":"ok","questions":{"q":{"type":"noul"}}}`,
@@ -24,8 +25,11 @@ func FuzzSystemOneAdversarialRequest(f *testing.F) {
 		if !json.Valid(body) {
 			t.Fatalf("接受非法 JSON：%q", body)
 		}
-		if model != "jev-latest" && model != "jev-1.13" && model != "jev-1.13-free" {
-			t.Fatalf("接受未允许模型：%q", model)
+		var request struct {
+			Model string `json:"model"`
+		}
+		if json.Unmarshal(body, &request) != nil || strings.TrimSpace(model) == "" || model != request.Model {
+			t.Fatalf("解析型号与请求不一致：%q", model)
 		}
 	})
 }

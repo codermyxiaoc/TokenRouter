@@ -133,6 +133,9 @@ func (s *SmartRoutingService) EvaluateSmartRoutingGroup(ctx context.Context, gro
 	eligible := make([]*Account, 0, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
+		if account.IsTypeSafe() && !typeSafeDeclaration(channel, requestedModel).accepts(account) {
+			continue
+		}
 		if !smartRoutingAccountCatalogContains(account, routingModel, channelMapped) ||
 			!s.gateway.isRoutingModelSupportedByAccountWithContext(ctx, account, routingModel) {
 			continue
@@ -295,6 +298,9 @@ func (s *SmartRoutingService) ResolveSmartRoutingModels(ctx context.Context, gro
 		found := false
 		for i := range accounts {
 			account := &accounts[i]
+			if account.IsTypeSafe() && !typeSafeDeclaration(channel, candidate).accepts(account) {
+				continue
+			}
 			if !smartRoutingAccountCatalogContains(account, routingModel, channelMapped) ||
 				!s.gateway.isRoutingModelSupportedByAccountWithContext(ctx, account, routingModel) {
 				continue
@@ -426,6 +432,11 @@ func smartRoutingAccountCatalogContains(account *Account, model string, channelM
 	if account == nil || strings.TrimSpace(model) == "" {
 		return false
 	}
+	if account.IsTypeSafe() {
+		// 调用方已检查渠道前的公开身份，此处检查映射后发往账号的型号。
+		_, ok := account.typeSafeSystemOneTarget(model)
+		return ok
+	}
 	if len(channelMapped) > 0 && channelMapped[0] && accountCatalogHasMappedTarget(account, model) {
 		return true
 	}
@@ -473,7 +484,9 @@ func smartRoutingAccountEndpointEligible(ctx context.Context, account *Account, 
 		return !strings.HasSuffix(endpoint, "/embeddings") && !strings.HasSuffix(endpoint, "/alpha/search")
 	}
 	capability := OpenAIEndpointCapabilityTextGeneration
-	if strings.Contains(endpoint, "/responses") && OpenAIImageGenerationIntentFromContext(ctx) {
+	if strings.HasSuffix(strings.TrimSuffix(endpoint, "/"), "/systemone") {
+		capability = OpenAIEndpointCapabilitySystemOne
+	} else if strings.Contains(endpoint, "/responses") && OpenAIImageGenerationIntentFromContext(ctx) {
 		capability = OpenAIEndpointCapabilityResponses
 	} else if strings.HasSuffix(endpoint, "/embeddings") {
 		if account.Platform != PlatformOpenAI {

@@ -28,20 +28,25 @@ func (s *OpenAIGatewayService) ForwardOpenCodeSystemOne(
 	c *gin.Context,
 	account *Account,
 	body []byte,
+	channelModel ...string,
 ) (*OpenAIForwardResult, error) {
 	if !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilitySystemOne) {
 		return nil, fmt.Errorf("System One requires a TypeSafe or OpenCode Zen account")
 	}
 
-	routingModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-	publicModel := routingModel
+	// 保留 Key 重定向后的公开型号用于用户账单，渠道与账号映射只决定真正的投递目标。
+	publicModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	routingModel := publicModel
+	if len(channelModel) > 0 && strings.TrimSpace(channelModel[0]) != "" {
+		routingModel = strings.TrimSpace(channelModel[0])
+	}
+	resultModel := publicModel
 	var model, billingModel string
 	if account.IsTypeSafe() {
 		target, supported := account.typeSafeSystemOneTarget(routingModel)
 		if !supported {
 			return nil, fmt.Errorf("model %q is not supported by TypeSafe System One", routingModel)
 		}
-		publicModel = DefaultTypeSafeModel
 		model, billingModel = target, publicModel
 		// Key 别名恢复器需要认识最终投递名，结构化 state/questions 中的同名内容保持原样。
 		RegisterAPIKeyModelRedirectStage(ctx, model)
@@ -50,9 +55,11 @@ func (s *OpenAIGatewayService) ForwardOpenCodeSystemOne(
 		if !IsOpenCodeSystemOneModel(model) {
 			return nil, fmt.Errorf("model %q is not supported by OpenCode System One", model)
 		}
+		// Zen 的结果继续记录渠道改写后的型号，实际计价按既有最终 Jev 型号处理。
 		billingModel = model
+		resultModel = routingModel
 	}
-	if model != routingModel {
+	if model != publicModel {
 		body = ReplaceModelInBody(body, model)
 	}
 	apiKey := strings.TrimSpace(account.GetOpenAIProtocolAPIKey())
@@ -136,7 +143,7 @@ func (s *OpenAIGatewayService) ForwardOpenCodeSystemOne(
 		UpstreamHeaders:  resp.Header.Clone(),
 		ResponseHeaders:  resp.Header.Clone(),
 		Usage:            usage,
-		Model:            publicModel,
+		Model:            resultModel,
 		BillingModel:     billingModel,
 		UpstreamModel:    model,
 		UpstreamEndpoint: "/v1/systemone",

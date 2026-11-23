@@ -206,8 +206,8 @@ func filterRequestableModelAccounts(accounts []Account, platform string) []Accou
 // 通配符只参与后续匹配，不会作为模型 ID 返回。
 func mergeRequestableModelCandidates(baseModels []string, accounts []Account, channel *Channel, platform string) []string {
 	if platform == PlatformTypeSafe {
-		// 账号映射名可指向私有部署。客户端只能从公开 Jev 型号进入结构化协议。
-		return []string{DefaultTypeSafeModel}
+		// 价格、过期缓存及私有部署映射值不能自行声明公开的结构化型号。
+		return typeSafePublicModelCandidates(accounts, channel)
 	}
 	candidates := make([]string, 0, len(baseModels)+16)
 	seen := make(map[string]struct{}, len(baseModels)+16)
@@ -394,11 +394,14 @@ func (s *GatewayService) resolveRequestableModel(
 	upstreamModels := make([]string, 0, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
-		if account.IsTypeSafe() && requestedModel != DefaultTypeSafeModel {
+		if account.IsTypeSafe() {
+			if !typeSafeDeclaration(channel, requestedModel).accepts(account) {
+				continue
+			}
+		} else if !accountDeclaresChannelCatalogModel(account, channelMappedModel, channelMapped) {
 			continue
 		}
-		if !accountDeclaresChannelCatalogModel(account, channelMappedModel, channelMapped) ||
-			!s.isRoutingModelSupportedByAccountWithContext(ctx, account, channelMappedModel) {
+		if !s.isRoutingModelSupportedByAccountWithContext(ctx, account, channelMappedModel) {
 			continue
 		}
 		for _, upstreamModel := range s.resolveAccountUpstreamModelsForListing(ctx, account, channelMappedModel) {
@@ -416,7 +419,7 @@ func (s *GatewayService) resolveRequestableModel(
 			}
 			if account.IsTypeSafe() {
 				// 与真实结算使用同一公开价目；先完成上面的渠道、账号准入检查。
-				return RequestableModel{ID: requestedModel, PricingModel: DefaultTypeSafeModel}, true
+				return RequestableModel{ID: requestedModel, PricingModel: requestedModel}, true
 			}
 			upstreamModels = append(upstreamModels, upstreamModel)
 		}

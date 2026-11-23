@@ -282,9 +282,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	var cost *CostBreakdown
 	var billingModels []string
 	if account.IsTypeSafe() {
-		// 私有路由名可能正好与免费或其它有价产品同名。TypeSafe 只按公开 Jev SKU 查价，
-		// 原始别名、渠道中间名及实际投递目标仍进入用量映射链和账号成本统计。
-		billingModels = []string{DefaultTypeSafeModel}
+		// TypeSafe 按客户端可请求的公开型号查价。私有部署名及 Key 别名继续进入映射链，
+		// 不能作为替代价格，以免与其它平台的免费或高价型号串用。
+		billingModels = []string{firstNonEmpty(result.BillingModel, result.Model)}
 	} else {
 		billingModels = usageBillingModelCandidates(
 			openAIUsageBillingModel(result, input.ChannelUsageFields),
